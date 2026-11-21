@@ -202,22 +202,24 @@ Final path: {self.result_path}
             raise InvalidResult("Result must be valid UTF-8 JSON with unique keys") from exc
 
         identity = self.packet.result_identity()
-        if not isinstance(result, dict) or result.keys() != identity.keys() | {"outcome", "details"}:
-            raise InvalidResult("Unexpected result fields")
+        if not isinstance(result, dict):
+            raise InvalidResult("Result must be a JSON object")
+        # Extra fields are harmless and ignored; identity and required details must match.
         for key, expected in identity.items():
-            value = result[key]
+            value = result.get(key)
             if type(value) is not type(expected) or value != expected:
                 raise InvalidResult(f"Result does not match the packet's {key}")
         try:
-            outcome = Outcome(result["outcome"])
+            outcome = Outcome(result.get("outcome"))
         except ValueError as exc:
             raise InvalidResult("Unknown worker outcome") from exc
-        details = result["details"]
-        if not isinstance(details, dict) or details.keys() != set(OUTCOME_FIELDS[outcome]):
-            raise InvalidResult(f"Unexpected details fields for {outcome}")
-        if any(not isinstance(value, str) or not value.strip() for value in details.values()):
-            raise InvalidResult("Result details must be nonempty strings")
-        return WorkerResult(self.packet, outcome, details)
+        details = result.get("details")
+        fields = OUTCOME_FIELDS[outcome]
+        if not isinstance(details, dict) or any(
+            not isinstance(details.get(field), str) or not details[field].strip() for field in fields
+        ):
+            raise InvalidResult(f"Details for {outcome} need nonempty strings: {', '.join(fields)}")
+        return WorkerResult(self.packet, outcome, {field: details[field] for field in fields})
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

@@ -116,17 +116,24 @@ class CodexHandoffTests(unittest.TestCase):
                 with self.assertRaises(InvalidResult):
                     self.handoff.read_result()
         for changes in (
-            {"extra": "field"},
             {"outcome": "cancelled"},
             {"outcome": []},
             {"outcome": "needs_input"},
             {"details": {"evidence": ["not a string"]}},
             {"details": {"evidence": "  "}},
+            {"details": {"summary": "Missing the evidence field"}},
+            {"item_id": None},
         ):
             with self.subTest(changes=changes):
                 self.write_result(**changes)
                 with self.assertRaises(InvalidResult):
                     self.handoff.read_result()
+
+    def test_ignores_extra_fields(self):
+        self.write_result(summary="Extra top-level note",
+                          details={"evidence": "Linked", "notes": "Extra detail"})
+        result = self.handoff.read_result()
+        self.assertEqual(result.details, {"evidence": "Linked"})
 
     def test_rejects_directory(self):
         self.handoff.result_path.mkdir()
