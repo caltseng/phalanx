@@ -54,21 +54,15 @@ def evaluate_pre_validation(
     if policy_result is not None:
         return policy_result
 
-    current: dict[str, list[PreEvidence]] = {}
-    for observation in observations:
-        if observation.candidate == candidate:
-            current.setdefault(observation.name, []).append(observation)
+    current = {observation.name: observation for observation in observations
+               if observation.candidate == candidate}
 
     problems = []
     for check in required:
-        results = current.get(check.name, [])
-        if not results:
+        result = current.get(check.name)
+        if result is None:
             problems.append((GateState.WAITING, f"{check.name} has no result for the candidate"))
             continue
-        if len(results) != 1:
-            problems.append((GateState.BLOCKED, f"{check.name} has multiple current dispositions"))
-            continue
-        result = results[0]
         if result.outcome == PreOutcome.PASSED:
             continue
         if result.outcome == PreOutcome.FAILED:

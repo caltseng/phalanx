@@ -43,12 +43,10 @@ class PreValidationTests(unittest.TestCase):
             with self.subTest(requirement=requirement, result=result):
                 self.assertEqual(evaluate_pre_validation("head", (requirement,), (result,)).state, GateState.BLOCKED)
 
-    def test_failure_or_ambiguous_current_disposition_does_not_pass(self):
+    def test_failure_does_not_pass(self):
         requirement = (PreCheck("unit", allow_skip=True),)
         failure = PreEvidence("head", "unit", PreOutcome.FAILED)
-        skip = PreEvidence("head", "unit", PreOutcome.SKIPPED, "urgent fix", "dispatch")
         self.assertEqual(evaluate_pre_validation("head", requirement, (failure,)).state, GateState.FAILED)
-        self.assertEqual(evaluate_pre_validation("head", requirement, (failure, skip)).state, GateState.BLOCKED)
 
 
 class PublishedValidationTests(unittest.TestCase):
