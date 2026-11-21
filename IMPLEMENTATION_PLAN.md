@@ -15,7 +15,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 | PH-05 | Server-owned transition engine in [PR #5](https://github.com/caltseng/phalanx/pull/5). | Wire phase decisions to durable intake, history, and versioned results. |
 | PH-10 | Local worktree allocation, reuse, and safe cleanup in [PR #9](https://github.com/caltseng/phalanx/pull/9). | Connect workspace reservations and cleanup to the runner and queue. |
 | PH-11 | Codex work packets and bounded attempt evidence ingestion in [PR #10](https://github.com/caltseng/phalanx/pull/10). | Wire live Captain launch receipts and observation to runner claims, results, and recovery. |
-| PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6) and conditional Git ref publication with exact read-back. | Wire publication to durable write intent, claim authority, recovery, and exact-head PR verification. |
+| PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6) and conditional Git ref publication in [PR #15](https://github.com/caltseng/phalanx/pull/15). Runner-side first draft workflow with local durable intent and verified recovery. | Wire the server claim/version guard and persist verified primary, duplicate, and conflict evidence through runner stage results. |
 | PH-17 | Authenticated keyset pages for open and recently closed executions, plus the selected execution timeline. | Wire the board adapter and map prerequisite and worker chat data when their read contracts are available. |
 | PH-18 | Operator board component with browser fixtures in [PR #8](https://github.com/caltseng/phalanx/pull/8). | Connect it to the authenticated PH-17 read API and package its static assets. |
 

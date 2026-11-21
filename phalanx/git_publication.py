@@ -1,5 +1,6 @@
 """Conditional publication of a runner-owned item branch."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -69,19 +70,36 @@ class GitPublication:
             if identity != self.expected_remote:
                 raise PublicationError("Origin does not match the registered repository")
 
-    def read_head(self) -> str | None:
+    def read_head(self, *, authorize: Callable[[], None] | None = None) -> str | None:
         """Read the exact remote item ref. Return None only for confirmed absence."""
+        return self._read_ref(self.ref, authorize)
+
+    def read_branch(
+        self, branch: str, *, authorize: Callable[[], None] | None = None,
+    ) -> str | None:
+        """Read an exact named remote branch, including the intended PR base."""
+        ref = f"refs/heads/{branch}"
+        if not branch or self._git("check-ref-format", ref).returncode:
+            raise PublicationError("Invalid remote branch name")
+        return self._read_ref(ref, authorize)
+
+    def _read_ref(self, ref: str, authorize: Callable[[], None] | None) -> str | None:
         self._verify_origin()
-        result = self._git("ls-remote", "--exit-code", "--refs", "origin", self.ref)
+        if authorize is not None:
+            authorize()
+        result = self._git("ls-remote", "--exit-code", "--refs", "origin", ref)
         if result.returncode == 2 and not result.stdout:
             return None
         if result.returncode == 0:
-            oid, separator, ref = result.stdout.rstrip("\n").partition("\t")
-            if separator and ref == self.ref and _is_oid(oid):
+            oid, separator, returned_ref = result.stdout.rstrip("\n").partition("\t")
+            if separator and returned_ref == ref and _is_oid(oid):
                 return oid
-        raise PublicationError("Could not read the exact remote item ref")
+        raise PublicationError("Could not read the exact remote branch ref")
 
-    def publish(self, candidate: str, *, expected: str | None) -> PublicationResult:
+    def publish(
+        self, candidate: str, *, expected: str | None,
+        authorize: Callable[[], None] | None = None,
+    ) -> PublicationResult:
         """Attempt one conditional update and verify the candidate by remote read-back."""
         if not _is_oid(candidate) or (expected is not None and not _is_oid(expected)):
             raise PublicationError("Publication requires full lowercase Git object IDs")
@@ -89,7 +107,7 @@ class GitPublication:
         if local.returncode or local.stdout.strip() != "commit":
             raise PublicationError("Publication candidate must be a local commit")
 
-        observed = self.read_head()
+        observed = self.read_head(authorize=authorize)
         if observed != expected:
             return PublicationResult("conflict", "The remote ref differs from the expected head")
         if expected is not None and expected != candidate:
@@ -107,6 +125,8 @@ class GitPublication:
         self._verify_origin()
         # A revision expression avoids matching a local branch named after the SHA.
         refspec = f"{candidate}^{{commit}}:{self.ref}"
+        if authorize is not None:
+            authorize()
         try:
             result = self._git(
                 "-c", "remote.origin.mirror=false",
@@ -123,7 +143,7 @@ class GitPublication:
                     return PublicationResult("conflict", "Git rejected the stale ref lease")
             return PublicationResult("uncertain", "Git push failed. Read the remote ref")
         try:
-            if self.read_head() == candidate:
+            if self.read_head(authorize=authorize) == candidate:
                 return PublicationResult("success", "Verified the candidate at the remote ref")
         except PublicationError:
             pass
