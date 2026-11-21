@@ -274,7 +274,7 @@ variables are removed from its subprocess environment; keep the bridge trusted.
 | Operation | Arguments and required response |
 | --- | --- |
 | `resolve_project` | Receives `host_id`, `project_id`, `checkout`. Discover the exact project on that host and return those verified fields; do not echo unverified input. The checkout must resolve to the configured root. |
-| `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host whose first prompt is exactly `prompt`, which contains the marker. Use `title` as the session name where the runtime allows it; otherwise use a name that fits, such as the attempt UUID from the marker. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. |
+| `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host whose first prompt is exactly `prompt`, which contains the marker. Use `title` as the session name where the runtime allows it; otherwise use a name that fits, such as the attempt UUID from the marker. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. You can also return a `worker_url`, an HTTPS link to that session with no credentials in it, which the operator board shows. The runner ignores an invalid link and reports a warning; the launch still succeeds. |
 | `observe` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). |
 
 Session rows use the recovery observation fields documented below. A `stopped`
@@ -381,6 +381,8 @@ A saved stop request can be replayed without another observation file. A `retry`
 ### Operator work board
 
 Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text.
+
+The board shows each item's prerequisite blockers, any scheduled retry or external recheck, its worker reference and chat link, its current PR and its final output. It is read-only. When an item is waiting for an answer, its detail shows the question and the `reply` command to answer it with. See [Answer a waiting item](#answer-a-waiting-item).
 
 ### Back up and restore SQLite
 
@@ -554,7 +556,10 @@ current cursor. The timestamp and version fields describe the persisted state.
 `last_advanced_at` records entry into the current stage. `last_progress_at` records
 the latest execution transition. Wait details include the stored reason, resume
 trigger, and age of the current recorded wait. A scheduled retry is available
-as `retry_at_ms` in Unix milliseconds. `primary_pr_url` represents the recorded
-primary PR. The draft state and worker chat link have no current read mapping.
-Prerequisite links are not yet wired into the API. Report output URLs use the
-authenticated report route.
+as `retry_at_ms` and a due external gate recheck as `recheck_at_ms`, both in Unix
+milliseconds. `primary_pr_url` represents the recorded primary PR. `worker_reference`
+is the latest attempt's opaque worker ID, which the runner republishes on each lease
+renewal. `worker_url` is the bridge's optional HTTPS chat link. `version` is the
+execution version that a reply must name. The timeline lists blocking `prerequisites`
+and, while the item is waiting for input, the current `question`. The draft state has
+no current read mapping. Report output URLs use the authenticated report route.

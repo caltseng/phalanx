@@ -421,7 +421,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         runner = self.runner()
         marker = runner.prepare()["marker"]
         thread_id = str(uuid4())
-        runner.receipt(marker, "local", thread_id=thread_id)
+        runner.receipt(marker, "local", thread_id=thread_id, worker_url="https://example.test/chat/1")
+        runner.renew()
+        execution_id = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["id"]
+        board = f"/v1/operator/executions/{execution_id}/timeline"
+        running = self.get(board, OWNER)[1]
+        self.assertEqual((running["item"]["worker_reference"], running["item"]["worker_url"]),
+                         (thread_id, "https://example.test/chat/1"))
+        self.assertIsNone(running["question"])
         self.write_result(runner, marker, {
             "question": "Which source?", "options": "Source A or B", "handoff": "Draft in notes.md",
         }, "needs_input")
@@ -435,6 +442,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "handoff": "Draft in notes.md", "proposed_default": None,
         }
         self.assertEqual(inbox[0]["question"], question)
+        asked = self.get(board, OWNER)[1]
+        self.assertEqual(asked["question"], question)
+        self.assertEqual(asked["item"]["version"], waiting["version"])
+        self.assertEqual(asked["item"]["worker_reference"], thread_id)
         route = f"/v1/items/{item['id']}/executions/{waiting['id']}/reply"
         status, queued = self.request(route, OWNER, {
             "expected_version": waiting["version"], "answer": "Source B only",

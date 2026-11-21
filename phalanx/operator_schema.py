@@ -62,3 +62,12 @@ OPERATOR_SCHEMA = (
            WHERE execution_id = NEW.id;
        END""",
 )
+
+# Opaque worker session reference and optional link that the runner's bridge supplied.
+WORKER_SCHEMA = (
+    """CREATE TABLE attempt_workers (
+        attempt_id TEXT PRIMARY KEY NOT NULL REFERENCES attempts(id),
+        reference TEXT NOT NULL,
+        url TEXT
+    )""",
+)

@@ -194,6 +194,14 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         status, renewed = self.request(renew_path, RUNNER, {}, headers)
         self.assertEqual(status, 200)
         self.assertGreaterEqual(renewed["lease_expires_at"], assigned["lease_expires_at"])
+        for worker in ({"reference": "w", "url": "http://example.test/chat"},
+                       {"reference": "w", "url": "https://user@example.test/chat"}, {"reference": ""}):
+            self.assertEqual(self.request(renew_path, RUNNER, {"worker": worker}, headers)[0], 422, worker)
+        worker = {"reference": "session-7", "url": "https://example.test/chat/7"}
+        self.assertEqual(self.request(renew_path, RUNNER, {"worker": worker}, headers)[0], 200)
+        board = self.get(f"/v1/operator/executions/{assigned['execution']['id']}/timeline", OWNER)[1]
+        self.assertEqual((board["item"]["worker_reference"], board["item"]["worker_url"]),
+                         ("session-7", "https://example.test/chat/7"))
         execution = assigned["execution"]
         result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
         result = {"expected_version": execution["version"], "attempt_id": assigned["attempt_id"],

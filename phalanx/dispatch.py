@@ -134,7 +134,7 @@ def open_attempt(db, runner_id, attempt_id):
     return attempt
 
 
-def renew(db, runner_id, attempt_id, lease_digest):
+def renew(db, runner_id, attempt_id, lease_digest, worker=None):
     attempt = open_attempt(db, runner_id, attempt_id)
     if not compare_digest(attempt["lease_digest"], lease_digest):
         raise intake.Conflict("The lease secret does not match the current attempt")
@@ -143,6 +143,9 @@ def renew(db, runner_id, attempt_id, lease_digest):
         raise intake.Conflict("Lease expired. Check the runner's recovery candidates")
     expires = max(attempt["lease_expires_at"], int(now) + LEASE_SECONDS)
     db.execute("UPDATE attempts SET lease_expires_at=? WHERE id=?", (expires, attempt_id))
+    if worker is not None:
+        db.execute("INSERT OR REPLACE INTO attempt_workers VALUES (?, ?, ?)",
+                   (attempt_id, worker.reference, worker.url))
     return {"attempt_id": attempt_id, "lease_expires_at": expires}
 
 

@@ -50,14 +50,18 @@
       return rows;
     }
 
-    function pullRequestUrl(value) {
+    function httpsUrl(value) {
       try {
         const url = new URL(value);
         if (url.protocol === "https:" && !url.username && !url.password) return url.href;
       } catch {
-        // Missing or invalid PR reference.
+        // Missing or invalid link.
       }
       return null;
+    }
+
+    function epochMs(value) {
+      return Number.isSafeInteger(value) && value > 0 ? value : null;
     }
 
     function identifier(value) {
@@ -72,19 +76,23 @@
       if (row.output?.kind === "report") {
         output = { kind: "report", itemId, id };
       } else if (row.output?.kind === "pr") {
-        const url = pullRequestUrl(row.output.url);
+        const url = httpsUrl(row.output.url);
         if (url) output = { kind: "pr", url };
       }
       return {
-        id, output,
+        id, itemId, output,
+        version: row.version,
         title: row.title,
         repo: row.repository_id,
         stage: row.stage,
         status: row.status,
         lastAdvancedAt: row.last_advanced_at,
         waitReason: row.wait_reason,
-        retryAt: Number.isSafeInteger(row.retry_at_ms) && row.retry_at_ms > 0 ? row.retry_at_ms : null,
-        primaryPrUrl: pullRequestUrl(row.primary_pr_url),
+        retryAt: epochMs(row.retry_at_ms),
+        recheckAt: epochMs(row.recheck_at_ms),
+        workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
+        chatUrl: httpsUrl(row.worker_url),
+        primaryPrUrl: httpsUrl(row.primary_pr_url),
         closedAt: row.closed_at,
         outcome: row.outcome
       };
@@ -106,6 +114,11 @@
           item: item(page.item),
           attempt: page.attempt,
           resumeTrigger: page.item.resume_trigger,
+          question: page.question ? {
+            prompt: page.question.prompt,
+            options: Array.isArray(page.question.options) ? page.question.options : [],
+            proposedDefault: page.question.proposed_default
+          } : null,
           dependencies: pageRows(page.prerequisites ?? [], 100).map(dependency => ({
             title: dependency.title || identifier(dependency.item_id),
             milestone: dependency.milestone,

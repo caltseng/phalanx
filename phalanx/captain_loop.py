@@ -174,8 +174,10 @@ class CaptainLoop:
                     del record["relay"]
             runner._transaction(retract)
             raise
+        warning = receipt.pop("warning", None)
         runner.receipt(result["marker"], result["host_id"], **receipt)
-        return {"status": "receipt_recorded", "slot": slot, **receipt}
+        return {"status": "receipt_recorded", "slot": slot, **receipt,
+                **({"reason": warning} if warning else {})}
 
     def _claim_new(self, slot, discovery=None):
         capabilities = self.config.get("stages", sorted(set(STAGES) | {"pr_creation", "report_storage"}))

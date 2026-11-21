@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 from tempfile import TemporaryFile
 from time import monotonic
@@ -21,6 +22,8 @@ from .handoff import _unique_object
 
 
 MAX_ADAPTER_REPLY_BYTES = 1024 * 1024
+# Matches the server's renewal validation for an optional worker session link.
+WORKER_URL = re.compile(r"https://[^\s/@?#]+(/\S*)?")
 
 
 class LaunchNotDelivered(RunnerError):
@@ -131,9 +134,17 @@ class BridgeAdapter:
             raise RunnerError("Launch requires exactly one native or queued receipt")
         field, value = ("thread_id", native) if native else ("client_thread_id", queued)
         try:
-            return {field: str(UUID(value))}
+            receipt = {field: str(UUID(value))}
         except (ValueError, TypeError, AttributeError) as error:
             raise RunnerError("Launch receipt must contain a UUID") from error
+        # The worker already launched, so an unusable link must not fail the receipt.
+        url = response.get("worker_url")
+        if url is not None:
+            if isinstance(url, str) and len(url) <= 2000 and WORKER_URL.fullmatch(url):
+                receipt["worker_url"] = url
+            else:
+                receipt["warning"] = "Bridge worker_url ignored; it must be an HTTPS link without credentials"
+        return receipt
 
     def observe(self, references: list[dict], *, cursors: dict[str, str],
                      timeout: float) -> ObservationBatch:

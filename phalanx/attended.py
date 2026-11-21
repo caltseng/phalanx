@@ -386,7 +386,7 @@ class AttendedRunner:
             {"slot": slot, **view(json.loads(data), statuses.get(slot))} for slot, data in rows
         ], **({"loop_status": loop_status} if loop_status is not None else {})}
 
-    def receipt(self, marker, host_id, *, thread_id=None, client_thread_id=None):
+    def receipt(self, marker, host_id, *, thread_id=None, client_thread_id=None, worker_url=None):
         def save(record, db):
             packet = self._handoff(record).packet
             if marker != packet.marker or host_id != record["host_id"]:
@@ -402,6 +402,8 @@ class AttendedRunner:
                             and "client_thread_id" not in current)):
                     raise RunnerError("Receipt conflicts with the recorded identity")
                 receipt = {**current, **receipt}
+            if worker_url:
+                receipt["worker_url"] = worker_url
             record["receipt"] = receipt
             return {"status": "receipt_recorded", **receipt}
 
@@ -412,7 +414,13 @@ class AttendedRunner:
         if not claim:
             raise RunnerError("There is no known claim to renew")
         endpoint = f"/dispatch/runners/{record['runner_id']}/attempts/{claim['attempt_id']}/renew"
-        result = self.api.call(endpoint, {}, lease=record["lease"])
+        # Each renewal republishes the bridge's opaque worker reference for the operator board.
+        receipt = record.get("receipt", {})
+        reference = receipt.get("thread_id") or receipt.get("client_thread_id")
+        body = {"worker": {"reference": reference, **(
+            {"url": receipt["worker_url"]} if receipt.get("worker_url") else {}
+        )}} if reference else {}
+        result = self.api.call(endpoint, body, lease=record["lease"])
         record["lease_expires_at"] = result["lease_expires_at"]
         return result
 
