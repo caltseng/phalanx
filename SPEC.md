@@ -55,6 +55,8 @@ The server durably records report finalization before writing the final artifact
 
 Field reports use a shorter path. Draft and self-review the report, verify its supporting evidence and links, then store the Markdown and complete the item. Findings return it to drafting. Reports share the same pause, retry, and handoff behavior.
 
+For PR work, the runner binds self-review and local check results to the claimed candidate at the clean item worktree HEAD. Local checks and bypass authorizations come from trusted repository policy supplied by the runner. The result timeline records review notes, each check disposition, and the reason and authorization for a bypass.
+
 ### Execution status and recovery
 
 - Use `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`, `failed`, and `cancelled` as execution statuses. Store the stage, status, expected revision, and why any wait is active. A waiting item has a resume trigger, such as a user reply, check result, approval, or scheduled recheck. Reconcile external waits periodically so a missed event cannot strand the item.

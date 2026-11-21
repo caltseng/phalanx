@@ -126,9 +126,11 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
     payload = body.model_dump(mode="json")
-    # Preserve receipt digests for result requests written before this field existed.
-    if isinstance(body, Result) and body.failure_reason is None:
-        payload.pop("failure_reason")
+    # Preserve receipt digests for result requests written before these fields existed.
+    if isinstance(body, Result):
+        for field in ("failure_reason", "review_notes", "local_checks"):
+            if payload[field] is None:
+                del payload[field]
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,

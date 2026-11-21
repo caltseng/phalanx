@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from .transitions import Outcome, Stage, Target
+from .validation import PreOutcome
 
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16000)]
@@ -68,6 +69,13 @@ class WaitInput(Payload):
     trigger: Text
 
 
+class LocalCheckResult(Payload):
+    name: Text
+    outcome: PreOutcome
+    reason: Text | None = None
+    authorization: Text | None = None
+
+
 class Result(AttemptEvent):
     outcome: Outcome
     wait: WaitInput | None = None
@@ -77,3 +85,5 @@ class Result(AttemptEvent):
     report_revision: RevisionID | None = None
     reviewed_candidate: Text | None = None
     prevalidated_candidate: Text | None = None
+    review_notes: Text | None = None
+    local_checks: list[LocalCheckResult] | None = Field(default=None, max_length=50)
