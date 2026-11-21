@@ -161,7 +161,7 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             db.execute("INSERT INTO report_finalizations(execution_id,intent_version,due_at) VALUES ('execution',1,0)")
         migrate(path)
         with connect(path, mode="ro") as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS))
             self.assertEqual(db.execute("SELECT wait_since FROM operator_progress").fetchone()[0], stamp)
             queue_indexes = db.execute(
                 "SELECT sql FROM sqlite_schema WHERE name IN ('queue_heads', 'queue_stage_heads')"
