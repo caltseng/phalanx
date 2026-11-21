@@ -286,8 +286,11 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.api.paused = True
         loop = self.loop()
         self.spin(loop, lambda: any(event["status"] == "paused" for event in self.events))
+        loop.close()
         self.assertFalse(loop._records())
+        self.assertFalse(self.api.claims)
         self.api.paused = False
+        loop = self.loop()
         self.spin(loop, lambda: len(self.native.launches) == 2)
         loop.close()
         self.config["capacity"] = 1
