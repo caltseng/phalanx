@@ -65,6 +65,8 @@ def main() -> None:
     reply.add_argument("answer")
     reply.add_argument("--version", type=int, required=True)
     reply.add_argument("--key", required=True, help="reuse this key when retrying the same reply")
+    reply.add_argument("--answered-by", choices=("owner", "captain"), default="owner",
+                       help="who answered: the owner, or the Captain triaging a routine question")
     add_attended_command(commands)
     add_recovery_command(commands)
     add_captain_command(commands)
@@ -104,7 +106,8 @@ def main() -> None:
             execution = quote(args.execution_id, safe="")
             result = api_request(
                 args.api_url, f"/v1/items/{item}/executions/{execution}/reply", key=args.key,
-                body={"expected_version": args.version, "answer": args.answer},
+                body={"expected_version": args.version, "answer": args.answer,
+                      "answered_by": args.answered_by},
             )
             print(json.dumps(result, indent=2))
         else:

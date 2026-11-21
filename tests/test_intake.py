@@ -278,10 +278,50 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(resumed["status"], "claimed")
         self.assertEqual(resumed["execution"]["state"]["stage"], waiting["state"]["stage"])
         self.assertEqual(resumed["input_reply"], {
-            "answer": answer["answer"], "wait_version": waiting["version"], "question": question,
+            "answer": answer["answer"], "answered_by": "owner", "wait_version": waiting["version"],
+            "question": question,
         })
         self.assertEqual([entry["event"] for entry in self.get(route + "/timeline", OWNER)[1]],
                          ["intake", "claim", "result", "reply", "claim"])
+
+    def test_captain_answered_reply_resumes_and_records_who_answered(self):
+        item, _, _, route = self.create()
+        claim = self.claim(item, item["execution"])
+        question = {"prompt": "Which test runner?", "options": ["unittest", "pytest"],
+                    "proposed_default": "unittest", "handoff": "Tests are drafted"}
+        status, waiting = self.submit(route + "/result",
+                                      dict(claim, outcome="needs_input", question=question),
+                                      token=RUNNER, lease=LEASE, key="wait")
+        self.assertEqual(status, 200, waiting)
+        self.assertIsNone(self.get(f"/v1/items/{item['id']}", OWNER)[1]["last_reply"])
+        answer = {"expected_version": waiting["version"], "answer": "unittest"}
+        self.assertEqual(self.submit(route + "/reply", dict(answer, answered_by="worker"),
+                                     key="bad")[0], 422)
+        cli = subprocess.run(
+            [sys.executable, "-m", "phalanx", "--api-url", self.url, "reply", item["id"],
+             waiting["id"], "unittest", "--version", str(waiting["version"]),
+             "--key", "captain", "--answered-by", "captain"],
+            env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertEqual(json.loads(cli.stdout)["state"]["status"], "queued")
+        self.assertEqual(self.submit(route + "/reply", dict(answer, answered_by="captain"),
+                                     key="captain")[1], json.loads(cli.stdout))
+        reply = self.get(route + "/timeline", OWNER)[1][-1]
+        self.assertEqual((reply["event"], reply["details"]["answered_by"]), ("reply", "captain"))
+        last_reply = self.get(f"/v1/items/{item['id']}", OWNER)[1]["last_reply"]
+        self.assertEqual((last_reply["answer"], last_reply["answered_by"]), ("unittest", "captain"))
+        status, resumed = self.submit(
+            "/v1/dispatch/claim", {"runner_id": "local", "repository_ids": ["example"]},
+            token=RUNNER, lease="y" * 32,
+        )
+        self.assertEqual(status, 200, resumed)
+        self.assertEqual(resumed["execution"]["state"]["stage"], waiting["state"]["stage"])
+        self.assertEqual(resumed["input_reply"], {
+            "answer": "unittest", "answered_by": "captain", "wait_version": waiting["version"],
+            "question": question,
+        })
 
     def test_external_wait_is_due_after_restart_and_recheck_does_not_pass_gate(self):
         item, intake_body, _, route = self.create("ready_for_check_in")

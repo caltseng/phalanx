@@ -313,7 +313,7 @@ directory. Repeat this cycle while the loop runs:
 4. Between requests, run `python -m phalanx inbox` with the owner token and
    triage each worker question. When the answer follows from the repository,
    the issue, its conventions or the question's proposed default, answer it
-   yourself with `python -m phalanx reply` and note that the Captain answered.
+   yourself with `python -m phalanx reply ... --answered-by captain`.
    Escalate to Caleb in the Captain chat only when human judgment materially
    changes the outcome or authority is missing. `attended status --all` shows
    slot reasons.
@@ -494,9 +494,9 @@ python -m phalanx inbox
 python -m phalanx reply ITEM_ID EXECUTION_ID "Use the existing interface" --version 3 --key reply-001
 ```
 
-Reuse the same key and body if retrying the reply after a lost response. For more inbox entries, pass the last entry's `waiting_since` to `--after-time` and its `execution_id` to `--after-id`.
+A reply records who answered: `--answered-by owner` (the default) or `--answered-by captain` when the Captain answered a routine question itself. Reuse the same key and body if retrying the reply after a lost response. For more inbox entries, pass the last entry's `waiting_since` to `--after-time` and its `execution_id` to `--after-id`.
 
-Runners submit a structured `question` with `prompt`, `handoff`, optional `options`, and optional `proposed_default` in a stage result that needs input. The next claim after a reply includes `input_reply` with the answer and question. The authenticated execution timeline retains both.
+Runners submit a structured `question` with `prompt`, `handoff`, optional `options`, and optional `proposed_default` in a stage result that needs input. The next claim after a reply includes `input_reply` with the answer, `answered_by` and question. The authenticated execution timeline retains them, and `inspect` shows the current execution's `last_reply`.
 
 Runners can post `/external-wait` under an execution with the live attempt lease, expected version, and an idempotency key. Include the attempt and stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Both operations use the runner token. A recheck queues the same stage for verification. Provider observation and recurring polling are runner integration work.
 

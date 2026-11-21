@@ -30,7 +30,8 @@ def inbox(db, limit, after_time, after_id):
 
 def reply(db, item_id, execution_id, payload):
     row, state = intake.check_current(db, item_id, execution_id, payload.expected_version)
-    details = {"answer": payload.answer, "wait_version": row["version"]}
+    details = {"answer": payload.answer, "answered_by": payload.answered_by,
+               "wait_version": row["version"]}
     waiting = db.execute(
         "SELECT details_json FROM transition_history WHERE execution_id=? AND version=?",
         (execution_id, row["version"]),

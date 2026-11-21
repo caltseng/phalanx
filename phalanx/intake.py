@@ -115,11 +115,24 @@ def execution_view(row):
 
 def inspect(db, item_id):
     item = item_row(db, item_id)
+    execution = current_execution(db, item_id)
+    reply = db.execute(
+        """SELECT version, created_at, details_json FROM transition_history
+           WHERE execution_id=? AND event=? ORDER BY version DESC LIMIT 1""",
+        (execution["id"], Event.REPLY),
+    ).fetchone()
+    last_reply = None
+    if reply is not None:
+        details = json.loads(reply["details_json"])
+        last_reply = {"version": reply["version"], "created_at": reply["created_at"],
+                      "answer": details["answer"],
+                      "answered_by": details.get("answered_by", "owner")}
     return {
         "id": item["id"], "created_at": item["created_at"],
         **json.loads(item["request_json"]),
         "dependencies": dependencies.configured_dependencies(db, item_id),
-        "execution": execution_view(current_execution(db, item_id)),
+        "execution": execution_view(execution),
+        "last_reply": last_reply,
     }
 
 
