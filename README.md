@@ -279,12 +279,14 @@ state directory. Repeat this cycle while the loop runs:
    worker questions to Caleb in the Captain chat, and answer with
    `python -m phalanx reply`. `attended status --all` shows slot reasons.
 
-Identical in-flight requests share one entry, and verified project resolutions
+Identical requests waiting to be taken share one entry, and verified project resolutions
 are cached for ten minutes. The loop waits up to five minutes for a request to
 be taken and five more for its reply. A launch the Captain never took expires
 and is retracted, so the same packet can launch again. A taken request is never
-handed out again, even after a Captain restart; an unanswered launch stays
-reserved until native discovery reconciles it by marker. Never rerun a request
+handed out again, even after a Captain restart. An unanswered one is settled as
+lost: a later observation or resolution queues afresh, while an unanswered launch
+stays reserved until native discovery reconciles it by marker. A restarted loop
+expires requests left pending by its predecessor. Never rerun a request
 whose outcome you did not record; answer it from discovery instead.
 
 The App Server (`codex app-server`) is not used until its threads are verified to

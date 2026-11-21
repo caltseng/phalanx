@@ -12,7 +12,7 @@ from unittest.mock import patch
 from uuid import UUID, uuid4
 
 from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered
-from phalanx.captain_relay import RelayTransport, respond, take_next
+from phalanx.captain_relay import RelayTransport, _queue, respond, take_next
 from phalanx.runner_errors import RunnerError
 
 
@@ -138,9 +138,31 @@ class RelayQueueTests(unittest.TestCase):
         self.assertIsInstance(results[0], RunnerError)
         self.assertNotIsInstance(results[0], LaunchNotDelivered)
         self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
-        self.assertEqual(respond(self.root, taken["id"], response={}), {"status": "recorded", "id": taken["id"]})
         with self.assertRaisesRegex(RunnerError, "unknown or settled"):
-            respond(self.root, taken["id"], error="again")
+            respond(self.root, taken["id"], response={})
+
+    def test_unanswered_observation_is_settled_and_retry_reaches_a_fresh_captain(self):
+        transport = RelayTransport(self.root, timeout=0.3, poll=0.01)
+        arguments = {"references": [{"marker": "m"}]}
+        results = []
+        waiter = Thread(target=self.call, args=(transport, results, "wait_threads", arguments))
+        waiter.start()
+        take_next(self.root, wait=10, poll=0.01)
+        waiter.join(10)
+        self.assertRegex(str(results[0]), "never answered")
+        retry = Thread(target=self.call, args=(transport, results, "wait_threads", arguments))
+        retry.start()
+        fresh = take_next(self.root, wait=10, poll=0.01)
+        self.assertEqual(fresh["arguments"], arguments)
+        respond(self.root, fresh["id"], response={"threads": []})
+        retry.join(10)
+        self.assertEqual(results[1], {"threads": []})
+
+    def test_restarted_loop_expires_orphaned_pending_requests(self):
+        with _queue(self.root) as db:
+            db.execute("INSERT INTO request VALUES ('old', 'k', 'create_thread', '{}', 'pending', NULL, NULL, 0, 0)")
+        RelayTransport(self.root, timeout=1)
+        self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
 
     def test_identical_waiters_share_one_request_and_resolution_is_cached(self):
         transport = RelayTransport(self.root, timeout=30, poll=0.01)

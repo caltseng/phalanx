@@ -42,6 +42,10 @@ class RelayTransport:
     def __init__(self, root: Path, *, timeout: float = 300, poll: float = 0.2):
         self.root, self.timeout, self.poll = Path(root).resolve(), timeout, poll
         self.resolved: dict[str, tuple[float, dict]] = {}
+        # Waiters from a previous loop are gone; never let their requests launch late.
+        with _queue(self.root) as db:
+            db.execute("UPDATE request SET status='expired', updated_at=? WHERE status='pending' AND updated_at < ?",
+                       (time(), time() - timeout))
 
     def __call__(self, operation: str, arguments: dict) -> dict:
         body = json.dumps({"contract_version": 1, "operation": operation, "arguments": arguments},
@@ -53,18 +57,21 @@ class RelayTransport:
         now = time()
         with _queue(self.root) as db:
             db.execute("DELETE FROM request WHERE status != 'pending' AND updated_at < ?", (now - RETAIN_SECONDS,))
-            # Identical in-flight requests share one Captain action.
-            row = db.execute("SELECT id FROM request WHERE key=? AND status IN ('pending', 'taken')",
-                             (key,)).fetchone()
+            # Identical requests waiting for the Captain share one action.
+            row = db.execute("SELECT id FROM request WHERE key=? AND status='pending'", (key,)).fetchone()
             request_id = row[0] if row else str(uuid4())
             if not row:
                 db.execute("INSERT INTO request VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)",
                            (request_id, key, operation, body, now, now))
         while True:
-            with closing(sqlite3.connect(self.root / "captain-relay.sqlite3", timeout=30)) as db:
+            with _queue(self.root) as db:
                 status, response, error, updated = db.execute(
                     "SELECT status, response, error, updated_at FROM request WHERE id=?", (request_id,),
                 ).fetchone()
+                if status in {"pending", "taken"} and time() >= updated + self.timeout:
+                    # Settle it so an identical retry queues afresh for a live Captain.
+                    status = "expired" if status == "pending" else "lost"
+                    db.execute("UPDATE request SET status=?, updated_at=? WHERE id=?", (status, time(), request_id))
             if status == "answered":
                 if error is not None:
                     raise RunnerError(f"Captain relay {operation} failed: {error}")
@@ -74,20 +81,10 @@ class RelayTransport:
                 return reply
             if status == "expired":
                 raise LaunchNotDelivered(f"Captain relay never took {operation}; start or resume the Captain chat relay")
-            if time() >= updated + self.timeout:
-                with _queue(self.root) as db:
-                    expired = db.execute(
-                        "UPDATE request SET status='expired', updated_at=? WHERE id=? AND status='pending'",
-                        (time(), request_id),
-                    ).rowcount
-                if expired:
-                    raise LaunchNotDelivered(
-                        f"Captain relay never took {operation}; start or resume the Captain chat relay")
-                if status == "taken":
-                    # The Captain may have run the tool. Never resend; discovery reconciles a launch.
-                    raise RunnerError(f"Captain relay took {operation} but has not answered; "
-                                      "it is never resent and native discovery reconciles a launch")
-                continue
+            if status == "lost":
+                # The Captain may have run the tool. The journal never relaunches; discovery reconciles it.
+                raise RunnerError(f"Captain relay took {operation} but never answered; "
+                                  "a launch is reconciled by native discovery")
             sleep(self.poll)
 
 
