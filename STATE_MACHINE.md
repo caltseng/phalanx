@@ -13,7 +13,7 @@ flowchart TD
     Start([New execution]) --> Kind{Output type}
     Kind -->|Pull request| Dev[Development]
     Kind -->|Field report| Draft[Report drafting]
-    Dev -->|Candidate commit recorded| Publish[Open draft PR]
+    Dev -->|First candidate and no existing PR| Publish[Open draft PR]
     Dev -->|Revised candidate already has a PR| Self[Self review]
     Publish -->|Draft head verified| Self[Self review]
     Self -->|Changes required| Dev
@@ -100,7 +100,8 @@ stateDiagram-v2
 
 | Event | Server behavior |
 | --- | --- |
-| Eligible claim | Check dispatch pause, capacity, repo and runtime eligibility, and prerequisites in the claim operation. Assign one current lease and a new attempt. A blocked item retains the reason. A failed or cancelled prerequisite prompts a decision about skipping, replacing, or cancelling the dependent work. |
+| Eligible claim | Check dispatch pause, capacity, repo and runtime eligibility, and all upstream milestones in the claim operation. Assign one current lease and a new attempt only when all prerequisites are satisfied. A blocked item retains the unmet prerequisite and reason. A failed or cancelled prerequisite prompts recovery, redirection, or cancellation of the dependent work. |
+| Prerequisite satisfied | Recheck all prerequisites and make the dependent item eligible when its last required output is verified. Keep unrelated items runnable. Reconcile missed notifications by checking durable milestone records before claims and on recheck. |
 | Valid stage result | Check attempt ID, current lease, state version, stage, and evidence. Atomically record the outcome and timeline event. Queue the next runnable stage or persist the appropriate wait or final result. Apply the final-output guard before any terminal transition. |
 | Retryable failure or expired lease | Reconcile the known worker session, checkpoint, and outputs. Reattach if still running, collect and verify a finished result under a recovery claim, or retry a stopped attempt with bounded backoff. Unknown session state warrants a recheck before replacement. A late result cannot advance the item on an expired lease. Before repeating a GitHub operation, reconcile what happened. |
 | Human judgment required | Save one focused question, the options, any proposed default, and the handoff. Release the slot and notify the user. A reply queues the stage again with that context. |
@@ -121,3 +122,5 @@ Before yielding a slot, record the workspace, candidate revision or local checkp
 ## Transition tests
 
 Cover a report and a PR through completion, ready-only without merge, pre-PR checks passing or explicitly bypassed, a required CI failure after bypass, PR-only preview checks, new comments, conflicts, changed heads or bases, and a retry that discovers an existing PR or successful merge. Exercise duplicate submissions and events, a stale worker result, a lost external notification, a failed prerequisite, interruption during cancellation, and a review loop with no progress. Verify that failure and cancellation produce a report, including cancellation before the first claim, and that a storage outage leaves finalization retryable. For every active state, verify a next action, a persisted resume trigger, or an explicit way to close the execution.
+
+For dependency coverage, test parallel prerequisites across repos, a downstream item waiting for the last prerequisite, ready-only evidence held until a required merge, a failed upstream item that produces a report, cycle rejection, and eligibility changes after steering.

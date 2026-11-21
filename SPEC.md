@@ -4,7 +4,7 @@ Phalanx lets Caleb dispatch work across registered repositories and have local a
 
 ## Work items and repositories
 
-- A work item has an ID, repository, goal, output type (`report` or `pull_request`), status, and timestamps. Optional fields include context links, acceptance criteria, a target branch, and a prerequisite work item. An API caller may provide an idempotency key so resubmitting the same request returns the original item.
+- A work item has an ID, repository, goal, output type (`report` or `pull_request`), status, and timestamps. Optional fields include context links, acceptance criteria, a target branch, and dependencies on other work items. An API caller may provide an idempotency key so resubmitting the same request returns the original item.
 - A registered repository has a stable ID and expected remote. Each runner maps that ID to a local checkout and verifies the remote before starting. Repository instructions apply to each run. An item waits if no eligible runner can access its repo.
 - A **field report** is a Markdown deliverable with findings, sources or evidence where relevant, and open questions. PR items specify a completion target of `ready_for_check_in` or `checked_in`. A check-in target authorizes merging only when the dispatch explicitly requests it or a repo policy enables it. Repository rules still govern the merge.
 - The requested output type defines the intended path. Every closed execution records exactly one final output, either a verified PR reference or a stored Markdown report. If work closes without the requested deliverable, store a disposition report explaining the failure or cancellation, what was attempted, and what remains. Include any partial PR as a reference in that report. Work still in progress can have intermediate evidence and no final output yet.
@@ -123,6 +123,14 @@ Keep the work packet and result contract independent of the runtime. An executio
 - **GitHub writes.** Workers prepare commits and evidence. The runner owns pushes, PR creation and promotion, and merge via the current item claim. Verify authority and expected revision before writing. Prefer a possible duplicate PR to missing publication after bounded lookup. Verify and record one primary PR for review and check-in, and surface any duplicates. Uncertain merges require reconciliation before retrying.
 - **Overlapping changes.** Separate worktrees protect local changes from concurrent agents. Review intervening changes before opening a PR. Use an explicit dependency or targeted coordination when two items need the same change in a particular order. Avoid a global one-worker-per-repo restriction.
 - **Retries.** Retry transient failures with bounded backoff. Escalate persistent failures and material ambiguity. Record enough detail for a human to decide whether to retry, redirect, or cancel.
+
+## Interdependent work
+
+- V1 supports multiple prerequisites per work item, across repos when needed. Items whose prerequisites are satisfied can run in parallel. Reject self-dependencies and cycles when creating or editing links. Keep dependencies in the shared store so all devices see the same eligibility.
+- A dependency names the upstream item and the output milestone it needs. A report dependency needs the stored report. A PR dependency defaults to a verified check-in when downstream work needs the merged code. An item can explicitly depend on a PR being ready for check-in if it only needs the reviewed PR. A failed or cancelled upstream item does not satisfy a dependency even if it produces a disposition report.
+- Keep an item queued with a visible reason until all its prerequisites are satisfied. Before claim, give the next worker the upstream output references and expected target revision where applicable. Make newly unblocked items eligible on prerequisite completion and reconcile eligibility if an event is missed. A failed upstream prerequisite can be retried or replaced, or the dependent item can be redirected or cancelled.
+- Allow the owner to update queued work and its dependencies after upstream changes or new steering. Version those changes and check the version on claim. A change to an active item goes through the existing pause, handoff, or cancellation path so a worker cannot silently continue against revised instructions.
+- **Later: campaigns.** A campaign groups related work items around a larger goal. Campaign planning can decompose the goal into items and dependency links, then reconsider remaining work after check-ins or steering. Keep automated decomposition and replanning outside v1. The same work-item and dependency model will support them later.
 
 ## Server and deployment
 
