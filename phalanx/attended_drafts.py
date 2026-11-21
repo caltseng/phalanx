@@ -34,6 +34,7 @@ def development_checkpoint(journal, claim):
             WHERE json_extract(record, '$.claim.item_id') = ?
               AND json_extract(record, '$.claim.execution.id') = ?
               AND json_extract(record, '$.submission.body.candidate') = ?
+              AND json_extract(record, '$.submission.body.stage') = 'development'
             ORDER BY rowid DESC LIMIT 1
         """, (claim["item_id"], execution["id"], execution["state"].get("candidate"))).fetchone()
     if row is None or row[0] is None:

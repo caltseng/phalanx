@@ -4,22 +4,60 @@ import os
 import sqlite3
 from contextlib import closing
 import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier, Event
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
 from phalanx.attended_recovery_service import RecoveryJournal, run_recovery
+from phalanx.captain_loop import CaptainLoop
 from phalanx.draft_publication import DraftOutcome
 from phalanx.draft_stage import DraftStageResult
 from phalanx.finalization import attempt
+from phalanx.git_publication import PublicationResult
+from phalanx.github import GitHubClient
 from phalanx.store import connect, write_transaction
-from phalanx.workspaces import WorkspaceManager
+from phalanx.workspaces import WorkspaceManager, _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_github import pull, response
+
+
+class FakeGitHub:
+    """GitHub transport for one primary PR on owner/repo."""
+
+    def __init__(self, head, base, item_id):
+        self.head, self.base, self.branch = head, base, _item_branch(item_id)
+        self.pull = None
+        self.runs = []
+
+    def __call__(self, request, _timeout):
+        path = urlsplit(request.full_url).path
+        if request.method == "POST" and path == "/graphql":
+            self.pull["draft"] = False
+            return response({"data": {"markPullRequestReadyForReview": {
+                "pullRequest": {"id": self.pull["node_id"], "isDraft": False}}}})
+        if request.method == "POST":
+            self.pull = pull(head=self.branch)
+            self.pull["head"].update(sha=self.head, repo={"full_name": "Owner/Repo"})
+            self.pull.update(html_url="https://github.com/owner/repo/pull/7")
+            self.pull["base"]["sha"] = self.base
+            return response(self.pull, status=201)
+        if path.endswith("/pulls"):
+            return response([self.pull] if self.pull else [])
+        if "/git/ref/" in path:
+            return response({"ref": "refs/heads/main", "object": {"sha": self.base, "type": "commit"}})
+        if path.endswith("/check-runs"):
+            return response({"check_runs": self.runs})
+        if path.endswith("/statuses"):
+            return response([])
+        return response(self.pull)
 
 
 class StubAPI:
@@ -44,7 +82,7 @@ class StubAPI:
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
-            expected = ["pr_creation"] if self.stage == "pr_creation" else ["development", "report_drafting", "report_review"]
+            expected = [self.stage] if self.stage in ("pr_creation", "pre_pr_validation") else ["development", "report_drafting", "report_review", "self_review"]
             assert body["stages"] == expected, body
             self.claim_leases.append(lease)
             if self.drop_claim:
@@ -620,6 +658,111 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(publish.call_args_list[0].args[2]["lease"], publish.call_args_list[1].args[2]["lease"])
         self.assertEqual((routed["status"], routed["reason"]), ("draft_submitted", "The remote base moved"))
         self.assertEqual(self.runner().status(), {"status": "idle"})
+
+    def test_validation_stages_run_from_draft_to_ready_checks_over_http(self):
+        remote = "git@github.com:owner/repo.git"
+        self.git(self.checkout, "remote", "set-url", "origin", remote)
+        base = self.git(self.checkout, "rev-parse", "HEAD")
+        self.start_server(self.root.parent / "queue.sqlite3")
+        self.assertEqual(self.request("/v1/repositories", OWNER, {"id": "repo", "remote": remote})[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Fix tests", "target": "ready_for_check_in",
+            "target_branch": "main",
+        })
+        self.assertEqual(status, 201, item)
+        self.api = RunnerAPI(self.url, RUNNER)
+        policy = self.root.parent / "validation-policy.json"
+        policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
+            "local_checks": [{"name": "unit tests", "argv": [sys.executable, "-c", "print('ok')"]}],
+            "draft_checks": [],
+            "ready_checks": [{"name": "test", "kind": "check_run", "app_id": 15368}],
+        }}}), encoding="utf-8")
+        self.config["validation_policy"] = str(policy)
+
+        def work(details):
+            launch = self.runner().prepare()
+            self.assertEqual(launch["status"], "launch_intent", launch)
+            thread = str(uuid4())
+            self.runner().receipt(launch["marker"], "local", thread_id=thread)
+            if callable(details):
+                details = details(Path(self.runner().status()["packet"]["worktree"]))
+            self.write_result(self.runner(), launch["marker"], details)
+            return self.runner().submit(launch["marker"], "local", thread)
+
+        def commit(worktree):
+            self.git(worktree, "commit", "--allow-empty", "-m", "Candidate")
+            return self.git(worktree, "rev-parse", "HEAD")
+
+        self.assertEqual(work(commit)["state"]["stage"], "pr_creation")
+        candidate = self.runner()._transaction(
+            lambda record, db: json.loads(db.execute("SELECT record FROM completed").fetchone()[0])
+        )["submission"]["body"]["candidate"]
+        github = FakeGitHub(candidate, base, item["id"])
+
+        class Git:
+            expected_remote = ("github", "owner/repo")
+
+            def __init__(self, checkout, remote, item_id):
+                self.head = None
+                self.ref = f"refs/heads/{_item_branch(item_id)}"
+
+            def verify_candidate(self, *args, **kwargs):
+                pass
+
+            def read_branch(self, branch, *, authorize):
+                authorize()
+                return base
+
+            def read_head(self, *, authorize):
+                authorize()
+                return self.head
+
+            def publish(self, revision, *, expected, authorize, rewrite=False):
+                authorize()
+                self.head = revision
+                return PublicationResult("success", "fixture push")
+
+        def client(owner, name, *, token):
+            return GitHubClient(owner, name, token=token, transport=github)
+
+        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), \
+                patch("phalanx.draft_stage.GitPublication", Git), \
+                patch("phalanx.attended_drafts.GitHubClient", client), \
+                patch("phalanx.validation_stages.GitHubClient", client):
+            draft = self.runner().prepare(draft=True)
+            self.assertEqual(draft["execution"]["state"]["stage"], "self_review", draft)
+            reviewed = work("Reviewed the candidate diff against the criteria.")
+            self.assertEqual(reviewed["state"]["stage"], "pre_pr_validation")
+            for stage, following in (("pre_pr_validation", "pr_promotion"),
+                                     ("pr_promotion", "pr_validation")):
+                result = self.runner().prepare(stages=[stage])
+                self.assertEqual((result["status"], result["execution"]["state"]["stage"]),
+                                 (f"{stage}_submitted", following), result)
+            self.assertFalse(github.pull["draft"])
+            run = {"id": 1, "name": "test", "head_sha": candidate, "status": "in_progress",
+                   "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
+            github.runs = [run]
+            pending = self.runner().prepare(stages=["pr_validation"])["execution"]
+            self.assertEqual(pending["state"]["status"], "waiting_for_external", pending)
+            with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                db.execute("UPDATE external_rechecks SET due_at_ms=0")
+            CaptainLoop._recheck_due(SimpleNamespace(api=self.api))
+            run.update(status="completed", conclusion="success")
+            ready = self.runner().prepare(stages=["pr_validation"])
+        self.assertEqual(ready["status"], "published_validation_submitted", ready)
+        state = ready["execution"]["state"]
+        self.assertEqual((state["stage"], state["status"]), ("adversarial_review", "queued"), state)
+        self.assertEqual(self.runner().status(), {"status": "idle"})
+
+    def test_validation_policy_gap_waits_for_owner_with_reason(self):
+        self.api.stage, self.api.candidate = "pre_pr_validation", "a" * 40
+        self.api.drop_claim = self.api.drop_result = False
+        with patch("phalanx.validation_stages._candidate"):
+            result = self.runner().prepare(stages=["pre_pr_validation"])
+        body = self.api.posts[-1][0]
+        self.assertEqual((result["status"], body["outcome"], body["candidate"]),
+                         ("pre_pr_validation_submitted", "needs_input", "a" * 40))
+        self.assertIn("validation_policy", body["question"]["prompt"])
 
     def test_legacy_development_launch_preserves_candidate_and_blocks_draft(self):
         runner, marker, thread, worktree, candidate, _ = self.start_development()

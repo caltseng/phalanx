@@ -778,6 +778,19 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(stages, ["report_drafting", "report_review"])
         self.assertTrue(any(event["status"] == "report_storage_submitted" for event in self.events))
 
+    def test_validation_stages_need_policy_and_github_token(self):
+        loop = self.loop()
+        self.assertNotIn("pre_pr_validation", loop._capabilities())
+        self.config["validation_policy"] = str(self.directory / "policy.json")
+        with patch.dict(os.environ, {"PHALANX_GITHUB_TOKEN": ""}):
+            available = loop._capabilities()
+        self.assertIn("pre_pr_validation", available)
+        self.assertFalse({"pr_promotion", "pr_validation"} & set(available))
+        with patch.dict(os.environ, {"PHALANX_GITHUB_TOKEN": "fixture-only"}):
+            self.assertTrue(self.loop().rechecks)
+            self.assertLessEqual({"pre_pr_validation", "pr_promotion", "pr_validation"},
+                                 set(loop._capabilities()))
+
     def test_slow_runner_only_draft_keeps_worker_slot_and_renewals_usable(self):
         self.api.stages["first"] = "pr_creation"
         gate, entered = Event(), Event()

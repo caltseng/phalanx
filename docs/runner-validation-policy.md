@@ -128,11 +128,37 @@ bypass does **not** remove draft checks, ready CI, previews, or check-in gates.
 Carry the complete configured requirements into the existing exact-PR,
 head/base-bound observations, not just the checks currently returned by GitHub.
 
+## Runner stage wiring
+
+Set `"validation_policy"` in the runner config to the absolute policy path.
+`phalanx.validation_stages` runs `pre_pr_validation` (local checks through
+`CandidateLocal.pre_validate`), `pr_promotion` (draft checks, then marking the
+primary PR ready) and `pr_validation` (ready checks on the current head) on the
+runner, journaling each result before submission. Pending CI waits for an
+external recheck that the Captain loop requests when due. A missing policy
+entry or `null` phase becomes an owner question naming the gap; startup
+preflight rejects a malformed file before any claim.
+
+Example for a Python pilot repository (verify check names and app ID with
+`gh api repos/OWNER/REPO/commits/SHA/check-runs`):
+
+```json
+{"version": 1, "repositories": {"registered-repo-id": {
+  "local_checks": [{"name": "unit tests",
+    "argv": ["C:\\Python314\\python.exe", "-m", "unittest", "discover", "-s", "tests", "-v"],
+    "timeout_seconds": 600}],
+  "draft_checks": [],
+  "ready_checks": [
+    {"name": "test (ubuntu-latest)", "kind": "check_run", "app_id": 15368},
+    {"name": "test (windows-latest)", "kind": "check_run", "app_id": 15368}]}}}
+```
+
 ## Remaining integration
 
-This loader is not PH-14a pipeline acceptance. Captain/CLI configuration,
-claim dispatch, local result journaling, draft collection/promotion, ready
-collection and durable recheck orchestration still need stage wiring.
+Still pending: passing self-review findings into the next development packet,
+bypass dispositions and draft-only recovery in the wired stages, a moved base
+tip during ready collection (currently an owner question), adversarial review,
+and the acceptance repositories' policy files.
 
 Preview requirements load as ordinary `RequiredCheck` entries, but the loader
 never creates a provider reader: `policy.ready.read_preview` is `None`.
