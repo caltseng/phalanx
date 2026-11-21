@@ -68,9 +68,33 @@ class WaitInput(Payload):
     trigger: Text
 
 
+class Question(Payload):
+    prompt: Text
+    options: list[Text] = Field(default_factory=list, max_length=20)
+    proposed_default: Text | None = None
+    handoff: Text
+
+
+class Reply(Versioned):
+    answer: Text
+
+
+class GateRevision(Payload):
+    head: Text
+    base: Text
+
+
+class ExternalWait(AttemptEvent):
+    reason: Text
+    gate: Identifier
+    revision: GateRevision
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=0, le=86400)] = 0
+
+
 class Result(AttemptEvent):
     outcome: Outcome
     wait: WaitInput | None = None
+    question: Question | None = None
     failure_reason: Text | None = None
     candidate: Text | None = None
     report_markdown: Markdown | None = None

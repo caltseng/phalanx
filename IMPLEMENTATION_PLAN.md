@@ -69,6 +69,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-05. **Output:** PR.
 - Persist a focused question and handoff before releasing the slot. Provide a canonical owner reply through the API and CLI, plus one notification route. Index external recheck times, process due work in bounded batches with jitter and provider-directed backoff, and coalesce duplicate events by gate and revision. Surface why an item is waiting and what will resume it.
+- The durable slice provides the owner inbox, versioned replies, and runner endpoints for due waits and same-stage rechecks. Remaining integration includes active runner polling, provider observations and event coalescing by gate and revision, and the overdue-wave load check against lease renewals.
 - **Done when:** Replying queues the correct stage exactly once, a missed event is recovered by a recheck, and duplicate events or a wave of overdue waits neither occupy worker slots nor drown out lease renewals.
 
 ### PH-09 Make finalization durable
@@ -90,7 +91,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-01, PH-06, PH-10. **Output:** PR.
 - The attended single-slot bridge prepares development and report-drafting launches and relays verified results. Captain resolves the app project, records native receipts, and attests that the writer stopped. Dispatch filters claims by supported stage. Report review and storage, wider PR stage coverage, and a two-worker desktop run remain.
-- When PH-08 lands, send the worker question, options and handoff as its structured `question` result, carry the recorded question and owner answer into the next claim and work packet, and verify a question, reply and resumed attempt through the attended CLI. Until that integration, the attended runner submits the question and handoff in the owner wait reason.
+- The attended runner submits questions and handoffs through PH-08 and includes the recorded question and owner answer in the resumed work packet. Verify the roundtrip in a live Captain chat during the attended pilot.
 - Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
 - **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
 

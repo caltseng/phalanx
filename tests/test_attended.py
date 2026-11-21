@@ -8,8 +8,10 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from phalanx.attended import AttendedRunner, RunnerError
+from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
 from phalanx.workspaces import WorkspaceManager
+
+from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
 class StubAPI:
@@ -55,7 +57,7 @@ class StubAPI:
         raise AssertionError(path)
 
 
-class AttendedTest(unittest.TestCase):
+class AttendedTest(ServerFixture, unittest.TestCase):
     def setUp(self):
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -174,8 +176,54 @@ class AttendedTest(unittest.TestCase):
         self.assertIn("Build unavailable", technical["failure_reason"])
         self.assertNotIn("wait", technical)
         self.assertNotIn("failure_reason", question)
-        self.assertEqual(question["wait"]["trigger"], "owner reply")
-        self.assertIn("Which source?", question["wait"]["reason"])
+        self.assertEqual(question["question"], {
+            "prompt": "Which source?", "options": ["Source A or B"], "handoff": "No edits",
+        })
+
+    def test_owner_reply_reaches_the_next_attended_launch(self):
+        self.start_server(self.checkout.parent / "queue.sqlite3")
+        self.api = RunnerAPI(self.url, RUNNER)
+        status, registration = self.request(
+            "/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)},
+        )
+        self.assertEqual(status, 200, registration)
+        status, item = self.request(
+            "/v1/items", OWNER, {"repository_id": "repo", "goal": "Review sources", "target": "report"},
+        )
+        self.assertEqual(status, 201, item)
+        runner = self.runner()
+        marker = runner.prepare()["marker"]
+        thread_id = str(uuid4())
+        runner.receipt(marker, "local", thread_id=thread_id)
+        self.write_result(runner, marker, {
+            "question": "Which source?", "options": "Source A or B", "handoff": "Draft in notes.md",
+        }, "needs_input")
+        waiting = runner.submit(marker, "local", thread_id)
+        self.assertEqual(waiting["state"]["status"], "waiting_for_input")
+        self.assertEqual(runner.status(), {"status": "idle"})
+        status, inbox = self.get("/v1/owner/inbox", OWNER)
+        self.assertEqual(status, 200, inbox)
+        question = {
+            "prompt": "Which source?", "options": ["Source A or B"],
+            "handoff": "Draft in notes.md", "proposed_default": None,
+        }
+        self.assertEqual(inbox[0]["question"], question)
+        route = f"/v1/items/{item['id']}/executions/{waiting['id']}/reply"
+        status, queued = self.request(route, OWNER, {
+            "expected_version": waiting["version"], "answer": "Source B only",
+        }, {"Idempotency-Key": "answer"})
+        self.assertEqual(status, 200, queued)
+        self.assertEqual(queued["state"]["status"], "queued")
+        resumed = self.runner()
+        launch = resumed.prepare()
+        self.assertNotEqual(launch["marker"], marker)
+        packet = resumed.status()["packet"]
+        self.assertEqual(packet["stage"], "report_drafting")
+        self.assertEqual(json.loads(packet["handoff"]), {
+            "question": question, "answer": "Source B only", "wait_version": waiting["version"],
+        })
+        self.assertIn("Source B only", launch["create_thread"]["prompt"])
+        self.assertIn("Draft in notes.md", launch["create_thread"]["prompt"])
 
     def test_development_requires_verified_candidate(self):
         self.api.drop_claim = self.api.drop_result = False
