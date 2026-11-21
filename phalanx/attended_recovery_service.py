@@ -85,8 +85,8 @@ def _verify_local(root, record, packet, thread_id):
         elif result is None:
             summary = "Preserve and reconcile local changes before allowing a replacement"
         elif (
-            (packet.stage == "report_drafting" and unchanged
-             and result.outcome in {"succeeded", "needs_input", "failed"})
+            (packet.stage in {"report_drafting", "report_review"} and unchanged
+             and result.outcome in {"succeeded", "changes_required", "needs_input", "failed"})
             or (packet.stage == "development" and result.outcome == "succeeded"
                 and not workspace.dirty and workspace.head != packet.expected_revision
                 and result.details["evidence"].strip() == workspace.head)
@@ -109,7 +109,7 @@ def _verify_local(root, record, packet, thread_id):
 
 
 def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_complete=False,
-                 recheck=False, clock=time):
+                 recheck=False, clock=time, no_launch_proof=None):
     """Return a Captain decision and execute at most one journaled stop request."""
     original, local_attempt_ids = journal.snapshot()
     route = f"/dispatch/runners/{quote(runner_id, safe='')}"
@@ -128,6 +128,9 @@ def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_co
     if original["runner_id"] != runner_id:
         return {"status": "owner_wait", "reason": "Use the original runner identity for this slot"}
 
+    if no_launch_proof is not None and any(field in original for field in ("relay", "receipt", "submission")):
+        raise RunnerError("No-launch proof cannot replace reconciliation of recorded launch effects")
+
     # Keep native observations, filesystem inspection and HTTP outside the lock.
     record = json.loads(json.dumps(original))
     saved = record.get("packet")
@@ -139,7 +142,7 @@ def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_co
     def decision(**kwargs):
         return reconcile(record, runner_id=runner_id, packet=packet, expired=expired,
                          observations=observations, discovery_complete=discovery_complete,
-                         now=clock(), **kwargs)
+                         now=clock(), no_launch_proof=no_launch_proof, **kwargs)
 
     request = record.get("recover_stop")
     if (recheck and request and record.get("stop_rejected") and expired is not None

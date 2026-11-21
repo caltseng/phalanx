@@ -139,6 +139,26 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         })
         self.assertEqual(self.runner().status(), {"status": "idle"})
 
+    def test_correlated_queued_receipt_remains_idempotent_on_native_replays(self):
+        self.api.drop_claim = False
+        launch = self.runner().prepare()
+        queued, native = str(uuid4()), str(uuid4())
+        runner = self.runner()
+        runner.receipt(launch["marker"], "local", client_thread_id=queued)
+        runner.receipt(launch["marker"], "local", thread_id=native)
+        for _ in range(2):
+            response = runner.receipt(launch["marker"], "local", thread_id=native)
+            self.assertEqual(response, {"status": "receipt_recorded", "thread_id": native,
+                                        "client_thread_id": queued})
+        with self.assertRaisesRegex(RunnerError, "conflicts"):
+            runner.receipt(launch["marker"], "local", thread_id=str(uuid4()))
+        with self.assertRaisesRegex(RunnerError, "marker and host"):
+            runner.receipt("wrong-marker", "local", thread_id=native)
+        self.write_result(runner, launch["marker"], "# Verified report")
+        self.api.drop_result = False
+        runner.submit(launch["marker"], "local", native)
+        self.assertEqual(runner.status(), {"status": "idle"})
+
     def test_report_review_and_storage_recovery_over_http(self):
         database = self.root.parent / "queue.sqlite3"
         self.start_server(database)

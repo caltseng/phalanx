@@ -121,8 +121,127 @@ through the report endpoint.
 
 Keep the state directory when restarting. Expired leases and unverified results
 require reconciliation.
-Automatic desktop recovery and independent heartbeat scheduling remain
-follow-up work.
+The continuous loop below supplies independent heartbeat scheduling and
+fixture-backed native observation. Real desktop acceptance remains pending.
+
+### Continuous attended Captain loop
+
+Use the same stable runner ID, private state directory, and numbered slots as
+the attended commands. Finish other preparation commands before starting one
+loop for that directory. A process lock excludes a second loop; it does not
+prevent manual status, receipt, or recovery commands.
+
+```powershell
+python -m phalanx captain --config runner.json --state C:\phalanx-runner --adapter-command codex-desktop-bridge
+```
+
+`codex-desktop-bridge` is an **external integration contract**, not a bundled
+executable or a claim of supported Codex desktop automation. Supply a trusted
+bridge that can actually discover and operate the authorized desktop project.
+Put `--adapter-command` last; all remaining arguments belong to the bridge.
+The executable fixture in `tests/fixtures/captain_bridge.py` tests the JSON
+boundary without contacting a desktop.
+
+The loop enumerates durable reservations and the server's expired attempts
+before admitting work. An unavailable recovery listing or unmatched attempt
+pauses admission with a visible recovery reason. Existing reservations,
+including slots above a reduced capacity, still run and renew. New claims
+route implemented worker stages (`development`, `report_drafting`,
+`report_review`) separately from runner-only `pr_creation` and `report_storage`. An optional
+config `stages` array restricts this set. Initial draft claims are excluded
+without `PHALANX_GITHUB_TOKEN`. The server's atomic eligible-stage claim still
+applies pause, capacity, priority, repository, dependency and affinity gates.
+Worker claims require verified desktop mappings; runner-only claims retain all
+Git-verified mappings even when their desktop is unavailable. The loop alternates
+which group it polls first and preserves each pending claim's exact original
+filters and secret.
+
+Each slot has one work lane. Lease renewals have separate lanes (20 seconds
+by default), as do bounded native observation batches (eight slots, two-second
+wait by default). Git, provider requests, a slow native batch, or an ambiguous
+slot cannot occupy the heartbeat or another slot's work lane. Configure
+`--batch-size 1` to isolate individual native waits. `--poll-seconds`,
+`--heartbeat-seconds`, `--batch-size`, and `--wait-seconds` tune the bounded
+scheduler. Per-attempt cursors are persisted only as observation optimizations;
+they never prove stop or authorize replacement.
+
+Every prepared launch is relayed at most once. The loop journals relay intent
+before invoking the bridge and immediately saves a native or queued receipt.
+After timeout, failure or restart, a recorded relay intent is **never** repeated.
+A prepared packet with no relay intent, receipt, submission or recovery ownership
+can resume discovery and launch using its original claim and packet. Its clean,
+accounted worktree and live claim are rechecked before relaying.
+Discovery must correlate its original marker, assignment, host, project, launch
+time and any queued ID to exactly one native thread. A stopped turn also requires
+an explicit attestation that downstream writers stopped. The existing result
+collector validates the local result and checkpoint before submitting it.
+Once a queued ID has been correlated to a native thread, repeated observations
+of that same native ID preserve the queued identity and remain idempotent.
+Saved submissions replay their exact original receipt even when the local lease
+deadline has passed; the server decides whether they were already accepted.
+Expired results remain reserved for server-authorized adoption, which is not
+implemented by this slice. Existing stopped-attempt recovery can release only
+verified safe reservations.
+
+A stopping worker assignment with no relay intent, receipt, submission or recovery
+ownership (whether or not its packet was committed)
+can use the leased `stop-confirmed` route without waiting for expiry. The loop
+checks its absent or clean, accounted worktree and records the exact stop request
+before sending it. Retries recheck that proof and replay the original request.
+Only a verified finalization acknowledgment releases the slot. Dirty checkpoints,
+partial workspace refs, attempt evidence, ambiguous launches and runner-only
+publication/storage effects still require explicit reconciliation.
+For a launched stopping worker, the same stop path requires its exact stopped
+native turn and verifies the worktree and any result through the recovery
+verifier; it never submits a worker result as a cancellation acknowledgment.
+A clean unlaunched checkpoint remains accounted when origin advances to a
+descendant. Unmatched expired attempts consume capacity rather than stopping
+all admission. Recovery waits for an observation before starting its uncertainty
+backoff, and malformed native rows block only their associated markers.
+Rejected submissions remain observable across restart and stop confirmation
+archives their evidence once. An expired prepared packet with no relay effects
+uses the verified no-launch checkpoint for recovery without waiting for a
+native observation that cannot exist.
+
+The CLI prints JSON activity and actionable errors; reservation status includes
+the last loop and recovery reason. Ctrl+C stops scheduling and drains in-flight
+operations without discarding reservations. Restart with the same configuration.
+The journal refuses a different runner ID or API URL.
+
+#### Desktop bridge contract
+
+The runner invokes the adapter command once per operation, with one UTF-8 JSON
+request on stdin and one JSON object on stdout. The request contains
+`contract_version: 1`, `operation`, and `arguments`. Commands must not write
+diagnostic text to stdout; nonzero exits, malformed replies, replies exceeding
+1 MiB and a 15-second command timeout are visible failures. Stdin/stdout use
+temporary files, not pipes whose inherited handles could keep a timed-out helper
+or loop shutdown waiting for EOF. Timeout terminates only the direct helper, not
+native workers or its process tree; an uncertain launch stays reserved. Bridges
+must detach native workers' stdio from these short-lived request files. Shutdown
+still drains in-flight runner/Git operations.
+The bridge receives no queue token or
+lease in the protocol. Phalanx runner, owner and GitHub token environment
+variables are removed from its subprocess environment; keep the bridge trusted.
+
+| Operation | Arguments and required response |
+| --- | --- |
+| `resolve_project` | Receives `host_id`, `project_id`, `checkout`. Discover the exact project on that host and return those verified fields; do not echo unverified input. The checkout must resolve to the configured root. |
+| `create_thread` | Receives `host_id`, original `marker`, and the prepared `create_thread` arguments. Return the same host and marker and exactly one UUID: `thread_id` or queued `client_thread_id`. The bridge must route the local project target to that exact host. |
+| `wait_threads` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads`, and optional per-marker `cursors` (string or null to reset). |
+
+Thread rows use the recovery observation fields documented below. A `stopped`
+row additionally requires `writers_stopped: true`. Observation timestamps must
+be fresh (at most 60 seconds old). Discovery is complete only after the relevant
+history pages have been reconciled, including queued or lost receipts; a cursor
+must not hide the first-turn identity or be treated as complete history.
+
+**Acceptance gap:** This CLI entry point is executable with a fixture transport,
+but no production bridge to native Codex tools is bundled. Two real visible
+workers, queued/lost-receipt reconciliation, and attended restart need desktop
+acceptance. Wider PR stages, owner notifications/due external rechecks and
+fresh-claim result adoption remain integration work; this is not full PH-11
+or v1 acceptance.
 
 ### Load trusted validation policy
 
