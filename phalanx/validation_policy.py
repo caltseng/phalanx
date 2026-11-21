@@ -9,7 +9,7 @@ from pydantic import Field, StringConstraints, TypeAdapter, ValidationError, fie
 
 from .candidate_local import LocalCheck
 from .intake_models import Identifier, Payload, Text
-from .pr_observations import RequiredCheck as CheckConfig
+from .pr_models import RequiredCheck as CheckConfig
 from .published_validation_stage import PublishedValidationPolicy
 from .validation import CheckKind, PreCheck, PreOutcome, RequiredCheck
 

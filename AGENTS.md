@@ -17,7 +17,7 @@
 
 ## Architecture
 
-- Run a standalone HTTP API server locally first. Keep its API contract usable when hosted. The CLI and runner connect using a configurable base URL and credentials.
+- Run a standalone HTTP API server locally first. Keep its API contract usable when hosted. The CLI and runner connect using a configurable base URL and credentials. The work queue and the operator dashboard will be server-hosted, so keep the server a separate component from runners and clients: they reach queue storage only through the API, which lets storage move to the backend without re-architecture.
 - Keep queue state, claims, work history, and reports behind the API. Keep checkout mappings and Git credentials local to the runner. The runner talks to the backend and holds queue credentials and leases.
 - Stay runtime-neutral. Phalanx must work with any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code. Don't encode a preferred runtime, or one runtime's tools, names or behavior, in the core, specs, plan, branch names or tests. Keep runtime specifics behind the bridge, work packet and result contracts, with one adapter per runtime. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
 - Stay platform-neutral on the client side. The CLI, runner, Captain loop, bridge, and local checks must work on Windows, macOS, and Linux. Use portable paths, processes, signals, file locking and shells, and keep OS-specific behavior behind small, tested branches. CI must cover each supported OS. The server only needs to run where it is hosted.

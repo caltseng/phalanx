@@ -221,7 +221,7 @@ PH-11b, PH-14a and PH-V1 run against these two public scratch repositories. Each
 
 | Item | Depends on | Deliverable and acceptance |
 | --- | --- | --- |
-| **PH-20 Host the API** | PH-19 | Deploy the same server with HTTPS, persistence, backups, and restore validation. Point a local runner at the hosted URL and repeat the v1 muster through the same API. |
+| **PH-20 Host the API and dashboard** | PH-V1 | Deploy the same server with HTTPS, persistent backend storage, backups via `phalanx server backup`, and restore validation. Serve the operator dashboard from the hosted server's origin. Serving it from a separate static origin would also need a configurable API base URL and a CORS allowlist; add those only if needed. Point a local runner at the hosted URL and repeat the v1 muster through the same API. The import-boundary test keeps runners and clients off server storage, so this is deployment work. |
 | **PH-21 Add phone intake** | PH-20 | Verify the supported ChatGPT integration and authorization. File an item by phone and return its durable link. |
 | **PH-22 Support multi-device execution** | PH-19 | Validate claims across machines, checkpoint portability, affinity, GitHub write reconciliation, and device loss with work in flight. |
 | **PH-23 Add alternate runtimes** | PH-11, PH-19 | Verify and add Claude Code and GitHub Copilot CLI adapters as needed. Pass the shared stage contract and recovery tests for each supported runtime. |

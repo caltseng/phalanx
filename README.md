@@ -40,7 +40,7 @@ python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 
 The `python -m phalanx` commands below are the same in either shell once the virtual environment is active. Examples use Windows paths such as `C:\phalanx-runner` for the runner state directory and `C:/enlistments/example` for a checkout; on macOS or Linux use paths such as `~/phalanx-runner` on the command line and absolute paths such as `/Users/you/src/example` in JSON config. Set environment variables with `$env:NAME = "value"` in PowerShell or `export NAME="value"` in a POSIX shell. On macOS, configure checkout and state paths with their exact on-disk letter case.
 
-If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Tests use the standard library and the same runtime dependencies.
+If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Without the lock file, `pip install -e .` installs only what the CLI, runner and Captain loop need; add the `server` extra (`pip install -e ".[server]"`) on the server host. Tests use the standard library and the same runtime dependencies.
 
 Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server applies pending migrations before serving requests and defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
 
@@ -382,24 +382,24 @@ A saved stop request can be replayed without another observation file. A `retry`
 
 ### Operator work board
 
-Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text.
+Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
 
 The board shows each item's prerequisite blockers, any scheduled retry or external recheck, its worker reference and chat link, its current PR and its final output. It is read-only. When an item is waiting for an answer, its detail shows the question and the `reply` command to answer it with. See [Answer a waiting item](#answer-a-waiting-item).
 
 ### Back up and restore SQLite
 
-Run these commands in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS, APFS or ext4. Each command validates its copy before creating the destination and refuses to overwrite an existing file.
+These are server-host-only admin commands: they open the server's database file directly rather than going through the API, so run them on the server host, never from a runner. Run them in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS, APFS or ext4. Each command validates its copy before creating the destination and refuses to overwrite an existing file.
 
 ```powershell
 New-Item -ItemType Directory -Force .phalanx/backups | Out-Null  # POSIX: mkdir -p .phalanx/backups
-python -m phalanx backup .phalanx/backups/phalanx-01.sqlite3
+python -m phalanx server backup .phalanx/backups/phalanx-01.sqlite3
 ```
 
 For recovery, stop the server and point `PHALANX_DB` at a fresh path in an existing directory. Restore the backup there, restart the API using the same path, and verify `GET /health`. Keep the old database until you've verified the recovered data.
 
 ```powershell
 $env:PHALANX_DB = "$PWD/.phalanx/phalanx-restored.sqlite3"  # POSIX: export PHALANX_DB="$PWD/.phalanx/phalanx-restored.sqlite3"
-python -m phalanx restore .phalanx/backups/phalanx-01.sqlite3
+python -m phalanx server restore .phalanx/backups/phalanx-01.sqlite3
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 

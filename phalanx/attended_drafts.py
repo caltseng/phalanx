@@ -9,9 +9,9 @@ from .github import GitHubClient
 
 
 def github_repository(remote):
-    from .pr_observations import _GITHUB_REMOTE
+    from .pr_models import GITHUB_REMOTE
 
-    match = _GITHUB_REMOTE.fullmatch(remote)
+    match = GITHUB_REMOTE.fullmatch(remote)
     return match[1].lower() if match else None
 
 

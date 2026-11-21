@@ -11,6 +11,8 @@ import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 
+from .transitions import item_branch
+
 if os.name == "nt":
     import msvcrt
 else:
@@ -95,7 +97,7 @@ def _remote_identity(remote: str, checkout: Path) -> tuple:
 def _item_branch(item_id: str) -> str:
     if not item_id:
         raise WorkspaceError("A work item ID is required")
-    return f"phalanx/{hashlib.sha256(item_id.encode()).hexdigest()}"
+    return item_branch(item_id)
 
 
 @contextmanager

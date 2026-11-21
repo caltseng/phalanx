@@ -11,7 +11,7 @@ from typing import Protocol
 from .draft_publication import DraftIntent, DraftOutcome, DraftPublisher, PublicationClaim
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient
-from .pr_observations import ExpectedRefs, GitHubPull, Publication, PublicationBlocker
+from .pr_models import ExpectedRefs, GitHubPull, Publication, PublicationBlocker
 from .transitions import Stage
 
 

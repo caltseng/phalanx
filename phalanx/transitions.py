@@ -7,6 +7,7 @@ Provider observations and policy decisions must come from trusted adapters.
 
 from dataclasses import dataclass, replace
 from enum import StrEnum
+import hashlib
 
 
 class Stage(StrEnum):
@@ -132,6 +133,11 @@ class Execution:
 def start(target: Target) -> Execution:
     stage = Stage.REPORT_DRAFTING if target is Target.REPORT else Stage.DEVELOPMENT
     return Execution(target, stage)
+
+
+def item_branch(item_id: str) -> str:
+    """Deterministic PR head branch shared by the runner and the server."""
+    return f"phalanx/{hashlib.sha256(item_id.encode()).hexdigest()}"
 
 
 @dataclass(frozen=True)

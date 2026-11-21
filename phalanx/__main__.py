@@ -11,8 +11,6 @@ from .attended import RunnerError, add_attended_command, run_attended
 from .attended_recovery_service import add_recovery_command, run_recovery_command
 from .captain_loop import add_captain_command, run_captain
 from .captain_relay import add_relay_command, run_relay
-from .config import database_path
-from .store import snapshot
 from .workspaces import WorkspaceError
 
 
@@ -41,9 +39,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m phalanx")
     parser.add_argument("--api-url", default=os.environ.get("PHALANX_API_URL", "http://127.0.0.1:8000"))
     commands = parser.add_subparsers(dest="command", required=True)
-    backup = commands.add_parser("backup", help="snapshot PHALANX_DB to a new file")
+    server = commands.add_parser(
+        "server", help="server-host-only admin; opens PHALANX_DB directly, never through the API")
+    admin = server.add_subparsers(dest="server_command", required=True)
+    backup = admin.add_parser("backup", help="snapshot PHALANX_DB to a new file")
     backup.add_argument("destination", type=Path)
-    restore = commands.add_parser("restore", help="restore a snapshot to a new PHALANX_DB path")
+    restore = admin.add_parser("restore", help="restore a snapshot to a new PHALANX_DB path")
     restore.add_argument("source", type=Path)
     register = commands.add_parser("register", help="register an expected repository remote")
     register.add_argument("repository")
@@ -73,10 +74,10 @@ def main() -> None:
     add_relay_command(commands)
     args = parser.parse_args()
     try:
-        if args.command == "backup":
-            snapshot(database_path(), args.destination)
-        elif args.command == "restore":
-            snapshot(args.source, database_path())
+        if args.command == "server":
+            from .server_admin import run_server_command
+
+            run_server_command(args)
         elif args.command == "attended":
             run_attended(args)
         elif args.command == "attended-recover":

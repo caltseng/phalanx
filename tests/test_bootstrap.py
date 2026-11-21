@@ -144,7 +144,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
     def run_cli(self, database, command, argument, *, success=True):
         result = subprocess.run(
-            [sys.executable, "-m", "phalanx", command, str(argument)],
+            [sys.executable, "-m", "phalanx", "server", command, str(argument)],
             env=dict(os.environ, PHALANX_DB=str(database)),
             capture_output=True, text=True, timeout=10,
         )

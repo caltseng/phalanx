@@ -12,7 +12,7 @@ from .draft_stage import RunnerAPI
 from .github import GitHubClient, GitHubError
 from .github_checks import PreviewReader, collect_github_checks
 from .intake_models import Identifier
-from .pr_observations import (
+from .pr_models import (
     ExpectedRefs, GateObservation, GitHubPull, PublishedValidationClaimCheck, Validation,
 )
 from .transitions import Outcome, Stage
