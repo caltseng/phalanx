@@ -21,6 +21,7 @@ class StubAPI:
         self.drop_claim = True
         self.drop_result = True
         self.stage = "report_drafting"
+        self.dependencies = []
         self.current_version = 3
 
     def call(self, path, body=None, *, lease=None, key=None):
@@ -39,6 +40,7 @@ class StubAPI:
                 "status": "claimed", "item_id": "item", "attempt_id": self.attempt,
                 "lease_expires_at": 900,
                 "execution": {"id": "execution", "version": 3, "state": {"stage": self.stage}},
+                "dependencies": self.dependencies,
                 "request": {"repository_id": "repo", "goal": "Document the test suite",
                             "target": "report" if self.stage == "report_drafting" else "ready_for_check_in"},
             }
@@ -89,6 +91,10 @@ class AttendedTest(unittest.TestCase):
         (self.root / "results" / f"{marker}.json").write_text(json.dumps(result), encoding="utf-8")
 
     def test_report_roundtrip_with_lost_claim_and_result_responses(self):
+        self.api.dependencies = [{
+            "upstream_id": "upstream", "milestone": "report", "execution_id": "upstream-execution",
+            "reference": "/v1/report", "revision": "pinned-report-revision", "reviewed_revision": None,
+        }]
         with self.assertRaisesRegex(RunnerError, "lost claim"):
             self.runner().prepare()
         self.assertEqual(self.runner().status()["status"], "claim_pending")
@@ -98,6 +104,8 @@ class AttendedTest(unittest.TestCase):
         self.assertNotIn(self.api.claim_leases[0], json.dumps(launch))
         self.assertEqual(launch["create_thread"]["target"]["projectId"], "project")
         self.assertIn(marker, launch["create_thread"]["prompt"])
+        self.assertIn("pinned-report-revision", launch["create_thread"]["prompt"])
+        self.assertEqual(self.runner().status()["packet"]["dependencies"], self.api.dependencies)
         with self.assertRaisesRegex(RunnerError, "already issued"):
             self.runner().prepare()
         self.runner().receipt(marker, "local", client_thread_id=str(uuid4()))

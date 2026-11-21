@@ -5,6 +5,7 @@ import sqlite3
 from tempfile import TemporaryDirectory
 from threading import Lock
 
+from .dependency_schema import DEPENDENCY_SCHEMA
 from .dispatch_schema import DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
@@ -22,6 +23,7 @@ MIGRATIONS = (
     FINALIZATION_SCHEMA,
     OPERATOR_SCHEMA,
     STAGE_QUEUE_SCHEMA,
+    DEPENDENCY_SCHEMA,
 )
 
 

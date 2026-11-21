@@ -332,6 +332,10 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             plan = db.execute("EXPLAIN QUERY PLAN " + dispatch.QUEUE_HEAD,
                               (NOW * 1000, "repo", "", 2)).fetchone()["detail"]
             self.assertIn("SEARCH executions USING INDEX queue_heads", plan)
-            stage_plan = db.execute("EXPLAIN QUERY PLAN " + dispatch.STAGE_QUEUE_HEAD,
-                                    (NOW * 1000, "repo", "", 2, "report_drafting")).fetchone()["detail"]
-            self.assertIn("SEARCH executions USING INDEX queue_stage_heads", stage_plan)
+            stage_plan = [row["detail"] for row in db.execute(
+                "EXPLAIN QUERY PLAN " + dispatch.STAGE_QUEUE_HEAD,
+                (NOW * 1000, "repo", "", 2, "report_drafting"),
+            )]
+            self.assertEqual(len(stage_plan), 1)
+            self.assertIn("SEARCH executions USING INDEX queue_stage_heads", stage_plan[0])
+            self.assertIn("stage=? AND ready_since", stage_plan[0])
