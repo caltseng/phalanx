@@ -84,10 +84,11 @@ From an authorized Captain muster:
 Development success requires a new local candidate commit and a clean
 worktree. Report drafting sends the Markdown to the server as a draft.
 Both stages support questions and failures with local checkpoint evidence.
-Keep the state directory when restarting. Unsupported stages, expired leases,
-and unverified results require reconciliation. This slice has no automatic
-desktop recovery, independent heartbeat scheduling, or stage-aware admission.
-Use an isolated pilot queue for the supported stages.
+The runner claims only development and report drafting. Later stages stay in
+the queue for a handler that supports them. Keep the state directory when
+restarting. Expired leases and unverified results require reconciliation.
+Automatic desktop recovery and independent heartbeat scheduling remain
+follow-up work.
 
 ### Back up and restore SQLite
 
@@ -119,7 +120,7 @@ capacity and recovery within that trusted role.
 | --- | --- |
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
 | `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
-| `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), and optional `slots` to lower the capacity for this muster. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
+| `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |

@@ -120,7 +120,7 @@ class AttendedRunner:
             if not eligible:
                 raise RunnerError("No registered checkout passed verification; check local mappings and origins")
             record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                          repositories=eligible, blocked=blocked)
+                          repositories=eligible, blocked=blocked, stages=sorted(STAGES))
             return record["lease"]
 
         lease = self._transaction(reserve)
@@ -133,10 +133,13 @@ class AttendedRunner:
             ensure_reservation(record)
             if "claim" in record:
                 return None
-            result = self.api.call("/dispatch/claim", {
+            request = {
                 "runner_id": record["runner_id"], "repository_ids": sorted(record["repositories"]),
                 "slots": 1,
-            }, lease=record["lease"])
+            }
+            if "stages" in record:
+                request["stages"] = record["stages"]
+            result = self.api.call("/dispatch/claim", request, lease=record["lease"])
             if result["status"] != "claimed":
                 status = {"status": result["status"], "unverified_mappings": record["blocked"]}
                 record.clear()
@@ -144,12 +147,24 @@ class AttendedRunner:
             record.update(claim=result, lease_expires_at=result["lease_expires_at"])
             return None
 
-        def launch(record):
-            ensure_reservation(record)
-            return self._prepare_launch(record)
-
         result = self._transaction(claim)
-        return result if result is not None else self._transaction(launch)
+        if result is not None:
+            return result
+
+        snapshot = self._transaction(dict)
+        ensure_reservation(snapshot)
+        launch = self._prepare_launch(snapshot)
+
+        def commit_launch(record):
+            ensure_reservation(record)
+            if "packet" in record:
+                raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
+            for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
+                record[field] = snapshot[field]
+            record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
+
+        self._transaction(commit_launch)
+        return launch
 
     def _prepare_launch(self, record):
         if "packet" in record:
@@ -304,9 +319,21 @@ class AttendedRunner:
                 "details": result.details,
                 "stop_confirmed_at": datetime.now(timezone.utc).isoformat(),
             }
-            record["submission"] = submission
+            return submission
 
-        self._transaction(verify)
+        # Workspace inspection can run Git commands. Keep the journal available
+        # for renewals and verify the reservation again before saving evidence.
+        snapshot = self._transaction(dict)
+        submission = verify(snapshot)
+
+        def save_submission(record):
+            if (record.get("lease") != snapshot.get("lease")
+                    or record.get("receipt") != snapshot.get("receipt")):
+                raise RunnerError("The original reservation ended; inspect status")
+            if "submission" not in record:
+                record["submission"] = submission
+
+        self._transaction(save_submission)
 
         def send(record):
             packet = self._handoff(record).packet

@@ -1,11 +1,15 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Event
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerError
+from phalanx.workspaces import WorkspaceManager
 
 
 class StubAPI:
@@ -26,6 +30,7 @@ class StubAPI:
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
+            assert body["stages"] == ["development", "report_drafting"], body
             self.claim_leases.append(lease)
             if self.drop_claim:
                 self.drop_claim = False
@@ -119,6 +124,28 @@ class AttendedTest(unittest.TestCase):
             self.runner().prepare()
         self.assertEqual(self.runner().status()["status"], "claimed")
         self.assertEqual(self.api.posts, [])
+
+    def test_renew_can_run_while_git_prepares_workspace(self):
+        self.api.drop_claim = False
+        entered = Event()
+        resume = Event()
+        original = WorkspaceManager.prepare
+
+        def slow_prepare(manager, *args, **kwargs):
+            entered.set()
+            if not resume.wait(timeout=10):
+                raise AssertionError("Workspace preparation did not resume")
+            return original(manager, *args, **kwargs)
+
+        with patch.object(WorkspaceManager, "prepare", slow_prepare), ThreadPoolExecutor(2) as pool:
+            preparing = pool.submit(self.runner().prepare)
+            try:
+                self.assertTrue(entered.wait(timeout=10))
+                renewal = pool.submit(self.runner().renew).result(timeout=5)
+                self.assertEqual(renewal["lease_expires_at"], 901)
+            finally:
+                resume.set()
+            self.assertEqual(preparing.result(timeout=15)["status"], "launch_intent")
 
     def test_development_requires_verified_candidate(self):
         self.api.drop_claim = self.api.drop_result = False
