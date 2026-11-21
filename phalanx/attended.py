@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
+from .attended_drafts import development_checkpoint, github_repository, publish_draft
 from .codex_handoff import CodexHandoff, WorkPacket
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
@@ -121,13 +122,13 @@ class AttendedRunner:
         if record.get("lease") != lease:
             raise RunnerError("The original reservation has ended; inspect status")
 
-    def _verified_mappings(self):
+    def _verified_mappings(self, *, draft=False):
         eligible = {}
         blocked = []
         for registered in self.api.call("/repositories"):
             repo = registered["id"]
             mapping = self.config["repositories"].get(repo)
-            if mapping is None:
+            if mapping is None or (draft and github_repository(registered["remote"]) is None):
                 continue
             try:
                 self._manager(mapping, registered["remote"]).verify_checkout()
@@ -139,24 +140,28 @@ class AttendedRunner:
             raise RunnerError("No registered checkout passed verification; check local mappings and origins")
         return eligible, blocked
 
-    def prepare(self):
+    def prepare(self, *, draft=False):
         # Only competing preparations of this slot wait here. Heartbeats and
         # other slots can still use the journal during HTTP and Git operations.
         with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
-            return self._prepare_slot()
+            return self._prepare_slot(draft=draft)
 
-    def _prepare_slot(self):
+    def _prepare_slot(self, *, draft):
+        github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
         snapshot = self._snapshot()
         if not snapshot:
+            if draft and not github_token:
+                raise RunnerError("Set PHALANX_GITHUB_TOKEN in the runner environment for draft publication")
             if self.slot > self.capacity:
                 raise RunnerError("Slot exceeds local capacity; use an enabled slot")
-            eligible, blocked = self._verified_mappings()
+            eligible, blocked = self._verified_mappings(draft=draft)
 
             def reserve(record, db):
                 if db.execute("SELECT count(*) FROM slot").fetchone()[0] >= self.capacity:
                     raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
                 record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                              repositories=eligible, blocked=blocked, stages=sorted(STAGES),
+                              repositories=eligible, blocked=blocked,
+                              stages=["pr_creation"] if draft else sorted(STAGES),
                               slots=self.capacity)
                 return record
 
@@ -164,6 +169,8 @@ class AttendedRunner:
 
         lease = snapshot["lease"]
         if "claim" not in snapshot:
+            if draft and snapshot.get("stages") != ["pr_creation"]:
+                raise RunnerError("Resume the existing worker reservation with prepare")
             request = {
                 "runner_id": snapshot["runner_id"],
                 "repository_ids": sorted(snapshot["repositories"]),
@@ -186,6 +193,10 @@ class AttendedRunner:
             if not snapshot:
                 return {"status": result["status"], "slot": self.slot, "unverified_mappings": blocked}
 
+        if snapshot["claim"]["execution"]["state"]["stage"] == "pr_creation":
+            return {**self._run_draft(snapshot, github_token), "slot": self.slot}
+        if draft:
+            raise RunnerError("The slot holds a worker assignment; resume it with prepare")
         launch = self._prepare_launch(snapshot)
 
         def commit_launch(record, db):
@@ -194,10 +205,42 @@ class AttendedRunner:
                 raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
                 record[field] = snapshot[field]
+            if "development_base" in snapshot:
+                record["development_base"] = snapshot["development_base"]
             record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
 
         self._transaction(commit_launch)
         return {**launch, "slot": self.slot}
+
+    def _run_draft(self, snapshot, token):
+        claim = snapshot["claim"]
+        mapping = self.config["repositories"][claim["request"]["repository_id"]]
+        checkpoint = development_checkpoint(self.journal, claim)
+        if checkpoint is None:
+            status = {"status": "draft_blocked", "reason": (
+                "The candidate has no accepted development base checkpoint. "
+                "Recover the exact development base or return the item to development."
+            )}
+        elif not token:
+            status = {"status": "draft_blocked",
+                      "reason": "Set PHALANX_GITHUB_TOKEN in the runner environment and retry"}
+        else:
+            result = publish_draft(self.root, self.api, snapshot, mapping, checkpoint, token)
+            if result.execution is not None:
+                status = {"status": "draft_submitted", "execution": result.execution}
+            else:
+                status = {"status": "draft_" + result.publication.status,
+                          "reason": result.publication.reason}
+
+        def finish(record, db):
+            if record.get("lease") == snapshot["lease"]:
+                if status["status"] == "draft_submitted":
+                    record.clear()
+                else:
+                    record["draft_status"] = status
+
+        self._transaction(finish)
+        return status
 
     def _prepare_launch(self, record):
         if "packet" in record:
@@ -212,9 +255,13 @@ class AttendedRunner:
         mapping = self.config["repositories"][repo]
         base = request.get("target_branch") or mapping["base_branch"]
         self._renew(record)
-        workspace = self._manager(mapping, record["repositories"][repo]).prepare(
-            claim["item_id"], base=f"refs/remotes/origin/{base}",
-        )
+        manager = self._manager(mapping, record["repositories"][repo])
+        base_ref = f"refs/remotes/origin/{base}"
+        if stage == "development":
+            base_sha = manager.resolve_origin_base(base)
+            record["development_base"] = {"ref": base, "sha": base_sha}
+            base_ref = base_sha
+        workspace = manager.prepare(claim["item_id"], base=base_ref)
         candidate = execution["state"].get("candidate")
         if candidate and candidate != workspace.head:
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
@@ -258,12 +305,15 @@ class AttendedRunner:
                 status = "launch_uncertain"
             else:
                 status = "claimed" if claim else "claim_pending"
+            if record.get("draft_status"):
+                status = record["draft_status"]["status"]
             return {"status": status, "packet": packet, "attempt_id": claim and claim["attempt_id"],
                     "stage": claim and claim["execution"]["state"]["stage"],
                     "project_id": record.get("project_id"), "host_id": record.get("host_id"),
                     "started_at": record.get("started_at"), "receipt": record.get("receipt"),
                     "lease_expires_at": record.get("lease_expires_at"),
-                    "unverified_mappings": record.get("blocked", [])}
+                    "unverified_mappings": record.get("blocked", []),
+                    **({"reason": record["draft_status"]["reason"]} if record.get("draft_status") else {})}
 
         if not all_slots:
             return view(self._snapshot())
@@ -338,9 +388,10 @@ class AttendedRunner:
             result = handoff.read_result()
             if result is None:
                 raise RunnerError("No final result file; keep the reservation and reconcile")
-            workspace = self._manager(
+            manager = self._manager(
                 {"checkout": record["checkout"]}, record["repositories"][packet.repository],
-            ).inspect(packet.item_id)
+            )
+            workspace = manager.inspect(packet.item_id)
             if workspace.path != packet.worktree or workspace.branch != packet.branch:
                 raise RunnerError("Result worktree no longer matches the launch intent")
             body = {"attempt_id": record["claim"]["attempt_id"], "stage": packet.stage,
@@ -354,6 +405,8 @@ class AttendedRunner:
                             or evidence != workspace.head or workspace.dirty
                             or evidence == packet.expected_revision):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
+                    if "development_base" in record:
+                        manager.verify_base_ancestry(workspace, record["development_base"]["sha"])
                     body["candidate"] = workspace.head
                 else:
                     body["report_markdown"] = result.details["evidence"]
@@ -374,6 +427,8 @@ class AttendedRunner:
                 "details": result.details,
                 "stop_confirmed_at": datetime.now(timezone.utc).isoformat(),
             }
+            if packet.stage == "development" and "development_base" in record:
+                submission["checkpoint"]["base"] = record["development_base"]
             return submission
 
         # Workspace inspection can run Git commands. Keep the journal available
@@ -410,8 +465,9 @@ def add_attended_command(commands):
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--slot", type=int, default=1)
     actions = parser.add_subparsers(dest="action", required=True)
-    for action in ("prepare", "renew"):
-        actions.add_parser(action)
+    prepare = actions.add_parser("prepare")
+    prepare.add_argument("--draft", action="store_true", help="poll for runner-owned initial draft publication")
+    actions.add_parser("renew")
     actions.add_parser("status").add_argument("--all", action="store_true")
     receipt = actions.add_parser("receipt")
     receipt.add_argument("marker")
@@ -432,7 +488,9 @@ def run_attended(args):
     if not token and args.action in {"prepare", "renew", "submit"}:
         raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
     runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token), slot=args.slot)
-    if args.action == "receipt":
+    if args.action == "prepare":
+        result = runner.prepare(draft=args.draft)
+    elif args.action == "receipt":
         result = runner.receipt(args.marker, args.host_id, thread_id=args.thread_id,
                                 client_thread_id=args.client_thread_id)
     elif args.action == "submit":

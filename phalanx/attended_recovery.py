@@ -144,6 +144,10 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         return publish("owner_wait", "Server recovery identity conflicts with the local claim",
                        next_action="Inspect the server attempt and restore the matching local journal")
 
+    if claim["execution"]["state"]["stage"] == "pr_creation":
+        return publish("owner_wait", "Draft publication needs runner-side reconciliation",
+                       next_action="Resume prepare --draft or reconcile the publication journal")
+
     if "submission" in record:
         if candidate is not None:
             return publish("owner_wait", "Saved submission needs reconciliation under a fresh claim",

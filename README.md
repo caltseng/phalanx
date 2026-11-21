@@ -70,6 +70,15 @@ upgrading the bridge, finish any in-flight CLI commands and use the new
 version for all subsequent commands. The existing journal remains usable
 and its original reservation is slot 1.
 
+Set `PHALANX_GITHUB_TOKEN` in the runner environment to publish initial drafts
+for registered GitHub repositories. After development succeeds, run
+`python -m phalanx attended --config runner.json --state C:/phalanx-runner prepare --draft`
+to poll for draft publication. This command uses the runner's Git credentials
+for the push and its GitHub token for draft creation. It returns
+`draft_submitted` when the API accepts the verified PR. Keep the same state
+directory to retry an interrupted publication, and use `status` to inspect a
+blocked reservation. Draft assignments run directly on the runner.
+
 From an authorized Captain muster:
 
 1. Verify the project and host with Codex project discovery. Run
