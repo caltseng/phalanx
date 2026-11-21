@@ -12,7 +12,7 @@ The runner credential authorizes the caller to attest facts from its GitHub adap
 | `expected` | `head_ref` from the publication intent, `base_ref` from the work item or provider-resolved default, and `base_sha` for the exact target tip being evaluated. |
 | `pull` | Exact read-back fields `number`, `head_repository`, `base_repository`, `head_ref`, `base_ref`, `head_sha`, `base_sha`, `state`, `draft`, and `merged`. Repository names use `owner/name`. Commit SHAs use 40 lowercase hexadecimal characters. |
 
-The server checks the registered github.com remote, same-repository head and base, explicit target branch when supplied, expected refs, base tip, and assigned candidate SHA. It constructs the canonical PR URL from the registered repository and observed number. Subsequent successful submissions require the recorded primary PR.
+The server checks the registered github.com remote, same-repository head and base, deterministic item branch, explicit target branch when supplied, expected refs, base tip, and assigned candidate SHA. It constructs the canonical PR URL from the registered repository and observed number. Subsequent successful submissions require the recorded primary PR.
 
 ## Stage fields
 

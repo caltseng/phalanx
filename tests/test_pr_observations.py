@@ -1,10 +1,12 @@
 from pathlib import Path
+from secrets import token_urlsafe
 from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx import intake
 from phalanx.intake_models import Intake
 from phalanx.store import migrate, write_transaction
+from phalanx.workspaces import _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -12,7 +14,6 @@ from test_bootstrap import OWNER, RUNNER, ServerFixture
 HEAD = "a" * 40
 BASE = "b" * 40
 OTHER = "c" * 40
-LEASE = {"Phalanx-Lease": "x" * 32}
 
 
 class PullObservationTest(ServerFixture, unittest.TestCase):
@@ -26,15 +27,17 @@ class PullObservationTest(ServerFixture, unittest.TestCase):
             item = intake.create(db, Intake(repository_id="repo", goal="Update tests",
                                             target="ready_for_check_in", target_branch="main"))
         self.start_server(self.path)
+        self.head_ref = _item_branch(item["id"])
         self.item = f"/v1/items/{item['id']}"
         self.execution = f"{self.item}/executions/{item['execution']['id']}"
         self.observe = f"{self.execution}/pr-observation"
         self.develop()
 
     def claim(self, stage):
+        self.lease = {"Phalanx-Lease": token_urlsafe(32)}
         status, assignment = self.request("/v1/dispatch/claim", RUNNER, {
             "runner_id": "local", "repository_ids": ["repo"],
-        }, LEASE)
+        }, self.lease)
         self.assertEqual(status, 200)
         self.assertEqual(assignment["status"], "claimed")
         self.assertEqual(assignment["execution"]["state"]["stage"], stage)
@@ -45,13 +48,13 @@ class PullObservationTest(ServerFixture, unittest.TestCase):
 
     def result(self, claim, **fields):
         return self.request(f"{self.execution}/result", RUNNER,
-                            dict(claim, outcome="succeeded", **fields), LEASE)
+                            dict(claim, outcome="succeeded", **fields), self.lease)
 
     def develop(self):
         self.assertEqual(self.result(self.claim("development"), candidate=HEAD)[0], 200)
 
     def observation(self, claim, *, draft=False, **fields):
-        expected = {"head_ref": "codex/item", "base_ref": "main", "base_sha": BASE}
+        expected = {"head_ref": self.head_ref, "base_ref": "main", "base_sha": BASE}
         return dict(claim, expected=expected, pull={
             **expected, "number": 7, "head_sha": HEAD, "draft": draft,
             "head_repository": "Example/Repo", "base_repository": "example/repo",
@@ -65,7 +68,7 @@ class PullObservationTest(ServerFixture, unittest.TestCase):
                 "observations": [dict(requirement, tested_sha=HEAD, outcome=outcome)]}
 
     def submit(self, body, **headers):
-        return self.request(self.observe, RUNNER, body, {**LEASE, **headers})
+        return self.request(self.observe, RUNNER, body, {**self.lease, **headers})
 
     def publish(self):
         body = self.observation(self.claim("pr_creation"), draft=True)
@@ -76,7 +79,7 @@ class PullObservationTest(ServerFixture, unittest.TestCase):
     def test_publication_requires_authority_identity_and_exact_candidate(self):
         claim = self.claim("pr_creation")
         body = self.observation(claim, draft=True, duplicate_numbers=[8])
-        self.assertEqual(self.request(self.observe, OWNER, body, LEASE)[0], 403)
+        self.assertEqual(self.request(self.observe, OWNER, body, self.lease)[0], 403)
         self.assertEqual(self.request(self.observe, RUNNER, body)[0], 422)
         self.assertEqual(self.submit(body, **{"Phalanx-Lease": "y" * 32})[0], 409)
         self.assertEqual(self.submit(dict(body, expected_version=claim["expected_version"] - 1))[0], 409)
@@ -95,6 +98,11 @@ class PullObservationTest(ServerFixture, unittest.TestCase):
                              ("draft", False), ("state", "closed"), ("merged", True)):
             with self.subTest(field=field):
                 self.assertEqual(self.submit(dict(body, pull=dict(body["pull"], **{field: value})))[0], 409)
+        different_branch = "codex/unrelated-item"
+        self.assertEqual(self.submit(dict(
+            body, expected=dict(body["expected"], head_ref=different_branch),
+            pull=dict(body["pull"], head_ref=different_branch),
+        ))[0], 409)
         headers = {"Idempotency-Key": "publication"}
         status, updated = self.submit(body, **headers)
         self.assertEqual(status, 200)
@@ -146,7 +154,7 @@ class PullObservationTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         claim["expected_version"] = updated["version"]
         self.assertEqual(self.submit(self.observation(claim, draft=True))[0], 409)
-        status, updated = self.request(f"{self.execution}/stop-confirmed", RUNNER, claim, LEASE)
+        status, updated = self.request(f"{self.execution}/stop-confirmed", RUNNER, claim, self.lease)
         self.assertEqual(status, 200)
         self.assertEqual(updated["state"]["status"], "cancelled")
         self.assertIsNone(updated["state"]["primary_pr"])

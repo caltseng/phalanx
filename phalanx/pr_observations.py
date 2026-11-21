@@ -9,6 +9,7 @@ from pydantic import Field, StringConstraints
 from . import intake, validation
 from .intake_models import AttemptEvent, Payload
 from .transitions import Evidence, Event, Outcome, PullRequest, Revision, Stage
+from .workspaces import _item_branch
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Name = Annotated[str, StringConstraints(min_length=1, max_length=255)]
@@ -98,6 +99,8 @@ def submit(db, item_id, execution_id, body, lease_digest):
         raise intake.Conflict("PR repositories must match the registered GitHub repository")
 
     expected = body.expected
+    if expected.head_ref != _item_branch(item_id):
+        raise intake.Conflict("Expected head branch must match the deterministic item branch")
     target_branch = json.loads(item["request_json"])["target_branch"]
     if target_branch is not None and expected.base_ref != target_branch:
         raise intake.Conflict("Expected base branch must match the work item target")
