@@ -130,7 +130,9 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     payload = body.model_dump(mode="json")
     # Preserve receipt digests for results written before these optional fields existed.
     if isinstance(body, Result):
-        for field in ("failure_reason", "question", "retry_after_seconds"):
+        for field in (
+            "failure_reason", "question", "retry_after_seconds", "review_notes", "local_checks",
+        ):
             if payload[field] is None:
                 payload.pop(field)
     if isinstance(body, pr_observations.Validation) and not body.schedule_recheck:

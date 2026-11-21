@@ -139,6 +139,15 @@ class AttendedRecoveryTests(unittest.TestCase):
         self.assertEqual(self.decision(packet=None, expired=wrong)["status"], "owner_wait")
         self.assertEqual(self.decision(packet=None)["status"], "send_stop")
 
+    def test_draft_claim_requires_publication_reconciliation_without_a_worker(self):
+        del self.record["packet"]
+        self.record["claim"]["execution"]["state"]["stage"] = "pr_creation"
+        expired = [self.expired[0] | {"stage": "pr_creation"}]
+        result = self.decision(packet=None, expired=expired)
+        self.assertEqual(result["status"], "owner_wait")
+        self.assertIn("publication journal", result["next_action"])
+        self.assertNotIn("recover_stop", self.record)
+
     def test_saved_submission_and_unmatched_lease(self):
         self.record["submission"] = {"body": {}}
         self.assertEqual(self.decision(expired=[])["status"], "replay_submission")

@@ -146,6 +146,50 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(timeline[-1]["attempt_id"], claim["attempt_id"])
         self.assertEqual(timeline[-1]["details"]["duplicate_numbers"], [8])
 
+    def test_candidate_local_evidence_is_persisted_for_the_current_stage_and_candidate(self):
+        self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
+        review = self.claim("self_review")
+        question = {"prompt": "Which scope?", "options": ["Current or expanded"],
+                    "handoff": "Reviewed the current scope"}
+        status, waiting = self.request(f"{self.execution}/result", RUNNER, dict(
+            review, outcome="needs_input", candidate=HEAD, review_notes=question["prompt"],
+            question=question,
+        ), self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(waiting["state"]["wait"]["trigger"], "owner reply")
+        _, inbox = self.request("/v1/owner/inbox", OWNER)
+        self.assertEqual(inbox[0]["question"]["handoff"], question["handoff"])
+        self.assertEqual(self.request(f"{self.execution}/reply", OWNER, {
+            "expected_version": waiting["version"], "answer": "Current scope",
+        }, {"Idempotency-Key": "self-review-reply"})[0], 200)
+        review = self.claim("self_review")
+        notes = {"review_notes": "Reviewed the diff and acceptance criteria"}
+        self.assertEqual(self.result(review, reviewed_candidate=OTHER, **notes)[0], 409)
+        self.assertEqual(self.result(review, reviewed_candidate=HEAD, **notes)[0], 200)
+        validate = self.claim("pre_pr_validation")
+        status, waiting = self.request(f"{self.execution}/result", RUNNER, dict(
+            validate, outcome="needs_input", candidate=HEAD, local_checks=[],
+            question={"prompt": "Which local policy applies?", "handoff": "Policy is unverified"},
+        ), self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(waiting["state"]["wait"]["trigger"], "owner reply")
+        self.assertEqual(self.request(f"{self.execution}/reply", OWNER, {
+            "expected_version": waiting["version"], "answer": "Use section 2",
+        }, {"Idempotency-Key": "local-policy-reply"})[0], 200)
+        validate = self.claim("pre_pr_validation")
+        bypass = {"name": "platform", "outcome": "skipped", "reason": "Platform unavailable",
+                  "authorization": "Repository policy section 2"}
+        self.assertEqual(self.result(validate, prevalidated_candidate=HEAD, **notes)[0], 409)
+        self.assertEqual(self.result(validate, prevalidated_candidate=HEAD,
+                                     local_checks=[dict(bypass, authorization=None)])[0], 409)
+        self.assertEqual(self.result(validate, prevalidated_candidate=HEAD, local_checks=[bypass])[0],
+                         200)
+        _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+        self.assertIn(notes["review_notes"],
+                      [entry["details"].get("review_notes") for entry in timeline])
+        self.assertEqual(timeline[-1]["details"]["local_checks"], [bypass])
+        self.assertEqual(timeline[-1]["details"]["prevalidated_candidate"], HEAD)
+
     def test_promotion_and_validation_require_the_primary_pr_and_current_gates(self):
         self.publish()
         claim = self.claim("pr_promotion")
