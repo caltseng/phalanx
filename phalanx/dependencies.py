@@ -199,8 +199,7 @@ def refresh_wait(db, item_id, execution_id, now_ms):
 def refresh_items(db, items, now_ms):
     for item in items[:REFRESH_BATCH_SIZE]:
         row = db.execute(
-            """SELECT id FROM executions WHERE item_id = ? AND status = 'queued'
-               AND status NOT IN ('completed', 'failed', 'cancelled')""",
+            "SELECT id FROM executions WHERE item_id = ? AND status = 'queued'",
             (item["item_id"],),
         ).fetchone()
         if row is not None:
