@@ -293,7 +293,10 @@ class DispatchTest(ServerFixture, unittest.TestCase):
                             waiting = intake.result(db, question, execution["id"], Result(
                                 expected_version=execution["version"], attempt_id=assignment["attempt_id"],
                                 stage="report_drafting", outcome="needs_input",
-                                wait={"reason": "Which source should I use?", "trigger": "owner reply"},
+                                question={
+                                    "prompt": "Which source should I use?",
+                                    "handoff": "Source selection is pending.",
+                                },
                             ), intake.digest(lease))
                         self.assertEqual(waiting["state"]["status"], "waiting_for_input")
                         self.assertIsNone(waiting["retry_at_ms"])
