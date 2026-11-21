@@ -145,14 +145,18 @@ class AttendedRunner:
             raise RunnerError("No registered checkout passed verification; check local mappings and origins")
         return eligible, blocked
 
-    def prepare(self, *, draft=False, report_storage=False):
+    def prepare(self, *, draft=False, report_storage=False, stages=None):
         # Only competing preparations of this slot wait here. Heartbeats and
         # other slots can still use the journal during HTTP and Git operations.
         with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
-            return self._prepare_slot(draft=draft, report_storage=report_storage)
+            return self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages)
 
-    def _prepare_slot(self, *, draft, report_storage):
+    def _prepare_slot(self, *, draft, report_storage, stages=None):
         runner_stage = "pr_creation" if draft else reports.STORAGE if report_storage else None
+        if stages is not None and (
+            runner_stage or not stages or set(stages) - (set(STAGES) | {"pr_creation", reports.STORAGE})
+        ):
+            raise RunnerError("Continuous dispatch requires a nonempty supported stage list")
         github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
         snapshot = self._snapshot()
         if not snapshot:
@@ -167,7 +171,8 @@ class AttendedRunner:
                     raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
                 record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
                               repositories=eligible, blocked=blocked,
-                              stages=[runner_stage] if runner_stage else sorted(STAGES),
+                              stages=sorted(stages) if stages is not None else
+                              [runner_stage] if runner_stage else sorted(STAGES),
                               slots=self.capacity)
                 return record
 
@@ -318,10 +323,7 @@ class AttendedRunner:
         handoff = CodexHandoff(packet, self.results)
         if os.path.lexists(handoff.result_path) or os.path.lexists(handoff.temporary_path):
             raise RunnerError("Attempt already has local evidence; reconcile before launch")
-        current = self.api.call(f"/items/{packet.item_id}")["execution"]
-        if (current["id"] != execution["id"] or current["version"] != packet.state_version
-                or current["state"]["status"] != "running" or current["state"].get("stopping")):
-            raise RunnerError("Claimed execution changed before launch; reconcile the reservation")
+        self._verify_launch_claim(record)
         self._renew(record)
         record.update(packet={**asdict(packet), "attempt_id": str(packet.attempt_id),
                               "worktree": str(packet.worktree)},
@@ -330,6 +332,14 @@ class AttendedRunner:
         return {"status": "launch_intent", "marker": packet.marker, "host_id": record["host_id"],
                 "unverified_mappings": record["blocked"],
                 "create_thread": handoff.create_thread_arguments(record["project_id"])}
+
+    def _verify_launch_claim(self, record):
+        claim = record["claim"]
+        execution = claim["execution"]
+        current = self.api.call(f"/items/{claim['item_id']}")["execution"]
+        if (current["id"] != execution["id"] or current["version"] != execution["version"]
+                or current["state"]["status"] != "running" or current["state"].get("stopping")):
+            raise RunnerError("Claimed execution changed before launch; reconcile the reservation")
 
     def status(self, *, all_slots=False):
         def view(record):
@@ -353,6 +363,8 @@ class AttendedRunner:
                     "started_at": record.get("started_at"), "receipt": record.get("receipt"),
                     "lease_expires_at": record.get("lease_expires_at"),
                     "unverified_mappings": record.get("blocked", []),
+                    **({"loop": record["loop"]} if "loop" in record else {}),
+                    **({"recovery": record["recovery"]} if "recovery" in record else {}),
                     **({"reason": record["draft_status"]["reason"]} if record.get("draft_status") else {})}
 
         if not all_slots:
@@ -360,9 +372,15 @@ class AttendedRunner:
 
         with self._journal() as db:
             rows = db.execute("SELECT id, record FROM slot ORDER BY id").fetchall()
+            has_captain = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='captain'"
+            ).fetchone()
+            loop_status = [json.loads(row[0]) for row in db.execute(
+                "SELECT value FROM captain WHERE key LIKE 'status-%' ORDER BY key"
+            )] if has_captain else None
         return {"capacity": self.capacity, "reservations": [
             {"slot": slot, **view(json.loads(data))} for slot, data in rows
-        ]}
+        ], **({"loop_status": loop_status} if loop_status is not None else {})}
 
     def receipt(self, marker, host_id, *, thread_id=None, client_thread_id=None):
         def save(record, db):

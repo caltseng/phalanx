@@ -104,6 +104,12 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
 - **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
 
+#### PH-11a Continuous attended scheduling slice
+
+- The `captain` CLI loop uses the existing journal, stable runner ID and numbered slots. It enumerates reservations and server recovery before admission, preserves claim replay filters, combines implemented worker and runner-only routes, and separates per-slot work, heartbeats and bounded native observation.
+- The injectable subprocess JSON adapter and executable fixture cover exact project/host resolution, at-most-once relay, native/queued receipts, original assignment correlation and per-attempt cursor retention. Existing ambiguous packets remain reserved across restart; saved results replay through the existing collector.
+- **Not fully accepted:** A production bridge from this CLI entry point to the actual Codex desktop is not bundled. The desktop session must verify two visible chats and restart/receipt recovery. Wider PR stage routing, owner notification and due external rechecks, and adopting expired valid results under a fresh server claim remain separate slices.
+
 ### PH-12 Recover interrupted sessions and enforce real capacity
 
 - **Depends on:** PH-08, PH-10, PH-11. **Output:** PR.
