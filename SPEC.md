@@ -57,6 +57,8 @@ The draft author self-reviews the field report before submitting it. A fresh rev
 
 For PR work, the runner binds self-review and local check results to the claimed candidate at the clean item worktree HEAD. Local checks and bypass authorizations come from trusted repository policy supplied by the runner. The result timeline records review notes, each check disposition, and the reason and authorization for a bypass.
 
+The [runner-local validation policy](docs/runner-validation-policy.md) is loaded from an explicit operator-owned file outside worker-writable checkouts, selected by registered repository ID. Commands, bypass reasons, and authority are never loaded from item or worker-controlled content. Unavailable policy is distinct from explicitly empty checks. The loader preserves phase-specific source and revision requirements; preview provider adapters and draft-only recovery remain separate integration requirements and unsupported configuration cannot waive their gates.
+
 ### Execution status and recovery
 
 - Use `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`, `failed`, and `cancelled` as execution statuses. Store the stage, status, expected revision, and why any wait is active. A waiting item has a resume trigger, such as a user reply, check result, approval, or scheduled recheck. Reconcile external waits periodically so a missed event cannot strand the item.
