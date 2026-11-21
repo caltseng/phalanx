@@ -113,6 +113,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Depends on:** PH-02, PH-08, PH-13. **Output:** PR.
 - Run self-review and candidate-local pre-validation, recording allowed bypasses. Publish any updated candidate to the primary PR before checks that require that head. Run draft-only gates and then mark the draft ready for review. Observe required CI and previews for the current revision. Distinguish CI that is unconfigured from expected CI that is missing.
 - **Done when:** Revised draft previews run on the intended head and promotion does not wait for checks that only start after it. A pre-validation bypass leaves required CI intact. If a promoted PR later needs a draft-only check that cannot run, follow the repo policy or expose the decision rather than wait indefinitely.
+- Runner collection reads the primary PR and target tip around the check snapshot, verifies test-merge parents, and evaluates bounded, phase-specific provider evidence. The caller supplies complete phase policy, including whether a check uses the head or test-merge SHA, and an adapter for the configured preview provider and served revision. Policy discovery, provider-specific preview reads, promotion orchestration, and scheduled rechecks remain integration work.
 
 - **API slice:** Draft and ready check evidence is bound to the primary PR and exact revision. Remaining integration includes scheduled external rechecks and runner policy and provider discovery.
 
