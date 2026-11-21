@@ -93,6 +93,10 @@ restarting. Expired leases and unverified results require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.
 
+### Operator work board
+
+Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text.
+
 ### Back up and restore SQLite
 
 Run these commands in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS. Each command validates its copy before creating the destination and refuses to overwrite an existing file.

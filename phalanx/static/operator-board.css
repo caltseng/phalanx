@@ -45,3 +45,14 @@ body { margin: 0; }
 .phalanx-board button:disabled { opacity: .55; cursor: default; }
 .phalanx-board :focus-visible { outline: 3px solid #ffcd85; outline-offset: 3px; }
 .phalanx-board nav[hidden] { display: none; }
+#operator-session { padding-bottom: 0; }
+#operator-report {
+  width: min(44rem, 85vw);
+  max-height: 80vh;
+  color: inherit;
+  background: #19202c;
+  border: 1px solid #647694;
+  border-radius: .65rem;
+}
+#operator-report::backdrop { background: #080b12b8; }
+#operator-report-content { white-space: pre-wrap; overflow-wrap: anywhere; }
