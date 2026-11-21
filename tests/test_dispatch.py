@@ -1,0 +1,240 @@
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from secrets import token_urlsafe
+from tempfile import TemporaryDirectory
+from threading import Barrier
+import unittest
+from unittest.mock import patch
+
+from phalanx import dispatch, intake
+from phalanx.dispatch_api import Claim, DispatchSettings, ReconciledStop
+from phalanx.intake_models import Cancel, Intake, Result
+from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
+
+from test_bootstrap import OWNER, RUNNER, ServerFixture
+
+
+NOW = 1_800_000_000
+LEASE = "x" * 32
+CLAIM_PATH = "/v1/dispatch/claim"
+
+
+class DispatchTest(ServerFixture, unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "queue.sqlite3"
+        migrate(self.path)
+
+    def seed(self, repo, work):
+        with write_transaction(self.path) as db:
+            intake.register(db, repo, f"https://github.com/example/{repo}.git")
+            ids = []
+            for priority, seconds, affinity in work:
+                item = intake.create(db, Intake(repository_id=repo, goal="Test queue",
+                                                target="report", priority=priority,
+                                                runner_affinity=affinity))
+                db.execute("UPDATE executions SET ready_since=? WHERE item_id=?",
+                           ((NOW + seconds) * 1000, item["id"]))
+                ids.append(item["id"])
+            return ids
+
+    def claim(self, runner_id, repositories, *, lease=None):
+        body = Claim(runner_id=runner_id, repository_ids=repositories)
+        with write_transaction(self.path) as db:
+            return dispatch.claim(db, body, intake.digest(lease or token_urlsafe(32)))
+
+    def test_aging_stable_fifo_and_capability_filters(self):
+        low, normal, urgent_a, urgent_b, other, future, pinned = self.seed("repo", [
+            ("low", -600, None), ("normal", -300, None), ("urgent", -10, None),
+            ("urgent", -10, None), ("urgent", -700, "other"), ("urgent", 1, None),
+            ("urgent", -20, "local"),
+        ])
+        self.seed("elsewhere", [("urgent", -800, None)])
+        with write_transaction(self.path) as db:
+            dispatch.set_capacity(db, "local", 10)
+        with patch.object(dispatch, "time", return_value=NOW):
+            actual = [self.claim("local", ["repo"])["item_id"] for _ in range(5)]
+            self.assertEqual(actual, [low, normal, pinned, *sorted((urgent_a, urgent_b))])
+            self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
+            self.assertEqual(self.claim("other", ["repo"])["item_id"], other)
+        with patch.object(dispatch, "time", return_value=NOW + 1):
+            self.assertEqual(self.claim("local", ["repo"])["item_id"], future)
+
+    def test_concurrent_claims_never_duplicate_or_exceed_capacity(self):
+        self.seed("repo", [("normal", -1, None)] * 10)
+        barrier = Barrier(16)
+
+        def contender(number):
+            barrier.wait(timeout=5)
+            return self.claim("even" if number % 2 == 0 else "odd", ["repo"])
+
+        with patch.object(dispatch, "time", return_value=NOW):
+            with ThreadPoolExecutor(16) as pool:
+                results = list(pool.map(contender, range(16)))
+        claimed = [result for result in results if result["status"] == "claimed"]
+        self.assertEqual(len(claimed), 8)
+        self.assertEqual(len({result["item_id"] for result in claimed}), 8)
+        for runner_id in ("even", "odd"):
+            self.assertEqual(sum(row["runner_id"] == runner_id for row in claimed), 4)
+        with connect(self.path) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM request_receipts").fetchone()[0], 8)
+
+    def test_pause_preserves_claims_and_lower_capacity_takes_effect(self):
+        self.seed("repo", [("normal", -1, None)] * 3)
+        with patch.object(dispatch, "time", return_value=NOW):
+            assignment = self.claim("local", ["repo"], lease=LEASE)
+            with write_transaction(self.path) as db:
+                dispatch.set_capacity(db, "local", 1)
+                dispatch.set_dispatch(db, DispatchSettings(paused=True))
+            self.assertEqual(self.claim("local", ["repo"])["status"], "paused")
+            with write_transaction(self.path) as db:
+                dispatch.renew(db, "local", assignment["attempt_id"], intake.digest(LEASE))
+                dispatch.set_dispatch(db, DispatchSettings(paused=False))
+            self.assertEqual(self.claim("local", ["repo"])["status"], "at_capacity")
+            self.assertEqual(self.claim("other", ["repo"])["status"], "claimed")
+
+    def test_expiry_preserves_reservation_and_reconciled_retry_ages_from_due(self):
+        item_id, = self.seed("repo", [("low", -1000, None)])
+        with write_transaction(self.path) as db:
+            dispatch.set_capacity(db, "local", 1)
+        with patch.object(dispatch, "time", return_value=NOW):
+            claimed = self.claim("local", ["repo"], lease=LEASE)
+        attempt_id = claimed["attempt_id"]
+        execution = claimed["execution"]
+        body = ReconciledStop(item_id=item_id, expected_version=execution["version"],
+                              reconciliation="Worker stopped and no pending outputs")
+        expires = claimed["lease_expires_at"]
+        with patch.object(dispatch, "time", return_value=expires - 1):
+            with self.assertRaisesRegex(intake.Conflict, "still live"):
+                with write_transaction(self.path) as db:
+                    dispatch.recover_stopped(db, "local", attempt_id, body)
+        with patch.object(dispatch, "time", return_value=expires):
+            self.assertEqual(self.claim("local", ["repo"])["status"], "at_capacity")
+            self.assertEqual(self.claim("other", ["repo"])["status"], "no_eligible_work")
+            with write_transaction(self.path) as db:
+                self.assertEqual(dispatch.recovery_candidates(db, "local")[0]["attempt_id"], attempt_id)
+                self.assertEqual(dispatch.recovery_candidates(db, "other"), [])
+                with self.assertRaisesRegex(intake.Conflict, "expired"):
+                    dispatch.renew(db, "local", attempt_id, intake.digest(LEASE))
+                with patch.object(intake, "time", return_value=expires):
+                    with self.assertRaisesRegex(intake.Conflict, "no longer current"):
+                        intake.result(db, item_id, execution["id"], Result(
+                            expected_version=execution["version"], attempt_id=attempt_id,
+                            stage=execution["state"]["stage"], outcome="succeeded",
+                            report_markdown="# Stale\n",
+                        ), intake.digest(LEASE))
+                recovered = dispatch.recover_stopped(db, "local", attempt_id, body)
+                self.assertEqual(recovered["retry_at_ms"], (expires + 5) * 1000)
+                self.assertEqual(recovered["ready_since_ms"], recovered["retry_at_ms"])
+            self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
+        with patch.object(dispatch, "time", return_value=expires + 5):
+            replacement = self.claim("local", ["repo"])
+        self.assertEqual(replacement["item_id"], item_id)
+        self.assertNotEqual(replacement["attempt_id"], attempt_id)
+
+    def test_lease_and_result_http_replay_after_restart(self):
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/example/repo.git")
+            item = intake.create(db, Intake(repository_id="repo", goal="Test HTTP", target="report"))
+        server = self.start_server(self.path)
+        body = {"runner_id": "local", "repository_ids": ["repo"]}
+        headers = {"Phalanx-Lease": LEASE}
+        self.assertEqual(self.request(CLAIM_PATH, None, body, headers)[0], 401)
+        self.assertEqual(self.request(CLAIM_PATH, OWNER, body, headers)[0], 403)
+        self.assertEqual(self.request(CLAIM_PATH, RUNNER, body)[0], 422)
+        status, assigned = self.request(CLAIM_PATH, RUNNER, body, headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(assigned["status"], "claimed")
+        self.stop_server(server)
+        self.start_server(self.path)
+        self.assertEqual(self.request(CLAIM_PATH, RUNNER, body, headers), (200, assigned))
+        self.assertEqual(self.request(CLAIM_PATH, RUNNER, dict(body, slots=1), headers)[0], 409)
+        renew_path = f"/v1/dispatch/runners/local/attempts/{assigned['attempt_id']}/renew"
+        self.assertEqual(self.request(renew_path, RUNNER, {}, {"Phalanx-Lease": "y" * 32})[0], 409)
+        status, renewed = self.request(renew_path, RUNNER, {}, headers)
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(renewed["lease_expires_at"], assigned["lease_expires_at"])
+        execution = assigned["execution"]
+        result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
+        result = {"expected_version": execution["version"], "attempt_id": assigned["attempt_id"],
+                  "stage": execution["state"]["stage"], "outcome": "succeeded",
+                  "report_markdown": "# Draft\n"}
+        status, accepted = self.request(result_path, RUNNER, result, headers)
+        self.assertEqual(status, 200)
+        self.assertEqual(accepted["state"]["stage"], "report_review")
+        self.assertIsNotNone(accepted["ready_since_ms"])
+        self.assertEqual(self.request(renew_path, RUNNER, {}, headers)[0], 409)
+
+    def test_expired_cancellation_closes_only_after_reconciled_stop(self):
+        item_id, = self.seed("repo", [("normal", -1, None)])
+        with patch.object(dispatch, "time", return_value=NOW):
+            claimed = self.claim("local", ["repo"])
+        execution = claimed["execution"]
+        attempt = claimed["attempt_id"]
+        with write_transaction(self.path) as db:
+            pending = intake.cancel(db, item_id, execution["id"], Cancel(
+                expected_version=execution["version"], reason="Requested by owner",
+            ))
+        self.assertEqual(pending["state"]["status"], "waiting_for_external")
+        body = ReconciledStop(item_id=item_id, expected_version=pending["version"],
+                              reconciliation="Stopped worker and verified effects")
+        with patch.object(dispatch, "time", return_value=claimed["lease_expires_at"]):
+            with write_transaction(self.path) as db:
+                self.assertEqual(dispatch.recovery_candidates(db, "local")[0]["version"],
+                                 pending["version"])
+                closed = dispatch.recover_stopped(db, "local", attempt, body)
+                self.assertEqual(closed["state"]["status"], "cancelled")
+                self.assertIn("Requested by owner", intake.report(db, item_id, execution["id"]))
+                self.assertEqual(dispatch.recovery_candidates(db, "local"), [])
+
+    def test_fifth_stopped_attempt_parks_stage(self):
+        item_id, = self.seed("repo", [("normal", -1, None)])
+        now = NOW
+        for index in range(5):
+            with patch.object(dispatch, "time", return_value=now):
+                claimed = self.claim("local", ["repo"])
+            execution = claimed["execution"]
+            now = claimed["lease_expires_at"]
+            body = ReconciledStop(item_id=item_id, expected_version=execution["version"],
+                                  reconciliation="Stopped worker and verified effects")
+            with patch.object(dispatch, "time", return_value=now):
+                with write_transaction(self.path) as db:
+                    outcome = dispatch.recover_stopped(db, "local", claimed["attempt_id"], body)
+            if index < 4:
+                now += 5 * 2 ** index
+                self.assertEqual(outcome["ready_since_ms"], now * 1000)
+        self.assertEqual(outcome["state"]["status"], "waiting_for_input")
+        self.assertIsNone(outcome["ready_since_ms"])
+        with patch.object(dispatch, "time", return_value=now + 9999):
+            self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
+
+    def test_schema_two_migrates_queue_and_preserves_running_attempt(self):
+        path = self.path.with_name("legacy.sqlite3")
+        with connect(path, mode="rwc") as db:
+            for migration in MIGRATIONS[:2]:
+                for statement in migration:
+                    db.execute(statement)
+            db.execute("PRAGMA user_version=2")
+            stamp = "2026-01-02T00:00:00.123000+00:00"
+            intake.register(db, "repo", "https://github.com/example/repo.git")
+            for status in ("queued", "running"):
+                db.execute("INSERT INTO work_items VALUES (?, 'repo', ?, ?)",
+                           (status, '{"priority":"urgent"}', stamp))
+                db.execute(
+                    """INSERT INTO executions (id, item_id, version, state_json, created_at, updated_at)
+                       VALUES (?, ?, 1, json_object('stage','report_drafting','status',?,
+                                                    'final_output',NULL), ?, ?)""",
+                    (status, status, status, stamp, stamp),
+                )
+            db.execute("INSERT INTO attempts VALUES ('attempt','running','report_drafting','local',"
+                       "'digest',1,?,NULL)", (stamp,))
+        migrate(path)
+        with connect(path) as db:
+            row = dispatch.queue_head(db, "local", ["repo"], NOW * 1000, 300_000)
+            self.assertEqual(row["id"], "queued")
+            self.assertEqual(row["ready_since"], 1767312000123)
+            self.assertEqual(dispatch.recovery_candidates(db, "local")[0]["attempt_id"], "attempt")
+            plan = db.execute("EXPLAIN QUERY PLAN " + dispatch.QUEUE_HEAD,
+                              (NOW * 1000, "repo", "", 2)).fetchone()["detail"]
+            self.assertIn("SEARCH executions USING INDEX queue_heads", plan)

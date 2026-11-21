@@ -52,6 +52,53 @@ python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 
 ### Develop the API
 
+#### Dispatch and leases
+
+Owner routes set dispatch policy. Runner routes require the runner bearer token.
+In the local deployment, the runner token identifies a trusted runner role.
+Use one stable runner ID per local runner across restarts. The ID scopes
+capacity and recovery within that trusted role.
+
+| Method and path | Request and behavior |
+| --- | --- |
+| `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
+| `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
+| `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), and optional `slots` to lower the capacity for this muster. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
+| `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
+
+A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
+`no_eligible_work`. A successful assignment includes the work request,
+execution and version, attempt ID, and lease expiry (90 seconds from claim).
+Pass its attempt ID, execution version, and stage to the existing result route
+with the same lease header. Keep the bearer token and lease secret with the runner.
+After a lost claim response, replay the same body and lease secret to retrieve
+the original assignment. Deduplicate by attempt ID and verify that the lease
+and execution are still current before starting work on a replayed assignment.
+Empty polls leave no receipts. The server stores only the lease-secret digest.
+
+An intake item can set `runner_affinity` to require a specific runner ID.
+For matching repositories and affinity, urgency rises one band per aging
+interval. Within the effective band, the server chooses the oldest eligible
+timestamp and breaks ties by item ID. Execution views report
+`ready_since_ms` and `retry_at_ms` as Unix milliseconds. A reconciled retry
+starts accruing age when its delay elapses. A newly queued stage gets its
+own clock. Prerequisite handling can keep a queued stage out of the claim
+index by clearing `ready_since`, then set it when the last gate clears.
+
+An expired lease prevents stale results and renewals. Its attempt still holds
+the slot and item reservation. Leave uncertain or live workers reserved.
+After confirming that a worker stopped and that repeating the stage is safe,
+submit stopped recovery. It records the reconciliation and uses delays of
+5, 10, 20, and 40 seconds for the first four retries. A fifth stopped attempt
+waits for owner intervention. If cancellation is already pending, stopped
+recovery closes it with a stored cancellation report. PH-12 extends recovery
+to launch intent, live session reattachment, and collection of finished
+results under a recovery claim.
+
+#### Transactions and tests
+
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived read connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`.
