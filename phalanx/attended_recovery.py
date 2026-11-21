@@ -200,13 +200,25 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
 def acknowledge_stop(record, request, response):
     """Validate the reply before the journal owner archives the reservation."""
     claim = record.get("claim")
-    if (claim is None or record.get("recover_stop") != request
-            or response.get("id") != claim["execution"]["id"]
-            or response.get("version") != request["body"]["expected_version"] + 1):
+    if claim is None or record.get("recover_stop") != request:
         return False
-    return response.get("state", {}).get("status") in {
-        "queued", "waiting_for_input", "waiting_for_external", "failed", "cancelled",
-    }
+    execution_id = claim["execution"]["id"]
+    if response.get("id") != execution_id:
+        return False
+    version = request["body"]["expected_version"]
+    state = response.get("state", {})
+    status = state.get("status")
+    if response.get("version") == version + 1:
+        return status in {"queued", "waiting_for_input", "waiting_for_external"}
+    if response.get("version") != version + 2 or status not in {"failed", "cancelled"}:
+        return False
+    # The stop can enqueue a report and the HTTP handler can finalize it
+    # before replying. The report reference must belong to this execution.
+    output = state.get("final_output")
+    item_id = claim["item_id"]
+    return isinstance(output, dict) and output.get("reference") == (
+        f"/v1/items/{item_id}/executions/{execution_id}/report"
+    )
 
 
 def unmatched_leases(expired, local_attempt_ids):
