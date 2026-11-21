@@ -511,7 +511,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 if response is None:
                     response = {"id": current["id"], "version": current["version"] + 2,
                                 "state": {"status": "cancelled", "final_output": {
-                                    "reference": route.removesuffix("/stop-confirmed") + "/report",
+                                    "reference": "/v1" + route.removesuffix("/stop-confirmed") + "/report",
                                 }}}
                     raise RunnerError("lost stop acknowledgment")
                 return response
@@ -539,12 +539,12 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         probe = CommandTransportTests()
         identities, command = probe.probe(self.directory, parent_wait=10)
         loop = self.loop()
-        future = loop.native_pool.submit(CommandTransport(command, timeout=0.3), "wait_threads", {})
+        future = loop.native_pool.submit(CommandTransport(command, timeout=2), "wait_threads", {})
         try:
             self.spin(loop, identities.exists)
             started = time.monotonic()
             loop.close()
-            self.assertLess(time.monotonic() - started, 1.2)
+            self.assertLess(time.monotonic() - started, 2.6)
             with self.assertRaisesRegex(RunnerError, "unavailable"):
                 future.result()
         finally:

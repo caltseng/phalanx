@@ -238,7 +238,7 @@ class CaptainLoop:
             finalized = (
                 response.get("version") == version + 2 and state.get("status") == disposition
                 and isinstance(output, dict)
-                and output.get("reference") == route.removesuffix("/stop-confirmed") + "/report"
+                and output.get("reference") == "/v1" + route.removesuffix("/stop-confirmed") + "/report"
             )
             if response.get("id") != claim["execution"]["id"] or not (pending or finalized):
                 raise RunnerError("Unlaunched stop acknowledgment did not verify finalization; retain its exact request")
