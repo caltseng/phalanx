@@ -1,8 +1,8 @@
-"""Production desktop bridge: the Captain chat relays queued requests to the Codex app.
+"""Production bridge: a Captain chat relays queued requests to its worker runtime.
 
-Only the Captain chat can call the app's thread tools. The loop queues each
+The Captain chat holds the runtime's session tools. The loop queues each
 bridge request in the runner state directory and waits. The Captain chat takes
-one request at a time with `relay next`, runs the matching app tool, and records
+one request at a time with `relay next`, runs it with its runtime adapter, and records
 the reply with `relay respond`. Requests use the same JSON contract as the
 `--adapter-command` subprocess bridge.
 """
@@ -17,7 +17,7 @@ from time import sleep, time
 from uuid import uuid4
 
 from .captain_adapter import LaunchNotDelivered
-from .codex_handoff import _unique_object
+from .handoff import _unique_object
 from .runner_errors import RunnerError
 
 
@@ -37,7 +37,7 @@ def _queue(root: Path):
 
 
 class RelayTransport:
-    """Transport for CodexCLIAdapter backed by the Captain chat relay queue."""
+    """Transport for BridgeAdapter backed by the Captain chat relay queue."""
 
     def __init__(self, root: Path, *, timeout: float = 300, poll: float = 0.2):
         self.root, self.timeout, self.poll = Path(root).resolve(), timeout, poll
@@ -122,11 +122,11 @@ def add_relay_command(commands):
     parser.add_argument("--state", required=True, type=Path)
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("next", help="take the next request").add_argument("--wait", type=float, default=30)
-    answer = actions.add_parser("respond", help="record the app's reply to a taken request")
+    answer = actions.add_parser("respond", help="record the runtime's reply to a taken request")
     answer.add_argument("id")
     source = answer.add_mutually_exclusive_group()
     source.add_argument("--file", type=Path, help="JSON reply file; defaults to stdin")
-    source.add_argument("--error", help="the app tool failed with this message")
+    source.add_argument("--error", help="the runtime action failed with this message")
 
 
 def run_relay(args):

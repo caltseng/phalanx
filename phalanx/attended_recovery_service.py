@@ -16,7 +16,7 @@ from .attended import RunnerAPI, RunnerError
 from .attended_recovery import (
     NativeObservation, StoppedEvidence, acknowledge_stop, reconcile, unmatched_leases,
 )
-from .codex_handoff import CodexHandoff, InvalidResult, WorkPacket
+from .handoff import WorkerHandoff, InvalidResult, WorkPacket
 from .workspaces import WorkspaceError, WorkspaceManager
 
 
@@ -63,7 +63,7 @@ class RecoveryJournal:
 
 
 def _verify_local(root, record, packet, thread_id):
-    handoff = CodexHandoff(packet, root / "results")
+    handoff = WorkerHandoff(packet, root / "results")
     disposition = "unresolved"
     checked = None
     summary = "Restore the registered worktree and verify the result file"

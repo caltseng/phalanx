@@ -10,7 +10,7 @@ from uuid import uuid4
 
 from phalanx.attended import RunnerError
 from phalanx.candidate_local import CandidateLocal, LocalCheck, _kill_tree
-from phalanx.codex_handoff import Outcome, WorkerResult
+from phalanx.handoff import Outcome, WorkerResult
 from phalanx.validation import PreCheck, PreOutcome
 from phalanx.workspaces import WorkspaceError, WorkspaceManager
 

@@ -16,7 +16,7 @@ from uuid import UUID
 
 from .attended_drafts import development_checkpoint, github_repository, publish_draft
 from . import report_execution as reports
-from .codex_handoff import CodexHandoff, WorkPacket
+from .handoff import WorkerHandoff, WorkPacket
 from .runner_errors import RunnerError
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
@@ -215,7 +215,7 @@ class AttendedRunner:
         def commit_launch(record, db):
             self._ensure_reservation(record, lease)
             if "packet" in record:
-                raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
+                raise RunnerError("Launch intent already issued; inspect status and reconcile in the worker runtime")
             if "recover_stop" in record or "cancel_stop" in record:
                 raise RunnerError("Recovery owns this reservation; inspect attended-recover")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
@@ -278,7 +278,7 @@ class AttendedRunner:
 
     def _prepare_launch(self, record):
         if "packet" in record:
-            raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
+            raise RunnerError("Launch intent already issued; inspect status and reconcile in the worker runtime")
         claim = record["claim"]
         execution = claim["execution"]
         state = execution["state"]
@@ -319,7 +319,7 @@ class AttendedRunner:
                                 ("context_links", "acceptance_criteria")}, ensure_ascii=False),
             handoff=json.dumps(input_reply, ensure_ascii=False) if input_reply is not None else "",
         )
-        handoff = CodexHandoff(packet, self.results)
+        handoff = WorkerHandoff(packet, self.results)
         if os.path.lexists(handoff.result_path) or os.path.lexists(handoff.temporary_path):
             raise RunnerError("Attempt already has local evidence; reconcile before launch")
         self._verify_launch_claim(record)
@@ -330,7 +330,7 @@ class AttendedRunner:
                       checkout=mapping["checkout"], started_at=datetime.now(timezone.utc).isoformat())
         return {"status": "launch_intent", "marker": packet.marker, "host_id": record["host_id"],
                 "unverified_mappings": record["blocked"],
-                "create_thread": handoff.create_thread_arguments(record["project_id"])}
+                "session": handoff.launch_arguments(record["project_id"])}
 
     def _verify_launch_claim(self, record):
         claim = record["claim"]
@@ -429,7 +429,7 @@ class AttendedRunner:
         if "packet" not in record:
             raise RunnerError("No durable launch intent exists")
         packet = record["packet"]
-        return CodexHandoff(WorkPacket(**{
+        return WorkerHandoff(WorkPacket(**{
             **packet, "attempt_id": UUID(packet["attempt_id"]), "worktree": Path(packet["worktree"]),
             "dependencies": tuple(packet.get("dependencies", ())),
         }), self.results)

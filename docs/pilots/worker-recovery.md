@@ -1,6 +1,8 @@
-# PH-01 Codex worker recovery field report
+# PH-01 worker recovery field report
 
-Use the Codex desktop Captain chat for attended launch and observation. Use a local runner process for durable attempt state, workspace preparation, lease renewal, evidence verification, and publication. This pilot verified discovery and live observation on Windows. The two-worker interruption and question/reply acceptance run remains open.
+This report records field evidence for the Codex desktop app adapter, the first runtime piloted. Other runtimes serve the same runtime-neutral bridge contract (see the README's runtime mapping) and add their evidence here as they are piloted.
+
+The Codex desktop Captain chat ran attended launch and observation. A local runner process handles durable attempt state, workspace preparation, lease renewal, evidence verification, and publication. This pilot verified discovery and live observation on Windows. The two-worker interruption and question/reply acceptance run remains open.
 
 ## Live evidence on November 20, 2026
 

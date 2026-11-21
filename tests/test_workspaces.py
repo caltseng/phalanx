@@ -49,6 +49,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(first.path.parent, self.root)
         self.assertNotEqual(first.path, second.path)
         self.assertNotEqual(first.branch, second.branch)
+        self.assertRegex(first.branch, r"^phalanx/[0-9a-f]{64}$")
 
         (first.path / "source").write_text("committed\n")
         self.git(first.path, "commit", "-am", "worker checkpoint")

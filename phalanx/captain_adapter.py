@@ -1,6 +1,6 @@
-"""Bounded JSON subprocess boundary for an attended Codex desktop bridge.
+"""Bounded JSON subprocess boundary for an attended worker runtime bridge.
 
-The external bridge owns actual desktop discovery, thread creation and reads.
+The external bridge owns actual project discovery, worker launch and observation.
 This module validates its replies; it does not simulate native acceptance.
 """
 
@@ -17,7 +17,7 @@ from uuid import UUID
 
 from .runner_errors import RunnerError
 from .attended_recovery import NativeObservation
-from .codex_handoff import _unique_object
+from .handoff import _unique_object
 
 
 MAX_ADAPTER_REPLY_BYTES = 1024 * 1024
@@ -52,7 +52,7 @@ class CommandTransport:
                 )
                 while process.poll() is None:
                     if os.fstat(response_file.fileno()).st_size > MAX_ADAPTER_REPLY_BYTES:
-                        raise RunnerError(f"Desktop adapter {operation} response exceeds the size limit")
+                        raise RunnerError(f"Bridge adapter {operation} response exceeds the size limit")
                     remaining = deadline - monotonic()
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(self.command, self.timeout)
@@ -61,26 +61,26 @@ class CommandTransport:
                     except subprocess.TimeoutExpired:
                         continue
                 if process.returncode:
-                    raise RunnerError(f"Desktop adapter {operation} failed with exit code {process.returncode}")
+                    raise RunnerError(f"Bridge adapter {operation} failed with exit code {process.returncode}")
                 response_file.seek(0)
                 raw = response_file.read(MAX_ADAPTER_REPLY_BYTES + 1)
                 if len(raw) > MAX_ADAPTER_REPLY_BYTES:
-                    raise RunnerError(f"Desktop adapter {operation} response exceeds the size limit")
+                    raise RunnerError(f"Bridge adapter {operation} response exceeds the size limit")
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise RunnerError(f"Desktop adapter {operation} unavailable; reconcile before retrying launch") from error
+            raise RunnerError(f"Bridge adapter {operation} unavailable; reconcile before retrying launch") from error
         finally:
             if process is not None and process.poll() is None:
                 process.kill()
                 try:
                     process.wait(timeout=0.25)
                 except subprocess.TimeoutExpired as error:
-                    raise RunnerError(f"Desktop adapter {operation} helper did not exit; retain its reservation") from error
+                    raise RunnerError(f"Bridge adapter {operation} helper did not exit; retain its reservation") from error
         try:
             response = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         except (ValueError, RecursionError) as error:
-            raise RunnerError(f"Desktop adapter {operation} returned invalid JSON") from error
+            raise RunnerError(f"Bridge adapter {operation} returned invalid JSON") from error
         if not isinstance(response, dict):
-            raise RunnerError(f"Desktop adapter {operation} must return a JSON object")
+            raise RunnerError(f"Bridge adapter {operation} must return a JSON object")
         return response
 
 
@@ -100,7 +100,7 @@ def _timestamp(value: str) -> datetime:
     return result
 
 
-class CodexCLIAdapter:
+class BridgeAdapter:
     def __init__(self, transport: Callable[[str, dict], dict]):
         self.transport = transport
 
@@ -113,27 +113,27 @@ class CodexCLIAdapter:
             or not isinstance(response.get("checkout"), str)
             or Path(response["checkout"]).resolve(strict=True) != Path(expected["checkout"]).resolve(strict=True)
         ):
-            raise RunnerError("Desktop project discovery did not verify the exact host, project and checkout")
+            raise RunnerError("Project discovery did not verify the exact host, project and checkout")
 
     def launch(self, launch: dict) -> dict:
-        response = self.transport("create_thread", {
+        response = self.transport("launch", {
             "host_id": launch["host_id"], "marker": launch["marker"],
-            "create_thread": launch["create_thread"],
+            "session": launch["session"],
         })
         if response.get("host_id") != launch["host_id"] or response.get("marker") != launch["marker"]:
-            raise RunnerError("Desktop launch receipt does not match the exact marker and host")
+            raise RunnerError("Launch receipt does not match the exact marker and host")
         native, queued = response.get("thread_id"), response.get("client_thread_id")
         if bool(native) == bool(queued):
-            raise RunnerError("Desktop launch requires exactly one native or queued receipt")
+            raise RunnerError("Launch requires exactly one native or queued receipt")
         field, value = ("thread_id", native) if native else ("client_thread_id", queued)
         try:
             return {field: str(UUID(value))}
         except (ValueError, TypeError, AttributeError) as error:
-            raise RunnerError("Desktop launch receipt must contain a UUID") from error
+            raise RunnerError("Launch receipt must contain a UUID") from error
 
-    def wait_threads(self, references: list[dict], *, cursors: dict[str, str],
+    def observe(self, references: list[dict], *, cursors: dict[str, str],
                      timeout: float) -> ObservationBatch:
-        response = self.transport("wait_threads", {
+        response = self.transport("observe", {
             "references": references, "cursors": cursors, "timeout_seconds": timeout,
         })
         try:
@@ -150,7 +150,7 @@ class CodexCLIAdapter:
             ):
                 raise ValueError("Invalid freshness, discovery or cursor evidence")
         except (KeyError, ValueError, TypeError, AttributeError) as error:
-            raise RunnerError("Desktop observation has invalid or stale identity evidence") from error
+            raise RunnerError("Observation has invalid or stale identity evidence") from error
         threads, errors = [], {}
         markers = {ref["marker"] for ref in references}
         for row in rows:

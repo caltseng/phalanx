@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from .codex_handoff import WorkPacket
+from .handoff import WorkPacket
 
 
 RECHECK_SECONDS = (2, 4, 8, 16)
@@ -110,7 +110,7 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         failures = progress.get("failures", 0)
         if failures == len(RECHECK_SECONDS):
             return publish("owner_wait", reason, next_action=(
-                "Inspect the original Codex launch and workspace, then explicitly recheck this reservation"
+                "Inspect the original worker launch and workspace, then explicitly recheck this reservation"
             ))
         progress.update(failures=failures + 1, retry_at=now + RECHECK_SECONDS[failures])
         return publish("retry", reason)
@@ -195,7 +195,7 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         if stopped.disposition not in {"retry_safe", "verified_result"} or not stopped.summary.strip() or len(stopped.summary) > 15800:
             return uncertain("Local checkpoint or output reconciliation is incomplete")
     else:
-        # The launch protocol cannot call Codex before committing the packet.
+        # The launch protocol cannot launch a worker before committing the packet.
         stopped = None
 
     if expired is None:

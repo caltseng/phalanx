@@ -116,9 +116,9 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         marker = launch["marker"]
         self.assertEqual(self.api.claim_leases[0], self.api.claim_leases[1])
         self.assertNotIn(self.api.claim_leases[0], json.dumps(launch))
-        self.assertEqual(launch["create_thread"]["target"]["projectId"], "project")
-        self.assertIn(marker, launch["create_thread"]["prompt"])
-        self.assertIn("pinned-report-revision", launch["create_thread"]["prompt"])
+        self.assertEqual(launch["session"]["project_id"], "project")
+        self.assertIn(marker, launch["session"]["prompt"])
+        self.assertIn("pinned-report-revision", launch["session"]["prompt"])
         self.assertEqual(self.runner().status()["packet"]["dependencies"], self.api.dependencies)
         with self.assertRaisesRegex(RunnerError, "already issued"):
             self.runner().prepare()
@@ -185,7 +185,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         draft = "# Tests\n"
         first = submit(self.runner().prepare(), draft)["state"]["report_draft"]
         review = self.runner().prepare()
-        prompt = review["create_thread"]["prompt"]
+        prompt = review["session"]["prompt"]
         self.assertIn(json.dumps(draft), prompt)
         self.assertIn(first, prompt)
         self.assertIn("Include the test command", prompt)
@@ -194,8 +194,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(redo["state"]["stage"], "report_drafting")
 
         rewrite = self.runner().prepare()
-        self.assertIn(findings, rewrite["create_thread"]["prompt"])
-        self.assertIn(first, rewrite["create_thread"]["prompt"])
+        self.assertIn(findings, rewrite["session"]["prompt"])
+        self.assertIn(first, rewrite["session"]["prompt"])
         waiting = submit(rewrite, {
             "question": "Which command should the report use?",
             "options": "Discovery or a named test",
@@ -207,15 +207,15 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         }, {"Idempotency-Key": "ph16-reply"})
         self.assertEqual(status, 200, queued)
         rewrite = self.runner().prepare()
-        prompt = rewrite["create_thread"]["prompt"]
+        prompt = rewrite["session"]["prompt"]
         for text in (findings, first, "Use discovery."):
             self.assertIn(text, prompt)
         markdown = "# Tests \u2713\r\nRun `python -m unittest`.  \n"
         second = submit(rewrite, markdown)["state"]["report_draft"]
         self.assertNotEqual(first, second)
         review = self.runner().prepare()
-        self.assertIn(second, review["create_thread"]["prompt"])
-        self.assertNotIn(first, review["create_thread"]["prompt"])
+        self.assertIn(second, review["session"]["prompt"])
+        self.assertNotIn(first, review["session"]["prompt"])
         verified = submit(review, "Verified the command against the test configuration.")
         self.assertEqual(verified["state"]["stage"], "report_storage")
         self.assertEqual(self.runner().prepare()["status"], "no_eligible_work")
@@ -448,8 +448,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(json.loads(packet["handoff"]), {
             "question": question, "answer": "Source B only", "wait_version": waiting["version"],
         })
-        self.assertIn("Source B only", launch["create_thread"]["prompt"])
-        self.assertIn("Draft in notes.md", launch["create_thread"]["prompt"])
+        self.assertIn("Source B only", launch["session"]["prompt"])
+        self.assertIn("Draft in notes.md", launch["session"]["prompt"])
 
     def test_development_requires_verified_candidate(self):
         self.api.drop_claim = self.api.drop_result = False

@@ -8,7 +8,7 @@ from uuid import uuid4
 from phalanx.attended_recovery import (
     NativeObservation, StoppedEvidence, acknowledge_stop, reconcile, unmatched_leases,
 )
-from phalanx.codex_handoff import WorkPacket
+from phalanx.handoff import WorkPacket
 
 
 class AttendedRecoveryTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class AttendedRecoveryTests(unittest.TestCase):
         attempt = uuid4()
         self.start = datetime.now(timezone.utc)
         self.packet = WorkPacket("item", attempt, 2, "development", "repo",
-                                 Path.cwd() / "tree", "codex/item", "revision", "goal",
+                                 Path.cwd() / "tree", "phalanx/item", "revision", "goal",
                                  "pull_request", "commit")
         self.record = {
             "runner_id": "runner", "lease": "secret", "host_id": "local",
