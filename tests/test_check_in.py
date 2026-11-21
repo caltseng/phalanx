@@ -86,6 +86,15 @@ class CheckInTests(unittest.TestCase):
         self.assertIsNone(self.intent)
         self.assertEqual(self.puts, 0)
 
+    def test_ready_requires_current_claim_before_returning_evidence(self):
+        def assert_claim():
+            raise RuntimeError("claim lost")
+
+        with self.assertRaisesRegex(RuntimeError, "claim lost"):
+            self.run_check_in(Target.READY, assert_claim=assert_claim)
+        self.assertIsNone(self.intent)
+        self.assertEqual(self.puts, 0)
+
     def test_blocked_gates_never_write(self):
         for changes in (
             {"merge_authorized": False},

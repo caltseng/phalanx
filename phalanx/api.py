@@ -9,6 +9,8 @@ from .auth import require_owner, require_runner
 from .config import Credentials, database_path
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
+from .operator_api import router as operator_router
+from .operator_web import assets as operator_assets, router as operator_web_router
 from .store import connect, migrate
 
 
@@ -26,6 +28,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Phalanx", lifespan=lifespan)
+app.include_router(operator_web_router)
+app.mount("/operator/assets", operator_assets, name="operator-assets")
 
 
 @app.get("/health")
@@ -49,3 +53,4 @@ def runner_status():
 
 app.include_router(intake_router)
 app.include_router(dispatch_router)
+app.include_router(operator_router)

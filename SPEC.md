@@ -89,6 +89,8 @@ The agent returns one JSON result for its assigned stage. It reports an outcome 
 | `needs_input` | A focused question, relevant options or tradeoffs, and a handoff describing what is done and how to resume. Include workspace or output references when available. |
 | `failed` | Why the attempt could not produce a stage outcome, what was tried, and whether a retry is likely to help. Include references to any partial result. |
 
+The authenticated runner submits GitHub observations through the versioned, leased PR observation route. The runner obtains exact provider reads, resolves repository policy, and correlates gate evidence to the observed PR and revision. The server matches the registered repository and current assignment, evaluates the normalized gate evidence, and records the accepted observation with the transition. See the [runner contract](docs/runner-pr-observations.md).
+
 For example, `self_review` plus `succeeded` with findings and revision evidence advances to `pre_pr_validation`. `self_review` plus `changes_required` returns to `development`. Required external checks can still keep an item waiting even after a successful worker result. Only the server marks the whole item completed when its completion target is satisfied.
 
 On `needs_input`, the runner records the question and handoff, releases the slot, and triggers the notification flow. A user reply requeues the item and becomes part of the next work packet. If a process stops before returning a valid result, the runner records the attempt failure. Before retrying, it checks for an existing branch, PR, or stored report so work completed just before the interruption can be recovered.

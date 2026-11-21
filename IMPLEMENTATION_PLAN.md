@@ -16,6 +16,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 | PH-10 | Local worktree allocation, reuse, and safe cleanup in [PR #9](https://github.com/caltseng/phalanx/pull/9). | Connect workspace reservations and cleanup to the runner and queue. |
 | PH-11 | Codex work packets and bounded attempt evidence ingestion in [PR #10](https://github.com/caltseng/phalanx/pull/10). | Wire live Captain launch receipts and observation to runner claims, results, and recovery. |
 | PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6) and conditional Git ref publication in [PR #15](https://github.com/caltseng/phalanx/pull/15). Runner-side first draft workflow with local durable intent and verified recovery. | Wire the server claim/version guard and persist verified primary, duplicate, and conflict evidence through runner stage results. |
+| PH-17 | Authenticated keyset pages for open and recently closed executions, plus the selected execution timeline. | Wire the board adapter and map prerequisite and worker chat data when their read contracts are available. |
 | PH-18 | Operator board component with browser fixtures in [PR #8](https://github.com/caltseng/phalanx/pull/8). | Connect it to the authenticated PH-17 read API and package its static assets. |
 
 ## Integration pilots
@@ -105,15 +106,21 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - Record operation intent and expected remote state. After development records a candidate commit, push it and open a draft with the required Phalanx attribution. Reuse a matching PR. If bounded reconciliation cannot confirm creation, retry so the work gets a PR. Record one primary and surface duplicates. Use revision preconditions where supported and reconcile unresolved writes before issuing a conflicting operation.
 - **Done when:** A lost response to draft creation produces a primary PR and repeated publication keeps one attribution footer. Test a writer paused after its claim check, a lease expiry, and an outside push. The old attempt cannot silently overwrite newer work and any unresolved write remains visible for reconciliation.
 
+- **API slice:** The [runner observation contract](docs/runner-pr-observations.md) records verified draft publication and surfaced duplicates. Connect the runner's durable publication intent and reconciliation to this route.
+
 ### PH-14 Validate and promote the current candidate
 
 - **Depends on:** PH-02, PH-08, PH-13. **Output:** PR.
 - Run self-review and candidate-local pre-validation, recording allowed bypasses. Publish any updated candidate to the primary PR before checks that require that head. Run draft-only gates and then mark the draft ready for review. Observe required CI and previews for the current revision. Distinguish CI that is unconfigured from expected CI that is missing.
 - **Done when:** Revised draft previews run on the intended head and promotion does not wait for checks that only start after it. A pre-validation bypass leaves required CI intact. If a promoted PR later needs a draft-only check that cannot run, follow the repo policy or expose the decision rather than wait indefinitely.
+- Runner collection reads the primary PR and target tip around the check snapshot, verifies test-merge parents, and evaluates bounded, phase-specific provider evidence. The caller supplies complete phase policy, including whether a check uses the head or test-merge SHA, and an adapter for the configured preview provider and served revision. Policy discovery, provider-specific preview reads, promotion orchestration, and scheduled rechecks remain integration work.
+
+- **API slice:** Draft and ready check evidence is bound to the primary PR and exact revision. Remaining integration includes scheduled external rechecks and runner policy and provider discovery.
 
 ### PH-15 Review, reconcile, and check in
 
 - **Depends on:** PH-09, PH-12, PH-14. **Output:** PR.
+- **API follow-up:** Wire independent review, feedback, approvals, and mergeability to the verified primary PR and revision before assigning check-in. Verify a merge against the recorded pre-merge revision and durable write intent.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
 - When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
 - **Coordinator slice:** Verify exact primary identity and current gates, finish ready-only without a write, or reserve and request one authorized direct merge commit. Reconcile by reading the same PR and verifying the ordered base and head parents. Keep an ambiguous attempt reserved even if the PR still appears open.

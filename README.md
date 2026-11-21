@@ -33,6 +33,10 @@ Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlit
 
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
+### Operator work board
+
+Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text.
+
 ### Back up and restore SQLite
 
 Run these commands in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS. Each command validates its copy before creating the destination and refuses to overwrite an existing file.
@@ -113,7 +117,7 @@ python -m phalanx intake example "Review the test coverage" --target report --ke
 python -m phalanx inspect <item_id>
 ```
 
-Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The later GitHub integration supplies provider-verified facts for PR stages.
+Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
 
 The authenticated API exposes these routes under `/v1`.
 
@@ -140,4 +144,29 @@ Results and stop confirmations require a matching `attempt_id`, `stage` and `exp
 
 Migration 2 stores execution snapshots as JSON and exposes `stage` and `status` as queryable columns. It enforces one open execution per item and one open attempt per execution. PH-06 can select a queued execution and call `intake.claim_attempt` inside the same `store.write_transaction` after checking admission. Supply a stable `runner_id`, the SHA-256 hex digest of a freshly generated URL-safe lease secret, and `lease_expires_at` as Unix seconds. Return the plaintext secret only to the claiming runner. The claim returns the new attempt ID and execution snapshot. It appends history, increments the state version and changes the execution to running. A committed result ends the attempt. Renewal and recovery should use the persisted attempt ID, runner ID, lease digest and expiry. A cancellation request keeps the attempt open until stop confirmation or recovery.
 
-PH-06 owns candidate indexing, time eligible, aging, capacity, admission and lease renewal. PH-08 owns reply and external recheck routes. PH-09 owns general failure finalization and retries. Provider verification and recovery of uncertain writes belong to the GitHub and runner integrations. The result API rejects caller-supplied PR observations. PH-17 owns bounded history reads.
+PH-06 owns candidate indexing, time eligible, aging, capacity, admission and lease renewal. PH-08 owns reply and external recheck routes. PH-09 owns general failure finalization and retries. Provider verification and recovery of uncertain writes belong to the GitHub and runner integrations. The result API rejects caller-supplied PR observations. The operator API provides bounded history reads for the board.
+
+### Read the operator board data
+
+Both owner and runner bearer tokens can call these routes.
+
+| Route | Response |
+| --- | --- |
+| `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
+| `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. |
+
+Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the
+returned `next_cursor` as `cursor` on the same route and list kind until it is
+null. Pages read live state. An open execution entering or leaving the input-wait
+group can cross the cursor between requests. Refresh from the first page to
+see the current order. New timeline events and closures normally precede the
+current cursor. The timestamp and version fields describe the persisted state.
+
+`last_advanced_at` records entry into the current stage. `last_progress_at` records
+the latest execution transition. Wait details include the stored reason, resume
+trigger, and age of the current recorded wait. A scheduled retry is available
+as `retry_at_ms` in Unix milliseconds. `primary_pr_url` represents the recorded
+primary PR. The draft state and worker chat link have no current read mapping.
+Prerequisite links are not yet wired into the API. Report output URLs use the
+authenticated report route.

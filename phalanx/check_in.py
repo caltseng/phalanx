@@ -30,8 +30,11 @@ class CheckInGates:
     Direct merge assurance must cover the credential, allowed merge method,
     target branch, and current revision. Supply it only when the repository
     permits REST's base race and any base-sensitive evidence is protected by
-    a verified repository mechanism. Queue-required and exact-base atomic
-    policies cannot authorize this path.
+    a repository mechanism verified to apply to the actual merge credential.
+    A fresh ref read alone provides no protection from a concurrent base
+    advance or retarget, and parent verification only detects an unexpected
+    merge after the write. Queue-required and exact-base atomic policies
+    cannot authorize this path.
     """
 
     primary: PrimaryPull
@@ -91,7 +94,8 @@ class CheckInCoordinator:
         revision changes. Recovery must use that stored intent with reconcile.
         The caller owns recording results and retiring resolved reservations.
         A blocked or stale result from the reserving writer means no request was sent.
-        assert_claim must raise if the runner no longer owns the write.
+        assert_claim must raise if the runner no longer owns the stage.
+        It guards the ready-only result as well as reservation and dispatch.
         """
         if target not in (Target.READY, Target.MERGED):
             raise ValueError("check-in requires a PR completion target")
@@ -111,6 +115,7 @@ class CheckInCoordinator:
             return problem
 
         if target == Target.READY:
+            assert_claim()
             return CheckInOutcome("ready", "The primary PR is ready for check-in",
                                   VerifiedPullRequest(primary.url, primary.revision))
         assert_claim()
