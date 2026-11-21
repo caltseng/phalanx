@@ -14,7 +14,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 | PH-04 | Standalone FastAPI and SQLite server, migrations, bearer roles, and verified backups in [PR #7](https://github.com/caltseng/phalanx/pull/7). | Use the same API process for subsequent deployment. |
 | PH-05 | Server-owned transition engine in [PR #5](https://github.com/caltseng/phalanx/pull/5). | Wire phase decisions to durable intake, history, and versioned results. |
 | PH-10 | Local worktree allocation, reuse, and safe cleanup in [PR #9](https://github.com/caltseng/phalanx/pull/9). | Connect workspace reservations and cleanup to the runner and queue. |
-| PH-11 | Codex work packets in [PR #10](https://github.com/caltseng/phalanx/pull/10), attended bridge in [PR #18](https://github.com/caltseng/phalanx/pull/18), and numbered local reservations. | Verify two live desktop chats returning independent outcomes, and integrate structured owner replies and recovery. |
+| PH-11 | Codex work packets in [PR #10](https://github.com/caltseng/phalanx/pull/10), attended bridge in [PR #18](https://github.com/caltseng/phalanx/pull/18), and numbered local reservations. | Verify two live desktop chats returning independent outcomes and a structured owner reply roundtrip. Integrate per-slot recovery. |
 | PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6) and conditional Git ref publication in [PR #15](https://github.com/caltseng/phalanx/pull/15). Draft workflow and recovery in [PR #22](https://github.com/caltseng/phalanx/pull/22), trusted observation API in [PR #23](https://github.com/caltseng/phalanx/pull/23), and a runner stage that checks the current claim and submits verified drafts idempotently. | Route attended claims to the stage, persist the development base checkpoint, and wire non-success outcomes and recovery. |
 | PH-17 | Authenticated keyset pages for open and recently closed executions, plus the selected execution timeline. | Wire the board adapter and map prerequisite and worker chat data when their read contracts are available. |
 | PH-18 | Operator board component with browser fixtures in [PR #8](https://github.com/caltseng/phalanx/pull/8). | Connect it to the authenticated PH-17 read API and package its static assets. |
@@ -69,6 +69,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-05. **Output:** PR.
 - Persist a focused question and handoff before releasing the slot. Provide a canonical owner reply through the API and CLI, plus one notification route. Index external recheck times, process due work in bounded batches with jitter and provider-directed backoff, and coalesce duplicate events by gate and revision. Surface why an item is waiting and what will resume it.
+- The durable slice provides the owner inbox, versioned replies, and runner endpoints for due waits and same-stage rechecks. Remaining integration includes active runner polling, provider observations and event coalescing by gate and revision, and the overdue-wave load check against lease renewals.
 - **Done when:** Replying queues the correct stage exactly once, a missed event is recovered by a recheck, and duplicate events or a wave of overdue waits neither occupy worker slots nor drown out lease renewals.
 
 ### PH-09 Make finalization durable
@@ -90,7 +91,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-01, PH-06, PH-10. **Output:** PR.
 - The attended bridge uses independent numbered slots and prepares development and report-drafting launches and relays verified results. Captain resolves the app project, records native receipts, and attests that the writer stopped. Dispatch filters claims by supported stage. Report review and storage, wider PR stage coverage, and a two-worker desktop run remain.
-- When PH-08 lands, send the worker question, options and handoff as its structured `question` result, carry the recorded question and owner answer into the next claim and work packet, and verify a question, reply and resumed attempt through the attended CLI. Until that integration, the attended runner submits the question and handoff in the owner wait reason.
+- The attended runner submits questions and handoffs through PH-08 and includes the recorded question and owner answer in the resumed work packet. Verify the roundtrip in a live Captain chat during the attended pilot.
 - Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
 - **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
 
@@ -126,7 +127,7 @@ Integrate the restart core from [PR #27](https://github.com/caltseng/phalanx/pul
 ### PH-15 Review, reconcile, and check in
 
 - **Depends on:** PH-09, PH-12, PH-14. **Output:** PR.
-- **API follow-up:** Wire independent review, feedback, approvals, and mergeability to the verified primary PR and revision before assigning check-in. Verify a merge against the recorded pre-merge revision and durable write intent.
+- **API slice:** The [runner observation contract](docs/runner-pr-observations.md) records independent review and current gates against the primary PR, finalizes ready-only work, and records trusted merge verification against a persisted authorization and pre-merge revision. Runner integration still needs to supply provider correlation with its durable write intent, handle pending gates and candidate-changing fixes, and reconcile uncertain writes across claims.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
 - When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
 - **Coordinator slice:** Verify exact primary identity and current gates, finish ready-only without a write, or reserve and request one authorized direct merge commit. Reconcile by reading the same PR and verifying the ordered base and head parents. Keep an ambiguous attempt reserved even if the PR still appears open.
