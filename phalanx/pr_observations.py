@@ -6,9 +6,9 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints
 
-from . import intake, validation
+from . import intake, validation, waits
 from .intake_models import AttemptEvent, Identifier, Payload, Text
-from .transitions import Evidence, Event, Outcome, PullRequest, Revision, Stage, Status, Target
+from .transitions import Evidence, Event, Outcome, PullRequest, Revision, Stage, Status, Target, Wait
 from .workspaces import _item_branch
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -76,6 +76,11 @@ class PublicationClaimCheck(AttemptEvent):
     runner_id: Identifier
 
 
+class PublishedValidationClaimCheck(AttemptEvent):
+    stage: Literal[Stage.PR_VALIDATION]
+    runner_id: Identifier
+
+
 class Publication(AttemptEvent):
     stage: Literal[Stage.PR_CREATION]
     expected: ExpectedRefs
@@ -88,6 +93,7 @@ class Validation(AttemptEvent):
     expected: ExpectedRefs
     pull: GitHubPull
     gates: GateObservation
+    schedule_recheck: Flag = False
 
 
 class ReviewRecord(Payload):
@@ -186,6 +192,24 @@ def check_publication_claim(db, item_id, execution_id, body, lease_digest):
     }
 
 
+def check_published_validation_claim(db, item_id, execution_id, body, lease_digest):
+    try:
+        _, state = intake.check_current(db, item_id, execution_id, body.expected_version)
+        attempt = intake.check_attempt(db, execution_id, state, body, lease_digest)
+    except (intake.Conflict, intake.Missing):
+        return {"current": False}
+    if (attempt["runner_id"] != body.runner_id or state.status != Status.RUNNING
+            or state.stopping is not None):
+        return {"current": False}
+    promotion = latest_observation(db, execution_id, Stage.PR_PROMOTION)
+    pull = None
+    if (promotion and promotion["outcome"] == Outcome.SUCCEEDED
+            and promotion["pr_url"] == state.primary_pr
+            and promotion["pull"]["head_sha"] == state.candidate):
+        pull = promotion["pull"]
+    return {"current": True, "pr_url": state.primary_pr, "promotion": pull}
+
+
 def submit(db, item_id, execution_id, body, lease_digest):
     row, state = intake.check_current(db, item_id, execution_id, body.expected_version)
     intake.check_attempt(db, execution_id, state, body, lease_digest)
@@ -247,6 +271,9 @@ def submit(db, item_id, execution_id, body, lease_digest):
     else:
         if body.stage != Stage.PR_PROMOTION and pull.draft:
             raise intake.Conflict("Expected an open, ready primary PR")
+        schedule_recheck = isinstance(body, Validation) and body.schedule_recheck
+        if schedule_recheck and body.stage != Stage.PR_VALIDATION:
+            raise intake.Conflict("Scheduled ready checks require the published-validation stage")
         gates = evaluate_gates(body, url, revision)
         details["gate_result"] = {"state": gates.state, "reasons": gates.reasons}
         if gates.state in {validation.GateState.SATISFIED, validation.GateState.NOT_CONFIGURED}:
@@ -255,6 +282,8 @@ def submit(db, item_id, execution_id, body, lease_digest):
               and body.stage != Stage.PR_RECONCILIATION):
             evidence = Evidence(pr=pr)
             outcome = Outcome.CHANGES_REQUIRED
+        elif gates.state is validation.GateState.WAITING and schedule_recheck:
+            return _wait_for_published_gates(db, row, state, body, gates, details)
         else:
             raise intake.Conflict("PR gates did not pass: " + "; ".join(gates.reasons))
     details["outcome"] = outcome
@@ -316,3 +345,37 @@ def evaluate_gates(body, url, revision):
                                       gates.test_merge_sha),
         phase, required, observations,
     )
+
+
+def _wait_for_published_gates(db, row, state, body, gates, details):
+    if state.status != Status.RUNNING or state.stopping is not None:
+        raise intake.Conflict("Scheduling a PR recheck requires a running attempt")
+    # An explicit owner reply grants a fresh bounded observation window.
+    since, = db.execute("""
+        SELECT coalesce(max(version), 0) FROM transition_history
+        WHERE execution_id=? AND (event='reply' OR
+            (event='result' AND json_extract(details_json, '$.stage')='pr_promotion'))
+    """, (row["id"],)).fetchone()
+    previous = db.execute("""
+        SELECT json_extract(details_json, '$.recheck_count') FROM transition_history
+        WHERE execution_id=? AND version>? AND event='external_wait'
+          AND json_extract(details_json, '$.gate')='pr_validation'
+          AND json_extract(details_json, '$.revision.head')=?
+          AND json_extract(details_json, '$.revision.base')=?
+        ORDER BY version DESC LIMIT 1
+    """, (row["id"], since, body.pull.head_sha, body.pull.base_sha)).fetchone()
+    count = (previous[0] or 0) if previous else 0
+    reason = "; ".join(gates.reasons)[:16000]
+    if count >= 5:
+        question = "Resolve the stalled ready-phase checks, then reply to resume validation."
+        details["question"] = {"prompt": question, "handoff": reason}
+        details["outcome"] = Outcome.NEEDS_INPUT
+        return intake.apply(
+            db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
+            outcome=Outcome.NEEDS_INPUT, wait=Wait(reason, "owner reply"),
+        )
+    details.update(
+        gate="pr_validation", revision={"head": body.pull.head_sha, "base": body.pull.base_sha},
+        recheck_count=count + 1,
+    )
+    return waits.schedule(db, row, state, body.attempt_id, reason, 60 * 2**count, details)

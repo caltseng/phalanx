@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
+from time import time
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urljoin, urlsplit
@@ -18,9 +19,11 @@ _NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 class GitHubError(Exception):
     """Provider rejection or failed read."""
 
-    def __init__(self, operation: str, reason: str, status: int | None = None):
+    def __init__(self, operation: str, reason: str, status: int | None = None, *,
+                 retry_after_seconds: int | None = None):
         self.status = status
         self.operation = operation
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(f"{operation}: {reason}")
 
 
@@ -33,6 +36,25 @@ class HTTPResponse:
     status: int
     headers: Mapping[str, str]
     body: bytes
+
+
+def _read_retry_delay(response: HTTPResponse) -> int | None:
+    headers = {name.lower(): value for name, value in response.headers.items()}
+    limited = response.status == 429 or (response.status == 403 and (
+        headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers
+        or b"secondary rate limit" in response.body.lower()
+    ))
+    if not limited and response.status != 408 and not 500 <= response.status <= 599:
+        return None
+    delay = 0
+    if limited:
+        reset = headers.get("x-ratelimit-reset", "")
+        if headers.get("x-ratelimit-remaining") == "0" and re.fullmatch(r"[0-9]{1,12}", reset):
+            delay = max(0, int(reset) - int(time()))
+    retry = headers.get("retry-after", "")
+    if re.fullmatch(r"[0-9]{1,10}", retry):
+        return max(delay, int(retry))
+    return delay or (60 if limited else 0)
 
 
 Transport = Callable[[Request, float], HTTPResponse]
@@ -182,12 +204,18 @@ class GitHubClient:
         try:
             response = self._transport(request, self._timeout)
         except (OSError, http.client.HTTPException) as error:
-            raise error_type(operation, f"transport failure ({type(error).__name__})") from None
+            raise error_type(
+                operation, f"transport failure ({type(error).__name__})",
+                retry_after_seconds=0 if method == "GET" else None,
+            ) from None
         if response.status != expected:
             # A timeout or unexpected success/redirect/server error can hide a write.
             rejected = 400 <= response.status < 500 and response.status != 408
             failure = GitHubError if rejected else error_type
-            raise failure(operation, f"GitHub returned HTTP {response.status}", response.status)
+            raise failure(
+                operation, f"GitHub returned HTTP {response.status}", response.status,
+                retry_after_seconds=_read_retry_delay(response) if method == "GET" else None,
+            )
         try:
             return json.loads(response.body), response.headers
         except (ValueError, UnicodeError):

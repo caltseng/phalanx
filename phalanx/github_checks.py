@@ -23,6 +23,7 @@ class CheckCollection:
     gate: GateResult
     candidate: PublishedCandidate | None = None
     observations: tuple[PublishedEvidence, ...] = ()
+    retry_after_seconds: int | None = None
 
 
 # A repository-specific adapter verifies the preview provider, environment, and
@@ -190,10 +191,11 @@ def collect_github_checks(
             current, tuple(observations),
         )
     except GitHubError as error:
-        return _blocked(str(error))
+        return _blocked(str(error), retry_after_seconds=error.retry_after_seconds)
     except (KeyError, TypeError):
         return _blocked("GitHub returned malformed check data")
 
 
-def _blocked(reason: str) -> CheckCollection:
-    return CheckCollection(GateResult(GateState.BLOCKED, (reason,)))
+def _blocked(reason: str, *, retry_after_seconds: int | None = None) -> CheckCollection:
+    return CheckCollection(GateResult(GateState.BLOCKED, (reason,)),
+                           retry_after_seconds=retry_after_seconds)

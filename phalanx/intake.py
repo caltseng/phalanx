@@ -386,19 +386,50 @@ def stopped_retry_at(row, now):
 def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     check_attempt(db, execution_id, state, payload, lease_digest)
+    if payload.review_notes is not None and (
+        state.stage != Stage.SELF_REVIEW
+        or state.candidate is None
+        or state.candidate != (payload.reviewed_candidate if payload.outcome == Outcome.SUCCEEDED
+                               else payload.candidate)
+    ):
+        raise Conflict("Review notes require self-review evidence for the current candidate")
+    if payload.local_checks is not None and (
+        state.stage != Stage.PRE_PR_VALIDATION
+        or state.candidate is None
+        or state.candidate != (payload.prevalidated_candidate if payload.outcome == Outcome.SUCCEEDED
+                               else payload.candidate)
+    ):
+        raise Conflict("Local checks require pre-validation evidence for the current candidate")
+    if payload.local_checks is not None and payload.outcome == Outcome.SUCCEEDED:
+        if len({check.name for check in payload.local_checks}) != len(payload.local_checks):
+            raise Conflict("Successful pre-validation requires one disposition per local check")
+        if any(check.outcome == "failed" or (
+            check.outcome != "passed" and not (check.reason and check.authorization)
+        ) for check in payload.local_checks):
+            raise Conflict("Successful pre-validation requires passing checks or documented bypasses")
     wait = Wait(**payload.wait.model_dump()) if payload.wait else None
     if payload.question is not None:
         wait = Wait(wait.reason if wait else payload.question.prompt, "owner reply")
-    details = payload.model_dump(mode="json", exclude={"report_markdown", "expected_version"})
+    excluded = {"report_markdown", "expected_version"}
+    excluded.update(field for field in ("review_notes", "local_checks")
+                    if getattr(payload, field) is None)
+    details = payload.model_dump(mode="json", exclude=excluded)
     retry_at = None
+    if payload.retry_after_seconds is not None and payload.failure_reason is None:
+        raise Conflict("A retry delay requires a technical failure reason")
     if payload.failure_reason is not None:
         if payload.outcome != Outcome.FAILED or wait is not None:
             raise Conflict("A technical failure reason requires a failed result without an explicit wait")
-        retry_at = stopped_retry_at(row, time())
+        now = time()
+        retry_at = stopped_retry_at(row, now)
         if retry_at is None:
-            wait = Wait(f"Five stopped worker attempts require a recovery decision.\n\n{payload.failure_reason}",
+            attempts = ("technical failures" if payload.retry_after_seconds is not None
+                        else "stopped worker attempts")
+            wait = Wait(f"Five {attempts} require a recovery decision.\n\n{payload.failure_reason}",
                         "owner intervention")
         else:
+            if payload.retry_after_seconds is not None:
+                retry_at = max(retry_at, int(now * 1000) + payload.retry_after_seconds * 1000)
             details["retry_at_ms"] = retry_at
     if payload.report_review_notes is not None:
         if state.stage != Stage.REPORT_REVIEW or payload.outcome not in {

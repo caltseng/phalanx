@@ -55,6 +55,8 @@ The server durably records report finalization before writing the final artifact
 
 The draft author self-reviews the field report before submitting it. A fresh review assignment receives the exact stored draft revision and verifies the report against the request, its supporting evidence, and its links. Findings and the reviewed draft go back to drafting for fixes. The runner submits the approved revision for server finalization without launching a storage worker. Reports share the same pause, retry, and handoff behavior.
 
+For PR work, the runner binds self-review and local check results to the claimed candidate at the clean item worktree HEAD. Local checks and bypass authorizations come from trusted repository policy supplied by the runner. The result timeline records review notes, each check disposition, and the reason and authorization for a bypass.
+
 ### Execution status and recovery
 
 - Use `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`, `failed`, and `cancelled` as execution statuses. Store the stage, status, expected revision, and why any wait is active. A waiting item has a resume trigger, such as a user reply, check result, approval, or scheduled recheck. Reconcile external waits periodically so a missed event cannot strand the item.

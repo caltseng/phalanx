@@ -1,6 +1,7 @@
 from pathlib import Path
 from secrets import token_urlsafe
 from tempfile import TemporaryDirectory
+from time import time
 import unittest
 
 from phalanx import intake
@@ -145,6 +146,50 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(timeline[-1]["attempt_id"], claim["attempt_id"])
         self.assertEqual(timeline[-1]["details"]["duplicate_numbers"], [8])
 
+    def test_candidate_local_evidence_is_persisted_for_the_current_stage_and_candidate(self):
+        self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
+        review = self.claim("self_review")
+        question = {"prompt": "Which scope?", "options": ["Current or expanded"],
+                    "handoff": "Reviewed the current scope"}
+        status, waiting = self.request(f"{self.execution}/result", RUNNER, dict(
+            review, outcome="needs_input", candidate=HEAD, review_notes=question["prompt"],
+            question=question,
+        ), self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(waiting["state"]["wait"]["trigger"], "owner reply")
+        _, inbox = self.request("/v1/owner/inbox", OWNER)
+        self.assertEqual(inbox[0]["question"]["handoff"], question["handoff"])
+        self.assertEqual(self.request(f"{self.execution}/reply", OWNER, {
+            "expected_version": waiting["version"], "answer": "Current scope",
+        }, {"Idempotency-Key": "self-review-reply"})[0], 200)
+        review = self.claim("self_review")
+        notes = {"review_notes": "Reviewed the diff and acceptance criteria"}
+        self.assertEqual(self.result(review, reviewed_candidate=OTHER, **notes)[0], 409)
+        self.assertEqual(self.result(review, reviewed_candidate=HEAD, **notes)[0], 200)
+        validate = self.claim("pre_pr_validation")
+        status, waiting = self.request(f"{self.execution}/result", RUNNER, dict(
+            validate, outcome="needs_input", candidate=HEAD, local_checks=[],
+            question={"prompt": "Which local policy applies?", "handoff": "Policy is unverified"},
+        ), self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(waiting["state"]["wait"]["trigger"], "owner reply")
+        self.assertEqual(self.request(f"{self.execution}/reply", OWNER, {
+            "expected_version": waiting["version"], "answer": "Use section 2",
+        }, {"Idempotency-Key": "local-policy-reply"})[0], 200)
+        validate = self.claim("pre_pr_validation")
+        bypass = {"name": "platform", "outcome": "skipped", "reason": "Platform unavailable",
+                  "authorization": "Repository policy section 2"}
+        self.assertEqual(self.result(validate, prevalidated_candidate=HEAD, **notes)[0], 409)
+        self.assertEqual(self.result(validate, prevalidated_candidate=HEAD,
+                                     local_checks=[dict(bypass, authorization=None)])[0], 409)
+        self.assertEqual(self.result(validate, prevalidated_candidate=HEAD, local_checks=[bypass])[0],
+                         200)
+        _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+        self.assertIn(notes["review_notes"],
+                      [entry["details"].get("review_notes") for entry in timeline])
+        self.assertEqual(timeline[-1]["details"]["local_checks"], [bypass])
+        self.assertEqual(timeline[-1]["details"]["prevalidated_candidate"], HEAD)
+
     def test_promotion_and_validation_require_the_primary_pr_and_current_gates(self):
         self.publish()
         claim = self.claim("pr_promotion")
@@ -176,6 +221,82 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(updated["state"]["stage"], "pr_reconciliation")
         self.assertIsNone(updated["state"]["final_output"])
+
+    def test_published_validation_wait_replays_and_reclaims_exact_revision(self):
+        self.publish()
+        promotion = self.observation(self.claim("pr_promotion"), gates=self.gates("draft"))
+        self.assertEqual(self.submit(promotion)[0], 200)
+        claim = self.claim("pr_validation")
+        authority = f"{self.execution}/pr-validation-claim"
+        claim_body = dict(claim, runner_id="local")
+        self.assertEqual(self.request(authority, OWNER, claim_body, self.lease)[0], 403)
+        self.assertEqual(self.request(authority, RUNNER, dict(claim_body, runner_id="other"),
+                                      self.lease), (200, {"current": False}))
+        status, current = self.request(authority, RUNNER, claim_body, self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(current["promotion"], promotion["pull"])
+
+        for cycle in range(6):
+            body = self.observation(claim, gates=self.gates("ready", outcome="pending"),
+                                    schedule_recheck=True)
+            if cycle == 0:
+                changed_base = dict(
+                    body, pull=dict(body["pull"], base_sha=OTHER),
+                    expected=dict(body["expected"], base_sha=OTHER),
+                )
+                self.assertEqual(self.submit(changed_base)[0], 409)
+            key = {"Idempotency-Key": f"pending-ready-{cycle}"}
+            status, updated = self.submit(body, **key)
+            self.assertEqual(status, 200)
+            self.assertEqual(self.submit(body, **key), (status, updated))
+            if cycle == 5:
+                self.assertEqual(updated["state"]["status"], "waiting_for_input")
+                _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+                self.assertIn("stalled", timeline[-1]["details"]["question"]["prompt"])
+                break
+            self.assertEqual(updated["state"]["status"], "waiting_for_external")
+            self.assertEqual(self.request(authority, RUNNER, dict(claim, runner_id="local"),
+                                          self.lease), (200, {"current": False}))
+            with write_transaction(self.path) as db:
+                due = db.execute("SELECT version FROM external_rechecks WHERE version=?",
+                                 (updated["version"],)).fetchone()
+                self.assertIsNotNone(due)
+                db.execute("UPDATE external_rechecks SET due_at_ms=0 WHERE version=?",
+                           (updated["version"],))
+            status, due = self.request("/v1/runner/due-rechecks", RUNNER)
+            self.assertEqual(status, 200)
+            self.assertEqual(len(due), 1)
+            self.assertEqual(due[0]["revision"], {"head": HEAD, "base": BASE})
+            self.assertEqual(due[0]["gate"], "pr_validation")
+            status, queued = self.request(f"{self.execution}/recheck", RUNNER, {
+                "expected_version": updated["version"],
+            }, {"Idempotency-Key": f"recheck-ready-{cycle}"})
+            self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
+            claim = self.claim("pr_validation")
+
+        status, queued = self.request(f"{self.execution}/reply", OWNER, {
+            "expected_version": updated["version"], "answer": "The CI provider recovered",
+        }, {"Idempotency-Key": "ready-policy-reply"})
+        self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
+        ready = self.observation(self.claim("pr_validation"), gates=self.gates("ready"),
+                                 schedule_recheck=True)
+        status, updated = self.submit(ready, **{"Idempotency-Key": "ready-passed"})
+        self.assertEqual((status, updated["state"]["stage"]), (200, "adversarial_review"))
+
+    def test_transient_validation_retry_honors_provider_delay(self):
+        self.publish()
+        promotion = self.observation(self.claim("pr_promotion"), gates=self.gates("draft"))
+        self.assertEqual(self.submit(promotion)[0], 200)
+        claim = self.claim("pr_validation")
+        body = dict(claim, outcome="failed", failure_reason="GitHub returned HTTP 429",
+                    retry_after_seconds=120)
+        headers = {**self.lease, "Idempotency-Key": "validation-throttled"}
+        before = int(time() * 1000)
+        status, queued = self.request(f"{self.execution}/result", RUNNER, body, headers)
+        self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
+        self.assertGreaterEqual(queued["retry_at_ms"], before + 120_000)
+        self.assertEqual(self.request(f"{self.execution}/result", RUNNER, body, headers),
+                         (status, queued))
 
     def test_cancelling_attempt_cannot_record_publication(self):
         claim = self.claim("pr_creation")
