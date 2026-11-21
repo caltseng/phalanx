@@ -216,8 +216,11 @@ Once a queued ID has been correlated to a native thread, repeated observations
 of that same native ID preserve the queued identity and remain idempotent.
 Saved submissions replay their exact original receipt even when the local lease
 deadline has passed; the server decides whether they were already accepted.
-Expired results remain reserved for server-authorized adoption, which is not
-implemented by this slice. Existing stopped-attempt recovery can release only
+Expired attempts with a known active writer, a verified result or a saved
+submission are adopted rather than released. The runner journals a recovery
+claim with a fresh lease secret, and the server re-leases the same open attempt
+and fences the old secret. The writer, checkpoint and result stay bound to one
+attempt, so nothing is redrafted. Stopped-attempt recovery still releases only
 verified safe reservations.
 
 A stopping worker assignment with no relay intent, receipt, submission or recovery
@@ -345,9 +348,8 @@ the PH-11b muster on the GitHub Copilot app accepted it natively: two real
 visible workers, a worker question answered through the Captain chat, and
 Captain restarts around a receipt, recorded in
 [the worker recovery report](docs/pilots/worker-recovery.md). Wider PR stages,
-owner notifications/due external rechecks and
-fresh-claim result adoption remain integration work; this is not full PH-11
-or v1 acceptance.
+owner notifications/due external rechecks remain integration work; this is not
+full PH-11 or v1 acceptance.
 
 ### Load trusted validation policy
 
@@ -376,7 +378,7 @@ Each thread row includes the following fields.
 | `state` | Use `active`, `stopped`, or `unknown`. Attest `stopped` only after confirming the native turn ended and accounting for any worktree writer it started. A missing thread or ambiguous state is `unknown`. |
 | `client_thread_id` | The queued UUID when the native launch can be positively correlated with its saved queued receipt. Otherwise omit it. |
 
-A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. A verified result with an expired lease stays reserved with its result path, digest, and checkpoint for future adoption under a server-authorized recovery claim. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
+A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. An expired attempt with an active writer or a verified result is adopted under a recovery claim. The claim request and its fresh secret are journaled before sending, so a lost reply replays the same key. Afterwards the Captain renews and submits under the new lease. If the server refuses adoption, the reservation backs off and then waits for the owner; nothing is released. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. A reservation with no relay, receipt or submission is released only after `--recheck` proves no launch happened: no result file and a clean worktree at the accounted revision, or no worktree or branch at all. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
 
 ### Operator work board
 
@@ -416,6 +418,7 @@ capacity and recovery within that trusted role.
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, the old secret stops working, and the recovery is recorded. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. |
 
 A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
 `no_eligible_work`. A successful assignment includes the work request,
