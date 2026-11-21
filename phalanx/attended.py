@@ -203,6 +203,8 @@ class AttendedRunner:
             self._ensure_reservation(record, lease)
             if "packet" in record:
                 raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
+            if "recover_stop" in record:
+                raise RunnerError("Recovery owns this reservation; inspect attended-recover")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
                 record[field] = snapshot[field]
             if "development_base" in snapshot:

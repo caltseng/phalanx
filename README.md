@@ -117,6 +117,27 @@ restarting. Expired leases and unverified results require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.
 
+### Reconcile an attended reservation
+
+From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.
+
+```powershell
+python -m phalanx attended-recover --config runner.json --state C:/phalanx-runner --slot 1 --observation observation.json
+```
+
+The Captain supplies a fresh JSON snapshot from native Codex history and thread reads. Set `observed_at` to the time of the snapshot as ISO 8601 with an offset. Include `discovery_complete` and a `threads` array. Set `discovery_complete` only after inspecting all relevant history pages, including archived history where relevant. A thread already bound to a native receipt can be read directly.
+
+Each thread row includes the following fields.
+
+| Field | Source |
+| --- | --- |
+| `host_id`, `project_id`, `thread_id`, `started_at` | Native host, project, thread UUID and offset-aware original launch time. |
+| `marker`, `assignment` | The exact first-turn attempt marker and the original packet's `result_identity` object from the first prompt. |
+| `state` | Use `active`, `stopped`, or `unknown`. Attest `stopped` only after confirming the native turn ended and accounting for any worktree writer it started. A missing thread or ambiguous state is `unknown`. |
+| `client_thread_id` | The queued UUID when the native launch can be positively correlated with its saved queued receipt. Otherwise omit it. |
+
+A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. A verified result with an expired lease stays reserved with its result path, digest, and checkpoint for future adoption under a server-authorized recovery claim. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
+
 ### Operator work board
 
 Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text.

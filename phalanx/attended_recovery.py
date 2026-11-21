@@ -122,6 +122,25 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
                        next_action="Reconcile the exact attempt and version before retrying")
     if "recover_stop" in record and stop_failure == "unavailable":
         return uncertain("The stopped-attempt response is unavailable")
+    if "recover_stop" in record and packet:
+        states = {obs.state for obs in observations if _matches(record, packet, obs)}
+        if states - {"stopped"}:
+            record["stop_proof_stale"] = True
+        if record.get("stop_proof_stale"):
+            if states != {"stopped"} or not recheck:
+                return publish("owner_wait", "A fresh observation invalidated the saved stop proof",
+                               next_action="Verify the exact native writer has stopped and recheck")
+            if stopped is None:
+                return publish("verify_outputs", "The exact writer stopped again",
+                               next_action="Reverify the worktree and its outputs")
+            if (stopped.attempt_id != packet.attempt_id
+                    or str(stopped.thread_id) != record["receipt"]["thread_id"]
+                    or stopped.worktree != str(packet.worktree)
+                    or stopped.disposition != "retry_safe"):
+                return publish("owner_wait", "The prior stopped checkpoint could not be reverified",
+                               next_action="Account for the changed worktree or result before replay")
+            del record["stop_proof_stale"]
+
     if progress.get("status") == "owner_wait" and (
         "recover_stop" in record or progress.get("failures") == len(RECHECK_SECONDS)
     ):
@@ -171,7 +190,6 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         if (stopped is None or stopped.attempt_id != packet.attempt_id
                 or stopped.thread_id != observation.thread_id
                 or stopped.worktree != str(packet.worktree)):
-            progress.clear()
             return publish("verify_outputs", "The exact writer stopped",
                            next_action="Verify its workspace, checkpoint and outputs")
         if stopped.disposition not in {"retry_safe", "verified_result"} or not stopped.summary.strip() or len(stopped.summary) > 15800:
