@@ -122,6 +122,7 @@ class Execution:
     pending_output: Status | None = None
     ready_revision: Revision | None = None
     final_output: FinalOutput | None = None
+    report_review_findings: str | None = None
 
     def __post_init__(self) -> None:
         if (self.status in TERMINAL) != (self.final_output is not None):
@@ -166,6 +167,7 @@ class Evidence:
     stored_report: StoredReport | None = None
     merge_authorized: bool = False
     issue: Issue | None = None
+    report_review_notes: str | None = None
 
 
 def _require(condition: object, message: str) -> None:
@@ -248,7 +250,8 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
         return _queue(state, Stage.PR_PROMOTION)
     if stage is Stage.REPORT_DRAFTING:
         _require(evidence.report_draft, "Drafting requires a recoverable report")
-        return _queue(state, Stage.REPORT_REVIEW, report_draft=evidence.report_draft)
+        return _queue(state, Stage.REPORT_REVIEW, report_draft=evidence.report_draft,
+                      report_review_findings=None)
     if stage is Stage.REPORT_REVIEW:
         _require(state.report_draft and evidence.reviewed_report == state.report_draft,
                  "Review must verify the current report draft")
@@ -353,6 +356,7 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
     if stage is Stage.REPORT_REVIEW:
         _require(state.report_draft and evidence.report_draft == state.report_draft,
                  "Findings must match the report draft")
+        return _queue(state, Stage.REPORT_DRAFTING, report_review_findings=evidence.report_review_notes)
     elif stage in {Stage.SELF_REVIEW, Stage.PRE_PR_VALIDATION}:
         _require(state.candidate and evidence.candidate == state.candidate,
                  "Findings must match the candidate")

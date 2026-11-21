@@ -37,7 +37,7 @@ From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This
 
 Use a server with durable intake and dispatch enabled. Register the repository
 with the owner API, fetch the desired origin branch into its local checkout,
-and file a development or report-drafting item. Give the machine one stable
+and file a development or report item. Give the machine one stable
 runner ID and share one private local state directory and config across all
 Captain commands for that runner. The directory contains active lease secrets.
 Put it outside the mapped checkouts and restrict access to the runner account.
@@ -107,13 +107,20 @@ From an authorized Captain muster:
 
 Development success requires a new local candidate commit and a clean
 worktree. Report drafting sends the Markdown to the server as a draft.
-Both stages record local checkpoints for questions and failures. Questions
+Worker stages record local checkpoints for questions and failures. Questions
 wait for an owner reply. A technical failure from a confirmed-stopped worker
 enters the shared 5, 10, 20, and 40 second retry backoff. Exhausting the budget
 asks for owner intervention.
-The runner claims only development and report drafting. Later stages stay in
-the queue for a handler that supports them. Keep the state directory when
-restarting. Expired leases and unverified results require reconciliation.
+Run `prepare` again to launch an independent review with the exact stored draft
+revision. Review findings return to drafting with the previous draft in the new
+packet. Run `prepare --report-storage` in a free slot to submit a reviewed
+revision for server finalization. A `report_storage_submitted` result needs no
+native chat. If the response is lost, repeat the command in the same slot. The
+server retries final storage independently and exposes the finished Markdown
+through the report endpoint.
+
+Keep the state directory when restarting. Expired leases and unverified results
+require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.
 

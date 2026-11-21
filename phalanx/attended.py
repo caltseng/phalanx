@@ -15,6 +15,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 from .attended_drafts import development_checkpoint, github_repository, publish_draft
+from . import report_execution as reports
 from .codex_handoff import CodexHandoff, WorkPacket
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
@@ -42,7 +43,7 @@ class RunnerAPI:
         self.token = token
         self.opener = build_opener(NoRedirect())
 
-    def call(self, path, body=None, *, lease=None, key=None):
+    def call(self, path, body=None, *, lease=None, key=None, plain_text=False):
         headers = {"Authorization": f"Bearer {self.token}"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -54,7 +55,7 @@ class RunnerAPI:
                           data=None if body is None else json.dumps(body).encode())
         try:
             with self.opener.open(request, timeout=10) as response:
-                return json.load(response)
+                return response.read().decode("utf-8") if plain_text else json.load(response)
         except HTTPError as exc:
             raise RunnerError(f"Runner API returned HTTP {exc.code} for {path}") from None
         except (URLError, TimeoutError, ValueError):
@@ -63,7 +64,11 @@ class RunnerAPI:
 
 STAGES = {
     "development": "Commit the candidate locally. Put the full commit hash alone in details.evidence.",
-    "report_drafting": "Put the field report Markdown in details.evidence.",
+    reports.DRAFTING: (
+        "Draft and self-review the field report. Address any findings in the report checkpoint. "
+        "Put the complete Markdown in details.evidence."
+    ),
+    reports.REVIEW: reports.REVIEW_INSTRUCTIONS,
 }
 
 
@@ -140,13 +145,14 @@ class AttendedRunner:
             raise RunnerError("No registered checkout passed verification; check local mappings and origins")
         return eligible, blocked
 
-    def prepare(self, *, draft=False):
+    def prepare(self, *, draft=False, report_storage=False):
         # Only competing preparations of this slot wait here. Heartbeats and
         # other slots can still use the journal during HTTP and Git operations.
         with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
-            return self._prepare_slot(draft=draft)
+            return self._prepare_slot(draft=draft, report_storage=report_storage)
 
-    def _prepare_slot(self, *, draft):
+    def _prepare_slot(self, *, draft, report_storage):
+        runner_stage = "pr_creation" if draft else reports.STORAGE if report_storage else None
         github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
         snapshot = self._snapshot()
         if not snapshot:
@@ -161,7 +167,7 @@ class AttendedRunner:
                     raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
                 record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
                               repositories=eligible, blocked=blocked,
-                              stages=["pr_creation"] if draft else sorted(STAGES),
+                              stages=[runner_stage] if runner_stage else sorted(STAGES),
                               slots=self.capacity)
                 return record
 
@@ -169,8 +175,8 @@ class AttendedRunner:
 
         lease = snapshot["lease"]
         if "claim" not in snapshot:
-            if draft and snapshot.get("stages") != ["pr_creation"]:
-                raise RunnerError("Resume the existing worker reservation with prepare")
+            if runner_stage and snapshot.get("stages") != [runner_stage]:
+                raise RunnerError("Resume the existing reservation in its original prepare mode")
             request = {
                 "runner_id": snapshot["runner_id"],
                 "repository_ids": sorted(snapshot["repositories"]),
@@ -193,10 +199,13 @@ class AttendedRunner:
             if not snapshot:
                 return {"status": result["status"], "slot": self.slot, "unverified_mappings": blocked}
 
-        if snapshot["claim"]["execution"]["state"]["stage"] == "pr_creation":
+        stage = snapshot["claim"]["execution"]["state"]["stage"]
+        if runner_stage and stage != runner_stage:
+            raise RunnerError("Resume the existing assignment in its original prepare mode")
+        if stage == "pr_creation":
             return {**self._run_draft(snapshot, github_token), "slot": self.slot}
-        if draft:
-            raise RunnerError("The slot holds a worker assignment; resume it with prepare")
+        if stage == reports.STORAGE:
+            return self._store_report(snapshot)
         launch = self._prepare_launch(snapshot)
 
         def commit_launch(record, db):
@@ -244,12 +253,32 @@ class AttendedRunner:
         self._transaction(finish)
         return status
 
+    def _store_report(self, snapshot):
+        lease = snapshot["lease"]
+        submission = snapshot.get("submission")
+        if submission is None:
+            self._renew(snapshot)
+            submission = {"body": reports.storage_body(snapshot["claim"], self.api)}
+
+            def save(record, db):
+                self._ensure_reservation(record, lease)
+                record["submission"] = submission
+                record["lease_expires_at"] = max(record["lease_expires_at"],
+                                                snapshot["lease_expires_at"])
+
+            self._transaction(save)
+
+        key = f"phalanx-attempt-{snapshot['claim']['attempt_id']}"
+        result = self._send_submission(snapshot, submission, key)
+        return {"status": "report_storage_submitted", "slot": self.slot, "execution": result}
+
     def _prepare_launch(self, record):
         if "packet" in record:
             raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
         claim = record["claim"]
         execution = claim["execution"]
-        stage = execution["state"]["stage"]
+        state = execution["state"]
+        stage = state["stage"]
         if stage not in STAGES:
             raise RunnerError(f"Stage {stage} needs a different handler; claim retained for recovery")
         request = claim["request"]
@@ -264,16 +293,23 @@ class AttendedRunner:
             record["development_base"] = {"ref": base, "sha": base_sha}
             base_ref = base_sha
         workspace = manager.prepare(claim["item_id"], base=base_ref)
-        candidate = execution["state"].get("candidate")
+        candidate = state.get("candidate")
         if candidate and candidate != workspace.head:
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
         input_reply = claim.get("input_reply")
+        report_checkpoint = None
+        findings = state.get("report_review_findings")
+        if stage == reports.REVIEW or (stage == reports.DRAFTING and findings):
+            report_checkpoint = reports.checkpoint(self.api, claim)
+            if findings:
+                report_checkpoint["findings"] = findings
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
             worktree=workspace.path, branch=workspace.branch, expected_revision=workspace.head,
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
             evidence_requirements=STAGES[stage], base_branch=base,
+            report_checkpoint=report_checkpoint,
             dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps({field: request.get(field, []) for field in
                                 ("context_links", "acceptance_criteria")}, ensure_ascii=False),
@@ -401,8 +437,10 @@ class AttendedRunner:
             body = {"attempt_id": record["claim"]["attempt_id"], "stage": packet.stage,
                     "expected_version": packet.state_version, "outcome": result.outcome}
             if packet.output_type == "report" and workspace.head != packet.expected_revision:
-                raise RunnerError("Report checkout HEAD changed during drafting")
-            if result.outcome == "succeeded":
+                raise RunnerError("Report checkout HEAD changed during the assignment")
+            if packet.stage == reports.REVIEW and result.outcome in {"succeeded", "changes_required"}:
+                body.update(reports.review_evidence(packet, result))
+            elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
                     if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
@@ -455,9 +493,12 @@ class AttendedRunner:
             return record["submission"]
 
         submission = self._transaction(save_submission)
+        return self._send_submission(snapshot, submission, marker)
+
+    def _send_submission(self, snapshot, submission, key):
         claim = snapshot["claim"]
         path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
-        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=marker)
+        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=key)
 
         def finish(record, db):
             # A concurrent idempotent submit may already have archived this attempt.
@@ -475,7 +516,9 @@ def add_attended_command(commands):
     parser.add_argument("--slot", type=int, default=1)
     actions = parser.add_subparsers(dest="action", required=True)
     prepare = actions.add_parser("prepare")
-    prepare.add_argument("--draft", action="store_true", help="poll for runner-owned initial draft publication")
+    runner_stage = prepare.add_mutually_exclusive_group()
+    runner_stage.add_argument("--draft", action="store_true", help="poll for runner-owned initial draft publication")
+    runner_stage.add_argument("--report-storage", action="store_true", help="poll for reviewed report storage")
     actions.add_parser("renew")
     actions.add_parser("status").add_argument("--all", action="store_true")
     receipt = actions.add_parser("receipt")
@@ -498,7 +541,7 @@ def run_attended(args):
         raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
     runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token), slot=args.slot)
     if args.action == "prepare":
-        result = runner.prepare(draft=args.draft)
+        result = runner.prepare(draft=args.draft, report_storage=args.report_storage)
     elif args.action == "receipt":
         result = runner.receipt(args.marker, args.host_id, thread_id=args.thread_id,
                                 client_thread_id=args.client_thread_id)

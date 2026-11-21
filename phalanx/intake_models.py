@@ -101,12 +101,14 @@ class LocalCheckResult(Payload):
 
 class Result(AttemptEvent):
     outcome: Outcome
+    retry_after_seconds: Annotated[int, Field(strict=True, ge=0, le=10**12)] | None = None
     wait: WaitInput | None = None
     question: Question | None = None
     failure_reason: Text | None = None
     candidate: Text | None = None
     report_markdown: Markdown | None = None
     report_revision: RevisionID | None = None
+    report_review_notes: Text | None = None
     reviewed_candidate: Text | None = None
     prevalidated_candidate: Text | None = None
     review_notes: Text | None = None

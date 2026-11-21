@@ -415,15 +415,28 @@ def result(db, item_id, execution_id, payload, lease_digest):
                     if getattr(payload, field) is None)
     details = payload.model_dump(mode="json", exclude=excluded)
     retry_at = None
+    if payload.retry_after_seconds is not None and payload.failure_reason is None:
+        raise Conflict("A retry delay requires a technical failure reason")
     if payload.failure_reason is not None:
         if payload.outcome != Outcome.FAILED or wait is not None:
             raise Conflict("A technical failure reason requires a failed result without an explicit wait")
-        retry_at = stopped_retry_at(row, time())
+        now = time()
+        retry_at = stopped_retry_at(row, now)
         if retry_at is None:
-            wait = Wait(f"Five stopped worker attempts require a recovery decision.\n\n{payload.failure_reason}",
+            attempts = ("technical failures" if payload.retry_after_seconds is not None
+                        else "stopped worker attempts")
+            wait = Wait(f"Five {attempts} require a recovery decision.\n\n{payload.failure_reason}",
                         "owner intervention")
         else:
+            if payload.retry_after_seconds is not None:
+                retry_at = max(retry_at, int(now * 1000) + payload.retry_after_seconds * 1000)
             details["retry_at_ms"] = retry_at
+    if payload.report_review_notes is not None:
+        if state.stage != Stage.REPORT_REVIEW or payload.outcome not in {
+            Outcome.SUCCEEDED, Outcome.CHANGES_REQUIRED,
+        }:
+            raise Conflict("Review notes require a successful review or changes-required result")
+        details["report_review_notes"] = payload.report_review_notes
     draft_revision = payload.report_revision
     if payload.report_markdown is not None:
         if state.stage != Stage.REPORT_DRAFTING or payload.outcome != Outcome.SUCCEEDED:
@@ -454,7 +467,8 @@ def result(db, item_id, execution_id, payload, lease_digest):
         outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
                           prevalidated_candidate=payload.prevalidated_candidate,
-                          report_draft=draft_revision, reviewed_report=draft_revision),
+                          report_draft=draft_revision, reviewed_report=draft_revision,
+                          report_review_notes=payload.report_review_notes),
     )
 
 def draft(db, item_id, execution_id, revision):
