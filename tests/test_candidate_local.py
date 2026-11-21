@@ -66,6 +66,7 @@ class CandidateLocalTest(unittest.TestCase):
         waiting = operation.self_review(question)
         self.assertEqual(waiting["question"], {"prompt": question.details["question"],
                                                "options": [question.details["options"]],
+                                               "proposed_default": None,
                                                "handoff": question.details["handoff"]})
         stale = replace(result, packet=replace(packet, expected_revision="b" * 40))
         with self.assertRaisesRegex(RunnerError, "does not match"):

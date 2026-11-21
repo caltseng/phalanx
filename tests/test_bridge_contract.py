@@ -158,6 +158,20 @@ class RelayQueueTests(unittest.TestCase):
         retry.join(10)
         self.assertEqual(results[1], {"threads": []})
 
+    def test_relay_output_is_ascii_json_that_round_trips(self):
+        arguments = {"prompt": "Wait\u2026 then reply \u2014 caf\u00e9"}
+        results = []
+        waiter = Thread(target=self.call, args=(RelayTransport(self.root, timeout=30, poll=0.01), results,
+                                                "launch", arguments))
+        waiter.start()
+        taken = relay("--state", str(self.root), "next", "--wait", "10")
+        self.assertEqual(taken.returncode, 0, taken.stderr)
+        self.assertTrue(taken.stdout.isascii())
+        request = json.loads(taken.stdout)
+        self.assertEqual(request["arguments"], arguments)
+        respond(self.root, request["id"], response={})
+        waiter.join(10)
+
     def test_restarted_loop_expires_orphaned_pending_requests(self):
         with _queue(self.root) as db:
             db.execute("INSERT INTO request VALUES ('old', 'k', 'launch', '{}', 'pending', NULL, NULL, 0, 0)")

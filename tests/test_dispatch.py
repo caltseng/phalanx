@@ -237,6 +237,14 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.assertEqual((adopted["attempt_id"], adopted["execution_id"], adopted["version"]),
                          (attempt, execution["id"], execution["version"]))
         self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, claim), (200, adopted))
+        timeline = self.get(f"/v1/items/{item['id']}/executions/{execution['id']}/timeline", OWNER)[1]
+        adoptions = [event for event in timeline if event["event"] == "recover_claim"]
+        self.assertEqual(len(adoptions), 1)
+        self.assertEqual(adoptions[0]["details"], {"runner_id": "local",
+                                                   "reconciliation": "Exact writer still active"})
+        board = self.get(f"/v1/operator/executions/{execution['id']}/timeline", OWNER)[1]
+        self.assertEqual((board["events"][0]["event"], board["events"][0]["reason"]),
+                         ("recover_claim", "Adopted the attempt: Exact writer still active"))
         other = {"Phalanx-Lease": "o" * 32, "Idempotency-Key": "adopt-1"}
         self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, other)[0], 409)
         self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, new)[0], 409)

@@ -186,7 +186,7 @@ def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
 @router.get("/executions/{execution_id}/timeline")
 def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, cursor: Cursor = None):
     scope = f"timeline:{execution_id}"
-    after = decode_cursor(cursor, scope, (is_version,))
+    after = decode_cursor(cursor, scope, (is_version, is_stamp))
     with read_transaction(request.app.state.database_path) as db:
         execution = db.execute(
             f"{SUMMARY} WHERE execution.id = ?", (execution_id,)
@@ -209,7 +209,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                ORDER BY block.key""",
             (execution_id,),
         ).fetchall()
-        boundary, params = ("AND event.version < ?", after) if after else ("", ())
+        boundary, params = ("WHERE (version, created_at) < (?, ?)", after) if after else ("", ())
         question = None
         if execution["status"] == "waiting_for_input":
             asked = db.execute(
@@ -219,20 +219,37 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             ).fetchone()
             question = json.loads(asked["question"]) if asked and asked["question"] else None
         rows = db.execute(
-            f"""SELECT event.version, event.event, event.created_at, event.attempt_id,
+            f"""WITH events AS (
+                SELECT event.version, event.event, event.created_at, event.attempt_id,
                        json_extract(event.state_json, '$.stage') AS stage,
                        json_extract(event.state_json, '$.status') AS status,
                        CASE WHEN json_extract(prior.state_json, '$.stage')
                                  <> json_extract(event.state_json, '$.stage')
                             THEN json_extract(prior.state_json, '$.stage') END AS from_stage,
                        coalesce(json_extract(event.details_json, '$.reason'),
-                                json_extract(event.state_json, '$.wait.reason')) AS reason
+                                CASE WHEN event.event = 'reply' THEN 'Answered by ' || coalesce(
+                                    json_extract(event.details_json, '$.answered_by'), 'owner') END,
+                                json_extract(event.state_json, '$.wait.reason')) AS reason,
+                       CASE WHEN event.event = 'reply' THEN coalesce(
+                           json_extract(event.details_json, '$.answered_by'), 'owner') END
+                           AS answered_by
                 FROM transition_history AS event
                 LEFT JOIN transition_history AS prior
                     ON prior.execution_id = event.execution_id AND prior.version = event.version - 1
-                WHERE event.execution_id = ? {boundary}
-                ORDER BY event.version DESC LIMIT ?""",
-            (execution_id, *params, limit + 1),
+                WHERE event.execution_id = ?
+                UNION ALL
+                SELECT adoption.version, 'recover_claim', adoption.created_at, adoption.attempt_id,
+                       json_extract(adopted.state_json, '$.stage'),
+                       json_extract(adopted.state_json, '$.status'),
+                       NULL, 'Adopted the attempt: ' || adoption.reconciliation, NULL
+                FROM attempt_adoptions AS adoption
+                JOIN transition_history AS adopted
+                    ON adopted.execution_id = adoption.execution_id AND adopted.version = adoption.version
+                WHERE adoption.execution_id = ?
+            )
+            SELECT * FROM events {boundary}
+            ORDER BY version DESC, created_at DESC LIMIT ?""",
+            (execution_id, execution_id, *params, limit + 1),
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),
@@ -240,5 +257,5 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         "prerequisites": [dict(row) for row in prerequisites],
         "question": question,
         "events": [dict(row) for row in rows[:limit]],
-        "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"]]),
+        "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
     }

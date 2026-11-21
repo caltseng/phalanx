@@ -310,6 +310,9 @@ class IntakeTest(ServerFixture, unittest.TestCase):
                                      key="captain")[1], json.loads(cli.stdout))
         reply = self.get(route + "/timeline", OWNER)[1][-1]
         self.assertEqual((reply["event"], reply["details"]["answered_by"]), ("reply", "captain"))
+        board = self.get(f"/v1/operator/executions/{waiting['id']}/timeline", OWNER)[1]["events"][0]
+        self.assertEqual((board["event"], board["answered_by"], board["reason"]),
+                         ("reply", "captain", "Answered by captain"))
         last_reply = self.get(f"/v1/items/{item['id']}", OWNER)[1]["last_reply"]
         self.assertEqual((last_reply["answer"], last_reply["answered_by"]), ("unittest", "captain"))
         status, resumed = self.submit(

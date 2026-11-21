@@ -125,6 +125,7 @@ class CandidateLocal:
             body["candidate"] = self.candidate
         if outcome == Outcome.NEEDS_INPUT:
             body["question"] = {"prompt": notes, "options": [result.details["options"]],
+                                "proposed_default": result.details.get("proposed_default"),
                                 "handoff": result.details["handoff"]}
         elif outcome == Outcome.FAILED:
             body["failure_reason"] = notes

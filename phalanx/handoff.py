@@ -26,6 +26,7 @@ OUTCOME_FIELDS = {
     Outcome.NEEDS_INPUT: ("question", "options", "handoff"),
     Outcome.FAILED: ("reason", "attempted", "retry_guidance"),
 }
+OPTIONAL_FIELDS = {Outcome.NEEDS_INPUT: ("proposed_default",)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +132,7 @@ class WorkerHandoff:
         }, indent=2, ensure_ascii=False)
         outcomes = "\n".join(
             f"- {outcome}: {', '.join(fields)}"
+            + (f" (optional: {', '.join(OPTIONAL_FIELDS[outcome])})" if outcome in OPTIONAL_FIELDS else "")
             for outcome, fields in OUTCOME_FIELDS.items()
         )
         return {
@@ -205,7 +207,10 @@ Final path: {self.result_path}
             not isinstance(details.get(field), str) or not details[field].strip() for field in fields
         ):
             raise InvalidResult(f"Details for {outcome} need nonempty strings: {', '.join(fields)}")
-        return WorkerResult(self.packet, outcome, {field: details[field] for field in fields})
+        optional = [field for field in OPTIONAL_FIELDS.get(outcome, ())
+                    if isinstance(details.get(field), str) and details[field].strip()]
+        return WorkerResult(self.packet, outcome,
+                            {field: details[field] for field in (*fields, *optional)})
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

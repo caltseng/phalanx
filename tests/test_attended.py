@@ -505,7 +505,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertNotIn("wait", technical)
         self.assertNotIn("failure_reason", question)
         self.assertEqual(question["question"], {
-            "prompt": "Which source?", "options": ["Source A or B"], "handoff": "No edits",
+            "prompt": "Which source?", "options": ["Source A or B"], "proposed_default": None,
+            "handoff": "No edits",
         })
 
     def test_owner_reply_reaches_the_next_attended_launch(self):
@@ -532,6 +533,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertIsNone(running["question"])
         self.write_result(runner, marker, {
             "question": "Which source?", "options": "Source A or B", "handoff": "Draft in notes.md",
+            "proposed_default": "Source B",
         }, "needs_input")
         waiting = runner.submit(marker, "local", thread_id)
         self.assertEqual(waiting["state"]["status"], "waiting_for_input")
@@ -540,7 +542,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 200, inbox)
         question = {
             "prompt": "Which source?", "options": ["Source A or B"],
-            "handoff": "Draft in notes.md", "proposed_default": None,
+            "handoff": "Draft in notes.md", "proposed_default": "Source B",
         }
         self.assertEqual(inbox[0]["question"], question)
         asked = self.get(board, OWNER)[1]
