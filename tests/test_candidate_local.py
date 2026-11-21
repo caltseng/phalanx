@@ -3,8 +3,9 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from uuid import uuid4
 
 from phalanx.attended import RunnerError
@@ -119,21 +120,23 @@ class CandidateLocalTest(unittest.TestCase):
                               "Path('build').mkdir(); Path('build/out').touch()")
         self.assertEqual(operation.pre_validate((builds,))["outcome"], "succeeded")
 
-    def test_timed_out_check_retains_reservation_for_process_reconciliation(self):
-        operation = self.operation("pre_pr_validation")
-        check = self.command("timeout", "pass")
-        run = subprocess.run
-
-        def expire(argv, **kwargs):
-            if tuple(argv) == check.argv:
-                raise subprocess.TimeoutExpired(argv, check.timeout_seconds)
-            return run(argv, **kwargs)
-
-        with patch("phalanx.candidate_local.subprocess.run", side_effect=expire):
-            with self.assertRaisesRegex(RunnerError, "Keep the reservation.*processes have stopped"):
-                operation.pre_validate((check,))
-        self.assertFalse(any(call.args[0].endswith("/result")
-                             for call in self.api.call.call_args_list))
+    def test_timed_out_check_fails_and_stops_its_process_tree(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        started, survived = Path(temp.name) / "started", Path(temp.name) / "survived"
+        grandchild = (f"import pathlib, time; time.sleep(3); "
+                      f"pathlib.Path({str(survived)!r}).touch()")
+        check = replace(self.command("hangs", (
+            "import pathlib, subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}]); "
+            f"pathlib.Path({str(started)!r}).touch(); time.sleep(60)"
+        )), timeout_seconds=2)
+        body = self.operation("pre_pr_validation").pre_validate((check,))
+        self.assertEqual(body["outcome"], "changes_required")
+        self.assertEqual(body["local_checks"][0]["reason"], "Timed out after 2 seconds")
+        self.assertTrue(started.exists())
+        time.sleep(4)
+        self.assertFalse(survived.exists())
 
     def test_stopping_claim_blocks_commands(self):
         operation = self.operation("pre_pr_validation")

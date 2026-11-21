@@ -76,6 +76,8 @@ clean item worktree at the claimed candidate. Gitignored build output does not
 make the worktree dirty. Arguments are literal: no path
 discovery, interpolation, or environment expansion. `timeout_seconds` defaults
 to 60 and must be an integer from 1 through 86400; booleans are not integers.
+A check that times out is stopped with the processes it started and recorded as
+failed.
 
 `allow_skip` and `allow_inapplicable` default to false and must be JSON booleans.
 A `bypass` replaces the command and cannot include `argv` or `timeout_seconds`.
