@@ -447,7 +447,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         packet = resumed.status()["packet"]
         self.assertEqual(packet["stage"], "report_drafting")
         self.assertEqual(json.loads(packet["handoff"]), {
-            "question": question, "answer": "Source B only", "wait_version": waiting["version"],
+            "question": question, "answer": "Source B only", "answered_by": "owner",
+            "wait_version": waiting["version"],
         })
         self.assertIn("Source B only", launch["session"]["prompt"])
         self.assertIn("Draft in notes.md", launch["session"]["prompt"])

@@ -78,6 +78,7 @@ class Question(Payload):
 
 class Reply(Versioned):
     answer: Text
+    answered_by: Literal["owner", "captain"] = "owner"
 
 
 class GateRevision(Payload):
