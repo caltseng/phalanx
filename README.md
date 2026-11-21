@@ -109,6 +109,12 @@ verified merge commit. Use these revisions in the work packet. The snapshot
 is recorded on the attempt's claim event and returned on claim replay even
 if an upstream execution is rerun.
 
+Milestone changes refresh up to 32 dependents in the upstream transaction.
+The API processes larger fan-outs and restart audits in indexed batches
+across short transactions. Queued dependents in later batches may become
+eligible after the upstream transaction commits. The claim transaction
+always checks the current durable evidence before assigning work.
+
 An expired lease prevents stale results and renewals. Its attempt still holds
 the slot and item reservation. Leave uncertain or live workers reserved.
 After confirming that a worker stopped and that repeating the stage is safe,

@@ -7,7 +7,7 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from phalanx import dispatch, intake
+from phalanx import dependencies, dispatch, finalization, intake
 from phalanx.dispatch_api import Claim
 from phalanx.intake_models import Intake, Rerun
 from phalanx.store import connect, migrate, write_transaction
@@ -87,6 +87,51 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             self.assertEqual(self.claim(db, "resolved"), assignment)
             history = intake.timeline(db, dependent["id"], execution["id"])
             self.assertEqual(history[-1]["details"]["dependencies"], assignment["dependencies"])
+
+    def test_fanout_resumes_from_durable_cursor_in_bounded_batches(self):
+        batch = dependencies.REFRESH_BATCH_SIZE
+        with write_transaction(self.path) as db:
+            source = self.file(db, "source")
+            ids = sorted(self.file(db, upstream=[source])["id"] for _ in range(2 * batch + 1))
+            self.complete_report(db, source)
+
+        def checkpoint(expected, cursor):
+            with connect(self.path, mode="ro") as db:
+                self.assertEqual(db.execute(
+                    "SELECT count(*) FROM executions WHERE dependency_wait_json IS NOT NULL"
+                ).fetchone()[0], expected)
+                job = db.execute("SELECT cursor FROM dependency_refresh_jobs").fetchone()
+                self.assertEqual(None if job is None else job["cursor"], cursor)
+
+        checkpoint(batch + 1, ids[batch - 1])
+        self.assertTrue(dependencies.process_refresh(self.path))
+        checkpoint(1, ids[2 * batch - 1])
+        self.assertTrue(dependencies.process_refresh(self.path))
+        checkpoint(0, None)
+        self.assertFalse(dependencies.process_refresh(self.path))
+
+    def test_pending_report_finalization_keeps_consumer_blocked_until_storage(self):
+        with write_transaction(self.path) as db:
+            source = self.file(db, "source")
+            consumer = self.file(db, upstream=[source])
+            row = intake.current_execution(db, source["id"])
+            markdown = "# Reviewed report"
+            revision = intake.digest(markdown)
+            db.execute("INSERT INTO report_drafts VALUES (?, ?, ?)", (row["id"], revision, markdown))
+            state = replace(intake.STATE.validate_json(row["state_json"]), stage=Stage.REPORT_STORAGE,
+                            status=Status.RUNNING, report_draft=revision)
+            pending = intake.apply(db, row, state, Event.RESULT, details={}, outcome=Outcome.SUCCEEDED,
+                                   evidence=Evidence(report_draft=revision, reviewed_report=revision))
+            self.assertEqual(pending["state"]["pending_output"], Status.COMPLETED)
+            waits = intake.inspect(db, consumer["id"])["execution"]["unmet_dependencies"]
+            self.assertEqual(waits[0]["reason"], "Waiting for prerequisite report finalization")
+            self.assertEqual(self.claim(db, "pending")["status"], "no_eligible_work")
+
+        self.assertEqual(finalization.attempt(self.path, row["id"])["state"]["status"], Status.COMPLETED)
+        with write_transaction(self.path) as db:
+            assignment = self.claim(db, "stored")
+            self.assertEqual(assignment["item_id"], consumer["id"])
+            self.assertEqual(assignment["dependencies"][0]["revision"], revision)
 
     def test_restart_rechecks_missed_durable_milestone(self):
         server = self.start_server(self.path)

@@ -75,6 +75,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Depends on:** PH-05. **Output:** PR.
 - Use a retryable finalization operation keyed by execution ID. Persist each terminal outcome and final output together. Generate failure and cancellation reports from durable history when necessary. Keep finalization retries independent of worker slots. Define when a prolonged outage calls for operator attention.
 - **Done when:** Storage failure and restart do not rerun agent work, duplicate outputs, or close any execution without a PR or report. Include cancellation before first claim and a merge that succeeded before the local response was lost.
+- **Report finalization implemented:** Durable server-side finalization for reviewed reports, cancellation, and explicit failure. Provider-verified merge reconciliation and delivery across a lost merge response remain in the GitHub integration.
 
 ## Local execution
 

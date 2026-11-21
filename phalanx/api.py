@@ -1,12 +1,12 @@
+import asyncio
 from contextlib import asynccontextmanager
 import sqlite3
-from time import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
+from . import dependencies, finalization
 from .auth import require_owner, require_runner
 from .config import Credentials, database_path
-from .dependencies import reconcile_waits
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
 from .store import connect, migrate, write_transaction
@@ -18,8 +18,17 @@ async def lifespan(app: FastAPI):
     app.state.database_path = database_path()
     migrate(app.state.database_path)
     with write_transaction(app.state.database_path) as db:
-        reconcile_waits(db, int(time() * 1000))
-    yield
+        dependencies.start_reconciliation(db)
+    tasks = (
+        asyncio.create_task(finalization.run(app.state.database_path)),
+        asyncio.create_task(dependencies.run_refresh(app.state.database_path)),
+    )
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="Phalanx", lifespan=lifespan)

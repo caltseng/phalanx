@@ -15,4 +15,15 @@ DEPENDENCY_SCHEMA = (
     """CREATE INDEX queue_heads ON executions
         (queue_repository, queue_affinity, queue_priority, ready_since, item_id, id)
         WHERE status = 'queued' AND ready_since IS NOT NULL AND dependency_wait_json IS NULL""",
+    """CREATE TABLE dependency_refresh_jobs (
+        upstream_id TEXT PRIMARY KEY NOT NULL REFERENCES work_items(id),
+        cursor TEXT NOT NULL,
+        scheduled_at INTEGER NOT NULL
+    )""",
+    """CREATE INDEX dependency_refresh_order ON dependency_refresh_jobs(scheduled_at, upstream_id)""",
+    """CREATE TABLE dependency_audit (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        cursor TEXT
+    )""",
+    "INSERT INTO dependency_audit (id, cursor) VALUES (1, NULL)",
 )

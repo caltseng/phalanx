@@ -1,11 +1,19 @@
 """Dependency links and claim-time resolution against durable execution state."""
 
+import asyncio
 from dataclasses import asdict, dataclass
 import json
+import logging
 import sqlite3
+from time import time, time_ns
 from typing import Iterable
 
+from .store import connect, write_transaction
 from .transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target
+
+
+REFRESH_BATCH_SIZE = 32
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -115,9 +123,13 @@ def resolve_dependencies(
         """SELECT d.upstream_id, d.milestone, e.id, e.state_json,
                   EXISTS (SELECT 1 FROM reports WHERE execution_id = e.id) AS report_exists
            FROM work_dependencies AS d
-           LEFT JOIN executions AS e ON e.item_id = d.upstream_id
+           LEFT JOIN executions AS e ON e.id = (
+               SELECT latest.id FROM executions AS latest
+               WHERE latest.item_id = d.upstream_id
+                 AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id = latest.id)
+               ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+           )
            WHERE d.item_id = ?
-             AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id = e.id)
            ORDER BY d.upstream_id""",
         (item_id,),
     ):
@@ -130,7 +142,9 @@ def resolve_dependencies(
         state = STATE.validate_json(row["state_json"])
         output = state.final_output
         reason = f"Waiting for prerequisite milestone {milestone}"
-        if state.status in (Status.FAILED, Status.CANCELLED) or state.stopping or state.pending_output:
+        if state.pending_output == Status.COMPLETED:
+            reason = "Waiting for prerequisite report finalization"
+        elif state.status in (Status.FAILED, Status.CANCELLED) or state.stopping or state.pending_output:
             disposition = state.stopping or state.pending_output or state.status
             reason = f"Prerequisite disposition is {disposition}. Rerun or replace the prerequisite."
         elif milestone == Target.REPORT:
@@ -182,27 +196,84 @@ def refresh_wait(db, item_id, execution_id, now_ms):
     update_wait(db, execution_id, unmet, now_ms)
 
 
-def refresh_dependents(db, upstream_id, now_ms):
-    rows = db.execute(
-        """SELECT e.item_id, e.id
-           FROM work_dependencies AS d
-           JOIN executions AS e ON e.item_id = d.item_id
-           WHERE d.upstream_id = ? AND e.status = 'queued'
-             AND e.status NOT IN ('completed', 'failed', 'cancelled')""",
-        (upstream_id,),
-    ).fetchall()
-    for row in rows:
-        refresh_wait(db, row["item_id"], row["id"], now_ms)
+def refresh_items(db, items, now_ms):
+    for item in items[:REFRESH_BATCH_SIZE]:
+        row = db.execute(
+            """SELECT id FROM executions WHERE item_id = ? AND status = 'queued'
+               AND status NOT IN ('completed', 'failed', 'cancelled')""",
+            (item["item_id"],),
+        ).fetchone()
+        if row is not None:
+            refresh_wait(db, item["item_id"], row["id"], now_ms)
+    if len(items) > REFRESH_BATCH_SIZE:
+        return items[REFRESH_BATCH_SIZE - 1]["item_id"]
+    return None
 
 
-def reconcile_waits(db, now_ms):
-    """Rebuild queued dependency waits on server startup from durable evidence."""
+def refresh_dependents(db, upstream_id, now_ms, cursor=""):
+    """Refresh a numbered batch and persist the next action in the same write."""
     rows = db.execute(
-        """SELECT e.item_id, e.id
-           FROM (SELECT DISTINCT item_id FROM work_dependencies) AS d
-           JOIN executions AS e ON e.item_id = d.item_id
-           WHERE e.status = 'queued'
-             AND e.status NOT IN ('completed', 'failed', 'cancelled')"""
+        """SELECT item_id FROM work_dependencies
+           WHERE upstream_id = ? AND item_id > ? ORDER BY item_id LIMIT ?""",
+        (upstream_id, cursor, REFRESH_BATCH_SIZE + 1),
     ).fetchall()
-    for row in rows:
-        refresh_wait(db, row["item_id"], row["id"], now_ms)
+    next_cursor = refresh_items(db, rows, now_ms)
+    if next_cursor is not None:
+        db.execute(
+            """INSERT INTO dependency_refresh_jobs VALUES (?, ?, ?)
+               ON CONFLICT(upstream_id) DO UPDATE
+               SET cursor=excluded.cursor, scheduled_at=excluded.scheduled_at""",
+            (upstream_id, next_cursor, time_ns()),
+        )
+    else:
+        db.execute("DELETE FROM dependency_refresh_jobs WHERE upstream_id = ?", (upstream_id,))
+
+
+def audit_batch(db, now_ms):
+    cursor = db.execute("SELECT cursor FROM dependency_audit WHERE id = 1").fetchone()["cursor"]
+    if cursor is None:
+        return False
+    rows = db.execute(
+        """SELECT DISTINCT item_id FROM work_dependencies WHERE item_id > ?
+           ORDER BY item_id LIMIT ?""",
+        (cursor, REFRESH_BATCH_SIZE + 1),
+    ).fetchall()
+    db.execute("UPDATE dependency_audit SET cursor = ? WHERE id = 1",
+               (refresh_items(db, rows, now_ms),))
+    return True
+
+
+def start_reconciliation(db):
+    """Schedule a restart audit, preserving the cursor of any unfinished audit."""
+    db.execute("UPDATE dependency_audit SET cursor = '' WHERE id = 1 AND cursor IS NULL")
+    audit_batch(db, int(time() * 1000))
+
+
+def process_refresh(path):
+    """Advance each source of work in bounded transactions."""
+    with connect(path, mode="ro") as db:
+        has_job, has_audit = db.execute(
+            """SELECT EXISTS (SELECT 1 FROM dependency_refresh_jobs),
+                      EXISTS (SELECT 1 FROM dependency_audit WHERE id = 1 AND cursor IS NOT NULL)"""
+        ).fetchone()
+    if has_job:
+        with write_transaction(path) as db:
+            job = db.execute(
+                "SELECT upstream_id, cursor FROM dependency_refresh_jobs ORDER BY scheduled_at, upstream_id LIMIT 1"
+            ).fetchone()
+            if job is not None:
+                refresh_dependents(db, job["upstream_id"], int(time() * 1000), job["cursor"])
+    if has_audit:
+        with write_transaction(path) as db:
+            audit_batch(db, int(time() * 1000))
+    return bool(has_job or has_audit)
+
+
+async def run_refresh(path):
+    while True:
+        worked = False
+        try:
+            worked = await asyncio.to_thread(process_refresh, path)
+        except sqlite3.Error:
+            logger.exception("Could not advance queued prerequisite refresh")
+        await asyncio.sleep(0.05 if worked else 0.5)
