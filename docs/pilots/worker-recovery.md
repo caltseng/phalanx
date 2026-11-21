@@ -1,8 +1,8 @@
 # PH-01 worker recovery field report
 
-This report records field evidence for the Codex desktop app adapter, the first runtime piloted. Other runtimes serve the same runtime-neutral bridge contract (see the README's runtime mapping) and add their evidence here as they are piloted.
+This report records field evidence for each runtime that serves the runtime-neutral bridge contract (see the README's runtime mapping). The Codex desktop app was piloted first, for discovery and live observation. The PH-11b native muster then ran on the GitHub Copilot app as Captain; see [GitHub Copilot app muster](#github-copilot-app-muster-on-november-21-2026).
 
-The Codex desktop Captain chat ran attended launch and observation. A local runner process handles durable attempt state, workspace preparation, lease renewal, evidence verification, and publication. This pilot verified discovery and live observation on Windows. The two-worker interruption and question/reply acceptance run remains open.
+A local runner process handles durable attempt state, workspace preparation, lease renewal, evidence verification, and publication. The Captain chat serves launch and observation through the Captain chat relay.
 
 ## Live evidence on November 20, 2026
 
@@ -13,6 +13,53 @@ The Codex desktop Captain chat ran attended launch and observation. A local runn
 | Known identity | `read_thread` with the worker's host and UUID returned its cwd, active status and in-progress turn. A zero-timeout `wait_threads` call against the separate Captain returned active status, turn data and a cursor. A call targeting the calling thread was rejected. These checks exercised fresh attachment for observation without restarting a Captain. |
 | Unknown identity | A local Codex history query exposed the worker by its unique title, project and cwd without using the worker UUID as a request parameter. A read of a synthetic absent UUID returned a no-readable-match error. Discovery supplies candidates. An empty page or unreadable thread does not establish that a launch failed. No launch response was deliberately dropped. |
 | Outcome and reply | This field report is the worker's concrete deliverable. A runner result, a live question/reply, and continuation of the same chat were outside this pilot. The pilot launched no extra test chats. |
+
+## GitHub Copilot app muster on November 21, 2026
+
+**Runtime.** The Captain was a GitHub Copilot app session on Windows. It served the [Captain chat relay](../../README.md#captain-chat-relay) and the app's runtime mapping row by hand. The server and the `captain` loop ran from `main` at `ae224b4` (#62) as detached local processes, with capacity 2. Both pilot checkouts were registered with `add_repository` (pilot-py `c690dc60-199b-4d4e-be4f-764d2a007d3d`, pilot-web `252f7d83-3066-4a2c-aa64-7cc7754c8ce7`, host `local`). Workers were `create_session` sessions with a branch workspace, the attempt UUID as name, and an autopilot kickoff. They appear in the app sidebar under their pilot projects.
+
+**Items.** A PR item for [phalanx-pilot-py#3](https://github.com/caltseng/phalanx-pilot-py/issues/3) (slugify) and a report item for [phalanx-pilot-web#1](https://github.com/caltseng/phalanx-pilot-web/issues/1) (titleCase). The report goal told the worker to ask one question before drafting.
+
+All times are UTC.
+
+| Acceptance check | Evidence |
+| --- | --- |
+| Preflight stops before any claim | With `PHALANX_RUNNER_TOKEN` unset, `captain` printed "Runner preflight failed: Set PHALANX_RUNNER_TOKEN in the runner environment" and exited 1 at 13:25:32. The database still had zero attempts. |
+| Two concurrent visible workers | At 13:37:28 `get_sessions_status` showed worker `062a34cb` (pilot-web, attempt `1ecb399d`) and worker `7ca37c63` (pilot-py, attempt `ac01c7b7`) busy in autopilot at once. Both slots were `attached` with recorded receipts. |
+| Question round trip | Worker `a0d98b4b` (attempt `86600ba1`) returned `needs_input` at 13:29:50. The question reached `phalanx inbox`. Caleb answered "preserve" in the Captain chat (`ask_user`), and the Captain sent it with `phalanx reply` at 13:35:54. The next launch (`1ecb399d`, state version 5) carried `answer: "preserve"` and the earlier handoff, and its report records the chosen behavior. |
+| Stored report | Draft `1ecb399d` succeeded at 13:38. Independent review `4a34ef57` (worker `f6db1b3a`) succeeded at 13:47. The runner stored the report at 13:49:31 (`report_storage_submitted`), and the item reached `completed`. The Markdown is readable at `/v1/items/8f640e3c8ea4487c820657d9accc52d9/executions/b618368c6e8e41d28a09f0426aac5700/report`. |
+| Published draft | Development `ac01c7b7` succeeded with candidate `d8d5e4dc`. The runner published draft [phalanx-pilot-py#4](https://github.com/caltseng/phalanx-pilot-py/pull/4) at 13:45:38 with that head and the Phalanx footer. |
+| Restart before the receipt | The Captain took launch `8190a328` at 13:26:27, created worker `a0d98b4b`, and never answered. A fresh child Captain session ("Captain A") then took over the relay. At 13:31:27 the loop settled the launch as lost and held the slot ("reconciled by native discovery"). Captain A answered the next observation by marker, with `stopped` and `writers_stopped`. The slot submitted the worker's existing result at 13:31:34. No second session was started for `86600ba1`. |
+| Restart after the receipt | Captain A recorded receipt `7ca37c63` for `ac01c7b7` at 13:32:02 and stopped. The parent Captain recorded receipt `062a34cb` for `1ecb399d` at 13:37:05 and stopped serving. A second fresh child Captain ("Captain B") took over. It observed slot 1 by receipt as `active` at 13:38:15 and slot 2 by marker as `stopped` at 13:38:37. Slot 2 submitted at 13:38:41. Captain B launched nothing. |
+
+After the run, each attempt marker had exactly one session in `list_sessions_and_chats`: `a0d98b4b`, `7ca37c63`, `062a34cb` and `f6db1b3a`. Each slot held one reservation throughout.
+
+**How the restarts were done.** One app session cannot restart itself and keep serving. Each restart was a fresh child Captain session that started with no relay history. It got only the README procedure, the state directory and the relay helpers, and served `relay next` until a stop condition. Ending a Captain's turn mid-request is the same failure as a crashed chat: the request stays taken and is never handed out again.
+
+**Where it stopped.** The report item completed. The PR item stopped at `self_review` (queued) after the draft was published, because no dispatcher stage on `main` serves `self_review` yet (PH-14a part 2).
+
+### Findings
+
+**What worked live**
+- Every launch was relayed at most once, and every lost or late reply was reconciled by marker without a replacement writer.
+- The preflight blocked a missing token before any claim.
+- The owner reply resumed the report with its handoff, and the runner-only stages published the draft and stored the report without a worker.
+- Per-mapping `resolve_project` errors blocked only the affected slots.
+
+**What broke**
+- **Repository trust.** The app asks the owner, once per repository, to trust it. Until then, every worker tool call is denied ("denied-no-approval-rule", unattended fallback). The worker then ends without a result, which the runner would count as a technical failure. Both pilot workers hit this on their first launch. Caleb trusted both repositories, and the blocked worker resumed in place. Agents cannot grant trust.
+- **No transcript tool.** No app tool reads a child session's first user turn. `get_session` and `list_sessions_and_chats` return metadata only. The Captain read `~/.copilot/session-state/<id>/events.jsonl` (the `user.message` content and `session.start` cwd) with a small helper. This works only on the same machine.
+- **Manual observe replies.** Building a schema-valid `observe` reply by hand within the 60-second freshness window was impractical. The Captain used a local helper for it.
+
+**What surprised us**
+- The stored first user turn drops the prompt's trailing newline. Exact-prompt checks must compare after trimming trailing whitespace.
+- A single Captain serving launches one at a time took 25 to 42 seconds per launch. Observations queued meanwhile arrived late. One was discarded as aged ("Native observation aged while this slot was busy"), and one arrived with `receipt: null` because it was queued before the receipt was recorded. Both healed on the next poll.
+- Observations queued just before a slot submitted stayed pending, and the Captain answered them after the slot was free.
+- The draft PR title was the goal truncated at 256 characters, mid-sentence.
+- Running `python -m phalanx` from a working directory containing another Phalanx checkout imported that checkout instead of the installed one. The muster scripts use `python -P`.
+- The worker question went to Caleb, but its answer followed from the item's stated default. Caleb wants routine questions answered by the Captain.
+
+Each gap has a fix row ahead of PH-12a in the [implementation plan](../../IMPLEMENTATION_PLAN.md#remaining-v1-integration-work).
 
 ## Attended path for PH-11
 
@@ -37,4 +84,4 @@ These cases describe proposed behavior under the [execution rules](../../STATE_M
 
 ## Remaining acceptance checks
 
-Run two explicitly authorized workers in distinct projects. Verify sidebar placement and the operator open reference, collect a schema-valid outcome, and move a question through the owner reply and next claim. Interrupt the Captain before and after durable identity recording, including queued creation if available. Restart the runner during a live worker and stall the API. Verify that the runner recovers a known worker, discovers an accepted launch with no saved ID, and retains one slot and worktree for an ambiguous launch while unrelated work continues. Confirm that no replacement can write before reconciliation. Test app-managed worktrees and existing-worktree reuse if the adapter needs either operation.
+The GitHub Copilot app muster closed these checks: two workers in distinct projects with sidebar placement, a schema-valid outcome, a question through the owner reply and next claim, and Captain interruptions before and after durable identity recording. Queued creation does not apply to the Copilot app, which returns the session ID synchronously. Still open: restart the runner during a live worker and stall the API. Verify that the runner recovers a known worker, discovers an accepted launch with no saved ID, and retains one slot and worktree for an ambiguous launch while unrelated work continues. Confirm that no replacement can write before reconciliation. Test app-managed worktrees and existing-worktree reuse if the adapter needs either operation.
