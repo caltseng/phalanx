@@ -4,7 +4,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx.intake import record
+from phalanx.intake import record, steer
+from phalanx.intake_models import Steering
 from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, open_page
 from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, write_transaction
@@ -166,3 +167,28 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             closed = closed_page(db, [EARLY, identifier(6100)], 3)
             self.assertEqual([row["id"] for row in opened], list(map(identifier, [4901, 4902, 4903])))
             self.assertEqual([row["id"] for row in closed], list(map(identifier, [6099, 6098, 6097])))
+
+    def test_timeline_exposes_prerequisite_blockers_and_clears_after_steering(self):
+        upstream = identifier(100001)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Follow the upstream report", "target": "report",
+            "dependencies": [{"upstream_id": upstream, "milestone": "report"}],
+        })
+        self.assertEqual(status, 201, item)
+        execution = item["execution"]
+        route = f"{BOARD}/{execution['id']}/timeline"
+        blocked = self.page(route)
+        self.assertEqual(blocked["item"]["status"], "queued")
+        self.assertEqual(blocked["item"]["blocked_prerequisite_count"], 1)
+        self.assertEqual(blocked["item"]["wait_reason"], "Waiting for 1 prerequisite")
+        self.assertEqual(blocked["prerequisites"], [{
+            "item_id": upstream, "title": "Work 1", "milestone": "report",
+            "reason": "Waiting for prerequisite milestone report",
+        }])
+        with write_transaction(self.path) as db:
+            steer(db, item["id"], execution["id"],
+                  Steering(expected_version=execution["version"], dependencies=[]))
+        ready = self.page(route)
+        self.assertEqual(ready["item"]["blocked_prerequisite_count"], 0)
+        self.assertIsNone(ready["item"]["wait_reason"])
+        self.assertEqual(ready["prerequisites"], [])

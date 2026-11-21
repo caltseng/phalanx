@@ -265,6 +265,7 @@ class AttendedRunner:
         candidate = execution["state"].get("candidate")
         if candidate and candidate != workspace.head:
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
+        input_reply = claim.get("input_reply")
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
@@ -274,6 +275,7 @@ class AttendedRunner:
             dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps({field: request.get(field, []) for field in
                                 ("context_links", "acceptance_criteria")}, ensure_ascii=False),
+            handoff=json.dumps(input_reply, ensure_ascii=False) if input_reply is not None else "",
         )
         handoff = CodexHandoff(packet, self.results)
         if os.path.lexists(handoff.result_path) or os.path.lexists(handoff.temporary_path):
@@ -410,15 +412,20 @@ class AttendedRunner:
                     body["candidate"] = workspace.head
                 else:
                     body["report_markdown"] = result.details["evidence"]
-            elif result.outcome in {"needs_input", "failed"}:
+            elif result.outcome == "failed":
                 reason = "\n\n".join(f"{field.replace('_', ' ').capitalize()}\n{text}"
                                      for field, text in result.details.items())
                 if len(reason) > 16000:
                     raise RunnerError("Worker evidence exceeds the API limit")
-                if result.outcome == "failed":
-                    body["failure_reason"] = reason
-                else:
-                    body["wait"] = {"reason": reason, "trigger": "owner reply"}
+                body["failure_reason"] = reason
+            elif result.outcome == "needs_input":
+                if any(len(text.strip()) > 16000 for text in result.details.values()):
+                    raise RunnerError("Worker question exceeds the API limit")
+                body["question"] = {
+                    "prompt": result.details["question"],
+                    "options": [result.details["options"]],
+                    "handoff": result.details["handoff"],
+                }
             else:
                 raise RunnerError("Outcome is unsupported for this attended stage")
             submission = {
