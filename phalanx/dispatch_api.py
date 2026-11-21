@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import Field
+from pydantic import Field, StringConstraints
 
 from . import dispatch, intake
 from .auth import require_owner, require_runner
@@ -37,6 +37,15 @@ class ReconciledStop(Versioned):
     reconciliation: Text
 
 
+class WorkerReference(Payload):
+    reference: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    url: Annotated[str, StringConstraints(max_length=2000, pattern=r"^https://[^\s/@?#]+(/\S*)?$")] | None = None
+
+
+class Renewal(Payload):
+    worker: WorkerReference | None = None
+
+
 @router.put("/dispatch/settings", dependencies=[Depends(require_owner)])
 def settings(request: Request, body: DispatchSettings):
     return run(request, dispatch.set_dispatch, body, write=True)
@@ -54,8 +63,10 @@ def claim(request: Request, body: Claim, lease: Lease):
 
 @router.post("/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew",
              dependencies=[Depends(require_runner)])
-def renew(request: Request, runner_id: Identifier, attempt_id: Identifier, lease: Lease):
-    return run(request, dispatch.renew, runner_id, attempt_id, intake.digest(lease), write=True)
+def renew(request: Request, runner_id: Identifier, attempt_id: Identifier, lease: Lease,
+          body: Renewal | None = None):
+    worker = body.worker if body else None
+    return run(request, dispatch.renew, runner_id, attempt_id, intake.digest(lease), worker, write=True)
 
 
 @router.get("/dispatch/runners/{runner_id}/recovery", dependencies=[Depends(require_runner)])

@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from threading import Event, Lock
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
@@ -1100,6 +1100,14 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertFalse(batch.threads)
         self.assertIn("marker", batch.errors)
         self.assertIn("attestation", batch.errors["marker"])
+        thread = str(uuid4())
+        for url, expected in (("https://example.test/chat/1", {"worker_url": "https://example.test/chat/1"}),
+                              ("javascript:alert(1)", {"warning": ANY})):
+            adapter = BridgeAdapter(lambda operation, arguments: {
+                "host_id": "local", "marker": "marker", "thread_id": thread, "worker_url": url,
+            })
+            launched = adapter.launch({"host_id": "local", "marker": "marker", "session": {}})
+            self.assertEqual(launched, {"thread_id": thread, **expected})
         loop = self.loop()
         loop.close()
         self.config["runner_id"] = "other"

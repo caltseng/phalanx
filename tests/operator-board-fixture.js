@@ -11,7 +11,7 @@
   };
   const running = {
     id: "run", title: "Update telemetry", repo: "example/service", stage: "review",
-    status: "running", lastAdvancedAt: now
+    status: "running", lastAdvancedAt: now, workerRef: "opaque-worker-7", recheckAt: now
   };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report",
@@ -81,6 +81,7 @@
     assert(document.activeElement.textContent === running.title, "Selection transfers focus to detail");
     assert(detail.textContent.includes("review → development") && detail.textContent.includes("Prerequisites"), "Current detail renders the stage loop and dependencies");
     assert(detail.textContent.includes("Attempt 2") && detail.textContent.includes("CI completes"), "Attempt and resume trigger");
+    assert(detail.textContent.includes("opaque-worker-7") && detail.textContent.includes("Recheck scheduled"), "Worker reference and recheck");
     assert(!detail.textContent.includes(waiting.title), "Late detail ignored");
     button("Next history page").click();
     button("Next open work page").click();

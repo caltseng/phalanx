@@ -43,11 +43,13 @@
    * kind is "open" or "closed". Cursors are opaque strings or null. The adapter
    * orders closed items newest first and prioritizes input waits in open work.
    * Items contain string id, title, repo, stage, status, lastAdvancedAt, waitReason?,
-   * retryAt? (epoch ms), chatUrl?, draftUrl?, primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}.
+   * retryAt? and recheckAt? (epoch ms), workerRef? (opaque bridge reference), chatUrl?, draftUrl?,
+   * primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}, and for replies itemId? and version?.
    * Use status "waiting_for_input" for items requiring operator attention.
    * outcome is a display label, including "Checked in" vs "Ready for check-in".
    * source.detail({id, cursor, limit, signal}) resolves to
-   * {item, attempt?, nextAction?, resumeTrigger?, dependencies?, events, nextCursor}.
+   * {item, attempt?, nextAction?, resumeTrigger?, question?, dependencies?, events, nextCursor}.
+   * question is {prompt, options, proposedDefault?} while the item waits for the owner.
    * attempt is a display reference. Dependencies are {title, milestone, status}.
    * Events are newest first and contain {at, fromStage?, stage, status, reason?}.
    * Dates are ISO timestamps. Status/stage values may use underscores.
@@ -74,6 +76,28 @@
       }
     }
 
+    function addOutput(parent, item) {
+      if (item.output?.kind === "report" && source.openReport) {
+        const report = element("button", "Field report", { type: "button", "data-report": item.id });
+        report.addEventListener("click", () => source.openReport(item.output));
+        const line = element("p");
+        line.append(report);
+        parent.append(line);
+      } else if (item.output) {
+        addLink(parent, item.output.kind === "pr" ? "Verified PR" : "Field report", item.output.url);
+      }
+    }
+
+    function addWorker(parent, item) {
+      addLink(parent, "Worker chat", item.chatUrl);
+      if (item.workerRef) parent.append(element("p", "Worker reference: " + item.workerRef, { class: "meta" }));
+    }
+
+    function addSchedule(parent, item, attrs = {}) {
+      if (item.retryAt) parent.append(element("p", "Retry scheduled: " + when(item.retryAt), attrs));
+      if (item.recheckAt) parent.append(element("p", "Recheck scheduled: " + when(item.recheckAt), attrs));
+    }
+
     function renderItem(item, kind) {
       const row = element("li");
       const button = element("button", item.title, { type: "button", "data-item": item.id });
@@ -90,23 +114,15 @@
       row.append(button, element("p", item.repo, { class: "meta" }));
       if (kind === "closed") {
         row.append(element("p", label(item.outcome) + " · " + when(item.closedAt)));
-        if (item.output?.kind === "report" && source.openReport) {
-          const report = element("button", "Field report", { type: "button", "data-report": item.id });
-          report.addEventListener("click", () => source.openReport(item.output));
-          const line = element("p");
-          line.append(report);
-          row.append(line);
-        } else if (item.output) {
-          addLink(row, item.output.kind === "pr" ? "Verified PR" : "Field report", item.output.url);
-        }
+        addOutput(row, item);
       } else {
         row.append(element("p", "Stage: " + label(item.stage) + " · Status: " + label(item.status), {
           class: item.status === "waiting_for_input" ? "attention" : "meta"
         }));
         row.append(element("p", "Last advanced: " + when(item.lastAdvancedAt), { class: "meta" }));
         if (item.waitReason) row.append(element("p", item.waitReason));
-        if (item.retryAt) row.append(element("p", "Retry scheduled: " + when(item.retryAt), { class: "meta" }));
-        addLink(row, "Worker chat", item.chatUrl);
+        addSchedule(row, item, { class: "meta" });
+        addWorker(row, item);
         if (item.primaryPrUrl) addLink(row, "Primary PR", item.primaryPrUrl);
         else addLink(row, "Draft PR", item.draftUrl);
       }
@@ -119,9 +135,29 @@
       content.append(element("p", item.repo + " · Stage: " + label(item.stage) + " · Status: " + label(item.status)));
       if (item.waitReason) content.append(element("p", item.waitReason));
       content.append(element("p", "Attempt: " + (data.attempt || "None recorded")));
+      addWorker(content, item);
       if (data.nextAction) content.append(element("p", "Next action: " + data.nextAction));
-      if (item.retryAt) content.append(element("p", "Retry scheduled: " + when(item.retryAt)));
+      addSchedule(content, item);
       if (data.resumeTrigger) content.append(element("p", "Resume trigger: " + data.resumeTrigger));
+      if (data.question) {
+        content.append(element("h3", "Owner question"), element("p", data.question.prompt, { class: "attention" }));
+        if (data.question.options.length) {
+          const options = element("ul");
+          for (const option of data.question.options) options.append(element("li", option));
+          content.append(options);
+        }
+        if (data.question.proposedDefault) {
+          content.append(element("p", "Proposed default: " + data.question.proposedDefault));
+        }
+        const reply = element("p", "Reply through the owner inbox or API.", { class: "meta" });
+        if (item.itemId && item.version) {
+          reply.append(" ", element("code", "python -m phalanx reply " + item.itemId + " " + item.id +
+            " \"ANSWER\" --version " + item.version + " --key KEY"));
+        }
+        content.append(reply);
+      }
+      if (item.primaryPrUrl) addLink(content, "Primary PR", item.primaryPrUrl);
+      addOutput(content, item);
       if (data.dependencies?.length) {
         const list = element("ul");
         for (const dependency of data.dependencies) {

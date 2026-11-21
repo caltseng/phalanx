@@ -9,7 +9,7 @@ from .dependency_schema import DEPENDENCY_SCHEMA
 from .dispatch_schema import DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
-from .operator_schema import OPERATOR_SCHEMA
+from .operator_schema import OPERATOR_SCHEMA, WORKER_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
 
@@ -26,6 +26,7 @@ MIGRATIONS = (
     STAGE_QUEUE_SCHEMA,
     DEPENDENCY_SCHEMA,
     WAIT_SCHEMA,
+    WORKER_SCHEMA,
 )
 
 

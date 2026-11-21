@@ -20,14 +20,21 @@ STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9
 ID = re.compile(r"[0-9a-f]{32}")
 
 SUMMARY = """
-    SELECT execution.id, execution.item_id, execution.created_at, execution.updated_at,
+    SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
            item.repository_id, json_extract(item.request_json, '$.goal') AS title,
            progress.last_advanced_at, progress.wait_since,
-           coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count
+           coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
+           recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
+    LEFT JOIN external_rechecks AS recheck
+        ON recheck.execution_id = execution.id AND recheck.version = execution.version
+    LEFT JOIN attempt_workers AS worker ON worker.attempt_id = (
+        SELECT attempt.id FROM attempts AS attempt WHERE attempt.execution_id = execution.id
+        ORDER BY attempt.started_at DESC, attempt.id DESC LIMIT 1
+    )
 """
 
 
@@ -99,6 +106,7 @@ def summary(row, now):
     return {
         "id": row["id"],
         "item_id": row["item_id"],
+        "version": row["version"],
         "title": row["title"],
         "repository_id": row["repository_id"],
         "stage": row["stage"],
@@ -109,6 +117,9 @@ def summary(row, now):
         "blocked_prerequisite_count": blocked_count,
         "resume_trigger": wait.get("trigger"),
         "retry_at_ms": row["retry_at"],
+        "recheck_at_ms": row["recheck_at_ms"],
+        "worker_reference": row["worker_reference"],
+        "worker_url": row["worker_url"],
         "wait_since": wait_since,
         "wait_age_seconds": (
             max(0, int((now - datetime.fromisoformat(wait_since)).total_seconds()))
@@ -199,6 +210,14 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             (execution_id,),
         ).fetchall()
         boundary, params = ("AND event.version < ?", after) if after else ("", ())
+        question = None
+        if execution["status"] == "waiting_for_input":
+            asked = db.execute(
+                """SELECT json_extract(details_json, '$.question') AS question FROM transition_history
+                   WHERE execution_id = ? AND version = ?""",
+                (execution_id, execution["version"]),
+            ).fetchone()
+            question = json.loads(asked["question"]) if asked and asked["question"] else None
         rows = db.execute(
             f"""SELECT event.version, event.event, event.created_at, event.attempt_id,
                        json_extract(event.state_json, '$.stage') AS stage,
@@ -219,6 +238,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         "item": summary(execution, datetime.now(UTC)),
         "attempt": attempt["id"] if attempt else None,
         "prerequisites": [dict(row) for row in prerequisites],
+        "question": question,
         "events": [dict(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"]]),
     }

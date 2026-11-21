@@ -149,8 +149,10 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
                        ("attempt", identifier(10), QUEUED.stage, "runner-secret", "lease-digest", 9999, LATEST))
             transition(db, 10, 5001, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
+            db.execute("INSERT INTO external_rechecks VALUES (?, 5001, 1700000000000)", (identifier(10),))
         later = self.page(f"{route}?limit=2&cursor={first['next_cursor']}")
         self.assertEqual(later["attempt"], "attempt")
+        self.assertEqual(later["item"]["recheck_at_ms"], 1700000000000)
         self.assertEqual([row["version"] for row in later["events"]], [4998, 4997])
         self.assertNotIn("lease-digest", json.dumps(later))
         self.assertNotIn("runner-secret", json.dumps(later))
