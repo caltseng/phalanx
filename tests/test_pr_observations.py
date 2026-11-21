@@ -1,6 +1,7 @@
 from pathlib import Path
 from secrets import token_urlsafe
 from tempfile import TemporaryDirectory
+from time import time
 import unittest
 
 from phalanx import intake
@@ -237,6 +238,21 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
                                  schedule_recheck=True)
         status, updated = self.submit(ready, **{"Idempotency-Key": "ready-passed"})
         self.assertEqual((status, updated["state"]["stage"]), (200, "adversarial_review"))
+
+    def test_transient_validation_retry_honors_provider_delay(self):
+        self.publish()
+        promotion = self.observation(self.claim("pr_promotion"), gates=self.gates("draft"))
+        self.assertEqual(self.submit(promotion)[0], 200)
+        claim = self.claim("pr_validation")
+        body = dict(claim, outcome="failed", failure_reason="GitHub returned HTTP 429",
+                    retry_after_seconds=120)
+        headers = {**self.lease, "Idempotency-Key": "validation-throttled"}
+        before = int(time() * 1000)
+        status, queued = self.request(f"{self.execution}/result", RUNNER, body, headers)
+        self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
+        self.assertGreaterEqual(queued["retry_at_ms"], before + 120_000)
+        self.assertEqual(self.request(f"{self.execution}/result", RUNNER, body, headers),
+                         (status, queued))
 
     def test_cancelling_attempt_cannot_record_publication(self):
         claim = self.claim("pr_creation")

@@ -88,6 +88,8 @@ class PublishedValidationRunner:
         try:
             pull = self.github.get_pull_request(expected.number)
         except GitHubError as error:
+            if error.retry_after_seconds is not None:
+                return _retry(event, str(error), error.retry_after_seconds)
             return _block(event, f"Restore access to the primary PR. {error}", handoff)
 
         if (
@@ -102,6 +104,8 @@ class PublishedValidationRunner:
         checks = collect_github_checks(
             self.github, pull, Phase.READY, policy.required, read_preview=policy.read_preview,
         )
+        if checks.retry_after_seconds is not None:
+            return _retry(event, "; ".join(checks.gate.reasons), checks.retry_after_seconds)
         handoff = (f"{url}, target {pull.base_ref}, head {pull.head_sha}, base {pull.base_sha}")
         if checks.gate.state is GateState.BLOCKED or checks.candidate is None:
             return _block(event, "; ".join(checks.gate.reasons), handoff)
@@ -167,4 +171,11 @@ def _block(event, reason, handoff):
     return "result", {
         **event, "outcome": Outcome.NEEDS_INPUT,
         "question": {"prompt": reason[:16000], "handoff": handoff or "Published validation"},
+    }
+
+
+def _retry(event, reason, delay):
+    return "result", {
+        **event, "outcome": Outcome.FAILED,
+        "failure_reason": reason[:16000], "retry_after_seconds": delay,
     }

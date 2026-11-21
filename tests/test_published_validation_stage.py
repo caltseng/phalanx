@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx.github import GitHubClient
+from phalanx.github import GitHubClient, HTTPResponse
 from phalanx.published_validation_stage import (
     PublishedValidationAssignment, PublishedValidationPolicy, PublishedValidationRunner,
 )
@@ -39,7 +39,10 @@ class PublishedValidationRunnerTest(unittest.TestCase):
     def new_runner(self):
         def send(request, timeout):
             self.assertEqual(request.method, "GET")
-            return self.responses.popleft()
+            result = self.responses.popleft()
+            if isinstance(result, Exception):
+                raise result
+            return result
 
         github = GitHubClient("owner", "repo", token="fixture", transport=send)
         return PublishedValidationRunner(self.journal, self, github)
@@ -86,6 +89,33 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         self.assertEqual((route, body["outcome"]), ("result", "needs_input"))
         self.assertIn("validation policy", body["question"]["prompt"])
         self.assertIn(BASE, body["question"]["handoff"])
+
+    def test_transient_initial_transport_failure_uses_bounded_dispatch_retry(self):
+        self.responses.append(TimeoutError("fixture transport timeout"))
+        self.runner.run(self.assignment, PublishedValidationPolicy(()))
+        route, body, _ = self.calls[-1]
+        self.assertEqual((route, body["outcome"], body["retry_after_seconds"]),
+                         ("result", "failed", 0))
+        self.assertIn("transport failure", body["failure_reason"])
+
+    def test_collection_preserves_transient_errors_and_distinguishes_access_denial(self):
+        for failure, outcome, delay in (
+            (HTTPResponse(503, {}, b"{}"), "failed", 0),
+            (HTTPResponse(403, {"Retry-After": "120"}, b"{}"), "failed", 120),
+            (HTTPResponse(429, {}, b"{}"), "failed", 60),
+            (HTTPResponse(403, {}, b"{}"), "needs_input", None),
+        ):
+            with self.subTest(status=failure.status, headers=failure.headers):
+                snapshot = response(self.snapshot)
+                self.responses.extend((snapshot, snapshot, failure))
+                assignment = PublishedValidationAssignment(
+                    "item", "execution", "runner", "attempt", len(self.calls) + 10,
+                    self.assignment.lease,
+                )
+                self.runner.run(assignment, PublishedValidationPolicy(()))
+                route, body, _ = self.calls[-1]
+                self.assertEqual((route, body["outcome"], body.get("retry_after_seconds")),
+                                 ("result", outcome, delay))
 
     def test_empty_policy_attests_only_after_exact_ready_snapshot(self):
         self.verify_snapshot()
