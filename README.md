@@ -8,7 +8,7 @@ Phalanx is an agentic orchestrator for work across repositories. Work items live
 
 **Phalanx advancing** means a work item has met the conditions to move to its next stage.
 
-The first milestone runs the HTTP API server and durable store locally, with concurrent work in visible Codex chats launched from a Captain chat. The runner has a configurable concurrency limit and can pause dispatch. The same server is intended to move to cloud hosting while agents continue to run locally. A future ChatGPT phone workflow can file work through the hosted API and return a work-item link. Claude Code and GitHub Copilot CLI are P2 execution targets.
+The first milestone runs the HTTP API server and durable store locally, with concurrent work in visible worker sessions launched from a Captain chat. Phalanx is runtime-neutral: any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code, can serve as Captain through the [bridge contract](#bridge-contract). The runner has a configurable concurrency limit and can pause dispatch. The same server is intended to move to cloud hosting while agents continue to run locally. A future ChatGPT phone workflow can file work through the hosted API and return a work-item link.
 
 See the [design spec](SPEC.md) for the proposed workflow and the [implementation plan](IMPLEMENTATION_PLAN.md) for milestones and acceptance checks. Open [state-machine.html](state-machine.html) locally in a browser to explore the lifecycle and execution status graphs.
 
@@ -33,7 +33,7 @@ Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlit
 
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
-### Run attended Codex assignments
+### Run attended assignments
 
 Use a server with durable intake and dispatch enabled. Register the repository
 with the owner API, fetch the desired origin branch into its local checkout,
@@ -55,7 +55,7 @@ Save a local JSON config such as:
       "checkout": "C:/enlistments/example",
       "base_branch": "main",
       "host_id": "local",
-      "project_id": "project-id-from-Codex"
+      "project_id": "project-id-from-the-runtime"
     }
   }
 }
@@ -81,25 +81,26 @@ blocked reservation. Draft assignments run directly on the runner.
 
 From an authorized Captain muster:
 
-1. Verify the project and host with Codex project discovery. Run
+1. Verify the project and host with the runtime's project discovery. Run
    `python -m phalanx attended --config runner.json --state C:/phalanx-runner --slot 1 prepare`.
-   On `launch_intent`, invoke the app's create-thread action **once** with the
-   returned `create_thread` arguments. Save the marker for receipt and result
+   On `launch_intent`, launch **one** visible worker session from the returned
+   `session` (`project_id`, `title`, `prompt`), as the `launch` operation in the
+   [runtime mapping](#runtime-mapping) describes. Save the marker for receipt and result
    commands. Prepare each additional assignment in a free slot, such as
    `--slot 2 prepare`. The worker targets its assigned Git worktree explicitly.
 2. With the same command prefix and slot number, run
-   `receipt MARKER HOST --thread-id THREAD` for a native chat receipt, or
+   `receipt MARKER HOST --thread-id THREAD` with the worker session's UUID, or
    `receipt MARKER HOST --client-thread-id CLIENT` for queued setup. Resolve a
-   queued or lost receipt in the app and verify the exact launch marker and
+   queued or lost receipt in the runtime and verify the exact launch marker and
    assignment before recording the native ID. Use `status` to inspect a
    reservation or `status --all` to list occupied slots. If the claim response
    was lost, repeat `prepare` in the original slot to replay the claim. Keep an
-   ambiguous app launch reserved and reconcile it using the original marker.
+   ambiguous launch reserved and reconcile it using the original marker.
    Other free slots can continue preparing eligible assignments.
-3. Run `renew` for every known active claim in its slot independently of app
+3. Run `renew` for every known active claim in its slot independently of
    observation, comfortably before that lease expires. The CLI supports manual
    renewal. Use short observation waits.
-4. Read the native chat and verify the exact marker, assignment, and that the
+4. Read the worker session and verify the exact marker, assignment, and that the
    worker and any writers it started have stopped. Then run
    `submit MARKER HOST THREAD --confirmed-stopped`. The runner verifies the
    result file and current worktree before posting. If the submission response
@@ -122,7 +123,7 @@ through the report endpoint.
 Keep the state directory when restarting. Expired leases and unverified results
 require reconciliation.
 The continuous loop below supplies independent heartbeat scheduling and
-fixture-backed native observation. Real desktop acceptance remains pending.
+fixture-backed native observation. Real runtime acceptance remains pending.
 
 ### Continuous attended Captain loop
 
@@ -141,14 +142,14 @@ reports every missing package, Git older than 2.36, missing
 before any claim. Optional settings such as `PHALANX_GITHUB_TOKEN` are not
 required; without it, initial draft claims are excluded as before.
 
-By default the loop reaches the Codex app through the **Captain chat relay**,
-because only the Captain chat can call the app's thread tools. The loop queues
+By default the loop reaches the worker runtime through the **Captain chat relay**,
+because the Captain chat holds the runtime's session tools. The loop queues
 each bridge request in `<state>\captain-relay.sqlite3` and waits; the Captain
-chat runs it with the matching app tool and records the reply. See
+chat runs it with its runtime's tools and records the reply. See
 [Captain chat relay](#captain-chat-relay). To use a trusted subprocess bridge
 instead, put `--adapter-command BRIDGE [ARGS...]` last; all remaining arguments
 belong to the bridge. The executable fixture in `tests/fixtures/captain_bridge.py`
-tests that boundary without contacting a desktop, and one shared contract test
+tests that boundary without contacting a runtime, and one shared contract test
 runs both the fixture and the relay.
 
 The loop enumerates durable reservations and the server's expired attempts
@@ -160,10 +161,10 @@ route implemented worker stages (`development`, `report_drafting`,
 config `stages` array restricts this set. Initial draft claims are excluded
 without `PHALANX_GITHUB_TOKEN`. The server's atomic eligible-stage claim still
 applies pause, capacity, priority, repository, dependency and affinity gates.
-Worker claims require verified desktop mappings; runner-only claims retain all
-Git-verified mappings even when their desktop is unavailable. The loop alternates
+Worker claims require verified runtime project mappings; runner-only claims retain all
+Git-verified mappings even when their runtime is unavailable. The loop alternates
 which group it polls first and preserves each pending claim's exact original
-filters and secret. One asynchronous desktop discovery pass per poll verifies
+filters and secret. One asynchronous project discovery pass per poll verifies
 each distinct host/project/checkout mapping once and shares the results across
 slot admission and launch checks. Failed discovery is retried on the next poll.
 
@@ -225,10 +226,12 @@ written and emitted only when its status or reason changes. Ctrl+C stops schedul
 and drains in-flight operations without discarding reservations. Restart with the same configuration.
 The journal refuses a different runner ID or API URL.
 
-#### Desktop bridge contract
+#### Bridge contract
 
-Both transports carry the same request: `contract_version: 1`, `operation`, and
-`arguments`, answered by one JSON object.
+Both transports carry the same request: `contract_version: 2`, `operation`, and
+`arguments`, answered by one JSON object. A bridge or Captain must reject any
+other version with an error rather than guess; version 1 used the old operation names. The contract names no runtime; the
+[runtime mapping](#runtime-mapping) says how each runtime serves it.
 
 A subprocess bridge (`--adapter-command`) is invoked once per operation, with
 the request on stdin and the reply on stdout. Commands must not write
@@ -246,35 +249,37 @@ variables are removed from its subprocess environment; keep the bridge trusted.
 | Operation | Arguments and required response |
 | --- | --- |
 | `resolve_project` | Receives `host_id`, `project_id`, `checkout`. Discover the exact project on that host and return those verified fields; do not echo unverified input. The checkout must resolve to the configured root. |
-| `create_thread` | Receives `host_id`, original `marker`, and the prepared `create_thread` arguments. Return the same host and marker and exactly one UUID: `thread_id` or queued `client_thread_id`. The bridge must route the local project target to that exact host. |
-| `wait_threads` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads`, and optional per-marker `cursors` (string or null to reset). |
+| `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host whose first prompt is exactly `prompt`, which contains the marker. Use `title` as the session name where the runtime allows it; otherwise use a name that fits, such as the attempt UUID from the marker. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. |
+| `observe` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). |
 
-Thread rows use the recovery observation fields documented below. A `stopped`
+Session rows use the recovery observation fields documented below. A `stopped`
 row additionally requires `writers_stopped: true`. Observation timestamps must
 be fresh (at most 60 seconds old). Discovery is complete only after the relevant
 history pages have been reconciled, including queued or lost receipts; a cursor
 must not hide the first-turn identity or be treated as complete history.
+`thread_id` is the field name for the runtime's worker session UUID in every runtime.
 
 #### Captain chat relay
 
-Start the loop without `--adapter-command`, then open the Captain chat in the
-Phalanx project in the Codex app. The chat needs write access to the runner
-state directory. Repeat this cycle while the loop runs:
+Start the loop without `--adapter-command`, then open a Captain chat in any
+runtime that can launch and read visible worker sessions in the mapped
+projects. The chat needs a shell with write access to the runner state
+directory. Repeat this cycle while the loop runs:
 
 1. `python -m phalanx relay --state C:\phalanx-runner next --wait 30` hands out
    the oldest request exactly once, or `{"status": "idle"}`.
-2. Run the request with the app tools and the rules in the table above:
-   - `resolve_project`: list projects; reply with the verified host, project and
-     root path.
-   - `create_thread`: call `create_thread` **once** with the given arguments;
-     reply with the host, marker and `threadId` as `thread_id` (or the queued
-     `clientThreadId` as `client_thread_id`).
-   - `wait_threads`: read each receipt's thread, or search thread history for
-     the marker; reply with fresh rows. Set `writers_stopped` only after
-     verifying the turn stopped.
+2. Serve the request with the runtime's tools, following the contract table
+   above and the [runtime mapping](#runtime-mapping):
+   - `resolve_project`: discover the project; reply with the verified host,
+     project and root path.
+   - `launch`: start the worker session **once**; reply with the host, marker
+     and session UUID as `thread_id` (or a provisional ID as `client_thread_id`).
+   - `observe`: read each receipt's session, or find the marker in session
+     first prompts or history; reply with fresh rows. Set `writers_stopped` only after verifying
+     the session's turn stopped.
 3. Record the reply right away (observations go stale after 60 seconds):
    `python -m phalanx relay --state C:\phalanx-runner respond ID --file reply.json`,
-   or `respond ID --error "what failed"` when the tool fails.
+   or `respond ID --error "what failed"` when the runtime action fails.
 4. Between requests, run `python -m phalanx inbox` with the owner token, surface
    worker questions to Caleb in the Captain chat, and answer with
    `python -m phalanx reply`. `attended status --all` shows slot reasons.
@@ -289,13 +294,25 @@ stays reserved until native discovery reconciles it by marker. A restarted loop
 expires requests left pending by its predecessor. Never rerun a request
 whose outcome you did not record; answer it from discovery instead.
 
-The App Server (`codex app-server`) is not used until its threads are verified to
-appear in the app sidebar with the same thread identity as the app's tools.
+#### Runtime mapping
+
+Each runtime serves the same three operations with its own tools. Set the
+config's `host_id` and `project_id` to the values the runtime reports. Only the
+Codex desktop mapping has field evidence so far, in
+[the worker recovery report](docs/pilots/worker-recovery.md); verify the others
+in their first muster and record any correction here.
+
+| Runtime | `resolve_project` | `launch` | `observe` |
+| --- | --- | --- | --- |
+| Codex desktop app | `list_projects`; match the project ID, host and root path. | `create_thread` with `title`, `prompt` and target `{"type": "project", "projectId": project_id, "environment": {"type": "local"}}`. Return `threadId` as `thread_id` or `clientThreadId` as `client_thread_id`. | `read_thread` for receipts; `list_threads` history search for the marker. Use `codex app-server` only after verifying its threads appear in the app sidebar with the same identity as the app's tools. |
+| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, so read `assignment`, `started_at` and the marker from the session's first user turn in its transcript. An idle session whose turn ended is `stopped`; busy is `active`. |
+| GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session's state under `~/.copilot/session-state/`, or find the marker in its history. |
+| Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
 **Acceptance gap:** The relay and fixture pass one shared contract test, but
 native acceptance (two real visible workers, a worker question answered through
 the Captain chat, and Captain restart around a receipt) is still pending in
-[the Codex recovery report](docs/pilots/codex-recovery.md). Wider PR stages,
+[the worker recovery report](docs/pilots/worker-recovery.md). Wider PR stages,
 owner notifications/due external rechecks and
 fresh-claim result adoption remain integration work; this is not full PH-11
 or v1 acceptance.
@@ -316,7 +333,7 @@ From a fresh Captain chat, inspect the runner's original configuration and state
 python -m phalanx attended-recover --config runner.json --state C:/phalanx-runner --slot 1 --observation observation.json
 ```
 
-The Captain supplies a fresh JSON snapshot from native Codex history and thread reads. Set `observed_at` to the time of the snapshot as ISO 8601 with an offset. Include `discovery_complete` and a `threads` array. Set `discovery_complete` only after inspecting all relevant history pages, including archived history where relevant. A thread already bound to a native receipt can be read directly.
+The Captain supplies a fresh JSON snapshot from the runtime's native session history and session reads. Set `observed_at` to the time of the snapshot as ISO 8601 with an offset. Include `discovery_complete` and a `threads` array with one row per worker session. Set `discovery_complete` only after inspecting all relevant history pages, including archived history where relevant. A session already bound to a native receipt can be read directly.
 
 Each thread row includes the following fields.
 

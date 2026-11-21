@@ -16,7 +16,7 @@ from uuid import UUID
 from .attended import AttendedRunner, RunnerAPI, RunnerError, STAGES
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery
-from .captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch
+from .captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch
 from .captain_relay import RelayTransport
 from .runner_preflight import preflight
 from .workspaces import _file_lock, _git, _item_branch
@@ -26,7 +26,7 @@ _LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop")
 
 
 class CaptainLoop:
-    def __init__(self, root: Path, config: dict, api, adapter: CodexCLIAdapter, *,
+    def __init__(self, root: Path, config: dict, api, adapter: BridgeAdapter, *,
                  poll_seconds: float = 2, heartbeat_seconds: float = 20,
                  batch_size: int = 8, wait_seconds: float = 2, emit=None):
         if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds <= 20:
@@ -142,7 +142,7 @@ class CaptainLoop:
                 raise RunnerError("Prepared worktree is missing; restore it before launch")
             result = {
                 "status": "launch_intent", "marker": handoff.packet.marker, "host_id": original["host_id"],
-                "create_thread": handoff.create_thread_arguments(original["project_id"]),
+                "session": handoff.launch_arguments(original["project_id"]),
             }
         else:
             # A legacy or interrupted claim retains the original filters and
@@ -221,11 +221,11 @@ class CaptainLoop:
                 return runner, result
         if blocked:
             return self._runner(slot), {
-                "status": "desktop_blocked", "slot": slot,
-                "reason": "No eligible runner-only work; restore desktop mappings: " + ", ".join(blocked),
+                "status": "runtime_blocked", "slot": slot,
+                "reason": "No eligible runner-only work; restore runtime project mappings: " + ", ".join(blocked),
             }
         if result is None:
-            raise RunnerError("No mapping is eligible for configured stages; restore the repository/desktop mappings")
+            raise RunnerError("No mapping is eligible for configured stages; restore the repository/runtime project mappings")
         return self._runner(slot), result
 
     def _unlaunched_proof(self, runner, snapshot):
@@ -444,7 +444,7 @@ class CaptainLoop:
             saved = self.cursors.get(ref["slot"])
             if saved and saved["marker"] == ref["marker"] and saved.get("cursor"):
                 cursors[ref["marker"]] = saved["cursor"]
-        batch = self.adapter.wait_threads(references, cursors=cursors, timeout=self.wait_seconds)
+        batch = self.adapter.observe(references, cursors=cursors, timeout=self.wait_seconds)
         for ref in references:
             if ref["marker"] in batch.cursors:
                 self.cursors[ref["slot"]] = {
@@ -509,7 +509,7 @@ class CaptainLoop:
             self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
                          + ", ".join(self.unmatched))
         self.last_unmatched = self.unmatched.copy()
-        # Each desktop check is a Captain request; run it only for a free slot or a pending launch.
+        # Each project check is a Captain request; run it only for a free slot or a pending launch.
         free = self.recovery_ready and len(records) + len(self.unmatched) < self.runner.capacity
         launching = any(not any(field in record for field in (*_LAUNCH_EFFECTS, "cancel_stop"))
                         for record in records.values())
@@ -593,7 +593,7 @@ def run_captain(args):
     transport = (CommandTransport(args.adapter_command) if args.adapter_command
                  else RelayTransport(args.state))
     loop = CaptainLoop(
-        args.state, config, RunnerAPI(config["base_url"], token), CodexCLIAdapter(transport),
+        args.state, config, RunnerAPI(config["base_url"], token), BridgeAdapter(transport),
         poll_seconds=args.poll_seconds, heartbeat_seconds=args.heartbeat_seconds,
         batch_size=args.batch_size, wait_seconds=args.wait_seconds,
     )

@@ -9,7 +9,7 @@ from phalanx.validation import GateResult, GateState
 
 HEAD, BASE, MERGE, OTHER = (letter * 40 for letter in "abcd")
 PRIMARY = PrimaryPull("owner/repo", 12, "PR_node", "https://github.com/owner/repo/pull/12",
-                      "codex/topic", "release/main", Revision(HEAD, BASE))
+                      "phalanx/topic", "release/main", Revision(HEAD, BASE))
 
 
 class CheckInTests(unittest.TestCase):

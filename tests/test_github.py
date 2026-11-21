@@ -22,7 +22,7 @@ def response(data, *, status=200, next_url=None):
     return HTTPResponse(status, headers, json.dumps(data).encode())
 
 
-def pull(number=7, *, head="codex/topic", base="main", draft=True, merged=False):
+def pull(number=7, *, head="phalanx/topic", base="main", draft=True, merged=False):
     return {
         "number": number,
         "node_id": f"PR_{number}",
@@ -69,15 +69,15 @@ class GitHubClientTests(unittest.TestCase):
     def test_matching_pulls_follow_link_and_include_closed_matches(self):
         next_url = f"{API}/repositories/123/pulls?page=2"
         self.responses.extend([
-            response([pull(), pull(8, head="codex/other")], next_url=next_url),
+            response([pull(), pull(8, head="phalanx/other")], next_url=next_url),
             response([pull(9, draft=False, merged=True), pull(10, base="other")]),
         ])
         result = self.client.list_matching_pull_requests(
-            head_owner="owner", head="codex/topic", base="main"
+            head_owner="owner", head="phalanx/topic", base="main"
         )
         self.assertEqual([item.number for item in result], [7, 9])
         query = parse_qs(urlsplit(self.requests[0].full_url).query)
-        self.assertEqual(query, {"head": ["owner:codex/topic"], "base": ["main"],
+        self.assertEqual(query, {"head": ["owner:phalanx/topic"], "base": ["main"],
                                  "state": ["all"], "per_page": ["100"]})
         self.assertEqual(self.requests[1].full_url, next_url)
 
@@ -87,13 +87,13 @@ class GitHubClientTests(unittest.TestCase):
         closed["head"]["repo"] = None
         closed["head"]["user"] = None
         self.responses.append(response([pull(base="release"), closed]))
-        result = self.client.list_matching_pull_requests(head_owner="owner", head="codex/topic")
+        result = self.client.list_matching_pull_requests(head_owner="owner", head="phalanx/topic")
         self.assertEqual([(item.number, item.base_ref, item.state) for item in result],
                          [(7, "release", "open"), (8, "release", "closed")])
         self.assertEqual(result[0].head_repository, "Owner/SourceFork")
         self.assertIsNone(result[1].head_repository)
         query = parse_qs(urlsplit(self.requests[0].full_url).query)
-        self.assertEqual(query, {"head": ["owner:codex/topic"], "state": ["all"],
+        self.assertEqual(query, {"head": ["owner:phalanx/topic"], "state": ["all"],
                                  "per_page": ["100"]})
 
     def test_publication_lookup_guards_each_page_and_does_not_accept_partial_results(self):
@@ -106,12 +106,12 @@ class GitHubClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(GitHubError, "pagination limit"):
             self.client.list_matching_pull_requests(
-                head_owner="owner", head="codex/topic", authorize=checked, page_limit=1,
+                head_owner="owner", head="phalanx/topic", authorize=checked, page_limit=1,
             )
         self.assertEqual(calls, [0])
         self.responses.appendleft(response([pull()], next_url=next_url))
         matches = self.client.list_matching_pull_requests(
-            head_owner="owner", head="codex/topic", authorize=checked, page_limit=2,
+            head_owner="owner", head="phalanx/topic", authorize=checked, page_limit=2,
         )
         self.assertEqual([p.number for p in matches], [7])
         self.assertEqual(calls, [0, 1, 2])
@@ -119,18 +119,18 @@ class GitHubClientTests(unittest.TestCase):
     def test_pagination_rejects_a_link_to_another_host(self):
         self.responses.append(response([pull()], next_url="https://elsewhere.example/pulls"))
         with self.assertRaisesRegex(GitHubError, "untrusted pagination"):
-            self.client.list_matching_pull_requests(head_owner="owner", head="codex/topic",
+            self.client.list_matching_pull_requests(head_owner="owner", head="phalanx/topic",
                                                     base="main")
         self.assertEqual(len(self.requests), 1)
 
     def test_create_draft_normalizes_footer(self):
         self.responses.append(response(pull(), status=201))
-        self.client.create_draft(head="codex/topic", base="main", title="Title",
+        self.client.create_draft(head="phalanx/topic", base="main", title="Title",
                                  body=f"Body\r\n\r\n{ATTRIBUTION}\r\n{ATTRIBUTION}")
         request = self.requests[0]
         self.assertEqual(request.method, "POST")
         self.assertEqual(json.loads(request.data), {
-            "head": "codex/topic", "base": "main", "title": "Title",
+            "head": "phalanx/topic", "base": "main", "title": "Title",
             "body": f"Body\n\n{ATTRIBUTION}", "draft": True,
         })
 
@@ -143,7 +143,7 @@ class GitHubClientTests(unittest.TestCase):
         ])
         for call_count in range(1, 5):
             with self.assertRaises(UncertainGitHubWrite):
-                self.client.create_draft(head="codex/topic", base="main", title="Title", body="")
+                self.client.create_draft(head="phalanx/topic", base="main", title="Title", body="")
             self.assertEqual(len(self.requests), call_count)
 
     def test_promotion_uses_node_id_and_surfaces_graphql_errors(self):
@@ -180,7 +180,7 @@ class GitHubClientTests(unittest.TestCase):
 
     def test_merge_requires_explicit_method_and_head(self):
         with self.assertRaises(ValueError):
-            self.client.merge(7, expected_head="codex/topic", method="squash")
+            self.client.merge(7, expected_head="phalanx/topic", method="squash")
         with self.assertRaises(ValueError):
             self.client.merge(7, expected_head=HEAD, method="auto")
         self.assertEqual(self.requests, [])

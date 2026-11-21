@@ -14,7 +14,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
-from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered
+from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_loop import CaptainLoop
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -95,7 +95,7 @@ class NativeFixture:
     def __call__(self, operation, arguments):
         if operation == "resolve_project":
             return arguments.copy()
-        if operation == "create_thread":
+        if operation == "launch":
             self.launches.append(arguments)
             receipt = {"marker": arguments["marker"], "host_id": arguments["host_id"],
                        "thread_id": str(uuid4()), "started_at": datetime.now(timezone.utc).isoformat()}
@@ -103,11 +103,11 @@ class NativeFixture:
             if self.queued:
                 receipt["client_thread_id"] = str(uuid4())
             if self.fail_launch:
-                raise RunnerError("ambiguous desktop launch")
+                raise RunnerError("ambiguous launch")
             if self.queued:
                 return {field: receipt[field] for field in ("host_id", "marker", "client_thread_id")}
             return receipt
-        if operation == "wait_threads":
+        if operation == "observe":
             self.waits.append(arguments)
             if self.gate and any(ref["slot"] == self.gated_slot for ref in arguments["references"]):
                 self.gate.wait(5)
@@ -154,7 +154,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
 
     def loop(self, **options):
         loop = CaptainLoop(
-            self.root, self.config, self.api, CodexCLIAdapter(self.native),
+            self.root, self.config, self.api, BridgeAdapter(self.native),
             poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1,
             emit=self.events.append, **options,
         )
@@ -205,12 +205,12 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 original_native = self.native.__call__
                 def stopped(operation, arguments):
                     reply = original_native(operation, arguments)
-                    if operation == "wait_threads":
+                    if operation == "observe":
                         for row in reply["threads"]:
                             if row["thread_id"] == receipt["thread_id"]:
                                 row.update(state="stopped", writers_stopped=True)
                     return reply
-                loop.adapter = CodexCLIAdapter(stopped)
+                loop.adapter = BridgeAdapter(stopped)
                 self.spin(loop, lambda: bool(self.api.submissions))
                 self.assertFalse(native_gate.is_set())
                 self.assertLessEqual(max(len(wait["references"]) for wait in self.native.waits), 1)
@@ -241,11 +241,11 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         original = self.native.__call__
         undelivered = []
         def native(operation, arguments):
-            if operation == "create_thread" and not undelivered:
+            if operation == "launch" and not undelivered:
                 undelivered.append(arguments["marker"])
-                raise LaunchNotDelivered("Captain relay never took create_thread")
+                raise LaunchNotDelivered("Captain relay never took launch")
             return original(operation, arguments)
-        loop = CaptainLoop(self.root, self.config, self.api, CodexCLIAdapter(native),
+        loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(native),
                            poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, emit=self.events.append)
         self.addCleanup(loop.close)
         self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
@@ -299,7 +299,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                     claim["execution"]["state"]["stopping"] = True
             return original(operation, arguments)
         loop = self.loop()
-        loop.adapter = CodexCLIAdapter(native)
+        loop.adapter = BridgeAdapter(native)
         with self.assertRaisesRegex(RunnerError, "changed before launch"):
             loop._prepare(1)
         self.assertFalse(self.native.launches)
@@ -324,7 +324,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 prepared.append(loop._records()[1])
                 current = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
                 status, stopping = self.request(execution_route + "/cancel", OWNER, {
-                    "expected_version": current["version"], "reason": "Cancelled during desktop discovery",
+                    "expected_version": current["version"], "reason": "Cancelled during project discovery",
                 })
                 self.assertEqual(status, 200, stopping)
             return native(operation, arguments)
@@ -335,7 +335,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 self.assertEqual(saved["key"], kwargs["key"])
                 stop_posts.append((body.copy(), kwargs.copy()))
             return call(route, body, **kwargs)
-        loop.adapter = CodexCLIAdapter(discover)
+        loop.adapter = BridgeAdapter(discover)
         self.api.call = stop
         self.spin(loop, lambda: bool(stop_posts) and not loop._records(), timeout=15)
         self.assertEqual(len(stop_posts), 1)
@@ -363,7 +363,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 failed = True
                 raise OSError("Transient post-packet discovery failure")
             return native(operation, arguments)
-        loop.adapter = CodexCLIAdapter(discover)
+        loop.adapter = BridgeAdapter(discover)
         with self.assertRaisesRegex(RunnerError, "Transient post-packet"):
             loop._prepare(1)
         original = loop._records()[1]
@@ -382,7 +382,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(resumed["started_at"], original["started_at"])
         self.assertEqual(resumed["relay"]["marker"], self.native.launches[0]["marker"])
 
-    def test_one_desktop_verification_is_shared_across_slots_per_poll(self):
+    def test_one_project_verification_is_shared_across_slots_per_poll(self):
         self.config["repositories"]["alias"] = self.config["repositories"]["repo"].copy()
         calls = []
         native = self.native.__call__
@@ -392,7 +392,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             return native(operation, arguments)
         loop = self.loop()
         loop.poll_seconds = 30
-        loop.adapter = CodexCLIAdapter(discover)
+        loop.adapter = BridgeAdapter(discover)
         self.spin(loop, lambda: len(self.native.launches) == 2, timeout=15)
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(self.api.claims), 2)
@@ -400,7 +400,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         for _ in range(5):
             loop.step()
             time.sleep(0.01)
-        self.assertEqual(len(calls), 1, "launched slots at capacity need no desktop check")
+        self.assertEqual(len(calls), 1, "launched slots at capacity need no project check")
         self.config["capacity"] = 3
         loop.runner.capacity = 3
         self.spin(loop, lambda: len(calls) == 2)
@@ -414,7 +414,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 return ["not", "an", "object"]
             return native(operation, arguments)
         loop = self.loop()
-        loop.adapter = CodexCLIAdapter(malformed)
+        loop.adapter = BridgeAdapter(malformed)
         resolved = loop._discover({})
         self.assertIsNone(resolved[loop._mapping_key(self.config["repositories"]["healthy"])])
         self.assertRegex(resolved[loop._mapping_key(self.config["repositories"]["repo"])], "AttributeError")
@@ -450,8 +450,8 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             self.assertEqual(db.execute(
                 "SELECT count(*) FROM captain WHERE key LIKE 'cursor-%' OR key LIKE 'admission-%'"
             ).fetchone()[0], 0)
-        restarted._status(1, "slot_blocked", "Restore desktop access")
-        self.assertEqual(runner.status()["loop"]["reason"], "Restore desktop access")
+        restarted._status(1, "slot_blocked", "Restore runtime access")
+        self.assertEqual(runner.status()["loop"]["reason"], "Restore runtime access")
 
     def test_runner_only_no_intent_cancel_replays_and_archives_once_over_http(self):
         self.config["capacity"] = 1
@@ -622,12 +622,12 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         ).packet.marker
         def malformed(operation, arguments):
             reply = native(operation, arguments)
-            if operation == "wait_threads":
+            if operation == "observe":
                 for row in reply["threads"]:
                     if row["marker"] == bad_marker:
                         row["thread_id"] = "malformed UUID"
             return reply
-        loop.adapter = CodexCLIAdapter(malformed)
+        loop.adapter = BridgeAdapter(malformed)
         packet = self.write_result(good_slot)
         self.native.stopped.add(packet.marker)
         batch = loop._wait(tuple(records), records)
@@ -674,7 +674,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                    for field in ("host_id", "project_id", "checkout")}
         fixture.write_text(json.dumps({"projects": [project], "queued": True}), encoding="utf-8")
         command = [sys.executable, str(Path(__file__).parent / "fixtures" / "captain_bridge.py"), str(fixture)]
-        adapter = CodexCLIAdapter(CommandTransport(command))
+        adapter = BridgeAdapter(CommandTransport(command))
         adapter.resolve_project(project)
         runner = AttendedRunner(self.root, self.config, self.api)
         launch = runner.prepare()
@@ -682,7 +682,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertIn("client_thread_id", receipt)
         runner.receipt(launch["marker"], "local", **receipt)
         packet = runner._handoff(runner._snapshot()).packet
-        batch = adapter.wait_threads([{
+        batch = adapter.observe([{
             "slot": 1, "marker": packet.marker, "project_id": "project", "host_id": "local",
             "started_at": runner._snapshot()["started_at"], "assignment": packet.result_identity(),
             "receipt": receipt,
@@ -691,7 +691,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "failed with exit code"):
             adapter.launch(launch)
         with self.assertRaisesRegex(RunnerError, "unavailable"):
-            CommandTransport([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.01)("wait_threads", {})
+            CommandTransport([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.01)("observe", {})
         with patch.dict(os.environ, {"PHALANX_RUNNER_TOKEN": "private", "PHALANX_GITHUB_TOKEN": "private"}):
             response = CommandTransport([sys.executable, "-c", (
                 "import json, os; print(json.dumps({'tokens': [key for key in os.environ "
@@ -710,7 +710,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         original = self.native.__call__
         def native(operation, arguments):
             reply = original(operation, arguments)
-            if operation == "wait_threads":
+            if operation == "observe":
                 for ref, row in zip(arguments["references"], reply["threads"]):
                     packet = ref["assignment"]
                     result = {**packet, "outcome": "succeeded", "details": {"evidence": (
@@ -726,7 +726,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.spin(loop, lambda: self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"]
                   == "completed" and any(event["status"] == "report_storage_submitted" for event in self.events),
                   timeout=10)
-        stages = [json.loads(launch["create_thread"]["prompt"].split("Work packet:\n")[1].split(
+        stages = [json.loads(launch["session"]["prompt"].split("Work packet:\n")[1].split(
             "\n\nWrite one UTF-8")[0])["result_identity"]["stage"] for launch in original.__self__.launches]
         self.assertEqual(stages, ["report_drafting", "report_review"])
         self.assertTrue(any(event["status"] == "report_storage_submitted" for event in self.events))
@@ -753,7 +753,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 gate.set()
                 loop.close()
 
-    def test_missing_desktop_mapping_does_not_filter_runner_only_repository(self):
+    def test_missing_project_mapping_does_not_filter_runner_only_repository(self):
         self.config["repositories"]["healthy"] = {**self.config["repositories"]["repo"],
                                                    "project_id": "healthy-project"}
         self.api.waiting = ["first"]
@@ -761,7 +761,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         original_native = self.native.__call__
         def native(operation, arguments):
             if operation == "resolve_project" and arguments["project_id"] == "project":
-                raise RunnerError("Desktop project unavailable")
+                raise RunnerError("Runtime project unavailable")
             return original_native(operation, arguments)
         self.native = native
         original_call = self.api.call
@@ -1033,7 +1033,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         probe = CommandTransportTests()
         identities, command = probe.probe(self.directory, parent_wait=10)
         loop = self.loop()
-        future = loop.native_pool.submit(CommandTransport(command, timeout=2), "wait_threads", {})
+        future = loop.native_pool.submit(CommandTransport(command, timeout=2), "observe", {})
         try:
             self.spin(loop, identities.exists)
             started = time.monotonic()
@@ -1085,18 +1085,18 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
 
     def test_identity_and_stopped_attestation_are_rejected(self):
         started_at = datetime.now(timezone.utc).isoformat()
-        adapter = CodexCLIAdapter(lambda operation, arguments: {
+        adapter = BridgeAdapter(lambda operation, arguments: {
             "host_id": "wrong", "project_id": "project", "checkout": str(self.checkout),
         })
         with self.assertRaisesRegex(RunnerError, "exact host"):
             adapter.resolve_project(self.config["repositories"]["repo"])
-        adapter = CodexCLIAdapter(lambda operation, arguments: {
+        adapter = BridgeAdapter(lambda operation, arguments: {
             "observed_at": datetime.now(timezone.utc).isoformat(), "discovery_complete": True,
             "threads": [{"host_id": "local", "project_id": "project", "marker": "marker",
                          "thread_id": str(uuid4()), "started_at": started_at,
                          "assignment": {}, "state": "stopped"}],
         })
-        batch = adapter.wait_threads([{"marker": "marker"}], cursors={}, timeout=1)
+        batch = adapter.observe([{"marker": "marker"}], cursors={}, timeout=1)
         self.assertFalse(batch.threads)
         self.assertIn("marker", batch.errors)
         self.assertIn("attestation", batch.errors["marker"])

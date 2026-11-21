@@ -1,4 +1,4 @@
-"""One desktop bridge contract, run against the fixture subprocess and the Captain chat relay."""
+"""One bridge contract, run against the fixture subprocess and the Captain chat relay."""
 
 from datetime import datetime, timezone
 import json
@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
-from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered
+from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_relay import RelayTransport, _queue, respond, take_next
 from phalanx.runner_errors import RunnerError
 
@@ -39,7 +39,7 @@ class BridgeContract:
     def launch(self, adapter):
         marker = f"phalanx-attempt-{uuid4()}"
         return marker, adapter.launch({"host_id": "local", "marker": marker,
-                                       "create_thread": {"prompt": "Run the packet"}})
+                                       "session": {"prompt": "Run the packet"}})
 
     def test_resolve_project_verifies_exact_mapping(self):
         adapter = self.adapter()
@@ -52,16 +52,16 @@ class BridgeContract:
         marker, receipt = self.launch(adapter)
         UUID(receipt["thread_id"])
         with self.assertRaises(RunnerError):
-            adapter.launch({"host_id": "local", "marker": marker, "create_thread": {}})
+            adapter.launch({"host_id": "local", "marker": marker, "session": {}})
         self.configure(queued=True)
         _, queued = self.launch(adapter)
         self.assertEqual(set(queued), {"client_thread_id"})
 
-    def test_wait_threads_discovers_launched_marker(self):
+    def test_observe_discovers_launched_marker(self):
         adapter = self.adapter()
         marker, receipt = self.launch(adapter)
         assignment = {"item_id": "item", "attempt_id": "attempt"}
-        batch = adapter.wait_threads([{
+        batch = adapter.observe([{
             "slot": 1, "marker": marker, "project_id": "project", "host_id": "local",
             "started_at": datetime.now(timezone.utc).isoformat(), "assignment": assignment, "receipt": receipt,
         }], cursors={}, timeout=1)
@@ -73,7 +73,7 @@ class BridgeContract:
 
 class FixtureBridgeContractTests(BridgeContract, unittest.TestCase):
     def adapter(self):
-        return CodexCLIAdapter(CommandTransport([sys.executable, str(BRIDGE), str(self.fixture)]))
+        return BridgeAdapter(CommandTransport([sys.executable, str(BRIDGE), str(self.fixture)]))
 
 
 def relay(*args, stdin=None):
@@ -107,7 +107,7 @@ class RelayBridgeContractTests(BridgeContract, unittest.TestCase):
         thread.start()
         self.addCleanup(thread.join, 60)
         self.addCleanup(stop.set)
-        return CodexCLIAdapter(RelayTransport(state, timeout=60, poll=0.02))
+        return BridgeAdapter(RelayTransport(state, timeout=60, poll=0.02))
 
 
 class RelayQueueTests(unittest.TestCase):
@@ -123,17 +123,17 @@ class RelayQueueTests(unittest.TestCase):
             results.append(error)
 
     def test_untaken_request_expires_as_undelivered_and_is_never_handed_out(self):
-        with self.assertRaisesRegex(LaunchNotDelivered, "never took create_thread"):
-            RelayTransport(self.root, timeout=0.1, poll=0.01)("create_thread", {"marker": "m"})
+        with self.assertRaisesRegex(LaunchNotDelivered, "never took launch"):
+            RelayTransport(self.root, timeout=0.1, poll=0.01)("launch", {"marker": "m"})
         self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
 
     def test_taken_request_is_never_resent_after_captain_restart(self):
         results = []
         waiter = Thread(target=self.call, args=(RelayTransport(self.root, timeout=0.3, poll=0.01), results,
-                                                "create_thread", {"marker": "m"}))
+                                                "launch", {"marker": "m"}))
         waiter.start()
         taken = take_next(self.root, wait=10, poll=0.01)
-        self.assertEqual(taken["operation"], "create_thread")
+        self.assertEqual(taken["operation"], "launch")
         waiter.join(10)
         self.assertIsInstance(results[0], RunnerError)
         self.assertNotIsInstance(results[0], LaunchNotDelivered)
@@ -145,12 +145,12 @@ class RelayQueueTests(unittest.TestCase):
         transport = RelayTransport(self.root, timeout=0.3, poll=0.01)
         arguments = {"references": [{"marker": "m"}]}
         results = []
-        waiter = Thread(target=self.call, args=(transport, results, "wait_threads", arguments))
+        waiter = Thread(target=self.call, args=(transport, results, "observe", arguments))
         waiter.start()
         take_next(self.root, wait=10, poll=0.01)
         waiter.join(10)
         self.assertRegex(str(results[0]), "never answered")
-        retry = Thread(target=self.call, args=(transport, results, "wait_threads", arguments))
+        retry = Thread(target=self.call, args=(transport, results, "observe", arguments))
         retry.start()
         fresh = take_next(self.root, wait=10, poll=0.01)
         self.assertEqual(fresh["arguments"], arguments)
@@ -160,7 +160,7 @@ class RelayQueueTests(unittest.TestCase):
 
     def test_restarted_loop_expires_orphaned_pending_requests(self):
         with _queue(self.root) as db:
-            db.execute("INSERT INTO request VALUES ('old', 'k', 'create_thread', '{}', 'pending', NULL, NULL, 0, 0)")
+            db.execute("INSERT INTO request VALUES ('old', 'k', 'launch', '{}', 'pending', NULL, NULL, 0, 0)")
         RelayTransport(self.root, timeout=1)
         self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
 
@@ -188,16 +188,16 @@ class RelayQueueTests(unittest.TestCase):
     def test_cli_rejects_invalid_reply_and_reports_tool_error(self):
         results = []
         waiter = Thread(target=self.call, args=(RelayTransport(self.root, timeout=30, poll=0.01), results,
-                                                "wait_threads", {"references": []}))
+                                                "observe", {"references": []}))
         waiter.start()
         taken = json.loads(relay("--state", str(self.root), "next", "--wait", "10").stdout)
-        self.assertEqual(taken["contract_version"], 1)
+        self.assertEqual(taken["contract_version"], 2)
         invalid = relay("--state", str(self.root), "respond", taken["id"], stdin="[")
         self.assertEqual(invalid.returncode, 1, invalid.stderr)
         self.assertIn("not valid JSON", invalid.stderr)
         self.assertEqual(relay("--state", str(self.root), "respond", taken["id"], "--error", "no app").returncode, 0)
         waiter.join(10)
-        self.assertRegex(str(results[0]), "wait_threads failed: no app")
+        self.assertRegex(str(results[0]), "observe failed: no app")
 
 
 if __name__ == "__main__":

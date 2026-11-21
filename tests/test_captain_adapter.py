@@ -1,4 +1,4 @@
-"""Desktop transport regressions runnable without the API dependency stack."""
+"""Bridge transport regressions runnable without the API dependency stack."""
 
 import json
 import os
@@ -45,7 +45,7 @@ class CommandTransportTests(unittest.TestCase):
             started = time.monotonic()
             try:
                 with self.assertRaisesRegex(RunnerError, "unavailable"):
-                    CommandTransport(command, timeout=0.3)("create_thread", {})
+                    CommandTransport(command, timeout=0.3)("launch", {})
                 self.assertLess(time.monotonic() - started, 1.2)
                 self.assertTrue(identities.exists(), "Probe did not spawn its inheriting child")
             finally:
@@ -56,7 +56,7 @@ class CommandTransportTests(unittest.TestCase):
             identities, command = self.probe(directory, parent_wait=0)
             started = time.monotonic()
             try:
-                response = CommandTransport(command, timeout=0.5)("wait_threads", {})
+                response = CommandTransport(command, timeout=0.5)("observe", {})
                 self.assertEqual(response, {"accepted": True})
                 self.assertLess(time.monotonic() - started, 1.2)
             finally:
@@ -68,10 +68,10 @@ class CommandTransportTests(unittest.TestCase):
             ("import sys; sys.stdout.buffer.write(b'\\xff')", "invalid JSON"),
         ):
             with self.subTest(reason=reason), self.assertRaisesRegex(RunnerError, reason):
-                CommandTransport([sys.executable, "-c", code])("wait_threads", {})
+                CommandTransport([sys.executable, "-c", code])("observe", {})
 
     def test_file_stdin_preserves_utf8_request(self):
         command = [sys.executable, "-c", "import json, sys; print(json.dumps(json.load(sys.stdin)))"]
         request = {"marker": "fixture", "prompt": "Field report \u2713"}
-        response = CommandTransport(command)("create_thread", request)
-        self.assertEqual(response, {"contract_version": 1, "operation": "create_thread", "arguments": request})
+        response = CommandTransport(command)("launch", request)
+        self.assertEqual(response, {"contract_version": 2, "operation": "launch", "arguments": request})

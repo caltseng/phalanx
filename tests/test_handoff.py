@@ -6,16 +6,16 @@ from dataclasses import replace
 from pathlib import Path
 from uuid import UUID
 
-from phalanx.codex_handoff import (
+from phalanx.handoff import (
     MAX_RESULT_BYTES,
-    CodexHandoff,
+    WorkerHandoff,
     InvalidResult,
     Outcome,
     WorkPacket,
 )
 
 
-class CodexHandoffTests(unittest.TestCase):
+class WorkerHandoffTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -27,7 +27,7 @@ class CodexHandoffTests(unittest.TestCase):
             stage="development",
             repository="example/project",
             worktree=root / "isolated worktree",
-            branch="codex/docs",
+            branch="phalanx/docs",
             expected_revision="a" * 40,
             goal="Correct the README",
             output_type="pull_request",
@@ -38,7 +38,7 @@ class CodexHandoffTests(unittest.TestCase):
         )
         spool = root / "results"
         spool.mkdir()
-        self.handoff = CodexHandoff(packet, spool)
+        self.handoff = WorkerHandoff(packet, spool)
         self.result = packet.result_identity() | {
             "outcome": "succeeded",
             "details": {"evidence": "Candidate " + "b" * 40},
@@ -49,12 +49,10 @@ class CodexHandoffTests(unittest.TestCase):
             json.dumps(self.result | changes), encoding="utf-8",
         )
 
-    def test_captain_arguments_include_worktree_and_stable_marker(self):
+    def test_launch_arguments_include_worktree_and_stable_marker(self):
         handoff = self.handoff
-        arguments = handoff.create_thread_arguments("project-1")
-        self.assertEqual(arguments["target"], {
-            "type": "project", "projectId": "project-1", "environment": {"type": "local"},
-        })
+        arguments = handoff.launch_arguments("project-1")
+        self.assertEqual(arguments["project_id"], "project-1")
         self.assertIn(handoff.packet.marker, arguments["title"])
         prompt = arguments["prompt"]
         self.assertIn(handoff.packet.marker, prompt)

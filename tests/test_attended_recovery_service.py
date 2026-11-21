@@ -12,7 +12,7 @@ from uuid import uuid4
 from phalanx.attended import AttendedRunner, RunnerError
 from phalanx.attended_recovery import NativeObservation
 from phalanx.attended_recovery_service import RecoveryJournal, run_recovery
-from phalanx.codex_handoff import WorkPacket
+from phalanx.handoff import WorkPacket
 from phalanx.workspaces import Workspace
 
 
@@ -48,7 +48,7 @@ class RecoveryServiceTests(unittest.TestCase):
         self.journal = RecoveryJournal(self.root, 1)
         now = datetime.now(UTC)
         self.packet = WorkPacket("item", uuid4(), 2, "report_drafting", "repo",
-                                 self.root / "tree", "codex/item", "base", "goal", "report", "body")
+                                 self.root / "tree", "phalanx/item", "base", "goal", "report", "body")
         self.native = NativeObservation("local", uuid4(), "project", now, self.packet.marker,
                                         self.packet.result_identity(), "stopped")
         self.record = {

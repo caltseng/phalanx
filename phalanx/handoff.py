@@ -1,4 +1,4 @@
-"""Render an attended Codex handoff and read local attempt evidence."""
+"""Render an attended worker handoff and read local attempt evidence."""
 
 import json
 import os
@@ -69,20 +69,10 @@ class WorkPacket:
         return identity
 
 
-class LocalEnvironment(TypedDict):
-    type: Literal["local"]
-
-
-class ProjectTarget(TypedDict):
-    type: Literal["project"]
-    projectId: str
-    environment: LocalEnvironment
-
-
-class CreateThreadArguments(TypedDict):
+class WorkerSession(TypedDict):
+    project_id: str
     title: str
     prompt: str
-    target: ProjectTarget
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,12 +89,12 @@ class InvalidResult(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class CodexHandoff:
+class WorkerHandoff:
     """Use a runner-controlled result directory with trusted, stable ancestors.
 
-    The runner supplies a verified worktree and assignment. The Captain resolves
-    the project using list_projects and invokes create_thread after authorization
-    and durable launch intent. This class performs neither operation.
+    The runner supplies a verified worktree and assignment. The bridge resolves
+    the project and launches the worker session after authorization and durable
+    launch intent. This class performs neither operation.
     """
 
     packet: WorkPacket
@@ -125,8 +115,8 @@ class CodexHandoff:
     def temporary_path(self) -> Path:
         return self.result_path.with_suffix(".json.tmp")
 
-    def create_thread_arguments(self, project_id: str) -> CreateThreadArguments:
-        """Render arguments for the Captain's explicit project-local invocation."""
+    def launch_arguments(self, project_id: str) -> WorkerSession:
+        """Render the runtime-neutral worker session for a project-local launch."""
         packet = self.packet
         assignment = json.dumps({
             "result_identity": packet.result_identity(),
@@ -144,12 +134,8 @@ class CodexHandoff:
             for outcome, fields in OUTCOME_FIELDS.items()
         )
         return {
+            "project_id": project_id,
             "title": f"Phalanx worker [{packet.marker}]",
-            "target": {
-                "type": "project",
-                "projectId": project_id,
-                "environment": {"type": "local"},
-            },
             "prompt": f"""Phalanx attempt marker: {packet.marker}
 
 Execute only the assigned stage in the packet below. Scope is authorized
@@ -158,7 +144,7 @@ review. Do not perform offensive or exploit workflows. Read the applicable
 repository instructions, run relevant checks, and leave GitHub writes to the
 runner.
 
-The app may start in the project checkout. Use the absolute worktree path in
+The session may start in the project checkout. Use the absolute worktree path in
 the packet as the explicit working directory for every repository command and
 target all repository edits there. Before writing, verify the Git root,
 current branch, and HEAD against the packet. If you cannot verify or target

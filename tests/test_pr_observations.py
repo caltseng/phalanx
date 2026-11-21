@@ -130,7 +130,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
                              ("draft", False), ("state", "closed"), ("merged", True)):
             with self.subTest(field=field):
                 self.assertEqual(self.submit(dict(body, pull=dict(body["pull"], **{field: value})))[0], 409)
-        different_branch = "codex/unrelated-item"
+        different_branch = "phalanx/unrelated-item"
         self.assertEqual(self.submit(dict(
             body, expected=dict(body["expected"], head_ref=different_branch),
             pull=dict(body["pull"], head_ref=different_branch),

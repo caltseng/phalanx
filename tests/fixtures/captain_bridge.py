@@ -1,4 +1,4 @@
-"""Executable JSON bridge fixture; never talks to a desktop."""
+"""Executable JSON bridge fixture; never talks to a real runtime."""
 
 from datetime import datetime, timezone
 import json
@@ -10,14 +10,15 @@ from uuid import NAMESPACE_URL, uuid5
 fixture_path = Path(sys.argv[1])
 fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 request = json.load(sys.stdin)
-assert request["contract_version"] == 1
+if request["contract_version"] != 2:
+    sys.exit(f"Unsupported bridge contract_version {request['contract_version']}; expected 2")
 operation, arguments = request["operation"], request["arguments"]
 if operation == "resolve_project":
     matches = [project for project in fixture["projects"] if project == arguments]
     if len(matches) != 1:
         raise ValueError("No exact fixture project")
     response = matches[0]
-elif operation == "create_thread":
+elif operation == "launch":
     marker = arguments["marker"]
     thread = str(uuid5(NAMESPACE_URL, marker))
     receipt = {
@@ -32,7 +33,7 @@ elif operation == "create_thread":
     response = {field: receipt[field] for field in ("host_id", "marker")}
     field = "client_thread_id" if fixture.get("queued") else "thread_id"
     response[field] = receipt[field]
-elif operation == "wait_threads":
+elif operation == "observe":
     threads = []
     for reference in arguments["references"]:
         marker = reference["marker"]

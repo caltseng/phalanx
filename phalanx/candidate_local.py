@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 from .attended import RunnerAPI, RunnerError
-from .codex_handoff import WorkerResult, WorkPacket
+from .handoff import WorkerResult, WorkPacket
 from .transitions import Outcome, Stage
 from .validation import GateState, PreCheck, PreEvidence, PreOutcome, evaluate_pre_validation
 from .workspaces import Workspace, WorkspaceError, WorkspaceManager

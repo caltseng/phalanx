@@ -99,7 +99,7 @@ class GitHubCollectionTests(unittest.TestCase):
 
     def test_rejects_runs_for_other_pr_or_revision(self):
         association = {
-            "number": 7, "head": {"sha": HEAD, "ref": "codex/topic"},
+            "number": 7, "head": {"sha": HEAD, "ref": "phalanx/topic"},
             "base": {"sha": OTHER, "ref": "main"},
         }
         result = self.collect(
