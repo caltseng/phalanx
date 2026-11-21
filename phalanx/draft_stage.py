@@ -90,7 +90,8 @@ class DraftStageRunner:
         def send(saved):
             # Bare sealed rows predate blockers and are always observations.
             route, body = (saved["route"], saved["body"]) if "route" in saved else ("pr-observation", saved)
-            prefix = "draft-blocker" if route == "pr-publication-blocker" else "draft-observation"
+            prefix = {"pr-publication-blocker": "draft-blocker", "result": "draft-wait"}.get(
+                route, "draft-observation")
             return self.api.call(
                 f"{path}/{route}", body, lease=assignment.lease,
                 key=f"{prefix}:{assignment.attempt_id}:{assignment.state_version}",
@@ -154,9 +155,19 @@ class DraftStageRunner:
             saved = {"route": "pr-publication-blocker", "body": PublicationBlocker(
                 **event, expected=expected, reason=outcome.reason, pull=_pull(blocking[0]),
             ).model_dump(mode="json", exclude_none=True)}
-        else:
+        elif outcome.status in ("pending", "claim_lost"):
             # Unconfirmed writes stay local and retry under the same journaled intent.
             return DraftStageResult(outcome)
+        else:
+            # Outside movement with no PR to reconcile, or a deleted base, needs the owner.
+            reason = outcome.reason if outcome.status == "conflict" else (
+                f"The target branch {intent.base} no longer exists on the remote"
+            )
+            saved = {"route": "result", "body": {
+                **event, "outcome": "needs_input",
+                "question": {"prompt": reason, "handoff": "Draft publication for "
+                             f"{intent.head} at {intent.candidate} on {intent.base}"},
+            }}
         saved = self._receipt(assignment, saved)
         assert saved is not None
         return DraftStageResult(outcome, send(saved))

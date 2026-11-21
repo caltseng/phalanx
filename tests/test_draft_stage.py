@@ -238,6 +238,25 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
                          ("self_review", "https://github.com/owner/repo/pull/7"))
         self.assertEqual(len(self.posts), 1)
 
+    def test_outside_push_without_pr_waits_for_owner_with_observed_sha(self):
+        self.git.head = OTHER
+        result = self.run_stage()
+        self.assertEqual(result.publication.status, "conflict")
+        state = self.state()
+        self.assertEqual((state["stage"], state["status"]), ("pr_creation", "waiting_for_input"))
+        self.assertIn(OTHER, state["wait"]["reason"])
+        self.assertTrue(self.calls[-1][0].endswith("/result"))
+        self.assertFalse(self.posts or self.git.pushes)
+
+    def test_deleted_base_waits_for_owner_naming_the_branch(self):
+        self.git.base = None
+        result = self.run_stage()
+        self.assertEqual(result.publication.status, "base_changed")
+        state = self.state()
+        self.assertEqual((state["stage"], state["status"]), ("pr_creation", "waiting_for_input"))
+        self.assertIn("target branch main", state["wait"]["reason"])
+        self.assertFalse(self.posts or self.git.pushes)
+
     def test_base_drift_routes_to_development_and_replays_lost_response(self):
         self.git.base = OTHER
         self.drop_response = True

@@ -48,6 +48,10 @@ class _ClaimLost(Exception):
     pass
 
 
+def _ref_moved(reason: str, head: str | None, *pulls) -> DraftOutcome:
+    return DraftOutcome("conflict", f"{reason}. Observed {head or 'no remote ref'}", *pulls)
+
+
 class DraftPublisher:
     """Drive first publication using verified inputs from the runner.
 
@@ -145,7 +149,7 @@ class DraftPublisher:
                 if remote not in (previous.candidate, previous.expected_head) or (
                     intent.expected_head not in (None, remote)
                 ):
-                    return DraftOutcome("conflict", "The remote item ref differs from the journaled publication")
+                    return _ref_moved("The remote item ref differs from the journaled publication", remote)
                 intent = replace(intent, expected_head=remote)
                 row = None
         payload = json.dumps(asdict(intent), sort_keys=True)
@@ -194,11 +198,11 @@ class DraftPublisher:
         moved = self._check_base(intent, authorize)
         if moved is not None:
             if phase == "verified" or head not in (intent.candidate, intent.expected_head):
-                return DraftOutcome("conflict", "The base moved and the remote item ref differs from the publication intent")
+                return _ref_moved("The base moved and the remote item ref differs from the publication intent", head)
             return moved
         if head != intent.candidate:
             if phase in ("pushed", "draft", "verified") or head != intent.expected_head:
-                return DraftOutcome("conflict", "The remote item ref differs from the publication intent")
+                return _ref_moved("The remote item ref differs from the publication intent", head)
             record("push")
             # The lease allows replacing only the journaled remote commit, so a
             # rebased candidate may be published without a fast-forward.
@@ -215,7 +219,7 @@ class DraftPublisher:
                 if head == intent.expected_head:
                     return DraftOutcome("pending", "Push is unconfirmed. Reconcile the same intent on retry")
                 if head != intent.candidate:
-                    return DraftOutcome("conflict", "The remote item ref moved during publication")
+                    return _ref_moved("The remote item ref moved during publication", head)
         if phase not in ("draft", "verified"):
             if phase != "pushed":
                 record("pushed")
@@ -229,8 +233,8 @@ class DraftPublisher:
             moved = self._check_base(intent, authorize)
             if moved is not None:
                 return moved
-            if self.git.read_head(authorize=authorize) != intent.candidate:
-                return DraftOutcome("conflict", "The remote item ref moved before draft creation")
+            if (head := self.git.read_head(authorize=authorize)) != intent.candidate:
+                return _ref_moved("The remote item ref moved before draft creation", head)
             record("draft")
             phase = "draft"
             authorize()
@@ -297,8 +301,8 @@ class DraftPublisher:
         if conflicts:
             return DraftOutcome("conflict", "Found a PR that differs from the draft intent",
                                 primary, duplicates, tuple(conflicts))
-        if self.git.read_head(authorize=authorize) != intent.candidate:
-            return DraftOutcome("conflict", "The remote item ref moved while verifying the draft",
-                                primary, duplicates)
+        if (head := self.git.read_head(authorize=authorize)) != intent.candidate:
+            return _ref_moved("The remote item ref moved while verifying the draft", head,
+                              primary, duplicates)
         authorize()
         return DraftOutcome("verified", "Verified the draft and its remote revisions", primary, duplicates)
