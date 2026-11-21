@@ -135,6 +135,14 @@ def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifi
     return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
 
 
+@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
+             dependencies=[Depends(require_runner)])
+def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
+                         body: pr_observations.PublicationClaimCheck, lease: Lease):
+    return run(request, pr_observations.check_publication_claim, item_id, execution_id, body,
+               intake.digest(lease))
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
              dependencies=[Depends(require_runner)])
 def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,

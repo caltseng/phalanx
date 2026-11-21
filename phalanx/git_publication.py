@@ -70,6 +70,23 @@ class GitPublication:
             if identity != self.expected_remote:
                 raise PublicationError("Origin does not match the registered repository")
 
+    def verify_candidate(self, candidate: str, *, base: str, base_sha: str) -> None:
+        """Verify the recorded development revisions in the runner's worktree."""
+        if not _is_oid(candidate) or not _is_oid(base_sha) or not base or base == self.ref.removeprefix("refs/heads/"):
+            raise PublicationError("Invalid development checkpoint")
+        self._verify_origin()
+        branch = self._git("symbolic-ref", "--no-recurse", "HEAD")
+        head = self._git("rev-parse", "--verify", "HEAD^{commit}")
+        base_ref = self._git("check-ref-format", f"refs/heads/{base}")
+        if (
+            branch.returncode or branch.stdout.strip() != self.ref
+            or head.returncode or head.stdout.strip() != candidate or base_ref.returncode
+        ):
+            raise PublicationError("Worktree or allowed refs differ from the development checkpoint")
+        ancestry = self._git("merge-base", "--is-ancestor", base_sha, candidate)
+        if ancestry.returncode:
+            raise PublicationError("Candidate ancestry from the recorded development base could not be verified")
+
     def read_head(self, *, authorize: Callable[[], None] | None = None) -> str | None:
         """Read the exact remote item ref. Return None only for confirmed absence."""
         return self._read_ref(self.ref, authorize)

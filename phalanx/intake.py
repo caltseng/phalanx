@@ -253,6 +253,7 @@ def check_attempt(db, execution_id, state, payload, lease_digest):
             or attempt["lease_expires_at"] <= int(time())
             or not compare_digest(attempt["lease_digest"], lease_digest)):
         raise Conflict("Attempt, stage, or lease is no longer current")
+    return attempt
 
 
 def report(db, item_id, execution_id):
