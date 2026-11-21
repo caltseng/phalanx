@@ -124,6 +124,14 @@ require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.
 
+### Load trusted validation policy
+
+The callable [trusted validation policy loader](docs/runner-validation-policy.md)
+loads per-repository local checks, authorized bypasses, and draft/ready
+requirements from a separate operator-owned runner file. It is not yet wired
+into the attended CLI; preview adapters and draft-only recovery remain explicit
+integration requirements.
+
 ### Reconcile an attended reservation
 
 From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.
