@@ -17,6 +17,23 @@ from phalanx.store import connect, migrate, write_transaction
 OWNER = "o" * 32
 RUNNER = "r" * 32
 
+# Let the real server exit before its Python launcher exits on Windows.
+SERVER_PROCESS = """
+import sys
+from threading import Thread
+
+import uvicorn
+
+server = uvicorn.Server(uvicorn.Config("phalanx.api:app", port=int(sys.argv[1])))
+
+def stop_on_eof():
+    sys.stdin.buffer.read()
+    server.should_exit = True
+
+Thread(target=stop_on_eof, daemon=True).start()
+server.run()
+"""
+
 
 class ServerFixture:
     def start_server(self, path):
@@ -29,8 +46,8 @@ class ServerFixture:
         log = path.with_suffix(".log")
         with log.open("w") as output:
             server = subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "phalanx.api:app", "--port", str(port)],
-                env=env, stdout=output, stderr=subprocess.STDOUT,
+                [sys.executable, "-c", SERVER_PROCESS, str(port)],
+                env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
             )
         self.addCleanup(self.stop_server, server)
         deadline = time.monotonic() + 10
@@ -45,9 +62,15 @@ class ServerFixture:
 
     @staticmethod
     def stop_server(server):
+        if server.stdin and not server.stdin.closed:
+            server.stdin.close()
         if server.poll() is None:
-            server.terminate()
-            server.wait(timeout=10)
+            try:
+                server.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                server.terminate()
+                server.wait(timeout=10)
+                raise
 
     def get(self, path, token=None):
         return self.request(path, token=token)
