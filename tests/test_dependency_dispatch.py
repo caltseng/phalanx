@@ -10,8 +10,8 @@ from urllib.request import Request, urlopen
 from phalanx import dependencies, dispatch, finalization, intake
 from phalanx.dispatch_api import Claim
 from phalanx.intake_models import Intake, Rerun
-from phalanx.store import connect, migrate, write_transaction
-from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target
+from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
+from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target, Wait, start
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -132,6 +132,38 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             assignment = self.claim(db, "stored")
             self.assertEqual(assignment["item_id"], consumer["id"])
             self.assertEqual(assignment["dependencies"][0]["revision"], revision)
+
+    def test_released_schema_migrates_pending_report_and_operator_progress(self):
+        path = self.path.with_name("released.sqlite3")
+        markdown = "# Reviewed report before upgrade"
+        revision = intake.digest(markdown)
+        pending = replace(
+            start(Target.REPORT), stage=Stage.REPORT_STORAGE, status=Status.WAITING_FOR_EXTERNAL,
+            pending_output=Status.COMPLETED, report_draft=revision, wait=Wait("Store report", "finalize"),
+        )
+        with connect(path, mode="rwc") as db:
+            for migration in MIGRATIONS[:5]:
+                for statement in migration:
+                    db.execute(statement)
+            db.execute("PRAGMA user_version = 5")
+            intake.register(db, "source", "https://example.com/source.git")
+            stamp = intake.timestamp()
+            db.execute("INSERT INTO work_items VALUES ('item','source','{}',?)", (stamp,))
+            data = intake.encode(asdict(pending))
+            db.execute(
+                """INSERT INTO executions(id,item_id,version,state_json,created_at,updated_at)
+                   VALUES ('execution','item',1,?,?,?)""",
+                (data, stamp, stamp),
+            )
+            intake.record(db, "execution", 1, "result", {}, data, stamp)
+            db.execute("INSERT INTO report_drafts VALUES ('execution',?,?)", (revision, markdown))
+            db.execute("INSERT INTO report_finalizations(execution_id,intent_version,due_at) VALUES ('execution',1,0)")
+        migrate(path)
+        with connect(path, mode="ro") as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(db.execute("SELECT wait_since FROM operator_progress").fetchone()[0], stamp)
+        completed = finalization.attempt(path, "execution")
+        self.assertEqual(completed["state"]["final_output"]["draft_revision"], revision)
 
     def test_restart_rechecks_missed_durable_milestone(self):
         server = self.start_server(self.path)

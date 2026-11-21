@@ -4,8 +4,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import Field
 
-from . import finalization, intake
+from . import finalization, intake, pr_observations
 from .auth import authenticate, require_owner, require_runner
 from .store import write_transaction
 from .intake_models import (
@@ -143,3 +144,12 @@ def result(request: Request, item_id: Identifier, execution_id: Identifier,
 def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifier,
                    body: AttemptEvent, lease: Lease, key: Key = None):
     return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
+             dependencies=[Depends(require_runner)])
+def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,
+                   body: Annotated[pr_observations.Publication | pr_observations.Validation,
+                                   Field(discriminator="stage")],
+                   lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)

@@ -296,7 +296,7 @@ def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, 
     return {"attempt_id": attempt_id, "execution": execution, "dependencies": snapshot}
 
 
-def _check_attempt(db, execution_id, state, payload, lease_digest):
+def check_attempt(db, execution_id, state, payload, lease_digest):
     attempt = db.execute(
         """SELECT * FROM attempts WHERE id=? AND execution_id=? AND ended_at IS NULL""",
         (payload.attempt_id, execution_id),
@@ -342,7 +342,7 @@ def request_stop(db, item_id, execution_id, payload, event):
 
 def stop_confirmed(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    _check_attempt(db, execution_id, state, payload, lease_digest)
+    check_attempt(db, execution_id, state, payload, lease_digest)
     return confirm_stop(db, row, state, payload.attempt_id, details={})
 
 
@@ -359,7 +359,7 @@ def confirm_stop(db, row, state, attempt_id, *, details):
 
 def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    _check_attempt(db, execution_id, state, payload, lease_digest)
+    check_attempt(db, execution_id, state, payload, lease_digest)
     wait = Wait(**payload.wait.model_dump()) if payload.wait else None
     details = payload.model_dump(mode="json", exclude={"report_markdown", "expected_version"})
     draft_revision = payload.report_revision
