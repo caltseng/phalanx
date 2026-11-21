@@ -115,6 +115,7 @@ class Execution:
     status: Status = Status.QUEUED
     candidate: str | None = None
     primary_pr: str | None = None
+    publication_conflict: bool = False
     report_draft: str | None = None
     wait: Wait | None = None
     stopping: Status | None = None
@@ -145,16 +146,20 @@ class Evidence:
 
     A missing gate revision means the gate is unverified. Adapters can attest
     a gate with no applicable checks after evaluating repository policy.
+    matching_publication_pr attests that the observed URL belongs to this
+    publication intent, independently of the observed head or draft status.
     """
 
     candidate: str | None = None
     pr: PullRequest | None = None
+    matching_publication_pr: str | None = None
     reviewed_candidate: str | None = None
     prevalidated_candidate: str | None = None
     bypass: Bypass | None = None
     draft_checks: Revision | None = None
     ci_and_previews: Revision | None = None
     independent_review: Revision | None = None
+    actionable_feedback_cleared: Revision | None = None
     approvals_and_mergeability: Revision | None = None
     report_draft: str | None = None
     reviewed_report: str | None = None
@@ -260,11 +265,14 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
         return _wait(state, Status.WAITING_FOR_INPUT, wait)
     if stage is Stage.PR_RECONCILIATION and evidence.candidate:
         _require(evidence.candidate != candidate, "Candidate changes require a new revision")
-        return _queue(state, Stage.SELF_REVIEW, candidate=evidence.candidate)
+        return _queue(state, Stage.SELF_REVIEW, candidate=evidence.candidate,
+                      publication_conflict=False)
     if candidate != revision.head or evidence.issue is Issue.PR_BLOCKER:
         if stage is Stage.PR_RECONCILIATION:
             return _wait(state, Status.WAITING_FOR_INPUT, wait)
         return _queue(state, Stage.PR_RECONCILIATION)
+    if stage is Stage.PR_RECONCILIATION and state.publication_conflict and not pr.merge_commit:
+        return _queue(state, Stage.SELF_REVIEW, publication_conflict=False)
     if stage is Stage.PR_PROMOTION:
         _require(not pr.draft and not pr.merge_commit and evidence.draft_checks == revision,
                  "Promotion requires a ready PR and current draft-only gates")
@@ -288,12 +296,15 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
             return _queue(state, Stage.PR_VALIDATION)
         if evidence.independent_review != revision:
             return _queue(state, Stage.ADVERSARIAL_REVIEW)
+        if evidence.actionable_feedback_cleared != revision:
+            return _wait(state, Status.WAITING_FOR_INPUT, wait)
         if evidence.approvals_and_mergeability != revision:
             return _wait(state, Status.WAITING_FOR_EXTERNAL, wait)
         return _queue(state, Stage.READY_FOR_CHECK_IN, ready_revision=revision)
 
     if (state.ready_revision != revision or evidence.ci_and_previews != revision
             or evidence.independent_review != revision
+            or evidence.actionable_feedback_cleared != revision
             or evidence.approvals_and_mergeability != revision):
         return _queue(state, Stage.PR_RECONCILIATION)
     if stage is Stage.READY_FOR_CHECK_IN and state.target is Target.READY:
@@ -322,9 +333,19 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
     if stage is Stage.PR_CREATION:
         if evidence.issue is Issue.BASE_CHANGED_BEFORE_PUBLICATION and not state.primary_pr:
             return _queue(state, Stage.DEVELOPMENT)
-        _require(evidence.issue is Issue.PR_BLOCKER and state.primary_pr,
-                 "Publication conflict requires a known primary PR")
-        return _queue(state, Stage.PR_RECONCILIATION)
+        pr = evidence.pr
+        _require(evidence.issue is Issue.PR_BLOCKER and pr and pr.url
+                 and pr.revision.head and pr.revision.base,
+                 "Publication conflict requires a verified PR observation")
+        if state.primary_pr:
+            _primary(state, evidence)
+        else:
+            _require(evidence.matching_publication_pr == pr.url,
+                     "Discovered PR must match this publication intent")
+            _require(pr.revision.head != state.candidate or not pr.draft or pr.closed,
+                     "Matching draft at the expected head should be recorded as published")
+        return _queue(state, Stage.PR_RECONCILIATION, primary_pr=pr.url,
+                      publication_conflict=True)
     if stage is Stage.REPORT_REVIEW:
         _require(state.report_draft and evidence.report_draft == state.report_draft,
                  "Findings must match the report draft")

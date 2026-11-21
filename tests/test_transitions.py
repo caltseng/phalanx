@@ -11,7 +11,7 @@ REV = Revision("candidate", "base")
 DRAFT = PullRequest("https://example.com/pull/1", REV, draft=True)
 READY = replace(DRAFT, draft=False)
 GATES = Evidence(pr=READY, ci_and_previews=REV, independent_review=REV,
-                 approvals_and_mergeability=REV)
+                 actionable_feedback_cleared=REV, approvals_and_mergeability=REV)
 WAIT = Wait("Await verification", "scheduled recheck")
 
 
@@ -134,6 +134,50 @@ class TransitionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             decide(state, Event.RESULT, outcome=Outcome.SUCCEEDED, evidence=Evidence(pr=DRAFT))
         self.assertEqual(result(state, Evidence(pr=DRAFT)).primary_pr, DRAFT.url)
+
+    def test_publication_conflict_preserves_discovered_matching_pr(self):
+        state = result(start(Target.READY), Evidence(candidate=REV.head))
+        for pr, reconciliation in [
+            (READY, Evidence(pr=READY)),
+            (replace(DRAFT, revision=Revision("outside", REV.base)),
+             Evidence(pr=replace(DRAFT, revision=Revision("outside", REV.base)),
+                      candidate="outside")),
+        ]:
+            with self.subTest(pr=pr):
+                conflict = Evidence(pr=pr, issue=Issue.PR_BLOCKER,
+                                    matching_publication_pr=pr.url)
+                discovered = result(state, conflict, Outcome.CHANGES_REQUIRED)
+                self.assertEqual((discovered.stage, discovered.primary_pr, discovered.candidate),
+                                 (Stage.PR_RECONCILIATION, pr.url, REV.head))
+                recovered = result(discovered, reconciliation)
+                self.assertEqual((recovered.stage, recovered.primary_pr),
+                                 (Stage.SELF_REVIEW, pr.url))
+
+    def test_publication_conflict_rejects_unrelated_or_unverified_pr(self):
+        state = result(start(Target.READY), Evidence(candidate=REV.head))
+        unrelated = replace(READY, url="https://example.com/pull/2")
+        for matched_url in [None, READY.url]:
+            with self.subTest(matched_url=matched_url), self.assertRaises(ValueError):
+                result(state, Evidence(pr=unrelated, issue=Issue.PR_BLOCKER,
+                                       matching_publication_pr=matched_url),
+                       Outcome.CHANGES_REQUIRED)
+
+    def test_feedback_must_be_cleared_for_current_revision(self):
+        ready_state = ready(Target.MERGED)
+        reconciliation = result(ready_state, replace(GATES, issue=Issue.PR_BLOCKER))
+        check_in = result(ready_state, replace(GATES, merge_authorized=True))
+        for clearance in [None, Revision(REV.head, "old-base"), Revision("old-head", REV.base)]:
+            with self.subTest(clearance=clearance):
+                evidence = replace(GATES, actionable_feedback_cleared=clearance,
+                                   merge_authorized=True)
+                blocked = result(reconciliation, evidence,
+                                 wait=Wait("Resolve actionable feedback", "owner reply"))
+                self.assertEqual((blocked.stage, blocked.status),
+                                 (Stage.PR_RECONCILIATION, Status.WAITING_FOR_INPUT))
+                for state in [ready_state, check_in]:
+                    deferred = result(state, evidence)
+                    self.assertEqual(deferred.stage, Stage.PR_RECONCILIATION)
+                    self.assertIsNone(deferred.final_output)
 
     def test_exhausted_retry_waits_for_a_reply_at_the_same_stage(self):
         state = decide(start(Target.REPORT), Event.CLAIM)
