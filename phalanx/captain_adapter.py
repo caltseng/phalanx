@@ -30,6 +30,10 @@ class LaunchNotDelivered(RunnerError):
     """The transport proves the app never received the request, so it may be sent again."""
 
 
+class RequestRetracted(RunnerError):
+    """The loop withdrew a request before the runtime took it; nothing ran."""
+
+
 # Version 2 renamed the operations to resolve_project, launch and observe.
 BRIDGE_CONTRACT_VERSION = 2
 
@@ -110,6 +114,12 @@ def _timestamp(value: str) -> datetime:
 class BridgeAdapter:
     def __init__(self, transport: Callable[[str, dict], dict]):
         self.transport = transport
+
+    def retract_observations(self, observing: set[str]) -> None:
+        """Withdraw queued observations naming a marker that no longer observes, if the transport queues."""
+        retract = getattr(self.transport, "retract_observations", None)
+        if retract is not None:
+            retract(observing)
 
     def resolve_project(self, mapping: dict) -> None:
         expected = {field: mapping[field] for field in ("host_id", "project_id", "checkout")}

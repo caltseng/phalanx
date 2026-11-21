@@ -3,6 +3,7 @@
 from contextlib import closing
 import json
 from pathlib import Path
+import re
 import sqlite3
 
 from .github import GitHubClient
@@ -65,5 +66,15 @@ def publish_draft(root, api, record, mapping, checkpoint, token):
     goal = claim["request"]["goal"]
     return DraftStageRunner(root / "publication", api, GitHubClient(owner, name, token=token)).run(
         assignment, checkpoint, default_base=mapping["base_branch"],
-        title=goal.splitlines()[0][:256], body=goal,
+        title=draft_title(goal), body=goal,
     )
+
+
+def draft_title(goal, limit=72):
+    """A short title from the goal's first sentence, cut at a word boundary."""
+    line = next((line for line in goal.splitlines() if line.strip()), goal).strip().lstrip("#*-> ").strip()
+    sentence = re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0].rstrip(".").strip() or line or "Phalanx draft"
+    if len(sentence) <= limit:
+        return sentence
+    cut = sentence[:limit - 1]
+    return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:-") + "…"

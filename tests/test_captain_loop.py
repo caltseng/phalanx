@@ -278,6 +278,20 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(replay, original)
         self.assertEqual(len(self.native.launches), 1)
 
+    def test_finished_slot_retracts_its_queued_observations(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        retractions = []
+        self.native.retract_observations = retractions.append
+        loop = self.loop()
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        self.assertEqual(retractions, [])
+        packet = self.write_result(1)
+        self.native.stopped.add(packet.marker)
+        self.spin(loop, lambda: bool(self.api.submissions) and not loop._records())
+        loop.step()
+        self.assertEqual(retractions, [set()])
+
     def test_queued_receipt_promotes_on_active_then_submits_on_native_only_stop(self):
         self.config["capacity"] = 1
         self.api.waiting = ["first"]

@@ -323,7 +323,15 @@ directory. Repeat this cycle while the loop runs:
      and session UUID as `thread_id` (or a provisional ID as `client_thread_id`).
    - `observe`: read each receipt's session, or find the marker in session
      first prompts or history; reply with fresh rows. Set `writers_stopped` only after verifying
-     the session's turn stopped.
+     the session's turn stopped. When the runtime's tools cannot read a
+     session's first prompt, list the worker sessions and their state with
+     those tools, then let the observe helper read the local transcripts and
+     write the reply:
+     `python -m phalanx relay --state C:\phalanx-runner observe ID --runtime RUNTIME --host HOST --session SESSION_ID STATE PROJECT_ID --complete --out reply.json`.
+     Repeat `--session` for each listed session; `STATE` is `active`, `stopped`
+     (writers verified stopped) or `unknown`. Pass `--complete` only when every
+     worker session on the host was listed. The helper keeps only sessions
+     whose first prompt carries a queued marker and its exact assignment.
 3. Record the reply right away (observations go stale after 60 seconds):
    `python -m phalanx relay --state C:\phalanx-runner respond ID --file reply.json`,
    or `respond ID --error "what failed"` when the runtime action fails.
@@ -343,7 +351,9 @@ and is retracted, so the same packet can launch again. A taken request is never
 handed out again, even after a Captain restart. An unanswered one is settled as
 lost: a later observation or resolution queues afresh, while an unanswered launch
 stays reserved until native discovery reconciles it by marker. A restarted loop
-expires requests left pending by its predecessor. Never rerun a request
+expires requests left pending by its predecessor. Once a slot no longer
+observes, the loop retracts its untaken `observe` requests, so the Captain never
+answers for a finished worker. Never rerun a request
 whose outcome you did not record; answer it from discovery instead.
 
 #### Runtime mapping
@@ -357,8 +367,8 @@ in their first muster and record any correction here.
 | Runtime | `resolve_project` | `launch` | `observe` |
 | --- | --- | --- | --- |
 | Codex desktop app | `list_projects`; match the project ID, host and root path. | `create_thread` with `title`, `prompt` and target `{"type": "project", "projectId": project_id, "environment": {"type": "local"}}`. Return `threadId` as `thread_id` or `clientThreadId` as `client_thread_id`. | `read_thread` for receipts; `list_threads` history search for the marker. Use `codex app-server` only after verifying its threads appear in the app sidebar with the same identity as the app's tools. |
-| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with the setup error. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so read `assignment`, `started_at` and the marker from the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. The stored prompt drops its trailing newline; compare after trimming trailing whitespace. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
-| GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session's state under `~/.copilot/session-state/`, or find the marker in its history. |
+| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with the setup error. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so pass each worker session with its state to the observe helper with `--runtime copilot`; it reads the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
+| GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Pass each session with its state to the observe helper with `--runtime copilot`, which reads `~/.copilot/session-state/<id>/events.jsonl`. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
 **Acceptance gap:** The relay and fixture pass one shared contract test, and
