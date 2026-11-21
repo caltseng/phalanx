@@ -39,8 +39,8 @@ class DispatchTest(ServerFixture, unittest.TestCase):
                 ids.append(item["id"])
             return ids
 
-    def claim(self, runner_id, repositories, *, lease=None):
-        body = Claim(runner_id=runner_id, repository_ids=repositories)
+    def claim(self, runner_id, repositories, *, lease=None, stages=None):
+        body = Claim(runner_id=runner_id, repository_ids=repositories, stages=stages)
         with write_transaction(self.path) as db:
             return dispatch.claim(db, body, intake.digest(lease or token_urlsafe(32)))
 
@@ -60,6 +60,40 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             self.assertEqual(self.claim("other", ["repo"])["item_id"], other)
         with patch.object(dispatch, "time", return_value=NOW + 1):
             self.assertEqual(self.claim("local", ["repo"])["item_id"], future)
+
+    def test_attended_stage_filter_skips_later_work_and_preserves_it_for_other_runners(self):
+        supported = ["development", "report_drafting"]
+        first, second = self.seed("repo", [("normal", -10, None), ("normal", -1, None)])
+        with patch.object(dispatch, "time", return_value=NOW), patch.object(intake, "time", return_value=NOW):
+            with write_transaction(self.path) as db:
+                pr = intake.create(db, Intake(repository_id="repo", goal="Update docs",
+                                              target="ready_for_check_in", priority="urgent"))
+                db.execute("UPDATE executions SET ready_since=? WHERE item_id=?", (NOW * 1000, pr["id"]))
+            assignment = self.claim("local", ["repo"], lease=LEASE, stages=supported)
+            self.assertEqual(assignment["item_id"], pr["id"])
+            with write_transaction(self.path) as db:
+                next_stage = intake.result(db, pr["id"], assignment["execution"]["id"], Result(
+                    expected_version=assignment["execution"]["version"],
+                    attempt_id=assignment["attempt_id"], stage="development", outcome="succeeded",
+                    candidate="a" * 40,
+                ), intake.digest(LEASE))
+                self.assertEqual(next_stage["state"]["stage"], "pr_creation")
+            for item_id in (first, second):
+                lease = token_urlsafe(32)
+                assignment = self.claim("local", ["repo"], stages=supported, lease=lease)
+                self.assertEqual(assignment["item_id"], item_id)
+                with write_transaction(self.path) as db:
+                    report = intake.result(db, item_id, assignment["execution"]["id"], Result(
+                        expected_version=assignment["execution"]["version"],
+                        attempt_id=assignment["attempt_id"], stage="report_drafting",
+                        outcome="succeeded", report_markdown="# Draft",
+                    ), intake.digest(lease))
+                    self.assertEqual(report["state"]["stage"], "report_review")
+            self.assertEqual(self.claim("local", ["repo"], stages=supported)["status"], "no_eligible_work")
+            with connect(self.path) as db:
+                for item_id in (pr["id"], first, second):
+                    self.assertEqual(intake.inspect(db, item_id)["execution"]["state"]["status"], "queued")
+            self.assertEqual(self.claim("publisher", ["repo"], stages=["pr_creation"])["item_id"], pr["id"])
 
     def test_concurrent_claims_never_duplicate_or_exceed_capacity(self):
         self.seed("repo", [("normal", -1, None)] * 10)
@@ -138,7 +172,8 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             intake.register(db, "repo", "https://github.com/example/repo.git")
             item = intake.create(db, Intake(repository_id="repo", goal="Test HTTP", target="report"))
         server = self.start_server(self.path)
-        body = {"runner_id": "local", "repository_ids": ["repo"]}
+        body = {"runner_id": "local", "repository_ids": ["repo"],
+                "stages": ["development", "report_drafting"]}
         headers = {"Phalanx-Lease": LEASE}
         self.assertEqual(self.request(CLAIM_PATH, None, body, headers)[0], 401)
         self.assertEqual(self.request(CLAIM_PATH, OWNER, body, headers)[0], 403)
@@ -150,6 +185,9 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.start_server(self.path)
         self.assertEqual(self.request(CLAIM_PATH, RUNNER, body, headers), (200, assigned))
         self.assertEqual(self.request(CLAIM_PATH, RUNNER, dict(body, slots=1), headers)[0], 409)
+        self.assertEqual(self.request(CLAIM_PATH, RUNNER, dict(body, stages=["report_drafting"]), headers)[0], 409)
+        reordered = dict(body, stages=list(reversed(body["stages"])))
+        self.assertEqual(self.request(CLAIM_PATH, RUNNER, reordered, headers), (200, assigned))
         renew_path = f"/v1/dispatch/runners/local/attempts/{assigned['attempt_id']}/renew"
         self.assertEqual(self.request(renew_path, RUNNER, {}, {"Phalanx-Lease": "y" * 32})[0], 409)
         status, renewed = self.request(renew_path, RUNNER, {}, headers)
@@ -212,6 +250,44 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         with patch.object(dispatch, "time", return_value=now + 9999):
             self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
 
+    def test_stopped_technical_results_back_off_and_owner_questions_wait(self):
+        technical, question = self.seed("repo", [("urgent", -5, None), ("normal", -1, None)])
+        now = NOW
+        for retry, delay in enumerate((5, 10, 20, 40, None)):
+            with patch.object(dispatch, "time", return_value=now), patch.object(intake, "time", return_value=now):
+                lease = token_urlsafe(32)
+                assignment = self.claim("local", ["repo"], lease=lease)
+                self.assertEqual(assignment["item_id"], technical)
+                execution = assignment["execution"]
+                failure = Result(
+                    expected_version=execution["version"], attempt_id=assignment["attempt_id"],
+                    stage="report_drafting", outcome="failed", failure_reason="Build resource unavailable",
+                )
+                with write_transaction(self.path) as db:
+                    result = intake.result(db, technical, execution["id"], failure, intake.digest(lease))
+                if delay is not None:
+                    self.assertEqual(result["state"]["status"], "queued")
+                    self.assertEqual(result["ready_since_ms"], (now + delay) * 1000)
+                    self.assertEqual(result["retry_at_ms"], result["ready_since_ms"])
+                    if retry == 0:
+                        lease = token_urlsafe(32)
+                        assignment = self.claim("local", ["repo"], lease=lease)
+                        self.assertEqual(assignment["item_id"], question)
+                        execution = assignment["execution"]
+                        with write_transaction(self.path) as db:
+                            waiting = intake.result(db, question, execution["id"], Result(
+                                expected_version=execution["version"], attempt_id=assignment["attempt_id"],
+                                stage="report_drafting", outcome="needs_input",
+                                wait={"reason": "Which source should I use?", "trigger": "owner reply"},
+                            ), intake.digest(lease))
+                        self.assertEqual(waiting["state"]["status"], "waiting_for_input")
+                        self.assertIsNone(waiting["retry_at_ms"])
+                    self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
+                    now += delay
+        self.assertEqual(result["state"]["status"], "waiting_for_input")
+        self.assertIsNone(result["retry_at_ms"])
+        self.assertIn("Build resource unavailable", result["state"]["wait"]["reason"])
+
     def test_schema_two_migrates_queue_and_preserves_running_attempt(self):
         path = self.path.with_name("legacy.sqlite3")
         with connect(path, mode="rwc") as db:
@@ -241,3 +317,6 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             plan = db.execute("EXPLAIN QUERY PLAN " + dispatch.QUEUE_HEAD,
                               (NOW * 1000, "repo", "", 2)).fetchone()["detail"]
             self.assertIn("SEARCH executions USING INDEX queue_heads", plan)
+            stage_plan = db.execute("EXPLAIN QUERY PLAN " + dispatch.STAGE_QUEUE_HEAD,
+                                    (NOW * 1000, "repo", "", 2, "report_drafting")).fetchone()["detail"]
+            self.assertIn("SEARCH executions USING INDEX queue_stage_heads", stage_plan)

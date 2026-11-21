@@ -213,7 +213,7 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
     if next_state.status == Status.QUEUED:
         ready_since = retry_at if retry_at is not None else int(clock.timestamp() * 1000)
     retry_count = row["retry_count"] if next_state.stage == state.stage else 0
-    if event == Event.RETRY:
+    if event == Event.RETRY or retry_at is not None:
         retry_count += 1
     db.execute(
         """UPDATE executions SET version=?, state_json=?, updated_at=?, ready_since=?,
@@ -305,11 +305,28 @@ def confirm_stop(db, row, state, attempt_id, *, details):
                  details={**details, **json.loads(request["details_json"])}, attempt_id=attempt_id)
 
 
+def stopped_retry_at(row, now):
+    """Use the same budget and delay for returned failures and expired attempts."""
+    if row["retry_count"] >= 4:
+        return None
+    return int(now * 1000) + (5 * 2 ** row["retry_count"]) * 1000
+
+
 def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     check_attempt(db, execution_id, state, payload, lease_digest)
     wait = Wait(**payload.wait.model_dump()) if payload.wait else None
     details = payload.model_dump(mode="json", exclude={"report_markdown", "expected_version"})
+    retry_at = None
+    if payload.failure_reason is not None:
+        if payload.outcome != Outcome.FAILED or wait is not None:
+            raise Conflict("A technical failure reason requires a failed result without an explicit wait")
+        retry_at = stopped_retry_at(row, time())
+        if retry_at is None:
+            wait = Wait(f"Five stopped worker attempts require a recovery decision.\n\n{payload.failure_reason}",
+                        "owner intervention")
+        else:
+            details["retry_at_ms"] = retry_at
     draft_revision = payload.report_revision
     if payload.report_markdown is not None:
         if state.stage != Stage.REPORT_DRAFTING or payload.outcome != Outcome.SUCCEEDED:
@@ -337,7 +354,7 @@ def result(db, item_id, execution_id, payload, lease_digest):
 
     return apply(
         db, row, state, Event.RESULT, details=details, attempt_id=payload.attempt_id,
-        outcome=payload.outcome, wait=wait,
+        outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
                           prevalidated_candidate=payload.prevalidated_candidate,
                           report_draft=draft_revision, reviewed_report=draft_revision),

@@ -11,12 +11,16 @@ from .transitions import Event, Status, Wait
 LEASE_SECONDS = 90
 DEFAULT_CAPACITY = 4
 PRIORITIES = range(3)
-QUEUE_HEAD = """
-    SELECT id, item_id, ready_since FROM executions
+QUEUE_BUCKET = """
+    SELECT id, item_id, ready_since FROM executions {index}
     WHERE status = 'queued' AND ready_since IS NOT NULL AND ready_since <= ?
       AND queue_repository = ? AND queue_affinity = ? AND queue_priority = ?
-    ORDER BY ready_since, item_id, id LIMIT 1
 """
+QUEUE_ORDER = "ORDER BY ready_since, item_id, id LIMIT 1"
+QUEUE_HEAD = QUEUE_BUCKET.format(index="") + QUEUE_ORDER
+STAGE_QUEUE_HEAD = (
+    QUEUE_BUCKET.format(index="INDEXED BY queue_stage_heads") + "AND stage = ? " + QUEUE_ORDER
+)
 RECOVERY_CANDIDATES = """
     SELECT a.id AS attempt_id, a.execution_id, a.lease_expires_at,
            e.item_id, e.version, e.stage, e.status
@@ -41,31 +45,36 @@ def set_capacity(db, runner_id, capacity):
     return {"runner_id": runner_id, "capacity": capacity}
 
 
-def queue_head(db, runner_id, repository_ids, now_ms, aging_ms):
+def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
     # Within each bucket an older item can only gain as much or more priority.
     best_rank = None
     best = None
+    query = STAGE_QUEUE_HEAD if stages else QUEUE_HEAD
+    stage_buckets = [(stage,) for stage in stages] if stages else [()]
     for repository_id in repository_ids:
         for affinity in ("", runner_id):
             for priority in PRIORITIES:
-                row = db.execute(QUEUE_HEAD, (now_ms, repository_id, affinity, priority)).fetchone()
-                if row is None:
-                    continue
-                ready_since = row["ready_since"]
-                effective = min(2, priority + (now_ms - ready_since) // aging_ms)
-                rank = (-effective, ready_since, row["item_id"], row["id"])
-                if best_rank is None or rank < best_rank:
-                    best_rank, best = rank, row
+                for stage in stage_buckets:
+                    row = db.execute(query, (now_ms, repository_id, affinity, priority, *stage)).fetchone()
+                    if row is None:
+                        continue
+                    ready_since = row["ready_since"]
+                    effective = min(2, priority + (now_ms - ready_since) // aging_ms)
+                    rank = (-effective, ready_since, row["item_id"], row["id"])
+                    if best_rank is None or rank < best_rank:
+                        best_rank, best = rank, row
     return best
 
 
 def claim(db, request, lease_digest):
     # One fresh caller-generated secret per logical claim. Empty polls have
     # no receipt, so polling does not grow durable history or pin a miss.
+    filters = {"runner_id": request.runner_id, "repository_ids": sorted(set(request.repository_ids)),
+               "slots": request.slots}
+    if request.stages is not None:
+        filters["stages"] = sorted(set(request.stages))
     return intake.replayable(
-        db, "dispatch:claim", lease_digest,
-        {"runner_id": request.runner_id, "repository_ids": sorted(set(request.repository_ids)),
-         "slots": request.slots},
+        db, "dispatch:claim", lease_digest, filters,
         lambda: admit(db, request, lease_digest),
         should_record=lambda result: result["status"] == "claimed",
     )
@@ -89,7 +98,8 @@ def admit(db, request, lease_digest):
 
     now = time()
     head = queue_head(db, request.runner_id, sorted(set(request.repository_ids)),
-                      int(now * 1000), settings["aging_seconds"] * 1000)
+                      int(now * 1000), settings["aging_seconds"] * 1000,
+                      sorted(set(request.stages or ())))
     if head is None:
         return {"status": "no_eligible_work"}
     row = intake.execution_row(db, head["item_id"], head["id"])
@@ -148,12 +158,12 @@ def recover_stopped(db, runner_id, attempt_id, body):
         return intake.confirm_stop(db, row, state, attempt_id, details=details)
     if state.status != Status.RUNNING or state.stage != attempt["stage"]:
         raise intake.Conflict("This attempt has no supported stopped-worker recovery")
-    if row["retry_count"] >= 4:
+    retry_at = intake.stopped_retry_at(row, now)
+    if retry_at is None:
         return intake.apply(
             db, row, state, Event.RETRY, attempt_id=attempt_id, details=details,
             wait=Wait("Five stopped worker attempts require a recovery decision", "owner intervention"),
         )
-    retry_at = int(now * 1000) + min(120, 5 * 2 ** row["retry_count"]) * 1000
     return intake.apply(
         db, row, state, Event.RETRY, attempt_id=attempt_id,
         details={**details, "retry_at_ms": retry_at}, retry_at=retry_at, retry_allowed=True,
