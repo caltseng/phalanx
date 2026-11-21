@@ -18,7 +18,7 @@ OWNER = "o" * 32
 RUNNER = "r" * 32
 
 
-class BootstrapTest(unittest.TestCase):
+class ServerFixture:
     def start_server(self, path):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -50,16 +50,28 @@ class BootstrapTest(unittest.TestCase):
             server.wait(timeout=10)
 
     def get(self, path, token=None):
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        return self.request(path, token=token)
+
+    def request(self, path, token=None, body=None, headers=None):
+        headers = dict(headers or {})
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        if data is not None:
+            headers["Content-Type"] = "application/json"
         try:
-            response = urlopen(Request(self.url + path, headers=headers), timeout=1)
+            response = urlopen(Request(self.url + path, data=data, headers=headers), timeout=1)
         except HTTPError as error:
             response = error
         with response:
             if response.code == 401:
                 self.assertEqual(response.headers["WWW-Authenticate"], "Bearer")
-            return response.code, json.load(response)
+            if response.headers.get_content_type() == "application/json":
+                return response.code, json.load(response)
+            return response.code, response.read().decode("utf-8")
 
+
+class BootstrapTest(ServerFixture, unittest.TestCase):
     def test_http_restart_backup_and_restore(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "live.sqlite3"

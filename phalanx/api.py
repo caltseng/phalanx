@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 
 from .auth import require_owner, require_runner
 from .config import Credentials, database_path
+from .intake_api import router as intake_router
 from .store import connect, migrate
 
 
@@ -37,3 +38,5 @@ def owner_status():
 @app.get("/v1/runner/status", dependencies=[Depends(require_runner)])
 def runner_status():
     return {"role": "runner"}
+
+app.include_router(intake_router)
