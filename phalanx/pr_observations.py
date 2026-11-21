@@ -4,11 +4,11 @@ import json
 import re
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints
+from pydantic import Field, StringConstraints, model_validator
 
 from . import intake, validation, waits
 from .intake_models import AttemptEvent, Identifier, Payload, Text
-from .transitions import Evidence, Event, Outcome, PullRequest, Revision, Stage, Status, Target, Wait
+from .transitions import Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, Wait
 from .workspaces import _item_branch
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -86,6 +86,25 @@ class Publication(AttemptEvent):
     expected: ExpectedRefs
     pull: GitHubPull
     duplicate_numbers: list[PositiveInt] = Field(default_factory=list, max_length=30)
+
+
+class PublicationBlocker(AttemptEvent):
+    """Verified external state that prevents recording the first draft.
+
+    Name either the moved base revision or one PR on the item branch.
+    """
+
+    stage: Literal[Stage.PR_CREATION]
+    expected: ExpectedRefs
+    reason: Text
+    observed_base_sha: SHA | None = None
+    pull: GitHubPull | None = None
+
+    @model_validator(mode="after")
+    def one_blocker(self):
+        if (self.observed_base_sha is None) == (self.pull is None):
+            raise ValueError("Name exactly one of observed_base_sha or pull")
+        return self
 
 
 class Validation(AttemptEvent):
@@ -210,7 +229,7 @@ def check_published_validation_claim(db, item_id, execution_id, body, lease_dige
     return {"current": True, "pr_url": state.primary_pr, "promotion": pull}
 
 
-def submit(db, item_id, execution_id, body, lease_digest):
+def _check_refs(db, item_id, execution_id, body, lease_digest):
     row, state = intake.check_current(db, item_id, execution_id, body.expected_version)
     intake.check_attempt(db, execution_id, state, body, lease_digest)
     item = intake.item_row(db, item_id)
@@ -221,7 +240,8 @@ def submit(db, item_id, execution_id, body, lease_digest):
     if match is None:
         raise intake.Conflict("PR observations require a registered github.com remote")
     repository = match[1].lower()
-    if repository != pull.base_repository.lower() or repository != pull.head_repository.lower():
+    if pull is not None and (repository != pull.base_repository.lower()
+                             or repository != pull.head_repository.lower()):
         raise intake.Conflict("PR repositories must match the registered GitHub repository")
 
     expected = body.expected
@@ -230,6 +250,42 @@ def submit(db, item_id, execution_id, body, lease_digest):
     target_branch = json.loads(item["request_json"])["target_branch"]
     if target_branch is not None and expected.base_ref != target_branch:
         raise intake.Conflict("Expected base branch must match the work item target")
+    return row, state, repository
+
+
+def submit_blocker(db, item_id, execution_id, body, lease_digest):
+    """Route verified external movement found before the first draft is recorded."""
+    row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
+    if state.primary_pr is not None:
+        raise intake.Conflict("A primary PR is already recorded")
+    expected, pull = body.expected, body.pull
+    details = body.model_dump(mode="json")
+    details["outcome"] = Outcome.CHANGES_REQUIRED
+    if pull is None:
+        if body.observed_base_sha == expected.base_sha:
+            raise intake.Conflict("Observed base must differ from the expected base revision")
+        evidence = Evidence(issue=Issue.BASE_CHANGED_BEFORE_PUBLICATION)
+    else:
+        if pull.head_ref != expected.head_ref:
+            raise intake.Conflict("Blocking PR must use the deterministic item branch")
+        if (pull.head_sha == state.candidate and pull.base_ref == expected.base_ref
+                and pull.base_sha == expected.base_sha and pull.state == "open"
+                and pull.draft and not pull.merged):
+            raise intake.Conflict("Record a matching draft as the published PR instead")
+        url = f"https://github.com/{repository}/pull/{pull.number}"
+        details["pr_url"] = url
+        evidence = Evidence(
+            issue=Issue.PR_BLOCKER, matching_publication_pr=url,
+            pr=PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
+                           closed=pull.state == "closed"),
+        )
+    return intake.apply(db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
+                        outcome=Outcome.CHANGES_REQUIRED, evidence=evidence)
+
+
+def submit(db, item_id, execution_id, body, lease_digest):
+    row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
+    pull, expected = body.pull, body.expected
     if (pull.head_ref != expected.head_ref or pull.base_ref != expected.base_ref
             or pull.head_sha != state.candidate):
         raise intake.Conflict("Observed PR must match the expected refs and candidate head")

@@ -210,6 +210,14 @@ def pr_observation(request: Request, item_id: Identifier, execution_id: Identifi
     return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)
 
 
+@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-blocker",
+             dependencies=[Depends(require_runner)])
+def pr_publication_blocker(request: Request, item_id: Identifier, execution_id: Identifier,
+                           body: pr_observations.PublicationBlocker,
+                           lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit_blocker, item_id, execution_id, body, lease, key)
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
              dependencies=[Depends(require_runner)])
 def pr_validation_claim(request: Request, item_id: Identifier, execution_id: Identifier,

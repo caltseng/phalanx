@@ -31,6 +31,7 @@ class GitFixture:
         self.pushes = []
         self.on_push = lambda: None
         self.uncertain_push = False
+        self.drop_push = False
 
     def read_head(self, *, authorize):
         authorize()
@@ -41,10 +42,13 @@ class GitFixture:
         assert branch == "main"
         return self.base
 
-    def publish(self, candidate, *, expected, authorize):
+    def publish(self, candidate, *, expected, authorize, rewrite=False):
         authorize()
         self.on_push()
         self.pushes.append((candidate, expected))
+        if self.drop_push:
+            self.drop_push = False
+            return PublicationResult("uncertain", "Fixture push was lost before it applied")
         if self.head != expected:
             return PublicationResult("conflict", "Stale lease")
         self.head = candidate
@@ -141,13 +145,14 @@ class DraftPublicationTests(unittest.TestCase):
         self.assertEqual(len(self.posts), 1)
         self.assertEqual(self.git.pushes, [(CANDIDATE, None)])
 
-    def test_successor_recovers_lost_draft_from_disk_and_blocks_conflicting_intents(self):
+    def test_successor_recovers_lost_draft_from_disk_before_superseding(self):
         self.post_effects.append("lost_and_unreadable")
         self.assertEqual(self.publish().status, "pending")
         self.assertEqual(self.journal()[0], "draft")
         self.successor()
-        self.assertEqual(self.publish(replace(self.intent, candidate=OTHER)).status, "conflict")
-        self.assertEqual(len(self.posts), 1)
+        # A new candidate must first see the possible draft; no write happens blind.
+        self.assertEqual(self.publish(replace(self.intent, candidate=OTHER)).status, "pending")
+        self.assertEqual((len(self.posts), self.git.pushes), (1, [(CANDIDATE, None)]))
         self.fail_lookup = False
         self.assertEqual(self.publish().primary.number, 11)
         self.assertEqual(len(self.posts), 1)
@@ -190,23 +195,46 @@ class DraftPublicationTests(unittest.TestCase):
         self.assertEqual(result.conflicts[0].base_ref, "release")
         self.assertFalse(self.git.pushes or self.posts)
 
-    def test_base_move_after_confirmed_push_allows_new_candidate_with_original_tip(self):
+    def test_rebased_candidate_replaces_journaled_tip_under_derived_lease(self):
         self.git.on_push = lambda: setattr(self.git, "base", OTHER)
-        self.assertEqual(self.publish().status, "base_changed")
+        moved = self.publish()
+        self.assertEqual((moved.status, moved.observed_base), ("base_changed", OTHER))
         self.assertEqual(self.journal()[0], "pushed")
-        self.assertEqual(self.publish(replace(self.intent, candidate=OTHER)).status, "conflict")
         self.git.on_push = lambda: None
-        revised = replace(self.intent, candidate=OTHER, expected_head=CANDIDATE,
-                          expected_base=OTHER)
-        # GitHub observes the revised head and base once the draft is created.
+        # Development rebuilt the candidate on the moved base. The runner does not
+        # know the remote tip; the journal supplies it as the only lease.
+        revised = replace(self.intent, candidate=OTHER, expected_base=OTHER)
+        self.git.drop_push = True
+        self.assertEqual(self.publish(revised).status, "pending")
+        self.assertEqual(self.journal()[0], "push")
         original = self.pull
         def revised_pull(number):
             data = original(number, head=OTHER)
             data["base"]["sha"] = OTHER
             return data
         self.pull = revised_pull
+        # The retry reuses the journaled superseding intent and its lease.
         self.assertEqual(self.publish(revised).status, "verified")
-        self.assertEqual(self.git.pushes, [(CANDIDATE, None), (OTHER, CANDIDATE)])
+        self.assertEqual(self.git.pushes, [(CANDIDATE, None), (OTHER, CANDIDATE), (OTHER, CANDIDATE)])
+        self.assertEqual(len(self.posts), 1)
+
+    def test_superseding_candidate_refuses_an_outside_item_ref(self):
+        self.git.on_push = lambda: setattr(self.git, "base", OTHER)
+        self.assertEqual(self.publish().status, "base_changed")
+        self.git.on_push = lambda: None
+        self.git.head = "d" * 40
+        revised = replace(self.intent, candidate=OTHER, expected_base=OTHER)
+        self.assertEqual(self.publish(revised).status, "conflict")
+        self.assertEqual(len(self.git.pushes), 1)
+
+    def test_base_move_during_unresolved_push_routes_back_to_development(self):
+        self.git.drop_push = True
+        self.git.on_push = lambda: setattr(self.git, "base", OTHER)
+        self.assertEqual(self.publish().status, "pending")
+        self.assertEqual(self.journal()[0], "push")
+        self.git.on_push = lambda: None
+        self.assertEqual(self.publish().status, "base_changed")
+        self.assertEqual((len(self.git.pushes), self.posts), (1, []))
 
     def test_base_or_outside_push_conflict_before_any_write(self):
         self.git.base = OTHER

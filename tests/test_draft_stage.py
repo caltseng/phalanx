@@ -47,9 +47,9 @@ class GitFixture:
         authorize()
         return self.head
 
-    def publish(self, candidate, *, expected, authorize):
+    def publish(self, candidate, *, expected, authorize, rewrite=False):
         authorize()
-        assert self.head == expected
+        assert self.head == expected and rewrite
         self.pushes.append((candidate, expected))
         self.head = candidate
         return PublicationResult("success", "verified fixture push")
@@ -76,6 +76,9 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         self.posts = []
         self.pull = None
         self.drop_response = False
+        self.lose_create = False
+        self.fail_lookups = False
+        self.on_create = None
         self.revoke_during_lookup = False
         development = self.claim("development")
         self.call(f"{self.path}/result", {
@@ -103,7 +106,7 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
             headers["Idempotency-Key"] = key
         status, result = self.request("/v1" + path, RUNNER, body, headers)
         self.assertEqual(status, 200, result)
-        if path.endswith("/pr-observation") and self.drop_response:
+        if (path.endswith("/pr-observation") or path.endswith("/pr-publication-blocker")) and self.drop_response:
             self.drop_response = False
             raise TimeoutError("lost acknowledgement")
         return result
@@ -119,7 +122,13 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
             self.posts.append(json.loads(request.data))
             self.pull = pull(head=self.branch)
             self.pull["head"]["repo"]["full_name"] = "Owner/Repo"
+            if self.on_create:
+                self.on_create()
+            if self.lose_create:
+                raise TimeoutError("lost create response")
             return response(self.pull, status=201)
+        if self.fail_lookups:
+            raise TimeoutError("lookup unavailable")
         if urlsplit(request.full_url).path.endswith("/pulls"):
             return response([self.pull] if self.pull else [])
         return response(self.pull)
@@ -198,3 +207,78 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         status, events = self.get(f"/v1{self.path}/timeline", RUNNER)
         self.assertEqual(status, 200)
         self.assertEqual(sum(event["details"].get("pr_url") is not None for event in events), 1)
+
+    def state(self):
+        status, item = self.get(f"/v1/items/{self.item}", RUNNER)
+        self.assertEqual(status, 200)
+        return item["execution"]["state"]
+
+    def test_lost_create_response_retries_same_intent_without_development(self):
+        self.lose_create, self.fail_lookups = True, True
+        before = len(self.calls)
+        self.assertEqual(self.run_stage().publication.status, "pending")
+        self.assertEqual((self.state()["stage"], self.state()["status"]), ("pr_creation", "running"))
+        self.lose_create, self.fail_lookups = False, False
+        result = self.run_stage()
+        self.assertEqual(result.execution["state"]["stage"], "self_review")
+        self.assertEqual((len(self.posts), self.git.pushes), (1, [(CANDIDATE, None)]))
+        self.assertFalse(any(path == "/dispatch/claim" for path, _, _ in self.calls[before:]))
+
+    def test_base_move_after_lost_create_still_records_the_draft(self):
+        def land_then_black_out():
+            self.git.base = OTHER
+            self.fail_lookups = True
+
+        self.lose_create, self.on_create = True, land_then_black_out
+        self.assertEqual(self.run_stage().publication.status, "pending")
+        self.lose_create, self.on_create, self.fail_lookups = False, None, False
+        result = self.run_stage()
+        self.assertEqual(result.publication.status, "verified")
+        self.assertEqual((result.execution["state"]["stage"], result.execution["state"]["primary_pr"]),
+                         ("self_review", "https://github.com/owner/repo/pull/7"))
+        self.assertEqual(len(self.posts), 1)
+
+    def test_base_drift_routes_to_development_and_replays_lost_response(self):
+        self.git.base = OTHER
+        self.drop_response = True
+        with self.assertRaises(TimeoutError):
+            self.run_stage()
+        path, payload, key = self.calls[-1]
+        self.assertTrue(path.endswith("/pr-publication-blocker"))
+        self.assertEqual(payload["observed_base_sha"], OTHER)
+        remote = len(self.remote_calls)
+        result = self.run_stage()
+        self.assertEqual(self.calls[-1], (path, payload, key))
+        self.assertEqual(len(self.remote_calls), remote)
+        self.assertEqual((result.execution["state"]["stage"], result.execution["state"]["status"]),
+                         ("development", "queued"))
+        self.assertFalse(self.posts or self.git.pushes)
+
+    def test_outside_pr_on_item_branch_routes_to_reconciliation(self):
+        self.pull = pull(head=self.branch, draft=False)
+        self.pull["head"]["repo"]["full_name"] = "Owner/Repo"
+        result = self.run_stage()
+        self.assertEqual(result.publication.status, "conflict")
+        state = result.execution["state"]
+        self.assertEqual((state["stage"], state["primary_pr"], state["publication_conflict"]),
+                         ("pr_reconciliation", "https://github.com/owner/repo/pull/7", True))
+        self.assertFalse(self.posts or self.git.pushes)
+
+    def test_blocker_endpoint_rejects_matching_drafts_and_unmoved_bases(self):
+        body = {
+            "attempt_id": self.assignment.attempt_id, "expected_version": self.assignment.state_version,
+            "stage": "pr_creation", "reason": "Blocked",
+            "expected": {"head_ref": self.branch, "base_ref": "main", "base_sha": BASE},
+        }
+        matching = {
+            "number": 7, "head_repository": "owner/repo", "base_repository": "owner/repo",
+            "head_ref": self.branch, "base_ref": "main", "head_sha": CANDIDATE, "base_sha": BASE,
+            "state": "open", "draft": True, "merged": False,
+        }
+        path = f"/v1{self.path}/pr-publication-blocker"
+        headers = {"Phalanx-Lease": self.assignment.lease}
+        for extra, status in (({}, 422), ({"observed_base_sha": BASE, "pull": matching}, 422),
+                              ({"observed_base_sha": BASE}, 409), ({"pull": matching}, 409)):
+            with self.subTest(extra=extra):
+                self.assertEqual(self.request(path, RUNNER, {**body, **extra}, headers)[0], status)
+        self.assertEqual((self.state()["stage"], self.state()["status"]), ("pr_creation", "running"))

@@ -243,6 +243,8 @@ class AttendedRunner:
             result = publish_draft(self.root, self.api, snapshot, mapping, checkpoint, token)
             if result.execution is not None:
                 status = {"status": "draft_submitted", "execution": result.execution}
+                if result.publication is not None and result.publication.status != "verified":
+                    status["reason"] = result.publication.reason
             else:
                 status = {"status": "draft_" + result.publication.status,
                           "reason": result.publication.reason}

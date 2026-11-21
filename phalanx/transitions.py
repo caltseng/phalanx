@@ -349,8 +349,6 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
         else:
             _require(evidence.matching_publication_pr == pr.url,
                      "Discovered PR must match this publication intent")
-            _require(pr.revision.head != state.candidate or not pr.draft or pr.closed,
-                     "Matching draft at the expected head should be recorded as published")
         return _queue(state, Stage.PR_RECONCILIATION, primary_pr=pr.url,
                       publication_conflict=True)
     if stage is Stage.REPORT_REVIEW:
