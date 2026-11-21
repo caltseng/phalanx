@@ -5,12 +5,14 @@ import sqlite3
 from tempfile import TemporaryDirectory
 from threading import Lock
 
+from .intake_schema import INTAKE_SCHEMA
+
 
 APPLICATION_ID = 0x50484C58  # PHLX
 _write_lock = Lock()
 
-# Each tuple is one migration. Append PH-05 schema statements as migration 2.
-MIGRATIONS = ((f"PRAGMA application_id = {APPLICATION_ID}",),)
+# Each tuple is one migration.
+MIGRATIONS = ((f"PRAGMA application_id = {APPLICATION_ID}",), INTAKE_SCHEMA)
 
 
 @contextmanager

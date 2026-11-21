@@ -55,3 +55,42 @@ python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived read connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`.
+
+### File and inspect work
+
+Set `PHALANX_OWNER_TOKEN` to the same owner token used by the server. Set `PHALANX_API_URL` or pass `--api-url` before the command to override `http://127.0.0.1:8000`.
+
+```powershell
+python -m phalanx register example https://github.com/example/project.git
+python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
+python -m phalanx inspect <item_id>
+```
+
+Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The later GitHub integration supplies provider-verified facts for PR stages.
+
+The authenticated API exposes these routes under `/v1`.
+
+| Route | Access | Purpose |
+| --- | --- | --- |
+| `POST /repositories` | Owner | Register an ID and expected remote. Repeating the same registration returns it. |
+| `GET /repositories` | Owner or runner | Read registered repositories. |
+| `POST /items` | Owner | File a new item with an initial queued execution. |
+| `GET /items/{item_id}` | Owner or runner | Read the request and current execution, including its version, stage, status, wait and output. |
+| `GET /items/{item_id}/executions` | Owner or runner | Read past and current executions. |
+| `GET /items/{item_id}/executions/{execution_id}/timeline` | Owner or runner | Read durable transition history and evidence. |
+| `GET /items/{item_id}/executions/{execution_id}/drafts/{revision}` | Owner or runner | Retrieve the exact draft for review. |
+| `GET /items/{item_id}/executions/{execution_id}/report` | Owner or runner | Retrieve the final stored Markdown. |
+| `POST /items/{item_id}/executions/{execution_id}/cancel` | Owner | Request cancellation with `expected_version` and `reason`. |
+| `POST /items/{item_id}/executions/{execution_id}/rerun` | Owner | Create a linked execution from the current closed execution with `expected_version` and an explicit `target`. |
+| `POST /items/{item_id}/executions/{execution_id}/result` | Runner | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
+| `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation under a live lease after accounting for the worker and its effects. |
+
+Intake accepts `repository_id`, `goal` and `target`, plus optional `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the work item's output type.
+
+Results and stop confirmations require a matching `attempt_id`, `stage` and `expected_version`, plus the current secret in the `Phalanx-Lease` header. A successful report-drafting result sends `report_markdown`. The server persists it and derives a SHA-256 revision. Report review and storage send `report_revision`. The server copies the reviewed draft into final storage in the same transaction that closes the execution. A `needs_input` result supplies `wait.reason` and `wait.trigger`. Active cancellation preserves the attempt while awaiting reconciliation. An expired lease or uncertain provider effect requires recovery before confirmation.
+
+#### Queue storage handoff
+
+Migration 2 stores execution snapshots as JSON and exposes `stage` and `status` as queryable columns. It enforces one open execution per item and one open attempt per execution. PH-06 can select a queued execution and call `intake.claim_attempt` inside the same `store.write_transaction` after checking admission. Supply a stable `runner_id`, the SHA-256 hex digest of a freshly generated URL-safe lease secret, and `lease_expires_at` as Unix seconds. Return the plaintext secret only to the claiming runner. The claim returns the new attempt ID and execution snapshot. It appends history, increments the state version and changes the execution to running. A committed result ends the attempt. Renewal and recovery should use the persisted attempt ID, runner ID, lease digest and expiry. A cancellation request keeps the attempt open until stop confirmation or recovery.
+
+PH-06 owns candidate indexing, time eligible, aging, capacity, admission and lease renewal. PH-08 owns reply and external recheck routes. PH-09 owns general failure finalization and retries. Provider verification and recovery of uncertain writes belong to the GitHub and runner integrations. The result API rejects caller-supplied PR observations. PH-17 owns bounded history reads.
