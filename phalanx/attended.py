@@ -307,10 +307,14 @@ class AttendedRunner:
                 else:
                     body["report_markdown"] = result.details["evidence"]
             elif result.outcome in {"needs_input", "failed"}:
-                reason = "\n\n".join(result.details.values())
+                reason = "\n\n".join(f"{field.replace('_', ' ').capitalize()}\n{text}"
+                                     for field, text in result.details.items())
                 if len(reason) > 16000:
-                    raise RunnerError("Wait evidence exceeds the API limit")
-                body["wait"] = {"reason": reason, "trigger": "owner intervention"}
+                    raise RunnerError("Worker evidence exceeds the API limit")
+                if result.outcome == "failed":
+                    body["failure_reason"] = reason
+                else:
+                    body["wait"] = {"reason": reason, "trigger": "owner reply"}
             else:
                 raise RunnerError("Outcome is unsupported for this attended stage")
             submission = {

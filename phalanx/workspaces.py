@@ -205,7 +205,7 @@ class WorkspaceManager:
     def inspect(self, item_id: str) -> Workspace:
         """Verify an existing workspace without creating or repairing it."""
         common = self._verify_checkout()
-        with _repository_lock(common):
+        with _file_lock(common / "phalanx-workspaces.lock"):
             path, branch, owner_ref = self._location(common, item_id)
             if not self._registered(path, branch):
                 raise WorkspaceError("The item worktree is absent")

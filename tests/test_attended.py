@@ -80,12 +80,12 @@ class AttendedTest(unittest.TestCase):
     def runner(self):
         return AttendedRunner(self.root, self.config, self.api)
 
-    def write_result(self, runner, marker, evidence):
+    def write_result(self, runner, marker, evidence, outcome="succeeded"):
         p = runner.status()["packet"]
         fields = ("item_id", "attempt_id", "state_version", "stage", "repository",
                   "worktree", "branch", "expected_revision")
         result = {"contract_version": 1, **{key: p[key] for key in fields},
-                  "outcome": "succeeded", "details": {"evidence": evidence}}
+                  "outcome": outcome, "details": evidence if isinstance(evidence, dict) else {"evidence": evidence}}
         (self.root / "results" / f"{marker}.json").write_text(json.dumps(result), encoding="utf-8")
 
     def test_report_roundtrip_with_lost_claim_and_result_responses(self):
@@ -146,6 +146,28 @@ class AttendedTest(unittest.TestCase):
             finally:
                 resume.set()
             self.assertEqual(preparing.result(timeout=15)["status"], "launch_intent")
+
+    def test_failure_and_owner_question_send_distinct_results(self):
+        self.api.drop_claim = self.api.drop_result = False
+        outcomes = [
+            ("failed", {"reason": "Build unavailable", "attempted": "Retried locally",
+                        "retry_guidance": "Try from a new worker"}),
+            ("needs_input", {"question": "Which source?", "options": "Source A or B", "handoff": "No edits"}),
+        ]
+        runner = self.runner()
+        for outcome, details in outcomes:
+            self.api.attempt = uuid4().hex
+            marker = runner.prepare()["marker"]
+            thread_id = str(uuid4())
+            runner.receipt(marker, "local", thread_id=thread_id)
+            self.write_result(runner, marker, details, outcome)
+            runner.submit(marker, "local", thread_id)
+        technical, question = [post[0] for post in self.api.posts]
+        self.assertIn("Build unavailable", technical["failure_reason"])
+        self.assertNotIn("wait", technical)
+        self.assertNotIn("failure_reason", question)
+        self.assertEqual(question["wait"]["trigger"], "owner reply")
+        self.assertIn("Which source?", question["wait"]["reason"])
 
     def test_development_requires_verified_candidate(self):
         self.api.drop_claim = self.api.drop_result = False

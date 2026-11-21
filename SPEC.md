@@ -109,7 +109,7 @@ Keep the work packet and result contract independent of the runtime. An executio
 
 - **Max concurrency.** Set a per-runner maximum for active worker attempts across all repositories and runtimes. A muster may request fewer slots. A waiting-for-input item releases its slot. Reducing the limit leaves current attempts running and stops new claims until the runner is below the new limit.
 - **Dispatch pause.** Allow intake while new claims are paused. Existing attempts can finish and report results. Resume enables claims again.
-- **Eligibility.** Claim only work for registered repos the runner can reach and execute with an available runtime. An unmet prerequisite keeps an item queued with a visible reason. Independent jobs in the same repo remain eligible.
+- **Eligibility.** Claim only work for registered repos the runner can reach and execute with an available runtime. A runner can declare the stages it supports so the server filters them before ranking. An unmet prerequisite keeps an item queued with a visible reason. Independent jobs in the same repo remain eligible.
 - **Additional gates.** Keep optional queue-wide concurrency limits and explicit approval before publishing a PR as design choices. Enforce any queue-wide limit in the same atomic server-side claim operation. Start without per-repo limits unless overlap becomes a real problem.
 
 ## Worktrees and queue selection

@@ -83,7 +83,10 @@ From an authorized Captain muster:
 
 Development success requires a new local candidate commit and a clean
 worktree. Report drafting sends the Markdown to the server as a draft.
-Both stages support questions and failures with local checkpoint evidence.
+Both stages record local checkpoints for questions and failures. Questions
+wait for an owner reply. A technical failure from a confirmed-stopped worker
+enters the shared 5, 10, 20, and 40 second retry backoff. Exhausting the budget
+asks for owner intervention.
 The runner claims only development and report drafting. Later stages stay in
 the queue for a handler that supports them. Keep the state directory when
 restarting. Expired leases and unverified results require reconciliation.

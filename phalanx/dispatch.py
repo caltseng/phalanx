@@ -158,12 +158,12 @@ def recover_stopped(db, runner_id, attempt_id, body):
         return intake.confirm_stop(db, row, state, attempt_id, details=details)
     if state.status != Status.RUNNING or state.stage != attempt["stage"]:
         raise intake.Conflict("This attempt has no supported stopped-worker recovery")
-    if row["retry_count"] >= 4:
+    retry_at = intake.stopped_retry_at(row, now)
+    if retry_at is None:
         return intake.apply(
             db, row, state, Event.RETRY, attempt_id=attempt_id, details=details,
             wait=Wait("Five stopped worker attempts require a recovery decision", "owner intervention"),
         )
-    retry_at = int(now * 1000) + min(120, 5 * 2 ** row["retry_count"]) * 1000
     return intake.apply(
         db, row, state, Event.RETRY, attempt_id=attempt_id,
         details={**details, "retry_at_ms": retry_at}, retry_at=retry_at, retry_allowed=True,

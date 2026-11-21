@@ -250,6 +250,44 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         with patch.object(dispatch, "time", return_value=now + 9999):
             self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
 
+    def test_stopped_technical_results_back_off_and_owner_questions_wait(self):
+        technical, question = self.seed("repo", [("urgent", -5, None), ("normal", -1, None)])
+        now = NOW
+        for retry, delay in enumerate((5, 10, 20, 40, None)):
+            with patch.object(dispatch, "time", return_value=now), patch.object(intake, "time", return_value=now):
+                lease = token_urlsafe(32)
+                assignment = self.claim("local", ["repo"], lease=lease)
+                self.assertEqual(assignment["item_id"], technical)
+                execution = assignment["execution"]
+                failure = Result(
+                    expected_version=execution["version"], attempt_id=assignment["attempt_id"],
+                    stage="report_drafting", outcome="failed", failure_reason="Build resource unavailable",
+                )
+                with write_transaction(self.path) as db:
+                    result = intake.result(db, technical, execution["id"], failure, intake.digest(lease))
+                if delay is not None:
+                    self.assertEqual(result["state"]["status"], "queued")
+                    self.assertEqual(result["ready_since_ms"], (now + delay) * 1000)
+                    self.assertEqual(result["retry_at_ms"], result["ready_since_ms"])
+                    if retry == 0:
+                        lease = token_urlsafe(32)
+                        assignment = self.claim("local", ["repo"], lease=lease)
+                        self.assertEqual(assignment["item_id"], question)
+                        execution = assignment["execution"]
+                        with write_transaction(self.path) as db:
+                            waiting = intake.result(db, question, execution["id"], Result(
+                                expected_version=execution["version"], attempt_id=assignment["attempt_id"],
+                                stage="report_drafting", outcome="needs_input",
+                                wait={"reason": "Which source should I use?", "trigger": "owner reply"},
+                            ), intake.digest(lease))
+                        self.assertEqual(waiting["state"]["status"], "waiting_for_input")
+                        self.assertIsNone(waiting["retry_at_ms"])
+                    self.assertEqual(self.claim("local", ["repo"])["status"], "no_eligible_work")
+                    now += delay
+        self.assertEqual(result["state"]["status"], "waiting_for_input")
+        self.assertIsNone(result["retry_at_ms"])
+        self.assertIn("Build resource unavailable", result["state"]["wait"]["reason"])
+
     def test_schema_two_migrates_queue_and_preserves_running_attempt(self):
         path = self.path.with_name("legacy.sqlite3")
         with connect(path, mode="rwc") as db:
