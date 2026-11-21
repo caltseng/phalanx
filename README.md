@@ -16,7 +16,7 @@ Every closed work item has a final output. If it ends without the requested deli
 
 ## Run the local API
 
-Use CPython 3.14 for deployment and pilot runs. Phalanx supports CPython 3.12 and later. From the repository root in PowerShell:
+Use CPython 3.14 for deployment and pilot runs. Phalanx supports CPython 3.12 and later. The client side (CLI, runner, Captain loop and relay) runs on Windows, macOS and Linux; CI tests all three. From the repository root in PowerShell on Windows:
 
 ```powershell
 py -m venv .venv
@@ -27,11 +27,24 @@ $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsa
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
+Or in a POSIX shell on macOS or Linux:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.lock -e .
+export PHALANX_OWNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export PHALANX_RUNNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
+```
+
+The `python -m phalanx` commands below are the same in either shell once the virtual environment is active. Examples use `C:\phalanx-runner` as the runner state directory; on macOS or Linux use a path such as `~/phalanx-runner`. Set environment variables with `$env:NAME = "value"` in PowerShell or `export NAME="value"` in a POSIX shell. On macOS, configure checkout and state paths with their exact on-disk letter case.
+
 If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Tests use the standard library and the same runtime dependencies.
 
 Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server applies pending migrations before serving requests and defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
 
-From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
+From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health` (or `curl http://127.0.0.1:8000/health`). This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
 ### Run attended assignments
 
@@ -352,17 +365,17 @@ Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner
 
 ### Back up and restore SQLite
 
-Run these commands in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS. Each command validates its copy before creating the destination and refuses to overwrite an existing file.
+Run these commands in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS, APFS or ext4. Each command validates its copy before creating the destination and refuses to overwrite an existing file.
 
 ```powershell
-New-Item -ItemType Directory -Force .phalanx/backups | Out-Null
+New-Item -ItemType Directory -Force .phalanx/backups | Out-Null  # POSIX: mkdir -p .phalanx/backups
 python -m phalanx backup .phalanx/backups/phalanx-01.sqlite3
 ```
 
 For recovery, stop the server and point `PHALANX_DB` at a fresh path in an existing directory. Restore the backup there, restart the API using the same path, and verify `GET /health`. Keep the old database until you've verified the recovered data.
 
 ```powershell
-$env:PHALANX_DB = "$PWD/.phalanx/phalanx-restored.sqlite3"
+$env:PHALANX_DB = "$PWD/.phalanx/phalanx-restored.sqlite3"  # POSIX: export PHALANX_DB="$PWD/.phalanx/phalanx-restored.sqlite3"
 python -m phalanx restore .phalanx/backups/phalanx-01.sqlite3
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
@@ -446,7 +459,7 @@ results under a recovery claim.
 
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived read connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
-Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu with CPython 3.14. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
+Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu and macOS with CPython 3.14. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
 
 ### Answer a waiting item
 

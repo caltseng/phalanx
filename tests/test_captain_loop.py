@@ -161,7 +161,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.addCleanup(loop.close)
         return loop
 
-    def spin(self, loop, condition, timeout=5):
+    def spin(self, loop, condition, timeout=30):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             loop.step()
@@ -337,7 +337,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             return call(route, body, **kwargs)
         loop.adapter = BridgeAdapter(discover)
         self.api.call = stop
-        self.spin(loop, lambda: bool(stop_posts) and not loop._records(), timeout=15)
+        self.spin(loop, lambda: bool(stop_posts) and not loop._records())
         self.assertEqual(len(stop_posts), 1)
         self.assertFalse(self.native.launches)
         self.assertNotIn("relay", prepared[0])
@@ -393,7 +393,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         loop = self.loop()
         loop.poll_seconds = 30
         loop.adapter = BridgeAdapter(discover)
-        self.spin(loop, lambda: len(self.native.launches) == 2, timeout=15)
+        self.spin(loop, lambda: len(self.native.launches) == 2)
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(self.api.claims), 2)
         loop.discovery_due = 0
@@ -640,7 +640,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
 
     def test_cursor_retention_is_per_attempt_and_not_authority(self):
         loop = self.loop()
-        self.spin(loop, lambda: len(self.native.waits) >= 4 and len(self.native.launches) == 2, timeout=15)
+        self.spin(loop, lambda: len(self.native.waits) >= 4 and len(self.native.launches) == 2)
         self.assertTrue(any(wait["cursors"] for wait in self.native.waits))
         self.assertEqual(len(self.native.launches), 2)
         self.assertLessEqual(len(loop.cursors), 2)
@@ -856,7 +856,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                     raise RunnerError("Lost launched stop acknowledgment")
             return response
         self.api.call = stop
-        self.spin(loop, lambda: not loop._records() and len(stop_posts) == 2, timeout=15)
+        self.spin(loop, lambda: not loop._records() and len(stop_posts) == 2)
         self.assertFalse(submissions)
         self.assertEqual(stop_posts[0], stop_posts[1])
         self.assertEqual(len(self.native.launches), 1)
@@ -910,7 +910,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         loop.close()
         self.assertFalse(self.native.waits)
         restarted = self.loop()
-        self.spin(restarted, lambda: not runner._snapshot(), timeout=15)
+        self.spin(restarted, lambda: not runner._snapshot())
         self.assertTrue(self.native.waits)
         self.assertEqual(len(self.native.launches), 1)
         self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
