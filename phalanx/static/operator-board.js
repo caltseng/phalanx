@@ -286,10 +286,10 @@
         }, empty);
     }
 
-    list("Work in progress", "open", "No open work on this page.");
+    list("Work in progress", "open", "No open work on this page. The line holds.");
     const detail = createPanel("Selected item", "history", () => Boolean(selected),
       (cursor, signal) => source.detail({ id: selected.id, cursor, limit: PAGE_SIZE, signal }),
-      renderDetail, "Select an item to inspect its recorded history.");
+      renderDetail, "Select an item from the muster to inspect its recorded history.");
     list("Recently closed", "closed", "No closed work on this page.");
 
     function refreshAll() {
