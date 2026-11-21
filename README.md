@@ -38,7 +38,7 @@ export PHALANX_RUNNER_TOKEN="$(python -c 'import secrets; print(secrets.token_ur
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
-The `python -m phalanx` commands below are the same in either shell once the virtual environment is active. Examples use `C:\phalanx-runner` as the runner state directory; on macOS or Linux use a path such as `~/phalanx-runner`. Set environment variables with `$env:NAME = "value"` in PowerShell or `export NAME="value"` in a POSIX shell. On macOS, configure checkout and state paths with their exact on-disk letter case.
+The `python -m phalanx` commands below are the same in either shell once the virtual environment is active. Examples use Windows paths such as `C:\phalanx-runner` for the runner state directory and `C:/enlistments/example` for a checkout; on macOS or Linux use paths such as `~/phalanx-runner` on the command line and absolute paths such as `/Users/you/src/example` in JSON config. Set environment variables with `$env:NAME = "value"` in PowerShell or `export NAME="value"` in a POSIX shell. On macOS, configure checkout and state paths with their exact on-disk letter case.
 
 If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Tests use the standard library and the same runtime dependencies.
 
