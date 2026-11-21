@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import Field
 
 from . import finalization, intake, pr_observations
 from .auth import authenticate, require_owner, require_runner
@@ -161,7 +160,6 @@ def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Id
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
              dependencies=[Depends(require_runner)])
 def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,
-                   body: Annotated[pr_observations.Publication | pr_observations.Validation,
-                                   Field(discriminator="stage")],
+                   body: pr_observations.Observation,
                    lease: Lease, key: Key = None):
     return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)
