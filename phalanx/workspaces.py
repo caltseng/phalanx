@@ -87,6 +87,12 @@ def _remote_identity(remote: str, checkout: Path) -> tuple:
     return (transport, host, port, path)
 
 
+def _item_branch(item_id: str) -> str:
+    if not item_id:
+        raise WorkspaceError("A work item ID is required")
+    return f"codex/phalanx/{hashlib.sha256(item_id.encode()).hexdigest()}"
+
+
 @contextmanager
 def _repository_lock(common: Path):
     """Serialize short bookkeeping operations across local processes and threads."""
@@ -136,15 +142,14 @@ class WorkspaceManager:
         return common_path
 
     def _location(self, common: Path, item_id: str) -> tuple[Path, str, str]:
-        if not item_id:
-            raise WorkspaceError("A work item ID is required")
-        item = hashlib.sha256(item_id.encode()).hexdigest()
+        branch = _item_branch(item_id)
+        item = branch.rsplit("/", 1)[1]
         repo = hashlib.sha256(os.fsencode(os.path.normcase(str(common)))).hexdigest()[:16]
         path = self.root / f"{repo}-{item}"
         owner = hashlib.sha256(os.fsencode(os.path.normcase(str(path)))).hexdigest()
         if path.resolve() != path:
             raise WorkspaceError(f"Workspace path resolves elsewhere: {path}")
-        return path, f"codex/phalanx/{item}", f"refs/phalanx/workspaces/{owner}"
+        return path, branch, f"refs/phalanx/workspaces/{owner}"
 
     def _registered(self, path: Path, branch: str) -> bool:
         records = _git(self.checkout, "worktree", "list", "--porcelain", "-z")
