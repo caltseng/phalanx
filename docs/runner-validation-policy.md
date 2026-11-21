@@ -139,6 +139,19 @@ external recheck that the Captain loop requests when due. A missing policy
 entry or `null` phase becomes an owner question naming the gap; startup
 preflight rejects a malformed file before any claim.
 
+Self-review findings and failed local checks return the item to `development`
+with the findings in the server state. The next development packet carries
+them as `review_findings` in its context. When the reviewed candidate differs
+from the primary PR's head, `pr_promotion` first fast-forwards the item branch
+to it, leased on the observed PR head, then collects draft checks on the new
+head. A push that would not fast-forward, or a PR that has left its item branch
+or target, becomes an owner question. A configured local bypass is recorded as
+the check's disposition and as the pre-validation bypass evidence; draft and
+ready checks still apply.
+
+The acceptance repositories' policy is recorded in
+[pilots/validation-policies.md](pilots/validation-policies.md).
+
 Example for a Python pilot repository (verify check names and app ID with
 `gh api repos/OWNER/REPO/commits/SHA/check-runs`):
 
@@ -155,10 +168,10 @@ Example for a Python pilot repository (verify check names and app ID with
 
 ## Remaining integration
 
-Still pending: passing self-review findings into the next development packet,
-bypass dispositions and draft-only recovery in the wired stages, a moved base
-tip during ready collection (currently an owner question), adversarial review,
-and the acceptance repositories' policy files.
+Still pending (part 4): draft-only recovery when a ready PR lacks draft
+evidence, a moved base tip during ready collection (currently an owner
+question), and a rebased reviewed candidate, which needs a non-fast-forward
+update. Adversarial review is a later stage.
 
 Preview requirements load as ordinary `RequiredCheck` entries, but the loader
 never creates a provider reader: `policy.ready.read_preview` is `None`.

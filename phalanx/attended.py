@@ -320,16 +320,20 @@ class AttendedRunner:
             report_checkpoint = reports.checkpoint(self.api, claim)
             if findings:
                 report_checkpoint["findings"] = findings
+        context = {field: request.get(field, []) for field in ("context_links", "acceptance_criteria")}
+        requirements = STAGES[stage]
+        if stage == "development" and state.get("development_findings"):
+            context["review_findings"] = state["development_findings"]
+            requirements += " First address review_findings in the context on top of the current HEAD."
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
             worktree=workspace.path, branch=workspace.branch, expected_revision=workspace.head,
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
-            evidence_requirements=STAGES[stage], base_branch=base,
+            evidence_requirements=requirements, base_branch=base,
             report_checkpoint=report_checkpoint,
             dependencies=tuple(claim.get("dependencies", ())),
-            context=json.dumps({field: request.get(field, []) for field in
-                                ("context_links", "acceptance_criteria")}, ensure_ascii=False),
+            context=json.dumps(context, ensure_ascii=False),
             handoff=json.dumps(input_reply, ensure_ascii=False) if input_reply is not None else "",
         )
         handoff = WorkerHandoff(packet, self.results)

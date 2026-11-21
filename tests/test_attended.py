@@ -770,6 +770,104 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual((state["stage"], state["status"]), ("adversarial_review", "queued"), state)
         self.assertEqual(self.runner().status(), {"status": "idle"})
 
+    def test_review_findings_return_to_development_and_update_the_primary_pr(self):
+        remote = "git@github.com:owner/repo.git"
+        self.git(self.checkout, "remote", "set-url", "origin", remote)
+        base = self.git(self.checkout, "rev-parse", "HEAD")
+        self.start_server(self.root.parent / "queue.sqlite3")
+        self.assertEqual(self.request("/v1/repositories", OWNER, {"id": "repo", "remote": remote})[0], 200)
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Fix tests", "target": "ready_for_check_in",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        policy = self.root.parent / "validation-policy.json"
+        policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
+            "local_checks": [{"name": "platform", "allow_skip": True, "bypass": {
+                "outcome": "skipped", "reason": "Needs the other OS", "authorization": "Policy 3"}}],
+            "draft_checks": [],
+            "ready_checks": [{"name": "test", "kind": "check_run", "app_id": 15368}],
+        }}}), encoding="utf-8")
+        self.config["validation_policy"] = str(policy)
+
+        def work(details, outcome="succeeded"):
+            launch = self.runner().prepare()
+            thread = str(uuid4())
+            self.runner().receipt(launch["marker"], "local", thread_id=thread)
+            packet = self.runner().status()["packet"]
+            if callable(details):
+                details = details(Path(packet["worktree"]))
+            self.write_result(self.runner(), launch["marker"], details, outcome)
+            return packet, self.runner().submit(launch["marker"], "local", thread)
+
+        def commit(worktree):
+            self.git(worktree, "commit", "--allow-empty", "-m", "Candidate")
+            return self.git(worktree, "rev-parse", "HEAD")
+
+        first = work(commit)[1]["state"]
+        self.assertEqual(first["stage"], "pr_creation")
+        github = FakeGitHub(first["candidate"], base, item["id"])
+        pushes = []
+
+        class Git:
+            expected_remote = ("github", "owner/repo")
+
+            def __init__(self, checkout, remote, item_id):
+                self.ref = f"refs/heads/{_item_branch(item_id)}"
+                self.head = github.pull["head"]["sha"] if github.pull else None
+
+            def verify_candidate(self, *args, **kwargs):
+                pass
+
+            def read_branch(self, branch, *, authorize):
+                return base
+
+            def read_head(self, *, authorize):
+                authorize()
+                return self.head
+
+            def publish(self, revision, *, expected, authorize, rewrite=False):
+                authorize()
+                pushes.append((expected, revision, rewrite))
+                self.head = revision
+                if github.pull:
+                    github.pull["head"]["sha"] = revision
+                return PublicationResult("success", "fixture push")
+
+        def client(owner, name, *, token):
+            return GitHubClient(owner, name, token=token, transport=github)
+
+        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), \
+                patch("phalanx.draft_stage.GitPublication", Git), \
+                patch("phalanx.validation_stages.GitPublication", Git), \
+                patch("phalanx.attended_drafts.GitHubClient", client), \
+                patch("phalanx.validation_stages.GitHubClient", client):
+            self.assertEqual(self.runner().prepare(draft=True)["execution"]["state"]["stage"], "self_review")
+            state = work({"findings": "Rename the helper."}, "changes_required")[1]["state"]
+            self.assertEqual((state["stage"], state["development_findings"]),
+                             ("development", "Rename the helper."))
+            packet, revised = work(commit)
+            self.assertEqual(json.loads(packet["context"])["review_findings"], "Rename the helper.")
+            self.assertIn("review_findings", packet["evidence_requirements"])
+            revised = revised["state"]
+            self.assertEqual((revised["stage"], revised["development_findings"]), ("self_review", None))
+            self.assertNotEqual(revised["candidate"], first["candidate"])
+            work("Reviewed the revised diff.")
+            self.assertEqual(self.runner().prepare(stages=["pre_pr_validation"])["execution"]["state"]["stage"],
+                             "pr_promotion")
+            promoted = self.runner().prepare(stages=["pr_promotion"])
+            self.assertEqual(promoted["execution"]["state"]["stage"], "pr_validation", promoted)
+            self.assertEqual(pushes[-1], (first["candidate"], revised["candidate"], False))
+            self.assertEqual((github.pull["head"]["sha"], github.pull["draft"]), (revised["candidate"], False))
+            github.runs = [{"id": 1, "name": "test", "head_sha": revised["candidate"], "status": "completed",
+                            "conclusion": "failure", "app": {"id": 15368}, "pull_requests": []}]
+            failed = self.runner().prepare(stages=["pr_validation"])
+        self.assertEqual(failed["execution"]["state"]["stage"], "pr_reconciliation", failed)
+        _, timeline = self.request(f"/v1/items/{item['id']}/executions/{failed['execution']['id']}/timeline",
+                                   OWNER)
+        self.assertIn([{"name": "platform", "outcome": "skipped", "reason": "Needs the other OS",
+                        "authorization": "Policy 3"}],
+                      [entry["details"].get("local_checks") for entry in timeline])
+
     def test_validation_policy_gap_waits_for_owner_with_reason(self):
         self.api.stage, self.api.candidate = "pre_pr_validation", "a" * 40
         self.api.drop_claim = self.api.drop_result = False

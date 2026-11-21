@@ -124,6 +124,7 @@ class Execution:
     ready_revision: Revision | None = None
     final_output: FinalOutput | None = None
     report_review_findings: str | None = None
+    development_findings: str | None = None
 
     def __post_init__(self) -> None:
         if (self.status in TERMINAL) != (self.final_output is not None):
@@ -174,6 +175,7 @@ class Evidence:
     merge_authorized: bool = False
     issue: Issue | None = None
     report_review_notes: str | None = None
+    development_findings: str | None = None
 
 
 def _require(condition: object, message: str) -> None:
@@ -233,7 +235,7 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
     if stage is Stage.DEVELOPMENT:
         _require(evidence.candidate, "Development requires a recoverable candidate")
         next_stage = Stage.SELF_REVIEW if state.primary_pr else Stage.PR_CREATION
-        return _queue(state, next_stage, candidate=evidence.candidate)
+        return _queue(state, next_stage, candidate=evidence.candidate, development_findings=None)
     if stage is Stage.PR_CREATION:
         pr = evidence.pr
         _require(pr and pr.url and pr.draft and not pr.closed and not pr.merge_commit
@@ -364,6 +366,7 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
     elif stage in {Stage.SELF_REVIEW, Stage.PRE_PR_VALIDATION}:
         _require(state.candidate and evidence.candidate == state.candidate,
                  "Findings must match the candidate")
+        return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
     else:
         pr = _primary(state, evidence)
         if stage is Stage.PR_PROMOTION and (evidence.issue is Issue.PR_BLOCKER

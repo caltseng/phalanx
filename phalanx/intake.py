@@ -15,7 +15,7 @@ from . import dependencies
 from .finalization_schema import enqueue
 from .store import connect
 from .transitions import (
-    Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
+    Bypass, Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
 
 
@@ -485,13 +485,27 @@ def result(db, item_id, execution_id, payload, lease_digest):
         if draft is None:
             raise Conflict("Reviewed draft Markdown is unavailable")
 
+    findings = bypass = None
+    if payload.outcome == Outcome.CHANGES_REQUIRED and state.stage == Stage.SELF_REVIEW:
+        findings = payload.review_notes
+    elif payload.outcome == Outcome.CHANGES_REQUIRED and payload.local_checks:
+        findings = "\n".join(f"Local check {check.name} {check.outcome}: {check.reason or 'no detail'}"
+                             for check in payload.local_checks if check.outcome == "failed")[:16000] or None
+    elif payload.outcome == Outcome.SUCCEEDED and payload.local_checks:
+        skipped = [check for check in payload.local_checks if check.outcome != "passed"]
+        if skipped:
+            bypass = Bypass(tuple(check.name for check in skipped),
+                            "\n".join(f"{check.name} ({check.outcome}): {check.reason}" for check in skipped),
+                            "\n".join(f"{check.name}: {check.authorization}" for check in skipped))
+
     return apply(
         db, row, state, Event.RESULT, details=details, attempt_id=payload.attempt_id,
         outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
-                          prevalidated_candidate=payload.prevalidated_candidate,
+                          prevalidated_candidate=payload.prevalidated_candidate, bypass=bypass,
                           report_draft=draft_revision, reviewed_report=draft_revision,
-                          report_review_notes=payload.report_review_notes),
+                          report_review_notes=payload.report_review_notes,
+                          development_findings=findings),
     )
 
 def draft(db, item_id, execution_id, revision):

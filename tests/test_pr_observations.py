@@ -190,6 +190,18 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(timeline[-1]["details"]["local_checks"], [bypass])
         self.assertEqual(timeline[-1]["details"]["prevalidated_candidate"], HEAD)
 
+    def test_failed_local_check_returns_to_development_with_findings(self):
+        self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
+        self.assertEqual(self.result(self.claim("self_review"), reviewed_candidate=HEAD)[0], 200)
+        status, updated = self.request(f"{self.execution}/result", RUNNER, dict(
+            self.claim("pre_pr_validation"), outcome="changes_required", candidate=HEAD,
+            local_checks=[{"name": "lint", "outcome": "passed"},
+                          {"name": "unit tests", "outcome": "failed", "reason": "Exited with status 1"}],
+        ), self.lease)
+        self.assertEqual(status, 200, updated)
+        self.assertEqual((updated["state"]["stage"], updated["state"]["development_findings"]),
+                         ("development", "Local check unit tests failed: Exited with status 1"))
+
     def test_promotion_and_validation_require_the_primary_pr_and_current_gates(self):
         self.publish()
         claim = self.claim("pr_promotion")
