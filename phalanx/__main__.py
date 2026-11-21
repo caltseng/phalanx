@@ -8,6 +8,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .attended import RunnerError, add_attended_command, run_attended
+from .attended_recovery_service import add_recovery_command, run_recovery_command
 from .config import database_path
 from .store import snapshot
 from .workspaces import WorkspaceError
@@ -63,6 +64,7 @@ def main() -> None:
     reply.add_argument("--version", type=int, required=True)
     reply.add_argument("--key", required=True, help="reuse this key when retrying the same reply")
     add_attended_command(commands)
+    add_recovery_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "backup":
@@ -71,6 +73,8 @@ def main() -> None:
             snapshot(args.source, database_path())
         elif args.command == "attended":
             run_attended(args)
+        elif args.command == "attended-recover":
+            run_recovery_command(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
