@@ -219,7 +219,7 @@ def _kill_tree(process: subprocess.Popen) -> None:
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+        except OSError:  # The group may already be gone; macOS reports EPERM for zombies.
             pass
     process.kill()
     process.wait()
