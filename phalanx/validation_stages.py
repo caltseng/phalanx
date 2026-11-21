@@ -168,7 +168,13 @@ def _promotion(runner, snapshot):
     gates = result.gates
     if blocked or (result.status == "gates_unresolved" and gates.state is not GateState.FAILED):
         if not blocked and gates.state is GateState.WAITING:
-            return _retry(snapshot, "; ".join(gates.reasons) or "Draft checks are pending")
+            reason = ("; ".join(gates.reasons) or "Draft checks are pending")[:16000]
+            observed = result.pull or pull
+            return {"route": "external-wait", "reason": reason, "body": {
+                **_event(snapshot), "reason": reason, "gate": "draft_checks",
+                "revision": {"head": candidate, "base": observed.base_sha},
+                "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
+            }}
         return _question(snapshot, "; ".join(blocked or gates.reasons) or result.reason, handoff)
     # Verified evidence advances; failed draft checks return the item to development.
     return {"route": "pr-observation", "body": _validation(

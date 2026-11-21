@@ -674,7 +674,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         policy = self.root.parent / "validation-policy.json"
         policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
             "local_checks": [{"name": "unit tests", "argv": [sys.executable, "-c", "print('ok')"]}],
-            "draft_checks": [],
+            "draft_checks": [{"name": "draft", "kind": "check_run", "app_id": 15368}],
             "ready_checks": [{"name": "test", "kind": "check_run", "app_id": 15368}],
         }}}), encoding="utf-8")
         self.config["validation_policy"] = str(policy)
@@ -733,20 +733,33 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.assertEqual(draft["execution"]["state"]["stage"], "self_review", draft)
             reviewed = work("Reviewed the candidate diff against the criteria.")
             self.assertEqual(reviewed["state"]["stage"], "pre_pr_validation")
-            for stage, following in (("pre_pr_validation", "pr_promotion"),
-                                     ("pr_promotion", "pr_validation")):
-                result = self.runner().prepare(stages=[stage])
-                self.assertEqual((result["status"], result["execution"]["state"]["stage"]),
-                                 (f"{stage}_submitted", following), result)
+            result = self.runner().prepare(stages=["pre_pr_validation"])
+            self.assertEqual(result["execution"]["state"]["stage"], "pr_promotion", result)
+
+            def recheck():
+                with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                    db.execute("UPDATE external_rechecks SET due_at_ms=0")
+                CaptainLoop._recheck_due(SimpleNamespace(api=self.api))
+
+            draft_run = {"id": 2, "name": "draft", "head_sha": candidate, "status": "queued",
+                         "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
+            github.runs = [draft_run]
+            waiting = self.runner().prepare(stages=["pr_promotion"])
+            state = waiting["execution"]["state"]
+            self.assertEqual((state["stage"], state["status"]), ("pr_promotion", "waiting_for_external"),
+                             waiting)
+            self.assertTrue(github.pull["draft"])
+            recheck()
+            draft_run.update(status="completed", conclusion="success")
+            result = self.runner().prepare(stages=["pr_promotion"])
+            self.assertEqual(result["execution"]["state"]["stage"], "pr_validation", result)
             self.assertFalse(github.pull["draft"])
             run = {"id": 1, "name": "test", "head_sha": candidate, "status": "in_progress",
                    "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
             github.runs = [run]
             pending = self.runner().prepare(stages=["pr_validation"])["execution"]
             self.assertEqual(pending["state"]["status"], "waiting_for_external", pending)
-            with write_transaction(self.root.parent / "queue.sqlite3") as db:
-                db.execute("UPDATE external_rechecks SET due_at_ms=0")
-            CaptainLoop._recheck_due(SimpleNamespace(api=self.api))
+            recheck()
             run.update(status="completed", conclusion="success")
             ready = self.runner().prepare(stages=["pr_validation"])
         self.assertEqual(ready["status"], "published_validation_submitted", ready)
