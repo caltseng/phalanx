@@ -100,7 +100,7 @@ class StubAPI:
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
-            expected = [self.stage] if self.stage in ("pr_creation", "pre_pr_validation") else ["development", "report_drafting", "report_review", "self_review"]
+            expected = [self.stage] if self.stage in ("pr_creation", "pre_pr_validation") else ["adversarial_review", "development", "report_drafting", "report_review", "self_review"]
             assert body["stages"] == expected, body
             self.claim_leases.append(lease)
             if self.drop_claim:
@@ -679,7 +679,13 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual((routed["status"], routed["reason"]), ("draft_submitted", "The remote base moved"))
         self.assertEqual(self.runner().status(), {"status": "idle"})
 
-    def test_validation_stages_run_from_draft_to_ready_checks_over_http(self):
+    def test_validation_stages_run_from_draft_to_ready_check_in_over_http(self):
+        self.live_review_path(blocking=False)
+
+    def test_blocking_review_returns_findings_to_development_over_http(self):
+        self.live_review_path(blocking=True)
+
+    def live_review_path(self, *, blocking):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -699,14 +705,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         }}}), encoding="utf-8")
         self.config["validation_policy"] = str(policy)
 
-        def work(details):
+        def work(details, outcome="succeeded"):
             launch = self.runner().prepare()
             self.assertEqual(launch["status"], "launch_intent", launch)
             thread = str(uuid4())
             self.runner().receipt(launch["marker"], "local", thread_id=thread)
             if callable(details):
                 details = details(Path(self.runner().status()["packet"]["worktree"]))
-            self.write_result(self.runner(), launch["marker"], details)
+            self.write_result(self.runner(), launch["marker"], details, outcome)
             return self.runner().submit(launch["marker"], "local", thread)
 
         def commit(worktree):
@@ -783,9 +789,39 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             recheck()
             run.update(status="completed", conclusion="success")
             ready = self.runner().prepare(stages=["pr_validation"])
-        self.assertEqual(ready["status"], "published_validation_submitted", ready)
-        state = ready["execution"]["state"]
-        self.assertEqual((state["stage"], state["status"]), ("adversarial_review", "queued"), state)
+            self.assertEqual(ready["status"], "published_validation_submitted", ready)
+            state = ready["execution"]["state"]
+            self.assertEqual((state["stage"], state["status"]), ("adversarial_review", "queued"), state)
+
+            launch = self.runner().prepare()
+            review = json.loads(self.runner().status()["packet"]["context"])["review"]
+            self.assertEqual((review["pr_url"], review["head_sha"]),
+                             ("https://github.com/owner/repo/pull/7", candidate))
+            reviewer = str(uuid4())
+            self.runner().receipt(launch["marker"], "local", thread_id=reviewer)
+            if blocking:
+                self.write_result(self.runner(), launch["marker"],
+                                  {"findings": "P1: The new branch is untested"}, "changes_required")
+                routed = self.runner().submit(launch["marker"], "local", reviewer)
+                self.assertEqual(routed["state"]["stage"], "development", routed)
+                self.runner().prepare()
+                context = json.loads(self.runner().status()["packet"]["context"])
+                self.assertIn("P1: The new branch is untested", context["review_findings"])
+                return
+            self.write_result(self.runner(), launch["marker"], "No blocking findings on this head.")
+            routed = self.runner().submit(launch["marker"], "local", reviewer)
+            self.assertEqual(routed["state"]["stage"], "pr_reconciliation", routed)
+            retry = self.runner().prepare(stages=["pr_reconciliation"])
+            self.assertIn("mergeability", retry["reason"], retry)
+            with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
+            github.pull["mergeable"] = True
+            reconciled = self.runner().prepare(stages=["pr_reconciliation"])
+            self.assertEqual(reconciled["execution"]["state"]["stage"], "ready_for_check_in", reconciled)
+            done = self.runner().prepare(stages=["ready_for_check_in"])
+        state = done["execution"]["state"]
+        self.assertEqual(state["status"], "completed", state)
+        self.assertEqual(state["final_output"]["revision"]["head"], candidate)
         self.assertEqual(self.runner().status(), {"status": "idle"})
 
     def test_review_findings_return_to_development_and_update_the_primary_pr(self):

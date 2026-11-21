@@ -366,6 +366,20 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertIsNone(output["merge_commit"])
         self.assertEqual(self.submit(ready, **headers), (status, execution))
 
+    def test_blocking_review_routes_findings_back_to_development(self):
+        self.start_review()
+        review = self.review(self.claim("adversarial_review"))
+        blocking = dict(review, outcome="changes_required")
+        self.assertEqual(self.submit(dict(blocking, review=dict(blocking["review"], findings=[])))[0], 422)
+        status, execution = self.submit(blocking)
+        self.assertEqual(status, 200, execution)
+        state = execution["state"]
+        self.assertEqual((state["stage"], state["status"]), ("development", "queued"))
+        self.assertIn("P2: Verify the edge case", state["development_findings"])
+        status, execution = self.result(self.claim("development"), candidate=OTHER)
+        self.assertEqual(status, 200)
+        self.assertIsNone(execution["state"]["development_findings"])
+
 
 class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
     target = "checked_in"

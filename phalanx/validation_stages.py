@@ -14,11 +14,11 @@ from .candidate_local import CandidateLocal
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError, UncertainGitHubWrite
 from .github_checks import collect_github_checks
-from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Validation
+from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Reconciliation, Validation
 from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
-from .transitions import Outcome, Revision, Stage
+from .transitions import Outcome, Revision, Stage, Target
 from .validation import GateState, Phase
 from .validation_policy import ValidationPolicyError, load_validation_policy
 from .workspaces import WorkspaceError, _item_branch
@@ -36,7 +36,8 @@ def run(runner, snapshot):
             return {"status": "published_validation_submitted", "execution": execution}
         submission = snapshot["submission"]
     if submission is None:
-        handler = _pre_validation if stage == Stage.PRE_PR_VALIDATION else _promotion
+        handler = {Stage.PRE_PR_VALIDATION: _pre_validation, Stage.PR_PROMOTION: _promotion}.get(
+            stage, _disposition)
         submission = _save(runner, snapshot, handler(runner, snapshot))
     claim = snapshot["claim"]
     key = f"{stage}:{claim['attempt_id']}:{claim['execution']['version']}"
@@ -293,21 +294,78 @@ def _publish_update(snapshot, local, pull, base_ref, verified_head):
     return None
 
 
+def _disposition(runner, snapshot):
+    """Attest current ready gates for reconciliation and the ready-only check-in."""
+    claim = snapshot["claim"]
+    state = claim["execution"]["state"]
+    candidate, url = state["candidate"], state.get("primary_pr") or ""
+    handoff = f"{url}, candidate {candidate}"
+    if state["stage"] == Stage.READY_FOR_CHECK_IN and state["target"] != Target.READY:
+        return _question(snapshot, "Merge check-in is not automated yet. Merge the ready PR or change "
+                         "the target to ready_for_check_in, then reply.", handoff)
+    try:
+        policy = _policy(runner, snapshot).ready
+    except ValidationPolicyError as error:
+        return _question(snapshot, str(error), "Repair the runner's trusted validation policy, then reply.")
+    number = url.rsplit("/", 1)[-1]
+    if policy.required is None or not number.isdigit():
+        return _question(snapshot, "Configure the complete ready-phase policy and restore the primary PR.",
+                         handoff)
+    github = _github(snapshot)
+    mapping = runner.config["repositories"][claim["request"]["repository_id"]]
+    base_ref = claim["request"].get("target_branch") or mapping["base_branch"]
+    try:
+        pull = github.get_pull_request(int(number))
+    except GitHubError as error:
+        return _retry(snapshot, str(error), error.retry_after_seconds)
+    if (pull.url.casefold() != url.casefold() or pull.state != "open" or pull.merged or pull.draft
+            or (pull.head_ref, pull.base_ref, pull.head_sha)
+            != (_item_branch(claim["item_id"]), base_ref, candidate)):
+        return _question(snapshot, "Reconcile the primary PR with the recorded branch, target and candidate.",
+                         handoff)
+    if pull.mergeable is None:
+        return _retry(snapshot, "GitHub is still computing mergeability")
+    if not pull.mergeable:
+        return _question(snapshot, "Resolve the merge conflict on the primary PR, then reply.", handoff)
+    checks = collect_github_checks(github, pull, Phase.READY, policy.required, read_preview=policy.read_preview)
+    if checks.retry_after_seconds is not None:
+        return _retry(snapshot, "; ".join(checks.gate.reasons), checks.retry_after_seconds)
+    reason = "; ".join(checks.gate.reasons) or "Ready checks are not satisfied"
+    if checks.gate.state is GateState.WAITING:
+        return {"route": "external-wait", "reason": reason[:16000], "body": {
+            **_event(snapshot), "reason": reason[:16000], "gate": "ready_checks",
+            "revision": {"head": candidate, "base": pull.base_sha},
+            "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
+        }}
+    if checks.gate.state not in {GateState.SATISFIED, GateState.NOT_CONFIGURED} or checks.candidate is None:
+        return _question(snapshot, reason, handoff)
+    return {"route": "pr-observation", "body": _observation(
+        Reconciliation, snapshot, pull, base_ref, policy.required, checks.observations,
+        checks.candidate.merge_sha, Phase.READY,
+        actionable_feedback_cleared=True, approvals_and_mergeability=True,
+    )}
+
+
 def _validation(snapshot, pull, base_ref, required, checks):
+    return _observation(Validation, snapshot, pull, base_ref, required, checks.observations,
+                        checks.merge_sha, Phase.DRAFT)
+
+
+def _observation(model, snapshot, pull, base_ref, required, observations, merge_sha, phase, **fields):
     claim = snapshot["claim"]
     required = required or ()
-    return Validation(
-        **_event(snapshot),
+    return model(
+        **_event(snapshot), **fields,
         expected=ExpectedRefs(head_ref=_item_branch(claim["item_id"]), base_ref=base_ref,
                               base_sha=pull.base_sha),
         pull=GitHubPull.model_validate({field: getattr(pull, field) for field in GitHubPull.model_fields}),
         gates=GateObservation(
-            phase=Phase.DRAFT, number=pull.number, head_sha=pull.head_sha, base_sha=pull.base_sha,
-            test_merge_sha=checks.merge_sha, required=[asdict(check) for check in required],
+            phase=phase, number=pull.number, head_sha=pull.head_sha, base_sha=pull.base_sha,
+            test_merge_sha=merge_sha, required=[asdict(check) for check in required],
             observations=[
                 {"name": evidence.name, "kind": evidence.kind, "tested_sha": evidence.tested_sha,
                  "outcome": evidence.outcome, "app_id": evidence.app_id}
-                for evidence in checks.observations
+                for evidence in observations
                 if any(check.kind == evidence.kind and check.name == evidence.name
                        and (check.app_id is None or check.app_id == evidence.app_id) for check in required)
             ],

@@ -7,7 +7,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from . import validation
 from .intake_models import AttemptEvent, Identifier, Payload, Text
-from .transitions import Stage
+from .transitions import Outcome, Stage
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Name = Annotated[str, StringConstraints(min_length=1, max_length=255)]
@@ -124,6 +124,13 @@ class IndependentReview(AttemptEvent):
     expected: ExpectedRefs
     pull: GitHubPull
     review: ReviewRecord
+    outcome: Literal[Outcome.SUCCEEDED, Outcome.CHANGES_REQUIRED] = Outcome.SUCCEEDED
+
+    @model_validator(mode="after")
+    def blocking_findings(self):
+        if self.outcome == Outcome.CHANGES_REQUIRED and not self.review.findings:
+            raise ValueError("Changes required needs at least one finding")
+        return self
 
 
 class MergeIntent(Payload):
