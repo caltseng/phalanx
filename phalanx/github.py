@@ -167,6 +167,10 @@ class GitHubClient:
         self._transport = transport
         self._timeout = timeout
 
+    @property
+    def repository(self) -> str:
+        return self._repository
+
     def _request(self, operation, method, url, *, payload=None, expected=200):
         headers = self._headers.copy()
         body = None
@@ -189,13 +193,20 @@ class GitHubClient:
         except (ValueError, UnicodeError):
             raise error_type(operation, "invalid JSON response", response.status) from None
 
-    def _pages(self, operation: str, url: str, key: str | None = None) -> Iterator[dict]:
+    def _pages(
+        self, operation: str, url: str, key: str | None = None, *,
+        authorize: Callable[[], None] | None = None, page_limit: int | None = None,
+    ) -> Iterator[dict]:
         origin = urlsplit(url)
         visited = set()
         while url:
             if url in visited:
                 raise GitHubError(operation, "pagination loop")
+            if page_limit is not None and len(visited) >= page_limit:
+                raise GitHubError(operation, "pagination limit reached")
             visited.add(url)
+            if authorize is not None:
+                authorize()
             data, headers = self._request(operation, "GET", url)
             records = data if key is None else (data.get(key) if isinstance(data, dict) else None)
             if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
@@ -227,7 +238,8 @@ class GitHubClient:
         return f"{self._repo_url}/pulls/{number}"
 
     def list_matching_pull_requests(
-        self, *, head_owner: str, head: str, base: str | None = None
+        self, *, head_owner: str, head: str, base: str | None = None,
+        authorize: Callable[[], None] | None = None, page_limit: int | None = None,
     ) -> tuple[PullRequest, ...]:
         """Include closed PRs. Omit base to find PRs retargeted within the repo."""
         operation = "list matching pull requests"
@@ -236,7 +248,10 @@ class GitHubClient:
             filters["base"] = base
         query = urlencode(filters)
         matches = []
-        for data in self._pages(operation, f"{self._repo_url}/pulls?{query}"):
+        for data in self._pages(
+            operation, f"{self._repo_url}/pulls?{query}",
+            authorize=authorize, page_limit=page_limit,
+        ):
             try:
                 pull = _pull_request(data)
             except (AttributeError, KeyError, TypeError, ValueError):

@@ -94,12 +94,12 @@ def _item_branch(item_id: str) -> str:
 
 
 @contextmanager
-def _repository_lock(common: Path):
-    """Serialize short bookkeeping operations across local processes and threads."""
+def _file_lock(path: Path):
+    """Serialize an operation across local processes and threads."""
     try:
-        handle = (common / "phalanx-workspaces.lock").open("a+b")
+        handle = path.open("a+b")
     except OSError as exc:
-        raise WorkspaceError(f"Cannot open workspace lock in {common}: {exc}") from exc
+        raise WorkspaceError(f"Cannot open Git operation lock at {path}: {exc}") from exc
     with handle:
         deadline = time.monotonic() + 30
         while True:
@@ -112,7 +112,7 @@ def _repository_lock(common: Path):
                 break
             except OSError as exc:
                 if time.monotonic() >= deadline:
-                    raise WorkspaceError(f"Cannot acquire workspace lock in {common}: {exc}") from exc
+                    raise WorkspaceError(f"Cannot acquire Git operation lock at {path}: {exc}") from exc
                 time.sleep(0.05)
         yield
         # Closing the file releases the lock, including on exceptions and process exit.
@@ -201,7 +201,7 @@ class WorkspaceManager:
     def prepare(self, item_id: str, *, base: str) -> Workspace:
         """Create from a local base ref, or return the existing checkout as found."""
         common = self._verify_checkout()
-        with _repository_lock(common):
+        with _file_lock(common / "phalanx-workspaces.lock"):
             path, branch, owner_ref = self._location(common, item_id)
             registered = self._registered(path, branch)
             branch_ref = f"refs/heads/{branch}"
@@ -240,7 +240,7 @@ class WorkspaceManager:
         if closed is not True:
             raise WorkspaceError("Workspace cleanup requires a closed execution")
         common = self._verify_checkout()
-        with _repository_lock(common):
+        with _file_lock(common / "phalanx-workspaces.lock"):
             path, branch, owner_ref = self._location(common, item_id)
             if not self._registered(path, branch):
                 return False

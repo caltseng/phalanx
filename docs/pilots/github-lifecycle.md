@@ -17,6 +17,12 @@ Before a write, persist its intent with item and attempt IDs, state version, ope
 
 For a lost push response, inspect the remote ref. At the desired SHA, adopt the effect under the current claim. At the recorded old SHA or expected absence, retry the same conditional write after accounting for the prior writer. Any other value routes to reconciliation. Keep the original lease expectation through retries rather than silently replacing it with a fresh remote value.
 
+### Runner integration
+
+`DraftPublisher.publish` handles first draft publication on one device. Build the intent from the server's registered repository, item and base, the runner's expected remote revisions, and the candidate verified from PH-11 worker handoff. An optional worker PR number or URL is not publication evidence. Share one runner-owned journal directory across local processes. It contains the intent, latest attempt and state version, pending operation, and known or verified PR number. The per-item lock serializes the local calls, including recovery. A process that loses its claim leaves the journal available to a successor with the same intent.
+
+The attended runner still needs to supply the current-claim callback for the intended publication stage and commit the outcome with a server-side claim and state-version check. A verified result supplies the exact primary PR and any duplicate candidates. Conflicts can include exact provider observations for reconciliation. Map pending and lost-claim outcomes to recovery, and use the base-changed outcome to request a revised candidate when there is no unresolved write. A confirmed push without a sent draft can be superseded by a candidate whose lease expects the recorded pushed commit. A different intent stays blocked while a push or draft write is unresolved. The journal is local recovery state. The API remains authoritative for stage, evidence, and operator visibility.
+
 ## PH-14 validation and promotion
 
 | Point in the lifecycle | Evidence needed |
