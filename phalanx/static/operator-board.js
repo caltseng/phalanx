@@ -43,7 +43,7 @@
    * kind is "open" or "closed". Cursors are opaque strings or null. The adapter
    * orders closed items newest first and prioritizes input waits in open work.
    * Items contain string id, title, repo, stage, status, lastAdvancedAt, waitReason?,
-   * chatUrl?, draftUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}.
+   * retryAt? (epoch ms), chatUrl?, draftUrl?, primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}.
    * Use status "waiting_for_input" for items requiring operator attention.
    * outcome is a display label, including "Checked in" vs "Ready for check-in".
    * source.detail({id, cursor, limit, signal}) resolves to
@@ -51,6 +51,7 @@
    * attempt is a display reference. Dependencies are {title, milestone, status}.
    * Events are newest first and contain {at, fromStage?, stage, status, reason?}.
    * Dates are ISO timestamps. Status/stage values may use underscores.
+   * source.openReport?(output) opens an authenticated report in the host.
    * Reject failed reads. Runner availability is independent of read availability.
    */
   function mount(root, source) {
@@ -89,15 +90,25 @@
       row.append(button, element("p", item.repo, { class: "meta" }));
       if (kind === "closed") {
         row.append(element("p", label(item.outcome) + " · " + when(item.closedAt)));
-        if (item.output) addLink(row, item.output.kind === "pr" ? "Verified PR" : "Field report", item.output.url);
+        if (item.output?.kind === "report" && source.openReport) {
+          const report = element("button", "Field report", { type: "button", "data-report": item.id });
+          report.addEventListener("click", () => source.openReport(item.output));
+          const line = element("p");
+          line.append(report);
+          row.append(line);
+        } else if (item.output) {
+          addLink(row, item.output.kind === "pr" ? "Verified PR" : "Field report", item.output.url);
+        }
       } else {
         row.append(element("p", "Stage: " + label(item.stage) + " · Status: " + label(item.status), {
           class: item.status === "waiting_for_input" ? "attention" : "meta"
         }));
         row.append(element("p", "Last advanced: " + when(item.lastAdvancedAt), { class: "meta" }));
         if (item.waitReason) row.append(element("p", item.waitReason));
+        if (item.retryAt) row.append(element("p", "Retry scheduled: " + when(item.retryAt), { class: "meta" }));
         addLink(row, "Worker chat", item.chatUrl);
-        addLink(row, "Draft PR", item.draftUrl);
+        if (item.primaryPrUrl) addLink(row, "Primary PR", item.primaryPrUrl);
+        else addLink(row, "Draft PR", item.draftUrl);
       }
       return row;
     }
@@ -109,6 +120,7 @@
       if (item.waitReason) content.append(element("p", item.waitReason));
       content.append(element("p", "Attempt: " + (data.attempt || "None recorded")));
       if (data.nextAction) content.append(element("p", "Next action: " + data.nextAction));
+      if (item.retryAt) content.append(element("p", "Retry scheduled: " + when(item.retryAt)));
       if (data.resumeTrigger) content.append(element("p", "Resume trigger: " + data.resumeTrigger));
       if (data.dependencies?.length) {
         const list = element("ul");
@@ -192,12 +204,15 @@
             const content = render(data);
             const focused = body.contains(document.activeElement) ? document.activeElement : null;
             const focusedItem = focused?.dataset.item;
+            const focusedReport = focused?.dataset.report;
             const focusedHref = focused?.getAttribute("href");
             body.replaceChildren(content);
             syncSelection();
             if (focused) {
-              const replacement = [...body.querySelectorAll("button[data-item], a")].find(node =>
-                focusedItem ? node.dataset.item === focusedItem : node.getAttribute("href") === focusedHref
+              const replacement = [...body.querySelectorAll("button[data-item], button[data-report], a")].find(node =>
+                (focusedItem && node.dataset.item === focusedItem) ||
+                (focusedReport && node.dataset.report === focusedReport) ||
+                (focusedHref && node.getAttribute("href") === focusedHref)
               );
               (replacement || heading).focus({ preventScroll: true });
             }
