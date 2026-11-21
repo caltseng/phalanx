@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
+from . import report_execution as reports
 from .codex_handoff import CodexHandoff, WorkPacket
 from .workspaces import WorkspaceError, WorkspaceManager
 
@@ -41,7 +42,7 @@ class RunnerAPI:
         self.token = token
         self.opener = build_opener(NoRedirect())
 
-    def call(self, path, body=None, *, lease=None, key=None):
+    def call(self, path, body=None, *, lease=None, key=None, plain_text=False):
         headers = {"Authorization": f"Bearer {self.token}"}
         if body is not None:
             headers["Content-Type"] = "application/json"
@@ -53,7 +54,7 @@ class RunnerAPI:
                           data=None if body is None else json.dumps(body).encode())
         try:
             with self.opener.open(request, timeout=10) as response:
-                return json.load(response)
+                return response.read().decode("utf-8") if plain_text else json.load(response)
         except HTTPError as exc:
             raise RunnerError(f"Runner API returned HTTP {exc.code} for {path}") from None
         except (URLError, TimeoutError, ValueError):
@@ -62,7 +63,11 @@ class RunnerAPI:
 
 STAGES = {
     "development": "Commit the candidate locally. Put the full commit hash alone in details.evidence.",
-    "report_drafting": "Put the field report Markdown in details.evidence.",
+    reports.DRAFTING: (
+        "Draft and self-review the field report. Address any findings in the handoff. "
+        "Put the complete Markdown in details.evidence."
+    ),
+    reports.REVIEW: reports.REVIEW_INSTRUCTIONS,
 }
 
 
@@ -120,7 +125,8 @@ class AttendedRunner:
             if not eligible:
                 raise RunnerError("No registered checkout passed verification; check local mappings and origins")
             record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                          repositories=eligible, blocked=blocked, stages=sorted(STAGES))
+                          repositories=eligible, blocked=blocked,
+                          stages=sorted(STAGES.keys() | {reports.STORAGE}))
             return record["lease"]
 
         lease = self._transaction(reserve)
@@ -153,6 +159,8 @@ class AttendedRunner:
 
         snapshot = self._transaction(dict)
         ensure_reservation(snapshot)
+        if snapshot["claim"]["execution"]["state"]["stage"] == reports.STORAGE:
+            return self._store_report(snapshot)
         launch = self._prepare_launch(snapshot)
 
         def commit_launch(record):
@@ -166,12 +174,35 @@ class AttendedRunner:
         self._transaction(commit_launch)
         return launch
 
+    def _store_report(self, snapshot):
+        if "submission" not in snapshot:
+            self._renew(snapshot)
+            submission = {"body": reports.storage_body(snapshot["claim"], self.api)}
+
+            def save(record):
+                if record.get("lease") != snapshot["lease"]:
+                    raise RunnerError("The original storage reservation ended; inspect status")
+                record.setdefault("submission", submission)
+                record["lease_expires_at"] = max(record["lease_expires_at"],
+                                                 snapshot["lease_expires_at"])
+
+            self._transaction(save)
+
+        def send(record):
+            if record.get("lease") != snapshot["lease"]:
+                raise RunnerError("The original storage reservation ended; inspect status")
+            result = self._send_submission(record, f"phalanx-attempt-{snapshot['claim']['attempt_id']}")
+            return {"status": "report_storage_submitted", "execution": result}
+
+        return self._transaction(send)
+
     def _prepare_launch(self, record):
         if "packet" in record:
             raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
         claim = record["claim"]
         execution = claim["execution"]
-        stage = execution["state"]["stage"]
+        state = execution["state"]
+        stage = state["stage"]
         if stage not in STAGES:
             raise RunnerError(f"Stage {stage} needs a different handler; claim retained for recovery")
         request = claim["request"]
@@ -182,15 +213,20 @@ class AttendedRunner:
         workspace = self._manager(mapping, record["repositories"][repo]).prepare(
             claim["item_id"], base=f"refs/remotes/origin/{base}",
         )
-        candidate = execution["state"].get("candidate")
+        candidate = state.get("candidate")
         if candidate and candidate != workspace.head:
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
+        report_checkpoint = None
+        findings = state.get("report_review_findings")
+        if stage == reports.REVIEW or (stage == reports.DRAFTING and findings):
+            report_checkpoint = reports.checkpoint(self.api, claim)
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
             worktree=workspace.path, branch=workspace.branch, expected_revision=workspace.head,
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
             evidence_requirements=STAGES[stage], base_branch=base,
+            report_checkpoint=report_checkpoint, handoff=findings or "",
             context=json.dumps({field: request.get(field, []) for field in
                                 ("context_links", "acceptance_criteria")}, ensure_ascii=False),
         )
@@ -295,8 +331,10 @@ class AttendedRunner:
             body = {"attempt_id": record["claim"]["attempt_id"], "stage": packet.stage,
                     "expected_version": packet.state_version, "outcome": result.outcome}
             if packet.output_type == "report" and workspace.head != packet.expected_revision:
-                raise RunnerError("Report checkout HEAD changed during drafting")
-            if result.outcome == "succeeded":
+                raise RunnerError("Report checkout HEAD changed during the assignment")
+            if packet.stage == reports.REVIEW and result.outcome in {"succeeded", "changes_required"}:
+                body.update(reports.review_evidence(packet, result))
+            elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
                     if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
@@ -343,14 +381,16 @@ class AttendedRunner:
             packet = self._handoff(record).packet
             if packet.marker != marker:
                 raise RunnerError("A different launch owns the slot")
-            claim = record["claim"]
-            path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
-            response = self.api.call(path, record["submission"]["body"],
-                                     lease=record["lease"], key=marker)
-            record.clear()
-            return response
+            return self._send_submission(record, marker)
 
         return self._transaction(send)
+
+    def _send_submission(self, record, key):
+        claim = record["claim"]
+        path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
+        response = self.api.call(path, record["submission"]["body"], lease=record["lease"], key=key)
+        record.clear()
+        return response
 
 
 def add_attended_command(commands):

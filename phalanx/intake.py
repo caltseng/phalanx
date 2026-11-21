@@ -327,6 +327,12 @@ def result(db, item_id, execution_id, payload, lease_digest):
                         "owner intervention")
         else:
             details["retry_at_ms"] = retry_at
+    if payload.report_review_notes is not None:
+        if state.stage != Stage.REPORT_REVIEW or payload.outcome not in {
+            Outcome.SUCCEEDED, Outcome.CHANGES_REQUIRED,
+        }:
+            raise Conflict("Review notes require a successful review or changes-required result")
+        details["report_review_notes"] = payload.report_review_notes
     draft_revision = payload.report_revision
     if payload.report_markdown is not None:
         if state.stage != Stage.REPORT_DRAFTING or payload.outcome != Outcome.SUCCEEDED:
@@ -357,7 +363,8 @@ def result(db, item_id, execution_id, payload, lease_digest):
         outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
                           prevalidated_candidate=payload.prevalidated_candidate,
-                          report_draft=draft_revision, reviewed_report=draft_revision),
+                          report_draft=draft_revision, reviewed_report=draft_revision,
+                          report_review_notes=payload.report_review_notes),
     )
 
 def draft(db, item_id, execution_id, revision):

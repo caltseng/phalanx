@@ -8,8 +8,12 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from phalanx.attended import AttendedRunner, RunnerError
+from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
+from phalanx.finalization import attempt
+from phalanx.store import connect, write_transaction
 from phalanx.workspaces import WorkspaceManager
+
+from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
 class StubAPI:
@@ -30,7 +34,7 @@ class StubAPI:
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
-            assert body["stages"] == ["development", "report_drafting"], body
+            assert body["stages"] == ["development", "report_drafting", "report_review", "report_storage"], body
             self.claim_leases.append(lease)
             if self.drop_claim:
                 self.drop_claim = False
@@ -53,7 +57,7 @@ class StubAPI:
         raise AssertionError(path)
 
 
-class AttendedTest(unittest.TestCase):
+class AttendedTest(ServerFixture, unittest.TestCase):
     def setUp(self):
         tmp = TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -86,6 +90,8 @@ class AttendedTest(unittest.TestCase):
                   "worktree", "branch", "expected_revision")
         result = {"contract_version": 1, **{key: p[key] for key in fields},
                   "outcome": outcome, "details": evidence if isinstance(evidence, dict) else {"evidence": evidence}}
+        if p["stage"] == "report_review":
+            result["report_revision"] = p["report_checkpoint"]["revision"]
         (self.root / "results" / f"{marker}.json").write_text(json.dumps(result), encoding="utf-8")
 
     def test_report_roundtrip_with_lost_claim_and_result_responses(self):
@@ -116,6 +122,90 @@ class AttendedTest(unittest.TestCase):
             "outcome": "succeeded", "report_markdown": "# Test report",
         })
         self.assertEqual(self.runner().status(), {"status": "idle"})
+
+    def test_report_review_and_storage_recovery_over_http(self):
+        database = self.root.parent / "queue.sqlite3"
+        self.start_server(database)
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "repo", "remote": str(self.checkout),
+        })[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Document the test suite", "target": "report",
+            "acceptance_criteria": ["Include the test command"],
+        })
+        self.assertEqual(status, 201, item)
+        execution = item["execution"]["id"]
+        route = f"/v1/items/{item['id']}/executions/{execution}"
+        self.api = RunnerAPI(self.url, RUNNER)
+
+        def submit(launch, details, outcome="succeeded"):
+            self.assertEqual(launch["status"], "launch_intent")
+            marker = launch["marker"]
+            thread_id = str(uuid4())
+            self.runner().receipt(marker, "local", thread_id=thread_id)
+            self.write_result(self.runner(), marker, details, outcome)
+            return self.runner().submit(marker, "local", thread_id)
+
+        draft = "# Tests\n"
+        first = submit(self.runner().prepare(), draft)["state"]["report_draft"]
+        review = self.runner().prepare()
+        prompt = review["create_thread"]["prompt"]
+        self.assertIn(json.dumps(draft), prompt)
+        self.assertIn(first, prompt)
+        self.assertIn("Include the test command", prompt)
+        findings = "Add the unittest command."
+        redo = submit(review, {"findings": findings}, "changes_required")
+        self.assertEqual(redo["state"]["stage"], "report_drafting")
+
+        rewrite = self.runner().prepare()
+        self.assertIn(findings, rewrite["create_thread"]["prompt"])
+        self.assertIn(first, rewrite["create_thread"]["prompt"])
+        markdown = "# Tests \u2713\r\nRun `python -m unittest`.  \n"
+        second = submit(rewrite, markdown)["state"]["report_draft"]
+        self.assertNotEqual(first, second)
+        review = self.runner().prepare()
+        self.assertIn(second, review["create_thread"]["prompt"])
+        self.assertNotIn(first, review["create_thread"]["prompt"])
+        verified = submit(review, "Verified the command against the test configuration.")
+        self.assertEqual(verified["state"]["stage"], "report_storage")
+
+        with write_transaction(database) as db:
+            db.execute("""CREATE TRIGGER storage_outage BEFORE INSERT ON reports
+                          BEGIN SELECT RAISE(ABORT, 'simulated outage'); END""")
+        call = self.api.call
+        posts = []
+
+        def drop_first_response(path, body=None, **kwargs):
+            response = call(path, body, **kwargs)
+            if path.endswith("/result"):
+                posts.append((body, kwargs))
+                if len(posts) == 1:
+                    raise RunnerError("lost storage response")
+            return response
+
+        with patch.object(self.api, "call", side_effect=drop_first_response):
+            with self.assertRaisesRegex(RunnerError, "lost storage response"):
+                self.runner().prepare()
+            self.assertEqual(self.runner().status()["status"], "submitting")
+            storage = self.runner().prepare()
+        self.assertEqual(storage["status"], "report_storage_submitted")
+        self.assertEqual(posts[0], posts[1])
+        self.assertEqual(posts[0][0]["report_revision"], second)
+        self.assertNotIn("report_markdown", posts[0][0])
+        self.assertEqual(storage["execution"]["state"]["status"], "waiting_for_external")
+        self.assertEqual(self.runner().status(), {"status": "idle"})
+
+        with write_transaction(database) as db:
+            db.execute("DROP TRIGGER storage_outage")
+            db.execute("UPDATE report_finalizations SET due_at=0 WHERE execution_id=?", (execution,))
+        attempt(database, execution)
+        self.assertEqual(self.get(route + "/report", OWNER), (200, markdown))
+        self.assertEqual(self.get(route + "/drafts/" + first, OWNER), (200, draft))
+        timeline = self.get(route + "/timeline", OWNER)[1]
+        self.assertTrue(any(event["details"].get("report_review_notes") == findings for event in timeline))
+        with connect(database, mode="ro") as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM reports").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 5)
 
     def test_claim_changed_before_launch_retains_reservation(self):
         self.api.drop_claim = False

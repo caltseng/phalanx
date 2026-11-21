@@ -89,7 +89,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 ### PH-11 Build the visible Codex adapter
 
 - **Depends on:** PH-01, PH-06, PH-10. **Output:** PR.
-- The attended single-slot bridge prepares development and report-drafting launches and relays verified results. Captain resolves the app project, records native receipts, and attests that the writer stopped. Dispatch filters claims by supported stage. Report review and storage, wider PR stage coverage, and a two-worker desktop run remain.
+- The attended single-slot bridge prepares development and report-drafting launches and relays verified results. Captain resolves the app project, records native receipts, and attests that the writer stopped. Dispatch filters claims by supported stage. Wider PR stage coverage and a two-worker desktop run remain.
 - When PH-08 lands, send the worker question, options and handoff as its structured `question` result, carry the recorded question and owner answer into the next claim and work packet, and verify a question, reply and resumed attempt through the attended CLI. Until that integration, the attended runner submits the question and handoff in the owner wait reason.
 - Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
 - **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
@@ -137,6 +137,7 @@ After the attended runner lands, call the core before admitting replacement work
 
 - **Depends on:** PH-09, PH-11. **Output:** PR.
 - Draft, review, and store Markdown reports with sources or evidence, limitations, and open questions where applicable. Persist reviewed draft checkpoints and use the same stage outcome and finalization rules as PR work.
+- The attended runner supports revision-pinned independent review, a findings handoff to drafting, and runner-only storage submission. Local HTTP coverage includes a review loop and storage recovery. The integrated desktop muster remains.
 - **Done when:** A report request completes end to end without a PR and the verified report can be retrieved with the runner offline. Retrying report storage does not redraft the report.
 
 ## Operator visibility and local release

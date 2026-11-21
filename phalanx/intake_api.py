@@ -112,8 +112,10 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
     payload = body.model_dump(mode="json")
     # Preserve receipt digests for result requests written before this field existed.
-    if isinstance(body, Result) and body.failure_reason is None:
-        payload.pop("failure_reason")
+    if isinstance(body, Result):
+        for field in ("failure_reason", "report_review_notes"):
+            if payload[field] is None:
+                payload.pop(field)
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,

@@ -37,7 +37,7 @@ From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This
 
 Use a server with durable intake and dispatch enabled. Register the repository
 with the owner API, fetch the desired origin branch into its local checkout,
-and file a development or report-drafting item. Give the machine one stable
+and file a development or report item. Give the machine one stable
 runner ID and use one private local state directory for this slice. The state
 directory contains the runner's current lease. Put it outside the mapped
 checkouts and restrict its access to the runner account. Keep the runner token
@@ -87,8 +87,15 @@ Both stages record local checkpoints for questions and failures. Questions
 wait for an owner reply. A technical failure from a confirmed-stopped worker
 enters the shared 5, 10, 20, and 40 second retry backoff. Exhausting the budget
 asks for owner intervention.
-The runner claims only development and report drafting. Later stages stay in
-the queue for a handler that supports them. Keep the state directory when
+Run `prepare` again for each report stage. Review launches a new chat with the
+server's exact draft revision. Review findings return to drafting with the
+previous draft and findings in the new packet. When `prepare` returns
+`report_storage_submitted`, the runner has handed the reviewed revision to the
+server for finalization. This step has no native chat. If the response is lost,
+repeat `prepare` with the same state directory. The server retries final storage
+independently and exposes the finished Markdown through the report endpoint.
+PR stages after development stay queued for a handler that supports them.
+Keep the state directory when
 restarting. Expired leases and unverified results require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.

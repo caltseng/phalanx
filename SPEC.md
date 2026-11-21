@@ -53,7 +53,7 @@ The server owns transitions. Each stage has required evidence, allowed next stag
 
 The server durably records report finalization before writing the final artifact. Finalization retries independently of worker capacity or dispatch pause. The owner can retry a stalled finalization after addressing the storage blocker.
 
-Field reports use a shorter path. Draft and self-review the report, verify its supporting evidence and links, then store the Markdown and complete the item. Findings return it to drafting. Reports share the same pause, retry, and handoff behavior.
+The draft author self-reviews the field report before submitting it. A fresh review assignment receives the exact stored draft revision and verifies the report against the request, its supporting evidence, and its links. Findings and the reviewed draft go back to drafting for fixes. The runner submits the approved revision for server finalization without launching a storage worker. Reports share the same pause, retry, and handoff behavior.
 
 ### Execution status and recovery
 
