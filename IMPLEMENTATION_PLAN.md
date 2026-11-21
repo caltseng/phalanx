@@ -68,6 +68,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-05. **Output:** PR.
 - Persist a focused question and handoff before releasing the slot. Provide a canonical owner reply through the API and CLI, plus one notification route. Index external recheck times, process due work in bounded batches with jitter and provider-directed backoff, and coalesce duplicate events by gate and revision. Surface why an item is waiting and what will resume it.
+- The durable slice provides the owner inbox, versioned replies, and runner endpoints for due waits and same-stage rechecks. Remaining integration includes active runner polling, provider observations and event coalescing by gate and revision, and the overdue-wave load check against lease renewals.
 - **Done when:** Replying queues the correct stage exactly once, a missed event is recovered by a recheck, and duplicate events or a wave of overdue waits neither occupy worker slots nor drown out lease renewals.
 
 ### PH-09 Make finalization durable

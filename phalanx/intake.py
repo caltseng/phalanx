@@ -204,6 +204,11 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         next_state = decide(state, event, **options)
     except ValueError as error:
         raise Conflict(str(error)) from error
+    if event == Event.RESULT:
+        has_question = details.get("question") is not None
+        if (next_state.status == Status.WAITING_FOR_INPUT) != has_question:
+            raise Conflict("A structured question and handoff are required for an input wait"
+                           if not has_question else "This result does not open an input wait")
     version = row["version"] + 1
     clock = datetime.now(UTC)
     now = clock.isoformat(timespec="microseconds")
@@ -220,6 +225,8 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         (version, state_json, now, ready_since, retry_at, retry_count, row["id"]),
     )
     record(db, row["id"], version, event, details, state_json, now, attempt_id)
+    if state.status == Status.WAITING_FOR_EXTERNAL:
+        db.execute("DELETE FROM external_rechecks WHERE execution_id=?", (row["id"],))
     if attempt_id and event != Event.CLAIM:
         db.execute("UPDATE attempts SET ended_at=? WHERE id=?", (now, attempt_id))
     return execution_view(execution_row(db, row["item_id"], row["id"]))
@@ -236,9 +243,18 @@ def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, 
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (attempt_id, row["id"], state.stage, runner_id, lease_digest, lease_expires_at, timestamp()),
     )
+    resume = db.execute(
+        """SELECT event, details_json FROM transition_history
+           WHERE execution_id=? AND version=? AND event IN (?, ?)""",
+        (row["id"], row["version"], Event.REPLY, Event.RECHECK),
+    ).fetchone()
     execution = apply(db, row, state, Event.CLAIM, attempt_id=attempt_id,
                       details={"runner_id": runner_id, "ready_since_ms": row["ready_since"]})
-    return {"attempt_id": attempt_id, "execution": execution}
+    claim = {"attempt_id": attempt_id, "execution": execution}
+    if resume is not None:
+        field = "input_reply" if resume["event"] == Event.REPLY else "external_recheck"
+        claim[field] = json.loads(resume["details_json"])
+    return claim
 
 
 def _check_attempt(db, execution_id, state, payload, lease_digest):
@@ -326,6 +342,8 @@ def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     _check_attempt(db, execution_id, state, payload, lease_digest)
     wait = Wait(**payload.wait.model_dump()) if payload.wait else None
+    if payload.question is not None:
+        wait = Wait(wait.reason if wait else payload.question.prompt, "owner reply")
     details = payload.model_dump(mode="json", exclude={"report_markdown", "expected_version"})
     draft_revision = payload.report_revision
     if payload.report_markdown is not None:

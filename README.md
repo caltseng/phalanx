@@ -103,6 +103,21 @@ Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to d
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`.
 
+### Answer a waiting item
+
+With the owner token configured, poll the local question inbox and use the item's IDs and version from the result:
+
+```powershell
+python -m phalanx inbox
+python -m phalanx reply ITEM_ID EXECUTION_ID "Use the existing interface" --version 3 --key reply-001
+```
+
+Reuse the same key and body if retrying the reply after a lost response. For more inbox entries, pass the last entry's `waiting_since` to `--after-time` and its `execution_id` to `--after-id`.
+
+Runners submit a structured `question` with `prompt`, `handoff`, optional `options`, and optional `proposed_default` in a stage result that needs input. The next claim after a reply includes `input_reply` with the answer and question. The authenticated execution timeline retains both.
+
+Runners can post `/external-wait` under an execution with the live attempt lease, expected version, and an idempotency key. Include the attempt and stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Both operations use the runner token. A recheck queues the same stage for verification. Provider observation and recurring polling are runner integration work.
+
 ### File and inspect work
 
 Set `PHALANX_OWNER_TOKEN` to the same owner token used by the server. Set `PHALANX_API_URL` or pass `--api-url` before the command to override `http://127.0.0.1:8000`.
