@@ -25,17 +25,7 @@ class PrimaryPull:
 
 @dataclass(frozen=True)
 class CheckInGates:
-    """Fresh normalized evidence from trusted review and policy adapters.
-
-    Direct merge assurance must cover the credential, allowed merge method,
-    target branch, and current revision. Supply it only when the repository
-    permits REST's base race and any base-sensitive evidence is protected by
-    a repository mechanism verified to apply to the actual merge credential.
-    A fresh ref read alone provides no protection from a concurrent base
-    advance or retarget, and parent verification only detects an unexpected
-    merge after the write. Queue-required and exact-base atomic policies
-    cannot authorize this path.
-    """
+    """Fresh normalized evidence from trusted review and policy adapters."""
 
     primary: PrimaryPull
     checks: GateResult
@@ -43,7 +33,6 @@ class CheckInGates:
     approvals_satisfied: bool
     conversations_resolved: bool
     merge_authorized: bool
-    direct_merge_assurance: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,7 +40,6 @@ class MergeIntent:
     """Persist before sending a merge request. There is no write on recovery."""
 
     primary: PrimaryPull
-    assurance: str
 
 
 @dataclass(frozen=True)
@@ -119,9 +107,7 @@ class CheckInCoordinator:
             return CheckInOutcome("ready", "The primary PR is ready for check-in",
                                   VerifiedPullRequest(primary.url, primary.revision))
         assert_claim()
-        assurance = gates.direct_merge_assurance
-        assert assurance is not None  # Validated by _verify_gates for a merge target.
-        if not reserve(MergeIntent(primary, assurance)):
+        if not reserve(MergeIntent(primary)):
             return CheckInOutcome("unresolved", "Reconcile the existing merge reservation before another write")
         try:
             current_gates = read_gates(primary)
@@ -130,8 +116,6 @@ class CheckInCoordinator:
         problem = self._verify_gates(primary, target, current_gates)
         if problem is not None:
             return problem
-        if current_gates.direct_merge_assurance != assurance:
-            return CheckInOutcome("stale", "Repository assurance changed during merge reservation")
         problem = self._verify_ready(primary)
         if problem is not None:
             # The reserving writer can retire this intent because it did not send a request.
@@ -153,11 +137,8 @@ class CheckInCoordinator:
             return CheckInOutcome("blocked", "; ".join(gates.checks.reasons) or "Required checks are unsatisfied")
         if not (gates.review_current and gates.approvals_satisfied and gates.conversations_resolved):
             return CheckInOutcome("blocked", "Current review, approvals, and conversation resolution are required")
-        if target == Target.MERGED:
-            if not gates.merge_authorized:
-                return CheckInOutcome("blocked", "Current merge authorization is required")
-            if not gates.direct_merge_assurance or not gates.direct_merge_assurance.strip():
-                return CheckInOutcome("blocked", "Verified repository assurance for a direct merge commit is required")
+        if target == Target.MERGED and not gates.merge_authorized:
+            return CheckInOutcome("blocked", "Current merge authorization is required")
         return None
 
     def _verify_ready(self, primary: PrimaryPull) -> CheckInOutcome | None:

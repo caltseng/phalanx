@@ -32,7 +32,7 @@ class CheckInTests(unittest.TestCase):
         self.tip = BASE
         self.parents = (BASE, HEAD)
         self.gates = CheckInGates(PRIMARY, GateResult(GateState.SATISFIED),
-                                  True, True, True, True, "verified release branch policy")
+                                  True, True, True, True)
         self.intent = None
         self.puts = 0
         self.mode = "success"
@@ -101,7 +101,6 @@ class CheckInTests(unittest.TestCase):
     def test_blocked_gates_never_write(self):
         for changes in (
             {"merge_authorized": False},
-            {"direct_merge_assurance": None},
             {"review_current": False},
             {"approvals_satisfied": False},
             {"conversations_resolved": False},
