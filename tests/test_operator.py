@@ -7,7 +7,7 @@ import unittest
 from phalanx.intake import record
 from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, open_page
-from phalanx.store import APPLICATION_ID, connect, write_transaction
+from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, write_transaction
 from phalanx.transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -65,6 +65,12 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             for version in range(2, 5001):
                 transition(db, 10, version, QUEUED)
 
+        # Bring the pre-operator store to the deployed PH-09 version first.
+        with write_transaction(self.path) as db:
+            for version, statements in enumerate(MIGRATIONS[2:4], start=3):
+                for statement in statements:
+                    db.execute(statement)
+                db.execute(f"PRAGMA user_version = {version}")
         self.start_server(self.path)
 
     @staticmethod
@@ -98,9 +104,12 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             transition(db, 2, 2, replace(QUEUED, stage=Stage.REPORT_REVIEW))
             db.execute("UPDATE executions SET retry_at=? WHERE id=?", (1700000000000, identifier(2)))
             transition(db, 3, 2, self.closed(3))
+            transition(db, 4999, 2, WAITING)
             db.execute("INSERT INTO reports VALUES (?, ?)", (identifier(3), "Cancellation report"))
         later = self.page(f"{BOARD}?limit=3&cursor={first['next_cursor']}")
         self.assertEqual([row["id"] for row in later["items"]], list(map(identifier, [4, 5, 6])))
+        refreshed = self.page(BOARD + "?limit=2")
+        self.assertEqual([row["id"] for row in refreshed["items"]], list(map(identifier, [4999, 5000])))
         detail = self.page(f"{BOARD}/{identifier(2)}/timeline")
         self.assertEqual(detail["item"]["last_advanced_at"], LATER)
         self.assertEqual(detail["item"]["retry_at_ms"], 1700000000000)

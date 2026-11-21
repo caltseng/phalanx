@@ -1,8 +1,10 @@
+import asyncio
 from contextlib import asynccontextmanager
 import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
+from . import finalization
 from .auth import require_owner, require_runner
 from .config import Credentials, database_path
 from .dispatch_api import router as dispatch_router
@@ -16,7 +18,12 @@ async def lifespan(app: FastAPI):
     app.state.credentials = Credentials.from_env()
     app.state.database_path = database_path()
     migrate(app.state.database_path)
-    yield
+    task = asyncio.create_task(finalization.run(app.state.database_path))
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 app = FastAPI(title="Phalanx", lifespan=lifespan)

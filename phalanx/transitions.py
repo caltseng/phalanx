@@ -198,7 +198,7 @@ def _disposition(state: Execution, status: Status, report: StoredReport | None) 
     if report is not None:
         return _close(state, status, report)
     return _wait(state, Status.WAITING_FOR_EXTERNAL,
-                 Wait("Store the disposition report", "retry finalization"),
+                 Wait("Store the final Markdown report", "retry finalization"),
                  stopping=None, pending_output=status)
 
 
@@ -255,6 +255,10 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
         return _queue(state, Stage.REPORT_STORAGE)
     if stage is Stage.REPORT_STORAGE:
         report = evidence.stored_report
+        if report is None:
+            _require(state.report_draft and evidence.report_draft == state.report_draft,
+                     "Storage requires the current reviewed report draft")
+            return _disposition(state, Status.COMPLETED, None)
         _require(report and state.report_draft and report.draft_revision == state.report_draft,
                  "Storage must persist the reviewed report draft")
         return _close(state, Status.COMPLETED, report)
@@ -380,6 +384,12 @@ def decide(
     _require(state.status not in TERMINAL, "A closed execution must be rerun as a new execution")
     if state.pending_output is not None:
         _require(event is Event.FINALIZE, "Only finalization may resume this execution")
+        if evidence.stored_report is None and wait is not None:
+            return replace(state, wait=wait)
+        if state.pending_output is Status.COMPLETED and evidence.stored_report is not None:
+            _require(state.stage is Stage.REPORT_STORAGE
+                     and state.report_draft == evidence.stored_report.draft_revision,
+                     "Finalization requires the reviewed report revision")
         return _disposition(state, state.pending_output, evidence.stored_report)
     if event is Event.MERGE_VERIFIED:
         _require(state.stage is Stage.CHECK_IN, "Merge verification requires check-in")

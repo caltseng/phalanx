@@ -144,8 +144,8 @@ def recover_stopped(db, runner_id, attempt_id, body):
         raise intake.Conflict("The existing lease is still live")
     row, state = intake.check_current(db, body.item_id, attempt["execution_id"], body.expected_version)
     details = {"runner_id": runner_id, "reconciliation": body.reconciliation}
-    if state.stopping == Status.CANCELLED:
-        return intake.confirm_cancellation(db, row, state, attempt_id, details=details)
+    if state.stopping in {Status.CANCELLED, Status.FAILED}:
+        return intake.confirm_stop(db, row, state, attempt_id, details=details)
     if state.status != Status.RUNNING or state.stage != attempt["stage"]:
         raise intake.Conflict("This attempt has no supported stopped-worker recovery")
     if row["retry_count"] >= 4:

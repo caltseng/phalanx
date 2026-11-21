@@ -4,9 +4,10 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
-from time import time
+from time import monotonic, sleep, time
 import unittest
 
+from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest
 from phalanx.store import APPLICATION_ID, connect, write_transaction
 from phalanx.transitions import Event, Wait
@@ -116,6 +117,11 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         claim = self.claim(item, storage)
         self.assertEqual(self.submit(path, claim, token=RUNNER, lease=LEASE)[0], 409)
         self.assertEqual(self.get(route + "/report", OWNER)[0], 404)
+        # Reconcile a matching artifact already present from an interrupted write.
+        with write_transaction(self.path) as db:
+            db.execute("INSERT INTO reports VALUES (?, ?)", (storage["id"], "# Final\n"))
+            db.execute("""CREATE TRIGGER no_duplicate_report BEFORE INSERT ON reports
+                          BEGIN SELECT RAISE(ABORT, 'duplicate report write'); END""")
         status, complete = self.submit(path, dict(claim, report_revision=revision), token=RUNNER, lease=LEASE)
         self.assertEqual(status, 200, complete)
         self.assertEqual(complete["state"]["status"], "completed")
@@ -174,7 +180,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(replacement["previous_id"], cancelled["id"])
         self.assertEqual(self.get(base + "/executions", OWNER)[1], [cancelled, replacement])
         self.assertEqual([event["event"] for event in self.get(route + "/timeline", OWNER)[1]],
-                         ["intake", "claim", "cancel", "stop_confirmed"])
+                         ["intake", "claim", "cancel", "stop_confirmed", "finalize"])
         self.assertEqual(self.submit(route + "/rerun", rerun)[0], 409)
 
     def test_cancel_before_first_claim(self):
@@ -199,4 +205,76 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(closed["state"]["status"], "cancelled")
         self.assertIn("report_drafting", self.get(route + "/report", OWNER)[1])
         self.assertEqual([event["event"] for event in self.get(route + "/timeline", OWNER)[1]],
-                         ["intake", "claim", "external_wait", "cancel", "stop_confirmed"])
+                         ["intake", "claim", "external_wait", "cancel", "stop_confirmed", "finalize"])
+
+    def test_cancel_storage_error_rolls_back_and_recovers_after_restart(self):
+        item, _, base, route = self.create()
+        execution_id = item["execution"]["id"]
+        with write_transaction(self.path) as db:
+            # Fail after inserting the report, at the terminal timeline write.
+            db.execute("""CREATE TRIGGER terminal_write_outage BEFORE INSERT ON transition_history
+                          WHEN json_extract(NEW.state_json, '$.status') = 'cancelled'
+                          BEGIN SELECT RAISE(ABORT, 'simulated outage'); END""")
+        body = {"expected_version": 1, "reason": "Withdrawn during outage"}
+        status, pending = self.submit(route + "/cancel", body, key="cancel")
+        self.assertEqual(status, 200, pending)
+        self.assertEqual(pending["state"]["pending_output"], "cancelled")
+        self.assertEqual(pending["state"]["status"], "waiting_for_external")
+        self.assertIsNone(pending["state"]["final_output"])
+        self.assertEqual(self.get(route + "/report", OWNER)[0], 404)
+
+        self.stop_server(self.server)
+        with write_transaction(self.path) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 0)
+            db.execute("DROP TRIGGER terminal_write_outage")
+            db.execute("UPDATE report_finalizations SET due_at=0 WHERE execution_id=?", (execution_id,))
+        self.server = self.start_server(self.path)
+        deadline = monotonic() + 5
+        while monotonic() < deadline:
+            closed = self.get(base, OWNER)[1]["execution"]
+            if closed["state"]["status"] == "cancelled":
+                break
+            sleep(0.05)
+        self.assertEqual(closed["state"]["status"], "cancelled")
+        self.assertEqual(self.submit(route + "/cancel", body, key="cancel"), (200, closed))
+        self.assertIn("Withdrawn during outage", self.get(route + "/report", OWNER)[1])
+        with connect(self.path, mode="ro") as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM reports").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM report_finalizations").fetchone()[0], 0)
+
+    def test_failed_attempt_releases_slot_and_stalled_storage_can_be_retried(self):
+        item, _, _, route = self.create("checked_in")
+        claim = self.claim(item, item["execution"])
+        result = dict(claim, outcome="failed", wait={"reason": "Build unavailable", "trigger": "owner reply"})
+        status, waiting = self.submit(route + "/result", result, token=RUNNER, lease=LEASE)
+        self.assertEqual(status, 200, waiting)
+        body = {"expected_version": waiting["version"], "reason": "Build remains unavailable"}
+        with write_transaction(self.path) as db:
+            db.execute("INSERT INTO reports VALUES (?, ?)", (waiting["id"], "# Conflicting report"))
+        self.assertEqual(self.submit(route + "/close-failure", body, token=RUNNER)[0], 403)
+        status, pending = self.submit(route + "/close-failure", body)
+        self.assertEqual(status, 200, pending)
+        self.assertEqual(pending["state"]["pending_output"], "failed")
+        self.stop_server(self.server)
+        for _ in BACKOFF_SECONDS:
+            with write_transaction(self.path) as db:
+                db.execute("UPDATE report_finalizations SET due_at=0 WHERE execution_id=?", (pending["id"],))
+            stalled = attempt(self.path, pending["id"])
+        self.assertIn("stalled after 5 failures", stalled["state"]["wait"]["reason"])
+        self.assertEqual(stalled["state"]["wait"]["trigger"], "owner retry finalization")
+        self.assertIsNone(stalled["state"]["final_output"])
+        self.assertEqual(attempt(self.path, pending["id"]), stalled)
+
+        with write_transaction(self.path) as db:
+            self.assertEqual(db.execute("SELECT markdown FROM reports").fetchone()[0], "# Conflicting report")
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts WHERE ended_at IS NULL").fetchone()[0], 0)
+            db.execute("DELETE FROM reports WHERE execution_id=?", (pending["id"],))
+        self.server = self.start_server(self.path)
+        retry = {"expected_version": stalled["version"]}
+        self.assertEqual(self.submit(route + "/retry-finalization", retry, token=RUNNER)[0], 403)
+        status, closed = self.submit(route + "/retry-finalization", retry)
+        self.assertEqual(status, 200, closed)
+        self.assertEqual(closed["state"]["status"], "failed")
+        report = self.get(route + "/report", OWNER)[1]
+        for expected in ("# Failure report", "development (1)", "Build remains unavailable", "Next action"):
+            self.assertIn(expected, report)
