@@ -132,9 +132,11 @@ class WorkspaceManager:
         self.root = Path(root).resolve()
 
     def _verify_checkout(self) -> Path:
-        top = _git(self.checkout, "rev-parse", "--show-toplevel")
-        if Path(top.rstrip("\n")).resolve() != self.checkout:
-            raise WorkspaceError(f"Mapped checkout is not a Git worktree root: {self.checkout}")
+        top = _git(self.checkout, "rev-parse", "--show-toplevel").rstrip("\n")
+        if Path(top).resolve() != self.checkout:
+            # On case-insensitive macOS volumes, a mis-cased configured path lands here.
+            raise WorkspaceError(f"Mapped checkout {self.checkout} is not its Git worktree root {top}; "
+                                 "configure the exact on-disk path")
         origin = _git(self.checkout, "remote", "get-url", "--all", "origin").rstrip("\n")
         if _remote_identity(origin, self.checkout) != self.expected_remote:
             raise WorkspaceError(f"Origin of {self.checkout} does not match the registered remote")

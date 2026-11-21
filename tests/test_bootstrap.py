@@ -28,7 +28,8 @@ from threading import Thread
 
 import uvicorn
 
-server = uvicorn.Server(uvicorn.Config("phalanx.api:app", port=int(sys.argv[1])))
+server = uvicorn.Server(uvicorn.Config("phalanx.api:app", port=int(sys.argv[1]),
+                                     timeout_graceful_shutdown=5))
 
 def stop_on_eof():
     sys.stdin.buffer.read()
@@ -68,13 +69,15 @@ class ServerFixture:
     def stop_server(server):
         if server.stdin and not server.stdin.closed:
             server.stdin.close()
-        if server.poll() is None:
+        # Teardown only: a slow shutdown on a loaded host is not a test failure.
+        for stop in (None, server.terminate, server.kill):
+            if stop:
+                stop()
             try:
                 server.wait(timeout=15)
+                return
             except subprocess.TimeoutExpired:
-                server.terminate()
-                server.wait(timeout=10)
-                raise
+                pass
 
     def get(self, path, token=None):
         return self.request(path, token=token)

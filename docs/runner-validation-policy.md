@@ -71,7 +71,7 @@ the current call. Files are bounded to 1 MiB.
 
 Local checks are capped at 50 per repository with unique exact names. Commands
 need a nonempty argument list whose executable is absolute (and `.exe` on
-Windows). They run without a shell through `CandidateLocal` in the verified,
+Windows; for example `/usr/bin/python3` on macOS or Linux). They run without a shell through `CandidateLocal` in the verified,
 clean item worktree at the claimed candidate. Gitignored build output does not
 make the worktree dirty. Arguments are literal: no path
 discovery, interpolation, or environment expansion. `timeout_seconds` defaults

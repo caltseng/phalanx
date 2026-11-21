@@ -17,6 +17,8 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
+On macOS or Linux, use `.venv/bin/python` in place of `.\.venv\Scripts\python.exe` and `curl` for the health probe.
+
 ## Measured baseline
 
 Windows 11 Pro build 26200, AMD Ryzen 9 5900HS (8 cores, 16 logical processors), 39.4 GiB visible RAM, 15.9 GiB free physical RAM and 553 GiB free on C: at the sample. The six tracked Phalanx files totaled 90,558 bytes at the pilot base. Five launches of the portable CPython 3.14.9 process importing `sqlite3` took 204–283 ms (median 226 ms). Those are process startup timings. This repo has no build workload at the pilot base. Per-chat startup, marginal memory, and representative build CPU, memory and disk use remain unmeasured. The real visible-worker limit is unverified. PH-01 can supply visible-chat startup samples and PH-19 should measure their marginal footprint and representative builds on the intended repos.
