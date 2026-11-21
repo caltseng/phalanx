@@ -27,6 +27,10 @@ class LaunchNotDelivered(RunnerError):
     """The transport proves the app never received the request, so it may be sent again."""
 
 
+# Version 2 renamed the operations to resolve_project, launch and observe.
+BRIDGE_CONTRACT_VERSION = 2
+
+
 class CommandTransport:
     def __init__(self, command: list[str], *, timeout: float = 15):
         if not command or not 0 < timeout <= 30:
@@ -35,7 +39,7 @@ class CommandTransport:
         self.timeout = timeout
 
     def __call__(self, operation: str, arguments: dict) -> dict:
-        request = {"contract_version": 1, "operation": operation, "arguments": arguments}
+        request = {"contract_version": BRIDGE_CONTRACT_VERSION, "operation": operation, "arguments": arguments}
         process = None
         try:
             # Inherited pipes can keep communicate() draining after the helper

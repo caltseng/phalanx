@@ -10,7 +10,8 @@ from uuid import NAMESPACE_URL, uuid5
 fixture_path = Path(sys.argv[1])
 fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
 request = json.load(sys.stdin)
-assert request["contract_version"] == 1
+if request["contract_version"] != 2:
+    sys.exit(f"Unsupported bridge contract_version {request['contract_version']}; expected 2")
 operation, arguments = request["operation"], request["arguments"]
 if operation == "resolve_project":
     matches = [project for project in fixture["projects"] if project == arguments]

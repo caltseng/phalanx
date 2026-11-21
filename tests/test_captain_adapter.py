@@ -74,4 +74,4 @@ class CommandTransportTests(unittest.TestCase):
         command = [sys.executable, "-c", "import json, sys; print(json.dumps(json.load(sys.stdin)))"]
         request = {"marker": "fixture", "prompt": "Field report \u2713"}
         response = CommandTransport(command)("launch", request)
-        self.assertEqual(response, {"contract_version": 1, "operation": "launch", "arguments": request})
+        self.assertEqual(response, {"contract_version": 2, "operation": "launch", "arguments": request})

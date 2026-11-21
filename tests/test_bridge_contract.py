@@ -191,7 +191,7 @@ class RelayQueueTests(unittest.TestCase):
                                                 "observe", {"references": []}))
         waiter.start()
         taken = json.loads(relay("--state", str(self.root), "next", "--wait", "10").stdout)
-        self.assertEqual(taken["contract_version"], 1)
+        self.assertEqual(taken["contract_version"], 2)
         invalid = relay("--state", str(self.root), "respond", taken["id"], stdin="[")
         self.assertEqual(invalid.returncode, 1, invalid.stderr)
         self.assertIn("not valid JSON", invalid.stderr)

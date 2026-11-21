@@ -16,7 +16,7 @@ import sys
 from time import sleep, time
 from uuid import uuid4
 
-from .captain_adapter import LaunchNotDelivered
+from .captain_adapter import BRIDGE_CONTRACT_VERSION, LaunchNotDelivered
 from .handoff import _unique_object
 from .runner_errors import RunnerError
 
@@ -48,7 +48,7 @@ class RelayTransport:
                        (time(), time() - timeout))
 
     def __call__(self, operation: str, arguments: dict) -> dict:
-        body = json.dumps({"contract_version": 1, "operation": operation, "arguments": arguments},
+        body = json.dumps({"contract_version": BRIDGE_CONTRACT_VERSION, "operation": operation, "arguments": arguments},
                           sort_keys=True)
         key = hashlib.sha256(body.encode("utf-8")).hexdigest()
         cached = self.resolved.get(key)

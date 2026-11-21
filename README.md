@@ -228,8 +228,9 @@ The journal refuses a different runner ID or API URL.
 
 #### Bridge contract
 
-Both transports carry the same request: `contract_version: 1`, `operation`, and
-`arguments`, answered by one JSON object. The contract names no runtime; the
+Both transports carry the same request: `contract_version: 2`, `operation`, and
+`arguments`, answered by one JSON object. A bridge or Captain must reject any
+other version with an error rather than guess; version 1 used the old operation names. The contract names no runtime; the
 [runtime mapping](#runtime-mapping) says how each runtime serves it.
 
 A subprocess bridge (`--adapter-command`) is invoked once per operation, with
@@ -248,7 +249,7 @@ variables are removed from its subprocess environment; keep the bridge trusted.
 | Operation | Arguments and required response |
 | --- | --- |
 | `resolve_project` | Receives `host_id`, `project_id`, `checkout`. Discover the exact project on that host and return those verified fields; do not echo unverified input. The checkout must resolve to the configured root. |
-| `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host, titled `title`, whose first prompt is exactly `prompt`. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. |
+| `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host whose first prompt is exactly `prompt`, which contains the marker. Use `title` as the session name where the runtime allows it; otherwise use a name that fits, such as the attempt UUID from the marker. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. |
 | `observe` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). |
 
 Session rows use the recovery observation fields documented below. A `stopped`
@@ -273,8 +274,8 @@ directory. Repeat this cycle while the loop runs:
      project and root path.
    - `launch`: start the worker session **once**; reply with the host, marker
      and session UUID as `thread_id` (or a provisional ID as `client_thread_id`).
-   - `observe`: read each receipt's session, or search session history for the
-     marker; reply with fresh rows. Set `writers_stopped` only after verifying
+   - `observe`: read each receipt's session, or find the marker in session
+     first prompts or history; reply with fresh rows. Set `writers_stopped` only after verifying
      the session's turn stopped.
 3. Record the reply right away (observations go stale after 60 seconds):
    `python -m phalanx relay --state C:\phalanx-runner respond ID --file reply.json`,
@@ -304,7 +305,7 @@ in their first muster and record any correction here.
 | Runtime | `resolve_project` | `launch` | `observe` |
 | --- | --- | --- | --- |
 | Codex desktop app | `list_projects`; match the project ID, host and root path. | `create_thread` with `title`, `prompt` and target `{"type": "project", "projectId": project_id, "environment": {"type": "local"}}`. Return `threadId` as `thread_id` or `clientThreadId` as `client_thread_id`. | `read_thread` for receipts; `list_threads` history search for the marker. Use `codex app-server` only after verifying its threads appear in the app sidebar with the same identity as the app's tools. |
-| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. | `create_session` with `project_id`, `name` set to `title`, and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts and `list_sessions_and_chats` to find the marker by title. An idle session whose turn ended is `stopped`; busy is `active`. |
+| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, so read `assignment`, `started_at` and the marker from the session's first user turn in its transcript. An idle session whose turn ended is `stopped`; busy is `active`. |
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session's state under `~/.copilot/session-state/`, or find the marker in its history. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
