@@ -9,6 +9,7 @@ from .auth import require_owner, require_runner
 from .config import Credentials, database_path
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
+from .operator_api import router as operator_router
 from .store import connect, migrate
 
 
@@ -49,3 +50,4 @@ def runner_status():
 
 app.include_router(intake_router)
 app.include_router(dispatch_router)
+app.include_router(operator_router)
