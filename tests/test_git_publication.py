@@ -113,6 +113,18 @@ class GitPublicationTests(unittest.TestCase):
         self.assertEqual(result.status, "uncertain")
         self.assertEqual(self.publisher.read_head(), self.candidate)
 
+    def test_verifies_development_checkpoint_on_the_item_worktree(self):
+        self.publisher.verify_candidate(self.old, base="main", base_sha=self.old)
+        for candidate, base, base_sha in (
+            (self.candidate, "main", self.old),
+            (self.old, "main", self.candidate),
+            (self.old, "invalid base", self.old),
+            (self.old, self.ref.removeprefix("refs/heads/"), self.old),
+        ):
+            with self.subTest(candidate=candidate, base=base, base_sha=base_sha):
+                with self.assertRaises(PublicationError):
+                    self.publisher.verify_candidate(candidate, base=base, base_sha=base_sha)
+
     def test_claim_is_checked_after_preflight_and_before_push(self):
         class Expired(Exception):
             pass

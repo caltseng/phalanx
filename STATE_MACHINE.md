@@ -64,7 +64,7 @@ The arrows below apply only when their guards pass. A blocked guard keeps the st
 
 If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. An unexpected merge or a PR closed without merge requires a decision if the actionâ€™s intent cannot be established. Never open a replacement PR just because an existing one is closed.
 
-Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current check-in claim supplies provider evidence correlated with that intent and pre-merge revision. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
+Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current check-in claim supplies the verified provider merge commit and its ordered parents, matching the authorized base and candidate head. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
 
 ## Repository validation policy
 

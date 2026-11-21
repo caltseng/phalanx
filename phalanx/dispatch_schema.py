@@ -31,3 +31,10 @@ DISPATCH_SCHEMA = (
         capacity INTEGER NOT NULL CHECK (capacity >= 1)
     )""",
 )
+
+
+STAGE_QUEUE_SCHEMA = (
+    """CREATE INDEX queue_stage_heads ON executions
+        (queue_repository, queue_affinity, queue_priority, stage, ready_since, item_id, id)
+        WHERE status = 'queued' AND ready_since IS NOT NULL""",
+)

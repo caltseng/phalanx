@@ -242,10 +242,17 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
 
         claim = self.claim("check_in")
         merged = self.observation(claim, operation_id="merge-7",
-                                  verification="Reconciled the journaled write with the provider merge commit")
+                                  merge_parent_shas=[BASE, HEAD])
         merged["pull"].update(state="closed", merged=True, merge_commit=OTHER, base_sha=OTHER)
         self.assertEqual(self.result(claim)[0], 409)
         self.assertEqual(self.submit(dict(merged, operation_id="other-write"))[0], 409)
+        for parents, expected_status in (([OTHER, HEAD], 409), ([BASE, OTHER], 409),
+                                         ([HEAD, BASE], 409), ([HEAD], 422)):
+            with self.subTest(parents=parents):
+                self.assertEqual(self.submit(dict(merged, merge_parent_shas=parents))[0],
+                                 expected_status)
+        missing_parents = {key: value for key, value in merged.items() if key != "merge_parent_shas"}
+        self.assertEqual(self.submit(missing_parents)[0], 422)
         self.assertEqual(self.submit(dict(merged, expected=dict(merged["expected"], base_sha=OTHER)))[0], 409)
         self.assertEqual(self.submit(dict(merged, pull=dict(merged["pull"], number=8)))[0], 409)
         self.assertEqual(self.submit(dict(merged, pull=dict(merged["pull"], merged=False)))[0], 422)
@@ -267,4 +274,6 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(self.submit(merged, **headers), (status, execution))
         self.assertEqual(self.submit(merged)[0], 409)
         _, timeline = self.request(f"{self.execution}/timeline", OWNER)
-        self.assertEqual(sum(event["event"] == "merge_verified" for event in timeline), 1)
+        verified = [event for event in timeline if event["event"] == "merge_verified"]
+        self.assertEqual(len(verified), 1)
+        self.assertEqual(verified[0]["details"]["merge_parent_shas"], [BASE, HEAD])
