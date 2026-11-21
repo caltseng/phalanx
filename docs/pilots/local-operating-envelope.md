@@ -53,3 +53,24 @@ After restart, target healthy HTTP and durable queue reads within 10 s, dispatch
 - PH-06 should sweep 100k and 1M jobs with the seed proportions above and twice as many history rows. Use 4, 16 and 32 synthetic clients, paced at 80 aggregate operations/s as a target and with simultaneous bursts. Mix claims and completions with renewals and paginated board reads. Record offered and completed rates, lock and retry counts, latency percentiles per operation, query plans and oldest eligible age. Require zero duplicate claims, stale lease writes or oversubscription.
 - PH-19 should add 10,000 due external waits, prerequisite fan-out, urgent arrivals, a provider throttle and a storage outage. Restart during a dependent wakeup batch. Interrupt a worker while another item is waiting for a blocked prerequisite. Verify unaffected items advance and each affected item resumes from recorded state once its trigger is satisfied.
 - On the intended two repos, measure cold and warm worker launch to first observable progress, sampled system memory and incremental memory with 2, 4 and 8 visible workers, and wall time, CPU and peak disk delta for each repo's normal checks. Include parallel builds, preview lifetimes, worktrees and shared caches. Count uncertain sessions until reconciled. The synthetic client counts measure database contention only.
+
+## PH-06 scheduling probe
+
+A short local Windows probe used CPython 3.14.10, SQLite 3.53.1, the production schema and dispatch transactions, eight repository mappings, mixed priority and affinity, and the seed proportions above. Each run completed 96 cycles of claim, renewal, a stage result that released the slot into an input wait, and a 50-item keyset read. Timings include SQLite commit and application write-lock wait. The probe ran in one process and bypassed the HTTP layer. The paginated read simulated board traffic. This was one sample at each load, with other local activity.
+
+| Executions | Clients | Mode | Completed ops/s | Claim p95/p99 ms | Renewal p95/p99 ms |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 100,000 | 4 | Paced | 79.3 | 81.3 / 92.5 | 71.6 / 98.2 |
+| 100,000 | 4 | Burst | 100.2 | 67.7 / 72.4 | 67.4 / 100.8 |
+| 100,000 | 16 | Paced | 79.9 | 47.0 / 83.1 | 29.0 / 40.5 |
+| 100,000 | 16 | Burst | 83.2 | 405.4 / 417.0 | 404.8 / 417.2 |
+| 100,000 | 32 | Paced | 79.5 | 167.1 / 186.2 | 158.7 / 191.7 |
+| 100,000 | 32 | Burst | 103.8 | 506.6 / 512.5 | 480.6 / 492.9 |
+| 1,000,000 | 4 | Paced | 80.1 | 64.5 / 210.7 | 62.0 / 70.2 |
+| 1,000,000 | 4 | Burst | 99.2 | 59.4 / 115.2 | 117.8 / 396.8 |
+| 1,000,000 | 16 | Paced | 80.1 | 27.3 / 104.3 | 18.3 / 32.6 |
+| 1,000,000 | 16 | Burst | 103.7 | 372.4 / 395.5 | 217.7 / 364.7 |
+| 1,000,000 | 32 | Paced | 78.4 | 105.0 / 222.8 | 79.3 / 97.3 |
+| 1,000,000 | 32 | Burst | 119.1 | 405.7 / 412.5 | 393.9 / 410.3 |
+
+At both sizes, SQLite used a range search of the partial queue index for each repository, affinity and priority bucket. It used the partial open-attempt index for capacity and recovery, and the attempt primary key for renewal. Each run checked for duplicate stage claims and oversubscription and ended with zero open attempts. Deterministic tests covered stale lease writes and aging separately. The paced 32-client case exceeded the 100 ms p95 claim target at both sizes. These measurements leave HTTP latency, eligibility-to-claim delay, sustained throughput, and heartbeat admission under pressure open for the pilot.
