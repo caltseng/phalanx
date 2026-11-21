@@ -164,8 +164,12 @@ CLI, the supported standing setup is to choose "trust for future sessions" once
 per checkout, or to add the checkout's path to the `trustedFolders` array in
 `~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)).
 Only the owner grants trust; a Captain or worker never edits it. The Captain
-checks trust while serving `resolve_project`, so every untrusted repository is
-reported together before any worker launches.
+checks trust while serving `resolve_project` and answers an untrusted checkout
+with an error naming it and the setup action. The loop records every
+unverified mapping and its error together in one `mappings` loop status
+(`attended status --all`) and launches no worker for them, while unrelated
+mappings keep claiming and launching. Once trust is granted, the next check
+verifies the mapping and admission resumes.
 
 By default the loop reaches the worker runtime through the **Captain chat relay**,
 because the Captain chat holds the runtime's session tools. The loop queues
@@ -318,8 +322,9 @@ directory. Repeat this cycle while the loop runs:
    changes the outcome or authority is missing. `attended status --all` shows
    slot reasons.
 
-Identical requests waiting to be taken share one entry, and verified project resolutions
-are cached for ten minutes. The loop waits up to five minutes for a request to
+Identical requests waiting to be taken share one entry. Verified project resolutions
+are cached for ten minutes and failed ones for one minute, so an untrusted
+repository costs the Captain one answer a minute. The loop waits up to five minutes for a request to
 be taken and five more for its reply. A launch the Captain never took expires
 and is retracted, so the same packet can launch again. A taken request is never
 handed out again, even after a Captain restart. An unanswered one is settled as

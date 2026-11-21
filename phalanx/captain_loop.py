@@ -61,6 +61,7 @@ class CaptainLoop:
         self.admission, self.cursors = {}, {}
         self.discovery_future = None
         self.discovery_due = 0
+        self.reported_discovery, self.blocked_mappings = None, {}
         self.closed = False
         self._bind_identity()
 
@@ -83,7 +84,8 @@ class CaptainLoop:
             ):
                 raise RunnerError("State directory belongs to another runner or API; restore its original configuration")
             db.execute("INSERT OR IGNORE INTO captain VALUES ('identity', ?)", (expected,))
-            db.execute("DELETE FROM captain WHERE key LIKE 'admission-%' OR key LIKE 'cursor-%'")
+            db.execute("DELETE FROM captain WHERE key LIKE 'admission-%' OR key LIKE 'cursor-%' "
+                       "OR key='status-mappings'")
             for slot, data in db.execute("SELECT id, record FROM slot").fetchall():
                 record = json.loads(data)
                 if "loop" in record:
@@ -125,6 +127,29 @@ class CaptainLoop:
             else:
                 verified[key] = None
         return verified
+
+    def _report_mappings(self):
+        """Record every unverified configured mapping from one discovery pass in one loop status."""
+        future = self.discovery_future
+        if future is None or not future.done() or future is self.reported_discovery:
+            return
+        self.reported_discovery = future
+        try:
+            resolved = future.result()
+            blocked = {repo: resolved[self._mapping_key(mapping)]
+                       for repo, mapping in self.config["repositories"].items()
+                       if resolved[self._mapping_key(mapping)] is not None}
+        except Exception as error:
+            blocked = {"*": f"{type(error).__name__}: {error}"}
+        if blocked == self.blocked_mappings:
+            return
+        self.blocked_mappings = blocked
+        if blocked:
+            self._status("mappings", "mapping_blocked", "No worker launches for these repositories until their "
+                         "runtime project mapping is verified: "
+                         + "; ".join(f"{repo}: {error}" for repo, error in sorted(blocked.items())))
+        else:
+            self._status("mappings", "mappings_verified", "Every runtime project mapping is verified")
 
     def _prepare(self, slot, discovery=None):
         runner = self._runner(slot)
@@ -209,9 +234,7 @@ class CaptainLoop:
                 for repo, mapping in mappings.items():
                     error = resolved[self._mapping_key(mapping)]
                     if error is not None:
-                        blocked.append(repo)
-                        self.emit({"slot": slot, "status": "mapping_blocked", "repository": repo,
-                                   "reason": error})
+                        blocked.append(f"{repo} ({error})")
                     else:
                         verified[repo] = mapping
                 mappings = verified
@@ -224,7 +247,7 @@ class CaptainLoop:
         if blocked:
             return self._runner(slot), {
                 "status": "runtime_blocked", "slot": slot,
-                "reason": "No eligible runner-only work; restore runtime project mappings: " + ", ".join(blocked),
+                "reason": "No eligible runner-only work; restore runtime project mappings: " + "; ".join(blocked),
             }
         if result is None:
             raise RunnerError("No mapping is eligible for configured stages; restore the repository/runtime project mappings")
@@ -483,6 +506,7 @@ class CaptainLoop:
             self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
                          + ", ".join(self.unmatched))
         self.last_unmatched = self.unmatched.copy()
+        self._report_mappings()
         # Each project check is a Captain request; run it only for a free slot or a pending launch.
         free = self.recovery_ready and len(records) + len(self.unmatched) < self.runner.capacity
         launching = any(not any(field in record for field in (*_LAUNCH_EFFECTS, "cancel_stop"))

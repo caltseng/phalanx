@@ -185,6 +185,26 @@ class RelayQueueTests(unittest.TestCase):
         self.assertEqual(transport("resolve_project", {"project_id": "p"}), {"project_id": "p"})
         self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
 
+    def test_failed_resolution_is_cached_briefly_without_a_new_request(self):
+        transport = RelayTransport(self.root, timeout=30, poll=0.01)
+        results = []
+        waiter = Thread(target=self.call, args=(transport, results, "resolve_project", {"project_id": "p"}))
+        waiter.start()
+        taken = take_next(self.root, wait=10, poll=0.01)
+        respond(self.root, taken["id"], error="checkout is untrusted; trust it once")
+        waiter.join(10)
+        self.assertRegex(str(results[0]), "untrusted")
+        with self.assertRaisesRegex(RunnerError, "untrusted"):
+            transport("resolve_project", {"project_id": "p"})
+        self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
+        with patch("phalanx.captain_relay.RESOLVE_FAILURE_CACHE_SECONDS", 0):
+            retry = Thread(target=self.call, args=(transport, results, "resolve_project", {"project_id": "p"}))
+            retry.start()
+            fresh = take_next(self.root, wait=10, poll=0.01)
+            respond(self.root, fresh["id"], response={"project_id": "p"})
+            retry.join(10)
+        self.assertEqual(results[1], {"project_id": "p"})
+
     def test_cli_rejects_invalid_reply_and_reports_tool_error(self):
         results = []
         waiter = Thread(target=self.call, args=(RelayTransport(self.root, timeout=30, poll=0.01), results,
