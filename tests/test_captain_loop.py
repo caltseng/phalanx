@@ -14,7 +14,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
-from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport
+from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_loop import CaptainLoop
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -234,6 +234,27 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(len(self.native.launches), 1)
         self.assertEqual(restarted._records()[1]["relay"]["status"], "started")
+
+    def test_undelivered_launch_retracts_relay_intent_and_relaunches_once(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        original = self.native.__call__
+        undelivered = []
+        def native(operation, arguments):
+            if operation == "create_thread" and not undelivered:
+                undelivered.append(arguments["marker"])
+                raise LaunchNotDelivered("Captain relay never took create_thread")
+            return original(operation, arguments)
+        loop = CaptainLoop(self.root, self.config, self.api, CodexCLIAdapter(native),
+                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, emit=self.events.append)
+        self.addCleanup(loop.close)
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        for _ in range(5):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(undelivered), 1)
+        self.assertEqual([launch["marker"] for launch in self.native.launches], undelivered)
+        self.assertEqual(loop._records()[1]["relay"], {"marker": undelivered[0], "status": "started"})
 
     def test_pending_claim_replays_original_filters_and_secret(self):
         self.api.waiting = ["first"]

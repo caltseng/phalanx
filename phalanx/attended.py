@@ -557,7 +557,10 @@ def add_attended_command(commands):
 def run_attended(args):
     config = json.loads(args.config.read_text(encoding="utf-8"))
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
-    if not token and args.action in {"prepare", "renew", "submit"}:
+    if args.action == "prepare":
+        from .runner_preflight import preflight
+        preflight(config, token)
+    elif not token and args.action in {"renew", "submit"}:
         raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
     runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token), slot=args.slot)
     if args.action == "prepare":
