@@ -16,7 +16,9 @@ from uuid import UUID
 from .attended import AttendedRunner, RunnerAPI, RunnerError, STAGES
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery
-from .captain_adapter import CodexCLIAdapter, CommandTransport, ObservationBatch
+from .captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch
+from .captain_relay import RelayTransport
+from .runner_preflight import preflight
 from .workspaces import _file_lock, _git, _item_branch
 
 
@@ -117,8 +119,9 @@ class CaptainLoop:
                 continue
             try:
                 self.adapter.resolve_project(mapping)
-            except (RunnerError, OSError) as error:
-                verified[key] = str(error)
+            except Exception as error:
+                # A malformed reply blocks only the slots using this mapping.
+                verified[key] = str(error) if isinstance(error, RunnerError) else f"{type(error).__name__}: {error}"
             else:
                 verified[key] = None
         return verified
@@ -161,7 +164,16 @@ class CaptainLoop:
                 raise RunnerError("The original launch packet changed; reconcile before any relay")
             record["relay"] = {"marker": result["marker"], "status": "started"}
         runner._transaction(relay_intent)
-        receipt = self.adapter.launch(result)
+        try:
+            receipt = self.adapter.launch(result)
+        except LaunchNotDelivered:
+            # The app never saw this launch, so the original packet may relay again.
+            def retract(record, db):
+                if (record.get("lease") == snapshot["lease"] and "receipt" not in record
+                        and record.get("relay") == {"marker": result["marker"], "status": "started"}):
+                    del record["relay"]
+            runner._transaction(retract)
+            raise
         runner.receipt(result["marker"], result["host_id"], **receipt)
         return {"status": "receipt_recorded", "slot": slot, **receipt}
 
@@ -477,11 +489,6 @@ class CaptainLoop:
         for slot in list(self.cursors):
             if slot not in records and not any(slot in slots for slots in self.observations):
                 del self.cursors[slot]
-        if now >= self.discovery_due and (
-            self.discovery_future is None or self.discovery_future.done()
-        ):
-            self.discovery_future = self.native_pool.submit(self._discover, records)
-            self.discovery_due = now + self.poll_seconds
         if self.recovery_future is not None and self.recovery_future.done():
             future, self.recovery_future = self.recovery_future, None
             try:
@@ -502,6 +509,15 @@ class CaptainLoop:
             self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
                          + ", ".join(self.unmatched))
         self.last_unmatched = self.unmatched.copy()
+        # Each desktop check is a Captain request; run it only for a free slot or a pending launch.
+        free = self.recovery_ready and len(records) + len(self.unmatched) < self.runner.capacity
+        launching = any(not any(field in record for field in (*_LAUNCH_EFFECTS, "cancel_stop"))
+                        for record in records.values())
+        if (free or launching) and now >= self.discovery_due and (
+            self.discovery_future is None or self.discovery_future.done()
+        ):
+            self.discovery_future = self.native_pool.submit(self._discover, records)
+            self.discovery_due = now + self.poll_seconds
         if self.recovery_future is None and now >= self.recovery_due:
             route = f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/recovery"
             self.recovery_future = self.control_pool.submit(self.api.call, route)
@@ -565,18 +581,19 @@ def add_captain_command(commands):
     parser.add_argument("--heartbeat-seconds", type=float, default=20)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--wait-seconds", type=float, default=2)
-    parser.add_argument("--adapter-command", required=True, nargs=argparse.REMAINDER,
-                        help="trusted JSON bridge executable and arguments; put this option last")
+    parser.add_argument("--adapter-command", nargs=argparse.REMAINDER,
+                        help="trusted JSON bridge executable and arguments instead of the Captain chat relay; "
+                             "put this option last")
 
 
 def run_captain(args):
     config = json.loads(args.config.read_text(encoding="utf-8"))
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
-    if not token:
-        raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
+    preflight(config, token)
+    transport = (CommandTransport(args.adapter_command) if args.adapter_command
+                 else RelayTransport(args.state))
     loop = CaptainLoop(
-        args.state, config, RunnerAPI(config["base_url"], token),
-        CodexCLIAdapter(CommandTransport(args.adapter_command)),
+        args.state, config, RunnerAPI(config["base_url"], token), CodexCLIAdapter(transport),
         poll_seconds=args.poll_seconds, heartbeat_seconds=args.heartbeat_seconds,
         batch_size=args.batch_size, wait_seconds=args.wait_seconds,
     )

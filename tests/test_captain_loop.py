@@ -14,7 +14,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
-from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport
+from phalanx.captain_adapter import CodexCLIAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_loop import CaptainLoop
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -235,6 +235,27 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(self.native.launches), 1)
         self.assertEqual(restarted._records()[1]["relay"]["status"], "started")
 
+    def test_undelivered_launch_retracts_relay_intent_and_relaunches_once(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        original = self.native.__call__
+        undelivered = []
+        def native(operation, arguments):
+            if operation == "create_thread" and not undelivered:
+                undelivered.append(arguments["marker"])
+                raise LaunchNotDelivered("Captain relay never took create_thread")
+            return original(operation, arguments)
+        loop = CaptainLoop(self.root, self.config, self.api, CodexCLIAdapter(native),
+                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, emit=self.events.append)
+        self.addCleanup(loop.close)
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        for _ in range(5):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(undelivered), 1)
+        self.assertEqual([launch["marker"] for launch in self.native.launches], undelivered)
+        self.assertEqual(loop._records()[1]["relay"], {"marker": undelivered[0], "status": "started"})
+
     def test_pending_claim_replays_original_filters_and_secret(self):
         self.api.waiting = ["first"]
         self.api.drop_claim = True
@@ -376,7 +397,27 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(self.api.claims), 2)
         loop.discovery_due = 0
+        for _ in range(5):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(calls), 1, "launched slots at capacity need no desktop check")
+        self.config["capacity"] = 3
+        loop.runner.capacity = 3
         self.spin(loop, lambda: len(calls) == 2)
+
+    def test_malformed_resolution_blocks_only_its_mapping(self):
+        self.config["repositories"]["healthy"] = {**self.config["repositories"]["repo"],
+                                                   "project_id": "healthy-project"}
+        native = self.native.__call__
+        def malformed(operation, arguments):
+            if operation == "resolve_project" and arguments["project_id"] == "project":
+                return ["not", "an", "object"]
+            return native(operation, arguments)
+        loop = self.loop()
+        loop.adapter = CodexCLIAdapter(malformed)
+        resolved = loop._discover({})
+        self.assertIsNone(resolved[loop._mapping_key(self.config["repositories"]["healthy"])])
+        self.assertRegex(resolved[loop._mapping_key(self.config["repositories"]["repo"])], "AttributeError")
 
     def test_status_changes_have_one_durable_store_and_no_repeated_writes(self):
         runner = AttendedRunner(self.root, self.config, self.api)

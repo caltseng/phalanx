@@ -23,6 +23,10 @@ from .codex_handoff import _unique_object
 MAX_ADAPTER_REPLY_BYTES = 1024 * 1024
 
 
+class LaunchNotDelivered(RunnerError):
+    """The transport proves the app never received the request, so it may be sent again."""
+
+
 class CommandTransport:
     def __init__(self, command: list[str], *, timeout: float = 15):
         if not command or not 0 < timeout <= 30:

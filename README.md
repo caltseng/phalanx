@@ -132,15 +132,24 @@ loop for that directory. A process lock excludes a second loop; it does not
 prevent manual status, receipt, or recovery commands.
 
 ```powershell
-python -m phalanx captain --config runner.json --state C:\phalanx-runner --adapter-command codex-desktop-bridge
+python -m phalanx captain --config runner.json --state C:\phalanx-runner
 ```
 
-`codex-desktop-bridge` is an **external integration contract**, not a bundled
-executable or a claim of supported Codex desktop automation. Supply a trusted
-bridge that can actually discover and operate the authorized desktop project.
-Put `--adapter-command` last; all remaining arguments belong to the bridge.
-The executable fixture in `tests/fixtures/captain_bridge.py` tests the JSON
-boundary without contacting a desktop.
+The runner first runs a startup preflight (also run by `attended prepare`). It
+reports every missing package, Git older than 2.36, missing
+`PHALANX_RUNNER_TOKEN` and unreachable or rejected API together, and stops
+before any claim. Optional settings such as `PHALANX_GITHUB_TOKEN` are not
+required; without it, initial draft claims are excluded as before.
+
+By default the loop reaches the Codex app through the **Captain chat relay**,
+because only the Captain chat can call the app's thread tools. The loop queues
+each bridge request in `<state>\captain-relay.sqlite3` and waits; the Captain
+chat runs it with the matching app tool and records the reply. See
+[Captain chat relay](#captain-chat-relay). To use a trusted subprocess bridge
+instead, put `--adapter-command BRIDGE [ARGS...]` last; all remaining arguments
+belong to the bridge. The executable fixture in `tests/fixtures/captain_bridge.py`
+tests that boundary without contacting a desktop, and one shared contract test
+runs both the fixture and the relay.
 
 The loop enumerates durable reservations and the server's expired attempts
 before admitting work. An unavailable recovery listing or unmatched attempt
@@ -218,9 +227,11 @@ The journal refuses a different runner ID or API URL.
 
 #### Desktop bridge contract
 
-The runner invokes the adapter command once per operation, with one UTF-8 JSON
-request on stdin and one JSON object on stdout. The request contains
-`contract_version: 1`, `operation`, and `arguments`. Commands must not write
+Both transports carry the same request: `contract_version: 1`, `operation`, and
+`arguments`, answered by one JSON object.
+
+A subprocess bridge (`--adapter-command`) is invoked once per operation, with
+the request on stdin and the reply on stdout. Commands must not write
 diagnostic text to stdout; nonzero exits, malformed replies, replies exceeding
 1 MiB and a 15-second command timeout are visible failures. Stdin/stdout use
 temporary files, not pipes whose inherited handles could keep a timed-out helper
@@ -244,10 +255,48 @@ be fresh (at most 60 seconds old). Discovery is complete only after the relevant
 history pages have been reconciled, including queued or lost receipts; a cursor
 must not hide the first-turn identity or be treated as complete history.
 
-**Acceptance gap:** This CLI entry point is executable with a fixture transport,
-but no production bridge to native Codex tools is bundled. Two real visible
-workers, queued/lost-receipt reconciliation, and attended restart need desktop
-acceptance. Wider PR stages, owner notifications/due external rechecks and
+#### Captain chat relay
+
+Start the loop without `--adapter-command`, then open the Captain chat in the
+Phalanx project in the Codex app. The chat needs write access to the runner
+state directory. Repeat this cycle while the loop runs:
+
+1. `python -m phalanx relay --state C:\phalanx-runner next --wait 30` hands out
+   the oldest request exactly once, or `{"status": "idle"}`.
+2. Run the request with the app tools and the rules in the table above:
+   - `resolve_project`: list projects; reply with the verified host, project and
+     root path.
+   - `create_thread`: call `create_thread` **once** with the given arguments;
+     reply with the host, marker and `threadId` as `thread_id` (or the queued
+     `clientThreadId` as `client_thread_id`).
+   - `wait_threads`: read each receipt's thread, or search thread history for
+     the marker; reply with fresh rows. Set `writers_stopped` only after
+     verifying the turn stopped.
+3. Record the reply right away (observations go stale after 60 seconds):
+   `python -m phalanx relay --state C:\phalanx-runner respond ID --file reply.json`,
+   or `respond ID --error "what failed"` when the tool fails.
+4. Between requests, run `python -m phalanx inbox` with the owner token, surface
+   worker questions to Caleb in the Captain chat, and answer with
+   `python -m phalanx reply`. `attended status --all` shows slot reasons.
+
+Identical requests waiting to be taken share one entry, and verified project resolutions
+are cached for ten minutes. The loop waits up to five minutes for a request to
+be taken and five more for its reply. A launch the Captain never took expires
+and is retracted, so the same packet can launch again. A taken request is never
+handed out again, even after a Captain restart. An unanswered one is settled as
+lost: a later observation or resolution queues afresh, while an unanswered launch
+stays reserved until native discovery reconciles it by marker. A restarted loop
+expires requests left pending by its predecessor. Never rerun a request
+whose outcome you did not record; answer it from discovery instead.
+
+The App Server (`codex app-server`) is not used until its threads are verified to
+appear in the app sidebar with the same thread identity as the app's tools.
+
+**Acceptance gap:** The relay and fixture pass one shared contract test, but
+native acceptance (two real visible workers, a worker question answered through
+the Captain chat, and Captain restart around a receipt) is still pending in
+[the Codex recovery report](docs/pilots/codex-recovery.md). Wider PR stages,
+owner notifications/due external rechecks and
 fresh-claim result adoption remain integration work; this is not full PH-11
 or v1 acceptance.
 
