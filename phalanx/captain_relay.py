@@ -22,6 +22,8 @@ from .runner_errors import RunnerError
 
 
 RESOLVE_CACHE_SECONDS = 600
+# An unverified project, such as an untrusted repository, costs the Captain one answer a minute.
+RESOLVE_FAILURE_CACHE_SECONDS = 60
 RETAIN_SECONDS = 86400
 
 
@@ -42,6 +44,7 @@ class RelayTransport:
     def __init__(self, root: Path, *, timeout: float = 300, poll: float = 0.2):
         self.root, self.timeout, self.poll = Path(root).resolve(), timeout, poll
         self.resolved: dict[str, tuple[float, dict]] = {}
+        self.unresolved: dict[str, tuple[float, str]] = {}
         # Waiters from a previous loop are gone; never let their requests launch late.
         with _queue(self.root) as db:
             db.execute("UPDATE request SET status='expired', updated_at=? WHERE status='pending' AND updated_at < ?",
@@ -54,6 +57,9 @@ class RelayTransport:
         cached = self.resolved.get(key)
         if cached and time() - cached[0] < RESOLVE_CACHE_SECONDS:
             return cached[1]
+        failed = self.unresolved.get(key)
+        if failed and time() - failed[0] < RESOLVE_FAILURE_CACHE_SECONDS:
+            raise RunnerError(failed[1])
         now = time()
         with _queue(self.root) as db:
             db.execute("DELETE FROM request WHERE status != 'pending' AND updated_at < ?", (now - RETAIN_SECONDS,))
@@ -74,7 +80,10 @@ class RelayTransport:
                     db.execute("UPDATE request SET status=?, updated_at=? WHERE id=?", (status, time(), request_id))
             if status == "answered":
                 if error is not None:
-                    raise RunnerError(f"Captain relay {operation} failed: {error}")
+                    message = f"Captain relay {operation} failed: {error}"
+                    if operation == "resolve_project":
+                        self.unresolved[key] = (time(), message)
+                    raise RunnerError(message)
                 reply = json.loads(response)
                 if operation == "resolve_project":
                     self.resolved[key] = (time(), reply)

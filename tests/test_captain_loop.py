@@ -414,6 +414,33 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         loop.runner.capacity = 3
         self.spin(loop, lambda: len(calls) == 2)
 
+    def test_untrusted_repositories_are_reported_together_and_others_launch(self):
+        for name in ("untrusted-a", "untrusted-b"):
+            self.config["repositories"][name] = {**self.config["repositories"]["repo"], "project_id": name}
+        native = self.native.__call__
+        def untrusted(operation, arguments):
+            if operation == "resolve_project" and arguments["project_id"].startswith("untrusted"):
+                raise RunnerError(f"{arguments['project_id']} is untrusted; trust its checkout once")
+            return native(operation, arguments)
+        original_call = self.api.call
+        def call(route, body=None, **kwargs):
+            if route == "/repositories":
+                return [{"id": repo, "remote": str(self.checkout)} for repo in self.config["repositories"]]
+            return original_call(route, body, **kwargs)
+        self.api.call = call
+        loop = self.loop()
+        loop.adapter = BridgeAdapter(untrusted)
+        self.spin(loop, lambda: len(self.native.launches) == 2)
+        for _ in range(5):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual({launch["session"]["project_id"] for launch in self.native.launches}, {"project"})
+        reported = [event for event in self.events if event["status"] == "mapping_blocked"]
+        self.assertEqual(len(reported), 1, "one status per change, not one per slot or poll")
+        self.assertRegex(reported[0]["reason"], "untrusted-a: .*trust its checkout once; untrusted-b: ")
+        saved = AttendedRunner(self.root, self.config, self.api).status(all_slots=True)["loop_status"]
+        self.assertIn(reported[0]["reason"], [event["reason"] for event in saved])
+
     def test_malformed_resolution_blocks_only_its_mapping(self):
         self.config["repositories"]["healthy"] = {**self.config["repositories"]["repo"],
                                                    "project_id": "healthy-project"}
