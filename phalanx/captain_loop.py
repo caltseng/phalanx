@@ -67,7 +67,7 @@ class CaptainLoop:
         self.recheck_future = None
         self.recheck_due = 0
         try:
-            self.rechecks = "pr_validation" in self._capabilities()
+            self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
         except RunnerError:
             self.rechecks = False
         self.closed = False
