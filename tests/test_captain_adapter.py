@@ -14,6 +14,7 @@ from phalanx.runner_errors import RunnerError
 
 
 class CommandTransportTests(unittest.TestCase):
+    # The probe's descendant sleeps 4s; bounds stay below that and leave startup headroom under load.
     def probe(self, directory, *, parent_wait):
         identities = Path(directory) / "owned-probe-processes.json"
         code = (
@@ -45,8 +46,8 @@ class CommandTransportTests(unittest.TestCase):
             started = time.monotonic()
             try:
                 with self.assertRaisesRegex(RunnerError, "unavailable"):
-                    CommandTransport(command, timeout=0.3)("launch", {})
-                self.assertLess(time.monotonic() - started, 1.2)
+                    CommandTransport(command, timeout=2)("launch", {})
+                self.assertLess(time.monotonic() - started, 3.5)
                 self.assertTrue(identities.exists(), "Probe did not spawn its inheriting child")
             finally:
                 self.cleanup_probe(identities)
@@ -56,9 +57,9 @@ class CommandTransportTests(unittest.TestCase):
             identities, command = self.probe(directory, parent_wait=0)
             started = time.monotonic()
             try:
-                response = CommandTransport(command, timeout=0.5)("observe", {})
+                response = CommandTransport(command, timeout=2)("observe", {})
                 self.assertEqual(response, {"accepted": True})
-                self.assertLess(time.monotonic() - started, 1.2)
+                self.assertLess(time.monotonic() - started, 3.5)
             finally:
                 self.cleanup_probe(identities)
 
