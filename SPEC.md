@@ -11,6 +11,18 @@ Phalanx lets Caleb dispatch work across registered repositories and have local a
 
 ## Dispatch and execution
 
+Use Phalanx terminology in operator-facing copy where it describes a concrete event.
+
+| Term | Meaning |
+| --- | --- |
+| **Muster** | A batch of work launched from the Captain chat. |
+| **Marshaled** | A work item has enough context to enter the queue. Dispatch gates still determine when it can be claimed. |
+| **Phalanx advancing** | Work is moving to the next lifecycle stage after the server accepts the evidence. Name the stage and transition condition in the activity entry. |
+| **Field report** | A Markdown deliverable, including the disposition report when work closes without the requested result. |
+| **Spearheaded by Phalanx** | Attribution footer in the description of every PR Phalanx opens. |
+
+Append `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)` as its own paragraph at the end of each PR description Phalanx creates. Keep the footer when updating that description and add it only once across retries.
+
 1. An authenticated client files an item through the API and receives its ID. The API supports listing and inspecting work, claiming eligible items, renewing claims, posting progress and results, and responding to a question.
 2. A runner requests an atomic claim for an eligible repo only when it has a free slot and dispatch is enabled. Agents can run concurrently, including on the same repo when their tasks are independent. A runner uses a separate worktree and topic branch for each PR item.
 3. An agent reads the repo instructions, executes one assigned stage, and returns its outcome and evidence or a focused question. The server applies the transition rules before the item is eligible for another stage. A waiting item releases its worker slot and retains the question, prior work, and resume context.
