@@ -1,4 +1,4 @@
-"""Schema for dependency links, registered when claim enforcement is wired."""
+"""Dependency links and indexed eligibility for queued executions."""
 
 DEPENDENCY_SCHEMA = (
     """CREATE TABLE work_dependencies (
@@ -9,4 +9,10 @@ DEPENDENCY_SCHEMA = (
         CHECK (item_id <> upstream_id)
     ) WITHOUT ROWID""",
     """CREATE INDEX dependencies_by_upstream ON work_dependencies(upstream_id, item_id)""",
+    """ALTER TABLE executions ADD COLUMN dependency_wait_json TEXT
+        CHECK (dependency_wait_json IS NULL OR json_valid(dependency_wait_json))""",
+    "DROP INDEX queue_heads",
+    """CREATE INDEX queue_heads ON executions
+        (queue_repository, queue_affinity, queue_priority, ready_since, item_id, id)
+        WHERE status = 'queued' AND ready_since IS NOT NULL AND dependency_wait_json IS NULL""",
 )

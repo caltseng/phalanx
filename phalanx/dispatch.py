@@ -14,6 +14,7 @@ PRIORITIES = range(3)
 QUEUE_HEAD = """
     SELECT id, item_id, ready_since FROM executions
     WHERE status = 'queued' AND ready_since IS NOT NULL AND ready_since <= ?
+      AND dependency_wait_json IS NULL
       AND queue_repository = ? AND queue_affinity = ? AND queue_priority = ?
     ORDER BY ready_since, item_id, id LIMIT 1
 """
@@ -88,23 +89,29 @@ def admit(db, request, lease_digest):
         return {"status": "at_capacity", "reserved": reserved, "capacity": capacity}
 
     now = time()
-    head = queue_head(db, request.runner_id, sorted(set(request.repository_ids)),
-                      int(now * 1000), settings["aging_seconds"] * 1000)
-    if head is None:
-        return {"status": "no_eligible_work"}
-    row = intake.execution_row(db, head["item_id"], head["id"])
-    state = intake.STATE.validate_json(row["state_json"])
+    repository_ids = sorted(set(request.repository_ids))
     expires = int(now) + LEASE_SECONDS
-    assignment = intake.claim_attempt(
-        db, row, state, runner_id=request.runner_id, lease_digest=lease_digest,
-        lease_expires_at=expires, now=now,
-    )
-    work_item = intake.item_row(db, row["item_id"])
-    return {
-        "status": "claimed", **assignment, "runner_id": request.runner_id,
-        "lease_expires_at": expires, "item_id": row["item_id"],
-        "request": json.loads(work_item["request_json"]),
-    }
+    # Each stale head is removed from the index by claim_attempt. Bound the
+    # repair work in one poll so other writers can acquire the transaction.
+    for _ in range(8):
+        head = queue_head(db, request.runner_id, repository_ids, int(now * 1000),
+                          settings["aging_seconds"] * 1000)
+        if head is None:
+            break
+        row = intake.execution_row(db, head["item_id"], head["id"])
+        state = intake.STATE.validate_json(row["state_json"])
+        assignment = intake.claim_attempt(
+            db, row, state, runner_id=request.runner_id, lease_digest=lease_digest,
+            lease_expires_at=expires, now=now,
+        )
+        if assignment is not None:
+            work_item = intake.item_row(db, row["item_id"])
+            return {
+                "status": "claimed", **assignment, "runner_id": request.runner_id,
+                "lease_expires_at": expires, "item_id": row["item_id"],
+                "request": json.loads(work_item["request_json"]),
+            }
+    return {"status": "no_eligible_work"}
 
 
 def open_attempt(db, runner_id, attempt_id):

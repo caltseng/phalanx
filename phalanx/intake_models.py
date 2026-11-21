@@ -20,6 +20,11 @@ class Registration(Payload):
     remote: Text
 
 
+class Prerequisite(Payload):
+    upstream_id: Identifier
+    milestone: Target = Target.MERGED
+
+
 class Intake(Payload):
     repository_id: Identifier
     goal: Text
@@ -29,10 +34,20 @@ class Intake(Payload):
     target_branch: Text | None = None
     priority: Literal["low", "normal", "urgent"] = "normal"
     runner_affinity: Identifier | None = None
+    dependencies: list[Prerequisite] = Field(default_factory=list, max_length=100)
 
 
 class Versioned(Payload):
     expected_version: Annotated[int, Field(strict=True, ge=1)]
+
+
+class Steering(Versioned):
+    goal: Text | None = None
+    context_links: list[Text] | None = Field(default=None, max_length=50)
+    acceptance_criteria: list[Text] | None = Field(default=None, max_length=50)
+    priority: Literal["low", "normal", "urgent"] | None = None
+    runner_affinity: Identifier | None = None
+    dependencies: list[Prerequisite] | None = Field(default=None, max_length=100)
 
 
 class Cancel(Versioned):

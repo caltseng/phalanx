@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 from threading import Lock
 
 from .dispatch_schema import DISPATCH_SCHEMA
+from .dependency_schema import DEPENDENCY_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
 
 
@@ -13,7 +14,7 @@ APPLICATION_ID = 0x50484C58  # PHLX
 _write_lock = Lock()
 
 # Each tuple is one migration.
-MIGRATIONS = ((f"PRAGMA application_id = {APPLICATION_ID}",), INTAKE_SCHEMA, DISPATCH_SCHEMA)
+MIGRATIONS = ((f"PRAGMA application_id = {APPLICATION_ID}",), INTAKE_SCHEMA, DISPATCH_SCHEMA, DEPENDENCY_SCHEMA)
 
 
 @contextmanager

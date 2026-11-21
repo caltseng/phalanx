@@ -1,13 +1,15 @@
 from contextlib import asynccontextmanager
 import sqlite3
+from time import time
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from .auth import require_owner, require_runner
 from .config import Credentials, database_path
+from .dependencies import reconcile_waits
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
-from .store import connect, migrate
+from .store import connect, migrate, write_transaction
 
 
 @asynccontextmanager
@@ -15,6 +17,8 @@ async def lifespan(app: FastAPI):
     app.state.credentials = Credentials.from_env()
     app.state.database_path = database_path()
     migrate(app.state.database_path)
+    with write_transaction(app.state.database_path) as db:
+        reconcile_waits(db, int(time() * 1000))
     yield
 
 
