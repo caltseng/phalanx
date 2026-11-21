@@ -71,6 +71,7 @@ class PullRequest:
     head_sha: str
     head_ref: str
     head_owner: str | None
+    head_repository: str | None
     base_sha: str
     base_ref: str
     base_repository: str
@@ -80,6 +81,7 @@ class PullRequest:
 
 def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
     head, base = data["head"], data["base"]
+    head_repo = head.get("repo")
     result = PullRequest(
         number=data["number"],
         node_id=data["node_id"],
@@ -90,6 +92,7 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
         head_sha=head["sha"],
         head_ref=head["ref"],
         head_owner=head["user"]["login"] if head.get("user") else None,
+        head_repository=head_repo["full_name"] if head_repo is not None else None,
         base_sha=base["sha"],
         base_ref=base["ref"],
         base_repository=base["repo"]["full_name"],
@@ -108,6 +111,13 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
         or (exact and type(result.merged) is not bool)
         or (result.mergeable is not None and type(result.mergeable) is not bool)
         or (result.head_owner is not None and not isinstance(result.head_owner, str))
+        or (
+            head_repo is not None
+            and (
+                not isinstance(result.head_repository, str)
+                or not re.fullmatch(r"[^/]+/[^/]+", result.head_repository)
+            )
+        )
         or not _SHA.fullmatch(result.head_sha)
         or not _SHA.fullmatch(result.base_sha)
         or (result.merge_commit_sha is not None and not _SHA.fullmatch(result.merge_commit_sha))
@@ -217,11 +227,14 @@ class GitHubClient:
         return f"{self._repo_url}/pulls/{number}"
 
     def list_matching_pull_requests(
-        self, *, head_owner: str, head: str, base: str
+        self, *, head_owner: str, head: str, base: str | None = None
     ) -> tuple[PullRequest, ...]:
-        """Include closed PRs so reconciliation can detect a prior disposition."""
+        """Include closed PRs. Omit base to find PRs retargeted within the repo."""
         operation = "list matching pull requests"
-        query = urlencode(dict(state="all", head=f"{head_owner}:{head}", base=base, per_page=100))
+        filters = {"state": "all", "head": f"{head_owner}:{head}", "per_page": "100"}
+        if base is not None:
+            filters["base"] = base
+        query = urlencode(filters)
         matches = []
         for data in self._pages(operation, f"{self._repo_url}/pulls?{query}"):
             try:
@@ -231,7 +244,7 @@ class GitHubClient:
             # GitHub applies the owner-qualified filter even when a deleted
             # fork no longer has an owner in the returned head object.
             if (
-                pull.head_ref == head and pull.base_ref == base
+                pull.head_ref == head and (base is None or pull.base_ref == base)
                 and pull.base_repository.casefold() == self._repository.casefold()
                 and (pull.head_owner is None or pull.head_owner.casefold() == head_owner.casefold())
             ):

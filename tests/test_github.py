@@ -30,7 +30,10 @@ def pull(number=7, *, head="codex/topic", base="main", draft=True, merged=False)
         "state": "closed" if merged else "open",
         "draft": draft,
         "merged": merged,
-        "head": {"ref": head, "sha": HEAD, "user": {"login": "Owner"}},
+        "head": {
+            "ref": head, "sha": HEAD, "user": {"login": "Owner"},
+            "repo": {"full_name": "Owner/SourceFork"},
+        },
         "base": {"ref": base, "sha": BASE, "repo": {"full_name": "Owner/Repo"}},
         "mergeable": None,
         "merge_commit_sha": MERGE if merged else None,
@@ -60,6 +63,7 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual((result.head_sha, result.base_sha, result.merge_commit_sha),
                          (HEAD, BASE, MERGE))
         self.assertEqual((result.state, result.draft, result.merged), ("closed", False, True))
+        self.assertEqual(result.head_repository, "Owner/SourceFork")
         self.assertIsNone(result.mergeable)
 
     def test_matching_pulls_follow_link_and_include_closed_matches(self):
@@ -76,6 +80,21 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(query, {"head": ["owner:codex/topic"], "base": ["main"],
                                  "state": ["all"], "per_page": ["100"]})
         self.assertEqual(self.requests[1].full_url, next_url)
+
+    def test_head_only_search_includes_retargeted_and_closed_pulls(self):
+        closed = pull(8, base="release")
+        closed["state"] = "closed"
+        closed["head"]["repo"] = None
+        closed["head"]["user"] = None
+        self.responses.append(response([pull(base="release"), closed]))
+        result = self.client.list_matching_pull_requests(head_owner="owner", head="codex/topic")
+        self.assertEqual([(item.number, item.base_ref, item.state) for item in result],
+                         [(7, "release", "open"), (8, "release", "closed")])
+        self.assertEqual(result[0].head_repository, "Owner/SourceFork")
+        self.assertIsNone(result[1].head_repository)
+        query = parse_qs(urlsplit(self.requests[0].full_url).query)
+        self.assertEqual(query, {"head": ["owner:codex/topic"], "state": ["all"],
+                                 "per_page": ["100"]})
 
     def test_pagination_rejects_a_link_to_another_host(self):
         self.responses.append(response([pull()], next_url="https://elsewhere.example/pulls"))
