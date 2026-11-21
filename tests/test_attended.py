@@ -12,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
+from phalanx.attended_recovery_service import RecoveryJournal, run_recovery
 from phalanx.draft_publication import DraftOutcome
 from phalanx.draft_stage import DraftStageResult
 from phalanx.finalization import attempt
@@ -258,6 +259,68 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         with connect(database, mode="ro") as db:
             self.assertEqual(db.execute("SELECT count(*) FROM reports").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 6)
+
+    def test_completed_review_and_storage_survive_lease_expiry(self):
+        database = self.root.parent / "queue.sqlite3"
+        self.start_server(database)
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "repo", "remote": str(self.checkout),
+        })[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Document the test suite", "target": "report",
+        })
+        self.assertEqual(status, 201, item)
+        execution = item["execution"]["id"]
+        route = f"/v1/items/{item['id']}/executions/{execution}"
+        self.api = RunnerAPI(self.url, RUNNER)
+        call = self.api.call
+
+        def unsent(path, body=None, **kwargs):
+            if path.endswith("/result"):
+                raise RunnerError("result unsent")
+            return call(path, body, **kwargs)
+
+        def expire_and_adopt():
+            with write_transaction(database) as db:
+                db.execute("UPDATE attempts SET lease_expires_at=0 WHERE ended_at IS NULL")
+            # A restarted runner reconciles from its journal alone.
+            decision = run_recovery(self.root, "desk", self.api, RecoveryJournal(self.root, 1))
+            self.assertEqual(decision["status"], "adopted", decision)
+
+        markdown = "# Tests\nRun `python -m unittest`.\n"
+        launch = self.runner().prepare()
+        thread_id = str(uuid4())
+        self.runner().receipt(launch["marker"], "local", thread_id=thread_id)
+        self.write_result(self.runner(), launch["marker"], markdown)
+        revision = self.runner().submit(launch["marker"], "local", thread_id)["state"]["report_draft"]
+
+        review = self.runner().prepare()
+        thread_id = str(uuid4())
+        self.runner().receipt(review["marker"], "local", thread_id=thread_id)
+        self.write_result(self.runner(), review["marker"], "Verified the command.")
+        with patch.object(self.api, "call", side_effect=unsent), \
+                self.assertRaisesRegex(RunnerError, "result unsent"):
+            self.runner().submit(review["marker"], "local", thread_id)
+        expire_and_adopt()
+        reviewed = self.runner().submit(review["marker"], "local", thread_id)
+        self.assertEqual(reviewed["state"]["stage"], "report_storage")
+        self.assertEqual(reviewed["state"]["report_draft"], revision)
+
+        with patch.object(self.api, "call", side_effect=unsent), \
+                self.assertRaisesRegex(RunnerError, "result unsent"):
+            self.runner().prepare(report_storage=True)
+        expire_and_adopt()
+        stored = self.runner().prepare(report_storage=True)
+        self.assertEqual(stored["status"], "report_storage_submitted", stored)
+        self.assertEqual(self.runner().status(), {"status": "idle"})
+
+        # The stored report is served by the API alone, with no runner involved.
+        self.assertEqual(self.get(route + "/report", OWNER), (200, markdown))
+        self.assertEqual(self.get(route + "/drafts/" + revision, OWNER), (200, markdown))
+        with connect(database, mode="ro") as db:
+            stages = [row[0] for row in db.execute("SELECT stage FROM attempts ORDER BY started_at")]
+            self.assertEqual(db.execute("SELECT count(*) FROM report_drafts").fetchone()[0], 1)
+        self.assertEqual(stages, ["report_drafting", "report_review", "report_storage"])
 
     def test_claim_changed_before_launch_retains_reservation(self):
         self.api.drop_claim = False
