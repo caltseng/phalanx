@@ -35,6 +35,9 @@ class CommandTransportTests(unittest.TestCase):
                 except PermissionError:
                     if os.name != "nt":
                         raise
+                except OSError as error:
+                    if os.name != "nt" or error.winerror != 87:
+                        raise
 
     def test_timeout_does_not_drain_descendant_inherited_stdio(self):
         with TemporaryDirectory() as directory:
