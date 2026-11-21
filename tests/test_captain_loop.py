@@ -1,8 +1,10 @@
 from datetime import datetime, timezone
+from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
 import subprocess
+import sqlite3
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event, Lock
@@ -266,14 +268,14 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
 
     def test_changed_claim_after_project_resolution_never_relays(self):
         self.api.waiting = ["first"]
+        AttendedRunner(self.root, self.config, self.api).prepare()
         original = self.native.__call__
         resolutions = []
         def native(operation, arguments):
             if operation == "resolve_project":
                 resolutions.append(arguments)
-                if len(resolutions) == 2:
-                    for claim in self.api.claims.values():
-                        claim["execution"]["state"]["stopping"] = True
+                for claim in self.api.claims.values():
+                    claim["execution"]["state"]["stopping"] = True
             return original(operation, arguments)
         loop = self.loop()
         loop.adapter = CodexCLIAdapter(native)
@@ -281,6 +283,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             loop._prepare(1)
         self.assertFalse(self.native.launches)
         self.assertIn("packet", loop._records()[1])
+        self.assertEqual(len(resolutions), 1)
 
     def test_cancel_during_post_packet_discovery_confirms_stop_without_launch(self):
         self.config["capacity"] = 1
@@ -290,6 +293,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
         self.api = RunnerAPI(self.url, RUNNER)
+        AttendedRunner(self.root, self.config, self.api).prepare()
         execution_route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
         native, call = self.native.__call__, self.api.call
         stop_posts, prepared = [], []
@@ -331,6 +335,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         native = self.native.__call__
         failed = False
         loop = self.loop()
+        loop.runner.prepare()
         def discover(operation, arguments):
             nonlocal failed
             if operation == "resolve_project" and "packet" in loop._records().get(1, {}) and not failed:
@@ -338,7 +343,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 raise OSError("Transient post-packet discovery failure")
             return native(operation, arguments)
         loop.adapter = CodexCLIAdapter(discover)
-        with self.assertRaisesRegex(OSError, "Transient post-packet"):
+        with self.assertRaisesRegex(RunnerError, "Transient post-packet"):
             loop._prepare(1)
         original = loop._records()[1]
         claim_requests = len(self.api.requests)
@@ -355,6 +360,156 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(resumed["lease"], original["lease"])
         self.assertEqual(resumed["started_at"], original["started_at"])
         self.assertEqual(resumed["relay"]["marker"], self.native.launches[0]["marker"])
+
+    def test_one_desktop_verification_is_shared_across_slots_per_poll(self):
+        self.config["repositories"]["alias"] = self.config["repositories"]["repo"].copy()
+        calls = []
+        native = self.native.__call__
+        def discover(operation, arguments):
+            if operation == "resolve_project":
+                calls.append(arguments)
+            return native(operation, arguments)
+        loop = self.loop()
+        loop.poll_seconds = 30
+        loop.adapter = CodexCLIAdapter(discover)
+        self.spin(loop, lambda: len(self.native.launches) == 2, timeout=15)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(self.api.claims), 2)
+        loop.discovery_due = 0
+        self.spin(loop, lambda: len(calls) == 2)
+
+    def test_status_changes_have_one_durable_store_and_no_repeated_writes(self):
+        runner = AttendedRunner(self.root, self.config, self.api)
+        runner.prepare()
+        loop = self.loop()
+        statements = []
+        journal = loop.runner._journal
+        @contextmanager
+        def traced():
+            with journal() as db:
+                db.set_trace_callback(statements.append)
+                yield db
+        with patch.object(loop.runner, "_journal", traced):
+            for _ in range(5):
+                loop._status(1, "observing", "Exact native writer is active")
+        self.assertEqual(sum("INSERT OR REPLACE INTO captain" in row for row in statements), 1)
+        self.assertNotIn("loop", runner._snapshot())
+        saved = runner.status()["loop"]
+        self.assertEqual(runner.status(all_slots=True)["reservations"][0]["loop"], saved)
+        with runner._journal() as db:
+            db.execute("INSERT INTO captain VALUES ('cursor-1', '{}')")
+            db.execute("INSERT INTO captain VALUES ('admission-1', '\"worker\"')")
+        runner._transaction(lambda record, db: record.update(loop=saved))
+        restarted = self.loop()
+        restarted._status(1, "observing", "Exact native writer is active")
+        self.assertEqual(len(self.events), 1)
+        self.assertEqual(runner.status()["loop"], saved)
+        self.assertNotIn("loop", runner._snapshot())
+        with runner._journal() as db:
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM captain WHERE key LIKE 'cursor-%' OR key LIKE 'admission-%'"
+            ).fetchone()[0], 0)
+        restarted._status(1, "slot_blocked", "Restore desktop access")
+        self.assertEqual(runner.status()["loop"]["reason"], "Restore desktop access")
+
+    def test_runner_only_no_intent_cancel_replays_and_archives_once_over_http(self):
+        self.config["capacity"] = 1
+        self.start_server(self.directory / "runner-only-cancel.sqlite3")
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        self.api = RunnerAPI(self.url, RUNNER)
+        loop = self.loop()
+        runner = loop.runner
+        for stage, target, worker_stages, method in (
+            ("report_storage", "report", ("report_drafting", "report_review"), "_store_report"),
+            ("pr_creation", "ready_for_check_in", ("development",), "_run_draft"),
+        ):
+            with self.subTest(stage=stage):
+                _, item = self.request("/v1/items", OWNER, {
+                    "repository_id": "repo", "goal": "Cancel before runner publication", "target": target,
+                })
+                for worker_stage in worker_stages:
+                    runner.prepare()
+                    packet = runner._handoff(runner._snapshot()).packet
+                    self.assertEqual(packet.stage, worker_stage)
+                    evidence = "# Reviewed report" if worker_stage == "report_drafting" else "Reviewed"
+                    if worker_stage == "development":
+                        subprocess.run([
+                            "git", "-c", "user.name=Test", "-c", "user.email=test@example.test",
+                            "commit", "--allow-empty", "-m", "Candidate",
+                        ], cwd=packet.worktree, check=True, capture_output=True)
+                        evidence = subprocess.check_output(
+                            ["git", "rev-parse", "HEAD"], cwd=packet.worktree, text=True,
+                        ).strip()
+                    self.write_result(1, evidence)
+                    native_id = str(uuid4())
+                    runner.receipt(packet.marker, "local", thread_id=native_id)
+                    runner.submit(packet.marker, "local", native_id)
+                with patch.object(AttendedRunner, method, side_effect=RunnerError("Interrupted before intent")):
+                    with self.assertRaisesRegex(RunnerError, "Interrupted before intent"):
+                        runner.prepare(stages=[stage])
+                snapshot = runner._snapshot()
+                route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
+                current = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
+                self.assertEqual(self.request(route + "/cancel", OWNER, {
+                    "expected_version": current["version"], "reason": "Stop runner-only stage before intent",
+                })[0], 200)
+                call, stops = self.api.call, []
+                def lost_stop(path, body=None, **kwargs):
+                    response = call(path, body, **kwargs)
+                    if path.endswith("/stop-confirmed"):
+                        stops.append((body.copy(), kwargs.copy()))
+                        if len(stops) == 1:
+                            raise RunnerError("Lost stop acknowledgment")
+                    return response
+                self.api.call = lost_stop
+                try:
+                    with self.assertRaisesRegex(RunnerError, "Lost stop acknowledgment"):
+                        loop._advance(1, snapshot, None)
+                    restarted = self.loop()
+                    self.assertEqual(restarted._advance(1, runner._snapshot(), None)["status"], "stop_confirmed")
+                finally:
+                    self.api.call = call
+                self.assertEqual(stops[0], stops[1])
+                self.assertFalse(runner._snapshot())
+                with runner._journal() as db:
+                    archives = db.execute("SELECT record FROM completed WHERE attempt_id=?",
+                                          (snapshot["claim"]["attempt_id"],)).fetchall()
+                self.assertEqual(len(archives), 1)
+                self.assertNotIn("lease", json.loads(archives[0][0]))
+                self.assertEqual(self.get(route + "/report", OWNER)[0], 200)
+                self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                                 "cancelled")
+        self.assertFalse(self.native.launches)
+
+    def test_runner_only_cancel_preserves_publication_intents_and_storage_submission(self):
+        self.api.waiting = ["first"]
+        self.api.stages["first"] = "pr_creation"
+        runner = AttendedRunner(self.root, self.config, self.api)
+        with patch.object(AttendedRunner, "_run_draft", side_effect=RunnerError("Before intent")):
+            with self.assertRaises(RunnerError):
+                runner.prepare(stages=["pr_creation"])
+        loop = self.loop()
+        snapshot = runner._snapshot()
+        current = {**snapshot["claim"]["execution"], "version": 4,
+                   "state": {"stage": "pr_creation", "stopping": "cancelled"}}
+        publication = self.root / "publication"
+        publication.mkdir()
+        for filename, table in (("draft-publication.sqlite3", "draft_publication"),
+                                ("draft-observations.sqlite3", "draft_observations")):
+            with self.subTest(table=table):
+                with closing(sqlite3.connect(publication / filename)) as db, db:
+                    db.execute(f"CREATE TABLE {table} (item_id TEXT PRIMARY KEY)")
+                    db.execute(f"INSERT INTO {table} VALUES ('first')")
+                with self.assertRaisesRegex(RunnerError, "effect reconciliation"):
+                    loop._confirm_stop(runner, current)
+                self.assertEqual(runner._snapshot(), snapshot)
+                with closing(sqlite3.connect(publication / filename)) as db, db:
+                    db.execute(f"DELETE FROM {table}")
+        runner._transaction(lambda record, db: record.update(submission={"body": {}}))
+        with self.assertRaisesRegex(RunnerError, "effect reconciliation"):
+            loop._confirm_stop(runner, current)
+        self.assertIn("submission", runner._snapshot())
+        self.assertFalse(self.native.launches)
 
     def test_pause_capacity_reduction_and_unmatched_attempts_prevent_admission(self):
         self.api.paused = True
@@ -444,11 +599,15 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
 
     def test_cursor_retention_is_per_attempt_and_not_authority(self):
         loop = self.loop()
-        self.spin(loop, lambda: len(self.native.waits) >= 4 and len(self.native.launches) == 2)
+        self.spin(loop, lambda: len(self.native.waits) >= 4 and len(self.native.launches) == 2, timeout=15)
         self.assertTrue(any(wait["cursors"] for wait in self.native.waits))
         self.assertEqual(len(self.native.launches), 2)
+        self.assertLessEqual(len(loop.cursors), 2)
         with loop.runner._journal() as db:
-            self.assertLessEqual(db.execute("SELECT count(*) FROM captain WHERE key LIKE 'cursor-%'").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT count(*) FROM captain WHERE key LIKE 'cursor-%'").fetchone()[0], 0)
+        restarted = self.loop()
+        self.assertFalse(restarted.cursors)
+        self.assertEqual(len(self.native.launches), 2)
 
     def test_saved_submission_replays_even_after_local_lease_expiry(self):
         self.config["capacity"] = 1
@@ -571,7 +730,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             return original_call(route, body, **kwargs)
         self.api.call = call
         loop = self.loop()
-        loop._metadata("admission-1", "worker")
+        loop.admission[1] = "worker"
         def store(runner, snapshot):
             self.assertEqual(snapshot["claim"]["request"]["repository_id"], "repo")
             runner._transaction(lambda record, db: record.clear())

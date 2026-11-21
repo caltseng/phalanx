@@ -154,7 +154,9 @@ applies pause, capacity, priority, repository, dependency and affinity gates.
 Worker claims require verified desktop mappings; runner-only claims retain all
 Git-verified mappings even when their desktop is unavailable. The loop alternates
 which group it polls first and preserves each pending claim's exact original
-filters and secret.
+filters and secret. One asynchronous desktop discovery pass per poll verifies
+each distinct host/project/checkout mapping once and shares the results across
+slot admission and launch checks. Failed discovery is retried on the next poll.
 
 Each slot has one work lane. Lease renewals have separate lanes (20 seconds
 by default), as do bounded native observation batches (eight slots, two-second
@@ -162,8 +164,8 @@ wait by default). Git, provider requests, a slow native batch, or an ambiguous
 slot cannot occupy the heartbeat or another slot's work lane. Configure
 `--batch-size 1` to isolate individual native waits. `--poll-seconds`,
 `--heartbeat-seconds`, `--batch-size`, and `--wait-seconds` tune the bounded
-scheduler. Per-attempt cursors are persisted only as observation optimizations;
-they never prove stop or authorize replacement.
+scheduler. Per-attempt cursors and admission rotation stay in memory as
+optimizations; they reset on restart and never prove stop or authorize replacement.
 
 Every prepared launch is relayed at most once. The loop journals relay intent
 before invoking the bridge and immediately saves a native or queued receipt.
@@ -191,6 +193,11 @@ before sending it. Retries recheck that proof and replay the original request.
 Only a verified finalization acknowledgment releases the slot. Dirty checkpoints,
 partial workspace refs, attempt evidence, ambiguous launches and runner-only
 publication/storage effects still require explicit reconciliation.
+Runner-only `report_storage` with no saved submission and `pr_creation` with no
+draft publication intent or sealed observation use the same no-writer stop path.
+Draft cancellation checks the runner's publication journals under the item
+publication lock; a saved intent remains reserved even when the slot has none.
+An existing clean candidate must match the claimed candidate, not today's origin.
 For a launched stopping worker, the same stop path requires its exact stopped
 native turn and verifies the worktree and any result through the recovery
 verifier; it never submits a worker result as a cancellation acknowledgment.
@@ -204,8 +211,9 @@ uses the verified no-launch checkpoint for recovery without waiting for a
 native observation that cannot exist.
 
 The CLI prints JSON activity and actionable errors; reservation status includes
-the last loop and recovery reason. Ctrl+C stops scheduling and drains in-flight
-operations without discarding reservations. Restart with the same configuration.
+the last loop and recovery reason. Loop status has one durable store and is
+written and emitted only when its status or reason changes. Ctrl+C stops scheduling
+and drains in-flight operations without discarding reservations. Restart with the same configuration.
 The journal refuses a different runner ID or API URL.
 
 #### Desktop bridge contract

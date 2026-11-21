@@ -341,7 +341,7 @@ class AttendedRunner:
             raise RunnerError("Claimed execution changed before launch; reconcile the reservation")
 
     def status(self, *, all_slots=False):
-        def view(record):
+        def view(record, loop=None):
             if not record:
                 return {"status": "idle"}
             packet = record.get("packet")
@@ -364,12 +364,9 @@ class AttendedRunner:
                     "started_at": record.get("started_at"), "receipt": record.get("receipt"),
                     "lease_expires_at": record.get("lease_expires_at"),
                     "unverified_mappings": record.get("blocked", []),
-                    **({"loop": record["loop"]} if "loop" in record else {}),
+                    **({"loop": loop} if loop is not None else {}),
                     **({"recovery": record["recovery"]} if "recovery" in record else {}),
                     **({"reason": record["draft_status"]["reason"]} if record.get("draft_status") else {})}
-
-        if not all_slots:
-            return view(self._snapshot())
 
         with self._journal() as db:
             rows = db.execute("SELECT id, record FROM slot ORDER BY id").fetchall()
@@ -379,8 +376,12 @@ class AttendedRunner:
             loop_status = [json.loads(row[0]) for row in db.execute(
                 "SELECT value FROM captain WHERE key LIKE 'status-%' ORDER BY key"
             )] if has_captain else None
+        statuses = {event["slot"]: event for event in loop_status or []}
+        if not all_slots:
+            return view(next((json.loads(data) for slot, data in rows if slot == self.slot), {}),
+                        statuses.get(self.slot))
         return {"capacity": self.capacity, "reservations": [
-            {"slot": slot, **view(json.loads(data))} for slot, data in rows
+            {"slot": slot, **view(json.loads(data), statuses.get(slot))} for slot, data in rows
         ], **({"loop_status": loop_status} if loop_status is not None else {})}
 
     def receipt(self, marker, host_id, *, thread_id=None, client_thread_id=None):

@@ -2,10 +2,12 @@
 
 import argparse
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing, ExitStack
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sqlite3
 from threading import Event
 from time import monotonic, time
 from urllib.parse import quote
@@ -15,7 +17,7 @@ from .attended import AttendedRunner, RunnerAPI, RunnerError, STAGES
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery
 from .captain_adapter import CodexCLIAdapter, CommandTransport, ObservationBatch
-from .workspaces import _file_lock, _git
+from .workspaces import _file_lock, _git, _item_branch
 
 
 _LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop")
@@ -54,6 +56,9 @@ class CaptainLoop:
         self.expired, self.unmatched = {}, []
         self.last_unmatched = None
         self.rotation = 0
+        self.admission, self.cursors = {}, {}
+        self.discovery_future = None
+        self.discovery_due = 0
         self.closed = False
         self._bind_identity()
 
@@ -76,30 +81,55 @@ class CaptainLoop:
             ):
                 raise RunnerError("State directory belongs to another runner or API; restore its original configuration")
             db.execute("INSERT OR IGNORE INTO captain VALUES ('identity', ?)", (expected,))
-
-    def _metadata(self, key, value=None):
-        with self.runner._journal() as db:
-            if value is None:
-                row = db.execute("SELECT value FROM captain WHERE key=?", (key,)).fetchone()
-                return json.loads(row[0]) if row else None
-            db.execute("INSERT OR REPLACE INTO captain VALUES (?, ?)", (key, json.dumps(value)))
+            db.execute("DELETE FROM captain WHERE key LIKE 'admission-%' OR key LIKE 'cursor-%'")
+            for slot, data in db.execute("SELECT id, record FROM slot").fetchall():
+                record = json.loads(data)
+                if "loop" in record:
+                    del record["loop"]
+                    db.execute("UPDATE slot SET record=? WHERE id=?", (json.dumps(record), slot))
 
     def _status(self, slot, status, reason, *, lease=None):
-        event = {"slot": slot, "status": status, "reason": reason,
-                 "at": datetime.now(timezone.utc).isoformat()}
-        def save(record, db):
-            if record and (lease is None or record.get("lease") == lease):
-                record["loop"] = event
-        if slot:
-            self._runner(slot)._transaction(save)
-        self._metadata(f"status-{slot}", event)
+        with self.runner._journal() as db:
+            if lease is not None:
+                row = db.execute("SELECT record FROM slot WHERE id=?", (slot,)).fetchone()
+                if row is None or json.loads(row[0]).get("lease") != lease:
+                    return
+            key = f"status-{slot}"
+            row = db.execute("SELECT value FROM captain WHERE key=?", (key,)).fetchone()
+            event = {"slot": slot, "status": status, "reason": reason}
+            if row and all(json.loads(row[0]).get(field) == value for field, value in event.items()):
+                return
+            event["at"] = datetime.now(timezone.utc).isoformat()
+            db.execute("INSERT OR REPLACE INTO captain VALUES (?, ?)", (key, json.dumps(event)))
         self.emit(event)
 
-    def _prepare(self, slot):
+    @staticmethod
+    def _mapping_key(mapping):
+        return tuple(mapping[field] for field in ("host_id", "project_id", "checkout"))
+
+    def _discover(self, records):
+        mappings = list(self.config["repositories"].values())
+        mappings.extend(record for record in records.values() if "packet" in record)
+        verified = {}
+        for mapping in mappings:
+            key = self._mapping_key(mapping)
+            if key in verified:
+                continue
+            try:
+                self.adapter.resolve_project(mapping)
+            except (RunnerError, OSError) as error:
+                verified[key] = str(error)
+            else:
+                verified[key] = None
+        return verified
+
+    def _prepare(self, slot, discovery=None):
         runner = self._runner(slot)
         original = runner._snapshot()
+        if discovery is None:
+            discovery = self.native_pool.submit(self._discover, self._records())
         if not original:
-            runner, result = self._claim_new(slot)
+            runner, result = self._claim_new(slot, discovery)
         elif "packet" in original:
             if any(field in original for field in (*_LAUNCH_EFFECTS, "cancel_stop")):
                 raise RunnerError("Launch relay already attempted or owned by recovery; reconcile its exact marker")
@@ -118,9 +148,9 @@ class CaptainLoop:
         if result["status"] != "launch_intent":
             return result
         snapshot = runner._snapshot()
-        self.adapter.resolve_project({
-            field: snapshot[field] for field in ("host_id", "project_id", "checkout")
-        })
+        error = discovery.result()[self._mapping_key(snapshot)]
+        if error is not None:
+            raise RunnerError(error)
         runner._verify_launch_claim(snapshot)
         runner.renew()
         def relay_intent(record, db):
@@ -135,7 +165,7 @@ class CaptainLoop:
         runner.receipt(result["marker"], result["host_id"], **receipt)
         return {"status": "receipt_recorded", "slot": slot, **receipt}
 
-    def _claim_new(self, slot):
+    def _claim_new(self, slot, discovery=None):
         capabilities = self.config.get("stages", sorted(set(STAGES) | {"pr_creation", "report_storage"}))
         if not capabilities or set(capabilities) - (set(STAGES) | {"pr_creation", "report_storage"}):
             raise RunnerError("Runner stage capabilities contain an unsupported stage")
@@ -147,9 +177,9 @@ class CaptainLoop:
             "runner": [stage for stage in available if stage not in STAGES],
             "worker": [stage for stage in available if stage in STAGES],
         }
-        first = self._metadata(f"admission-{slot}") or "runner"
+        first = self.admission.get(slot, "runner")
         second = "worker" if first == "runner" else "runner"
-        self._metadata(f"admission-{slot}", second)
+        self.admission[slot] = second
         result = None
         blocked = []
         for mode in (first, second):
@@ -158,14 +188,16 @@ class CaptainLoop:
                 continue
             mappings = self.config["repositories"]
             if mode == "worker":
+                if discovery is None:
+                    discovery = self.native_pool.submit(self._discover, self._records())
+                resolved = discovery.result()
                 verified = {}
                 for repo, mapping in mappings.items():
-                    try:
-                        self.adapter.resolve_project(mapping)
-                    except (RunnerError, OSError) as error:
+                    error = resolved[self._mapping_key(mapping)]
+                    if error is not None:
                         blocked.append(repo)
                         self.emit({"slot": slot, "status": "mapping_blocked", "repository": repo,
-                                   "reason": str(error)})
+                                   "reason": error})
                     else:
                         verified[repo] = mapping
                 mappings = verified
@@ -220,14 +252,30 @@ class CaptainLoop:
     def _confirm_stop(self, runner, current=None, native=None):
         # Exclude preparations while accounting for the writer and local effects,
         # and persist the exact stop request before sending it.
-        with _file_lock(self.root / f"attended-prepare-{runner.slot}.lock"):
+        with _file_lock(self.root / f"attended-prepare-{runner.slot}.lock"), ExitStack() as locks:
             snapshot = runner._snapshot()
             unsafe = ("recover_stop",)
             if any(field in snapshot for field in unsafe):
                 raise RunnerError("Stop needs native/effect reconciliation; an ambiguous launch is not a stopped writer")
             claim = snapshot["claim"]
-            if claim["execution"]["state"]["stage"] not in STAGES:
-                raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
+            stage = claim["execution"]["state"]["stage"]
+            if stage == "pr_creation":
+                item = _item_branch(claim["item_id"]).rsplit("/", 1)[1]
+                publication = self.root / "publication"
+                publication.mkdir(exist_ok=True)
+                locks.enter_context(_file_lock(publication / f"{item}.lock"))
+                for filename, table in (("draft-publication.sqlite3", "draft_publication"),
+                                        ("draft-observations.sqlite3", "draft_observations")):
+                    path = publication / filename
+                    if os.path.lexists(path):
+                        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as db:
+                            if (db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                                           (table,)).fetchone()
+                                    and db.execute(f"SELECT 1 FROM {table} WHERE item_id=?",
+                                                   (claim["item_id"],)).fetchone()):
+                                raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
+            elif stage not in {*STAGES, "report_storage"}:
+                raise RunnerError("Unsupported runner-only stop needs effect reconciliation")
             request = snapshot.get("cancel_stop")
             launched = any(field in snapshot for field in ("relay", "receipt"))
             if launched:
@@ -270,7 +318,7 @@ class CaptainLoop:
                 def save(record, db):
                     runner._ensure_reservation(record, snapshot["lease"])
                     if (any(field in record for field in unsafe)
-                            or any(record.get(field) != snapshot.get(field) for field in _LAUNCH_EFFECTS)):
+                            or any(record.get(field) != snapshot.get(field) for field in (*_LAUNCH_EFFECTS, "packet"))):
                         raise RunnerError("Launch changed during stop verification; retain the reservation")
                     record["cancel_stop"] = request
                 runner._transaction(save)
@@ -301,10 +349,10 @@ class CaptainLoop:
             runner._transaction(finish)
             return {"status": "stop_confirmed", "execution": response, "reason": request["proof"]}
 
-    def _advance(self, slot, snapshot, observation):
+    def _advance(self, slot, snapshot, observation, discovery=None):
         runner = self._runner(slot)
         if not snapshot:
-            return self._prepare(slot)
+            return self._prepare(slot, discovery)
         if "cancel_stop" in snapshot:
             native = None
             if observation is not None and "thread_id" in snapshot["cancel_stop"]:
@@ -326,7 +374,7 @@ class CaptainLoop:
                 return {"status": "submitted", "execution": runner.submit(
                     runner._handoff(snapshot).packet.marker, snapshot["host_id"], receipt["thread_id"],
                 )}
-            return self._prepare(slot)
+            return self._prepare(slot, discovery)
         if snapshot.get("recover_stop") or snapshot.get("claim", {}).get("attempt_id") in self.expired:
             if "packet" in snapshot and not unlaunched and observation is None and "recover_stop" not in snapshot:
                 return {"status": "observing", "reason": "Awaiting native observation before recovery"}
@@ -339,7 +387,7 @@ class CaptainLoop:
                 no_launch_proof=self._unlaunched_proof(runner, snapshot) if unlaunched else None,
             )
         if "packet" not in snapshot or unlaunched:
-            return self._prepare(slot)
+            return self._prepare(slot, discovery)
         if observation is None:
             return {"status": "observing", "reason": "Awaiting an exact native observation; launch is never replayed"}
         packet = runner._handoff(snapshot).packet
@@ -381,15 +429,15 @@ class CaptainLoop:
             })
         cursors = {}
         for ref in references:
-            saved = self._metadata(f"cursor-{ref['slot']}")
+            saved = self.cursors.get(ref["slot"])
             if saved and saved["marker"] == ref["marker"] and saved.get("cursor"):
                 cursors[ref["marker"]] = saved["cursor"]
         batch = self.adapter.wait_threads(references, cursors=cursors, timeout=self.wait_seconds)
         for ref in references:
             if ref["marker"] in batch.cursors:
-                self._metadata(f"cursor-{ref['slot']}", {
+                self.cursors[ref["slot"]] = {
                     "marker": ref["marker"], "cursor": batch.cursors[ref["marker"]],
-                })
+                }
         return batch
 
     def step(self):
@@ -426,6 +474,14 @@ class CaptainLoop:
                 else:
                     self._status(slot, result["status"], result.get("reason", "Operation recorded"))
         records = self._records()
+        for slot in list(self.cursors):
+            if slot not in records and not any(slot in slots for slots in self.observations):
+                del self.cursors[slot]
+        if now >= self.discovery_due and (
+            self.discovery_future is None or self.discovery_future.done()
+        ):
+            self.discovery_future = self.native_pool.submit(self._discover, records)
+            self.discovery_due = now + self.poll_seconds
         if self.recovery_future is not None and self.recovery_future.done():
             future, self.recovery_future = self.recovery_future, None
             try:
@@ -457,7 +513,8 @@ class CaptainLoop:
                 self.lease_due[slot] = now + self.heartbeat_seconds
             if slot not in self.work and now >= self.work_due.get(slot, 0):
                 observation = self.pending_observations.pop(slot, None)
-                self.work[slot] = self.slot_pool.submit(self._advance, slot, record, observation)
+                self.work[slot] = self.slot_pool.submit(self._advance, slot, record, observation,
+                                                       self.discovery_future)
                 self.work_due[slot] = now + self.poll_seconds
         observed_slots = {slot for slots in self.observations for slot in slots}
         candidates = [slot for slot, record in records.items()
@@ -478,7 +535,7 @@ class CaptainLoop:
             room = max(0, self.runner.capacity - len(occupied) - len(self.unmatched))
             for slot in range(1, self.runner.capacity + 1):
                 if room and slot not in occupied and now >= self.work_due.get(slot, 0):
-                    self.work[slot] = self.slot_pool.submit(self._prepare, slot)
+                    self.work[slot] = self.slot_pool.submit(self._prepare, slot, self.discovery_future)
                     self.work_due[slot] = now + self.poll_seconds
                     room -= 1
 
