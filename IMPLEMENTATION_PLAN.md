@@ -119,7 +119,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 ### PH-15 Review, reconcile, and check in
 
 - **Depends on:** PH-09, PH-12, PH-14. **Output:** PR.
-- **API follow-up:** Wire independent review, feedback, approvals, and mergeability to the verified primary PR and revision before assigning check-in. Verify a merge against the recorded pre-merge revision and durable write intent.
+- **API slice:** The [runner observation contract](docs/runner-pr-observations.md) records independent review and current gates against the primary PR, finalizes ready-only work, and records trusted merge verification against a persisted authorization and pre-merge revision. Runner integration still needs to supply provider correlation with its durable write intent, handle pending gates and candidate-changing fixes, and reconcile uncertain writes across claims.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
 - When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
 - **Done when:** A real PR goes through a feedback or conflict loop, required revision changes invalidate stale evidence, and a verified merge is recorded exactly once. A separate ready-only case completes with a verified PR and no merge.
