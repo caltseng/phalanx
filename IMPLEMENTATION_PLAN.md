@@ -15,7 +15,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 | PH-05 | Server-owned transition engine in [PR #5](https://github.com/caltseng/phalanx/pull/5). | Wire phase decisions to durable intake, history, and versioned results. |
 | PH-10 | Local worktree allocation, reuse, and safe cleanup in [PR #9](https://github.com/caltseng/phalanx/pull/9). | Connect workspace reservations and cleanup to the runner and queue. |
 | PH-11 | Codex work packets and bounded attempt evidence ingestion in [PR #10](https://github.com/caltseng/phalanx/pull/10). | Wire live Captain launch receipts and observation to runner claims, results, and recovery. |
-| PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6) and conditional Git ref publication in [PR #15](https://github.com/caltseng/phalanx/pull/15). Runner-side first draft workflow with local durable intent and verified recovery. | Wire the server claim/version guard and persist verified primary, duplicate, and conflict evidence through runner stage results. |
+| PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6) and conditional Git ref publication in [PR #15](https://github.com/caltseng/phalanx/pull/15). Draft workflow and recovery in [PR #22](https://github.com/caltseng/phalanx/pull/22), trusted observation API in [PR #23](https://github.com/caltseng/phalanx/pull/23), and a runner stage that checks the current claim and submits verified drafts idempotently. | Route attended claims to the stage, persist the development base checkpoint, and wire non-success outcomes and recovery. |
 | PH-17 | Authenticated keyset pages for open and recently closed executions, plus the selected execution timeline. | Wire the board adapter and map prerequisite and worker chat data when their read contracts are available. |
 | PH-18 | Operator board component with browser fixtures in [PR #8](https://github.com/caltseng/phalanx/pull/8). | Connect it to the authenticated PH-17 read API and package its static assets. |
 
@@ -89,6 +89,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 ### PH-11 Build the visible Codex adapter
 
 - **Depends on:** PH-01, PH-06, PH-10. **Output:** PR.
+- The attended single-slot bridge prepares development and report-drafting launches and relays verified results. Captain resolves the app project, records native receipts, and attests that the writer stopped. Dispatch filters claims by supported stage. Report review and storage, wider PR stage coverage, and a two-worker desktop run remain.
+- When PH-08 lands, send the worker question, options and handoff as its structured `question` result, carry the recorded question and owner answer into the next claim and work packet, and verify a question, reply and resumed attempt through the attended CLI. Until that integration, the attended runner submits the question and handoff in the owner wait reason.
 - Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
 - **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
 
@@ -99,6 +101,10 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Done when:** Interrupting the Captain on either side of launch or stalling the API never lets a replacement write in the same worktree or oversubscribe the machine. A reply and a finished worker result survive restarting the Captain.
 
 ## PR and report delivery
+
+The independent restart core consumes the original attended journal row, fresh native observations, verified local checkpoint evidence, and the server's expired-attempt list. It keeps uncertain reservations visible, retries temporary uncertainty at 2, 4, 8, and 16 seconds, and records an owner action when further automatic checks cannot help. Stopped-attempt requests retain their exact body and idempotency key until an authenticated response matches the execution and next version, or confirms the following version with its stored cancellation or failure report.
+
+After the attended runner lands, call the core before admitting replacement work. Gather Codex and Git evidence outside the journal transaction, then compare the original reservation and receipt inside it before applying the decision. Persist the stop request before sending it, archive only after verified acknowledgment, and expose retries, owner waits, and unmatched server attempts in runner status. Resolve definite version conflicts against server history before changing a recorded stop request. The runner still needs fresh-claim adoption for verified expired results, operator notification, and the live restart and concurrent capacity pilot.
 
 ### PH-13 Publish drafts and reconcile GitHub writes
 
@@ -123,6 +129,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **API follow-up:** Wire independent review, feedback, approvals, and mergeability to the verified primary PR and revision before assigning check-in. Verify a merge against the recorded pre-merge revision and durable write intent.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
 - When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
+- **Coordinator slice:** Verify exact primary identity and current gates, finish ready-only without a write, or reserve and request one authorized direct merge commit. Reconcile by reading the same PR and verifying the ordered base and head parents. Keep an ambiguous attempt reserved even if the PR still appears open.
+- **Remaining integration:** Persist and retire reservations under the runner claim, wire trusted check and review observations and repository-specific policy, record verified results through the server lifecycle, and pilot a live feedback or conflict loop. Add separate adapters for other merge methods or required merge queues.
 - **Done when:** A real PR goes through a feedback or conflict loop, required revision changes invalidate stale evidence, and a verified merge is recorded exactly once. A separate ready-only case completes with a verified PR and no merge.
 
 ### PH-16 Deliver field reports

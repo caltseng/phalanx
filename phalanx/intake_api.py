@@ -110,10 +110,14 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
 
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
+    payload = body.model_dump(mode="json")
+    # Preserve receipt digests for result requests written before this field existed.
+    if isinstance(body, Result) and body.failure_reason is None:
+        payload.pop("failure_reason")
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
-        payload={"body": body.model_dump(mode="json"), "lease_digest": lease_digest},
+        payload={"body": payload, "lease_digest": lease_digest},
     )
 
 
@@ -129,6 +133,14 @@ def result(request: Request, item_id: Identifier, execution_id: Identifier,
 def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifier,
                    body: AttemptEvent, lease: Lease, key: Key = None):
     return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
+             dependencies=[Depends(require_runner)])
+def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
+                         body: pr_observations.PublicationClaimCheck, lease: Lease):
+    return run(request, pr_observations.check_publication_claim, item_id, execution_id, body,
+               intake.digest(lease))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
