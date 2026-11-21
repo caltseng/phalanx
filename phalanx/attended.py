@@ -1,11 +1,11 @@
-"""Single-slot attended Captain bridge. Native app calls belong to the Captain."""
+"""Attended Captain bridge. Native app calls belong to the Captain."""
 
 import json
 import os
 import re
 import secrets
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,8 +14,9 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
+from .attended_drafts import development_checkpoint, github_repository, publish_draft
 from .codex_handoff import CodexHandoff, WorkPacket
-from .workspaces import WorkspaceError, WorkspaceManager
+from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
 
 class RunnerError(RuntimeError):
@@ -67,104 +68,181 @@ STAGES = {
 
 
 class AttendedRunner:
-    def __init__(self, root, config, api):
+    def __init__(self, root, config, api, *, slot=1):
         self.root = root.resolve()
         self.config = config
         self.api = api
+        self.capacity = config.get("capacity", 1)
+        if type(self.capacity) is not int or not 1 <= self.capacity <= 256:
+            raise RunnerError("Local capacity must be an integer from 1 to 256")
+        if type(slot) is not int or not 1 <= slot <= 256:
+            raise RunnerError("Slot must be an integer from 1 to 256")
+        self.slot = slot
         self.root.mkdir(parents=True, exist_ok=True)
         self.results = self.root / "results"
         self.results.mkdir(exist_ok=True)
         self.journal = self.root / "attended.sqlite3"
 
-    def _transaction(self, action):
+    @contextmanager
+    def _journal(self):
         with closing(sqlite3.connect(self.journal, timeout=30)) as db, db:
             db.execute("PRAGMA synchronous=EXTRA")
             db.execute("BEGIN IMMEDIATE")
             db.execute("CREATE TABLE IF NOT EXISTS slot (id INTEGER PRIMARY KEY, record TEXT)")
-            row = db.execute("SELECT record FROM slot WHERE id=1").fetchone()
+            yield db
+
+    def _transaction(self, action):
+        # Keep network, Git and evidence reads outside the journal lock.
+        with self._journal() as db:
+            row = db.execute("SELECT record FROM slot WHERE id=?", (self.slot,)).fetchone()
             record = json.loads(row[0]) if row else {}
             archived = record.copy() if "submission" in record else None
-            result = action(record)
+            result = action(record, db)
             if archived is not None and not record:
                 archived.pop("lease")
                 db.execute("CREATE TABLE IF NOT EXISTS completed (attempt_id TEXT PRIMARY KEY, record TEXT)")
                 db.execute("INSERT INTO completed VALUES (?, ?)",
                            (archived["claim"]["attempt_id"], json.dumps(archived)))
             if record:
-                db.execute("INSERT OR REPLACE INTO slot VALUES (1, ?)", (json.dumps(record),))
-            else:
-                db.execute("DELETE FROM slot WHERE id=1")
+                serialized = json.dumps(record)
+                if row is None or serialized != row[0]:
+                    db.execute("INSERT OR REPLACE INTO slot VALUES (?, ?)", (self.slot, serialized))
+            elif row is not None:
+                db.execute("DELETE FROM slot WHERE id=?", (self.slot,))
             return result
 
     def _manager(self, mapping, remote):
         return WorkspaceManager(Path(mapping["checkout"]), remote, self.root / "worktrees")
 
-    def prepare(self):
-        def reserve(record):
-            if record:
-                return record["lease"]
-            registrations = self.api.call("/repositories")
-            eligible = {}
-            blocked = []
-            for registered in registrations:
-                repo = registered["id"]
-                mapping = self.config["repositories"].get(repo)
-                if mapping is None:
-                    continue
-                try:
-                    self._manager(mapping, registered["remote"]).verify_checkout()
-                except WorkspaceError:
-                    blocked.append(repo)
-                    continue
-                eligible[repo] = registered["remote"]
-            if not eligible:
-                raise RunnerError("No registered checkout passed verification; check local mappings and origins")
-            record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                          repositories=eligible, blocked=blocked, stages=sorted(STAGES))
-            return record["lease"]
+    def _snapshot(self):
+        return self._transaction(lambda record, db: record)
 
-        lease = self._transaction(reserve)
+    @staticmethod
+    def _ensure_reservation(record, lease):
+        if record.get("lease") != lease:
+            raise RunnerError("The original reservation has ended; inspect status")
 
-        def ensure_reservation(record):
-            if record.get("lease") != lease:
-                raise RunnerError("The original reservation has ended; inspect status")
+    def _verified_mappings(self, *, draft=False):
+        eligible = {}
+        blocked = []
+        for registered in self.api.call("/repositories"):
+            repo = registered["id"]
+            mapping = self.config["repositories"].get(repo)
+            if mapping is None or (draft and github_repository(registered["remote"]) is None):
+                continue
+            try:
+                self._manager(mapping, registered["remote"]).verify_checkout()
+            except WorkspaceError:
+                blocked.append(repo)
+                continue
+            eligible[repo] = registered["remote"]
+        if not eligible:
+            raise RunnerError("No registered checkout passed verification; check local mappings and origins")
+        return eligible, blocked
 
-        def claim(record):
-            ensure_reservation(record)
-            if "claim" in record:
-                return None
+    def prepare(self, *, draft=False):
+        # Only competing preparations of this slot wait here. Heartbeats and
+        # other slots can still use the journal during HTTP and Git operations.
+        with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
+            return self._prepare_slot(draft=draft)
+
+    def _prepare_slot(self, *, draft):
+        github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
+        snapshot = self._snapshot()
+        if not snapshot:
+            if draft and not github_token:
+                raise RunnerError("Set PHALANX_GITHUB_TOKEN in the runner environment for draft publication")
+            if self.slot > self.capacity:
+                raise RunnerError("Slot exceeds local capacity; use an enabled slot")
+            eligible, blocked = self._verified_mappings(draft=draft)
+
+            def reserve(record, db):
+                if db.execute("SELECT count(*) FROM slot").fetchone()[0] >= self.capacity:
+                    raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
+                record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
+                              repositories=eligible, blocked=blocked,
+                              stages=["pr_creation"] if draft else sorted(STAGES),
+                              slots=self.capacity)
+                return record
+
+            snapshot = self._transaction(reserve)
+
+        lease = snapshot["lease"]
+        if "claim" not in snapshot:
+            if draft and snapshot.get("stages") != ["pr_creation"]:
+                raise RunnerError("Resume the existing worker reservation with prepare")
             request = {
-                "runner_id": record["runner_id"], "repository_ids": sorted(record["repositories"]),
-                "slots": 1,
+                "runner_id": snapshot["runner_id"],
+                "repository_ids": sorted(snapshot["repositories"]),
+                "slots": snapshot.get("slots", 1),
             }
-            if "stages" in record:
-                request["stages"] = record["stages"]
-            result = self.api.call("/dispatch/claim", request, lease=record["lease"])
-            if result["status"] != "claimed":
-                status = {"status": result["status"], "unverified_mappings": record["blocked"]}
-                record.clear()
-                return status
-            record.update(claim=result, lease_expires_at=result["lease_expires_at"])
-            return None
+            if "stages" in snapshot:
+                request["stages"] = snapshot["stages"]
+            result = self.api.call("/dispatch/claim", request, lease=lease)
 
-        result = self._transaction(claim)
-        if result is not None:
-            return result
+            def save_claim(record, db):
+                self._ensure_reservation(record, lease)
+                if result["status"] != "claimed":
+                    record.clear()
+                else:
+                    record.update(claim=result, lease_expires_at=result["lease_expires_at"])
+                return record
 
-        snapshot = self._transaction(dict)
-        ensure_reservation(snapshot)
+            blocked = snapshot["blocked"]
+            snapshot = self._transaction(save_claim)
+            if not snapshot:
+                return {"status": result["status"], "slot": self.slot, "unverified_mappings": blocked}
+
+        if snapshot["claim"]["execution"]["state"]["stage"] == "pr_creation":
+            return {**self._run_draft(snapshot, github_token), "slot": self.slot}
+        if draft:
+            raise RunnerError("The slot holds a worker assignment; resume it with prepare")
         launch = self._prepare_launch(snapshot)
 
-        def commit_launch(record):
-            ensure_reservation(record)
+        def commit_launch(record, db):
+            self._ensure_reservation(record, lease)
             if "packet" in record:
                 raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
+            if "recover_stop" in record:
+                raise RunnerError("Recovery owns this reservation; inspect attended-recover")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
                 record[field] = snapshot[field]
+            if "development_base" in snapshot:
+                record["development_base"] = snapshot["development_base"]
             record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
 
         self._transaction(commit_launch)
-        return launch
+        return {**launch, "slot": self.slot}
+
+    def _run_draft(self, snapshot, token):
+        claim = snapshot["claim"]
+        mapping = self.config["repositories"][claim["request"]["repository_id"]]
+        checkpoint = development_checkpoint(self.journal, claim)
+        if checkpoint is None:
+            status = {"status": "draft_blocked", "reason": (
+                "The candidate has no accepted development base checkpoint. "
+                "Recover the exact development base or return the item to development."
+            )}
+        elif not token:
+            status = {"status": "draft_blocked",
+                      "reason": "Set PHALANX_GITHUB_TOKEN in the runner environment and retry"}
+        else:
+            result = publish_draft(self.root, self.api, snapshot, mapping, checkpoint, token)
+            if result.execution is not None:
+                status = {"status": "draft_submitted", "execution": result.execution}
+            else:
+                status = {"status": "draft_" + result.publication.status,
+                          "reason": result.publication.reason}
+
+        def finish(record, db):
+            if record.get("lease") == snapshot["lease"]:
+                if status["status"] == "draft_submitted":
+                    record.clear()
+                else:
+                    record["draft_status"] = status
+
+        self._transaction(finish)
+        return status
 
     def _prepare_launch(self, record):
         if "packet" in record:
@@ -179,20 +257,27 @@ class AttendedRunner:
         mapping = self.config["repositories"][repo]
         base = request.get("target_branch") or mapping["base_branch"]
         self._renew(record)
-        workspace = self._manager(mapping, record["repositories"][repo]).prepare(
-            claim["item_id"], base=f"refs/remotes/origin/{base}",
-        )
+        manager = self._manager(mapping, record["repositories"][repo])
+        base_ref = f"refs/remotes/origin/{base}"
+        if stage == "development":
+            base_sha = manager.resolve_origin_base(base)
+            record["development_base"] = {"ref": base, "sha": base_sha}
+            base_ref = base_sha
+        workspace = manager.prepare(claim["item_id"], base=base_ref)
         candidate = execution["state"].get("candidate")
         if candidate and candidate != workspace.head:
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
+        input_reply = claim.get("input_reply")
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
             worktree=workspace.path, branch=workspace.branch, expected_revision=workspace.head,
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
             evidence_requirements=STAGES[stage], base_branch=base,
+            dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps({field: request.get(field, []) for field in
                                 ("context_links", "acceptance_criteria")}, ensure_ascii=False),
+            handoff=json.dumps(input_reply, ensure_ascii=False) if input_reply is not None else "",
         )
         handoff = CodexHandoff(packet, self.results)
         if os.path.lexists(handoff.result_path) or os.path.lexists(handoff.temporary_path):
@@ -210,7 +295,7 @@ class AttendedRunner:
                 "unverified_mappings": record["blocked"],
                 "create_thread": handoff.create_thread_arguments(record["project_id"])}
 
-    def status(self):
+    def status(self, *, all_slots=False):
         def view(record):
             if not record:
                 return {"status": "idle"}
@@ -224,16 +309,27 @@ class AttendedRunner:
                 status = "launch_uncertain"
             else:
                 status = "claimed" if claim else "claim_pending"
+            if record.get("draft_status"):
+                status = record["draft_status"]["status"]
             return {"status": status, "packet": packet, "attempt_id": claim and claim["attempt_id"],
                     "stage": claim and claim["execution"]["state"]["stage"],
                     "project_id": record.get("project_id"), "host_id": record.get("host_id"),
                     "started_at": record.get("started_at"), "receipt": record.get("receipt"),
-                    "lease_expires_at": record.get("lease_expires_at")}
+                    "lease_expires_at": record.get("lease_expires_at"),
+                    "unverified_mappings": record.get("blocked", []),
+                    **({"reason": record["draft_status"]["reason"]} if record.get("draft_status") else {})}
 
-        return self._transaction(view)
+        if not all_slots:
+            return view(self._snapshot())
+
+        with self._journal() as db:
+            rows = db.execute("SELECT id, record FROM slot ORDER BY id").fetchall()
+        return {"capacity": self.capacity, "reservations": [
+            {"slot": slot, **view(json.loads(data))} for slot, data in rows
+        ]}
 
     def receipt(self, marker, host_id, *, thread_id=None, client_thread_id=None):
-        def save(record):
+        def save(record, db):
             packet = self._handoff(record).packet
             if marker != packet.marker or host_id != record["host_id"]:
                 raise RunnerError("Receipt does not match the launch marker and host")
@@ -263,7 +359,15 @@ class AttendedRunner:
         return result
 
     def renew(self):
-        return self._transaction(self._renew)
+        snapshot = self._snapshot()
+        result = self._renew(snapshot)
+
+        def save_renewal(record, db):
+            self._ensure_reservation(record, snapshot["lease"])
+            record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
+
+        self._transaction(save_renewal)
+        return result
 
     def _handoff(self, record):
         if "packet" not in record:
@@ -271,6 +375,7 @@ class AttendedRunner:
         packet = record["packet"]
         return CodexHandoff(WorkPacket(**{
             **packet, "attempt_id": UUID(packet["attempt_id"]), "worktree": Path(packet["worktree"]),
+            "dependencies": tuple(packet.get("dependencies", ())),
         }), self.results)
 
     def submit(self, marker, host_id, thread_id):
@@ -287,9 +392,10 @@ class AttendedRunner:
             result = handoff.read_result()
             if result is None:
                 raise RunnerError("No final result file; keep the reservation and reconcile")
-            workspace = self._manager(
+            manager = self._manager(
                 {"checkout": record["checkout"]}, record["repositories"][packet.repository],
-            ).inspect(packet.item_id)
+            )
+            workspace = manager.inspect(packet.item_id)
             if workspace.path != packet.worktree or workspace.branch != packet.branch:
                 raise RunnerError("Result worktree no longer matches the launch intent")
             body = {"attempt_id": record["claim"]["attempt_id"], "stage": packet.stage,
@@ -303,18 +409,25 @@ class AttendedRunner:
                             or evidence != workspace.head or workspace.dirty
                             or evidence == packet.expected_revision):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
+                    if "development_base" in record:
+                        manager.verify_base_ancestry(workspace, record["development_base"]["sha"])
                     body["candidate"] = workspace.head
                 else:
                     body["report_markdown"] = result.details["evidence"]
-            elif result.outcome in {"needs_input", "failed"}:
+            elif result.outcome == "failed":
                 reason = "\n\n".join(f"{field.replace('_', ' ').capitalize()}\n{text}"
                                      for field, text in result.details.items())
                 if len(reason) > 16000:
                     raise RunnerError("Worker evidence exceeds the API limit")
-                if result.outcome == "failed":
-                    body["failure_reason"] = reason
-                else:
-                    body["wait"] = {"reason": reason, "trigger": "owner reply"}
+                body["failure_reason"] = reason
+            elif result.outcome == "needs_input":
+                if any(len(text.strip()) > 16000 for text in result.details.values()):
+                    raise RunnerError("Worker question exceeds the API limit")
+                body["question"] = {
+                    "prompt": result.details["question"],
+                    "options": [result.details["options"]],
+                    "handoff": result.details["handoff"],
+                }
             else:
                 raise RunnerError("Outcome is unsupported for this attended stage")
             submission = {
@@ -323,43 +436,48 @@ class AttendedRunner:
                 "details": result.details,
                 "stop_confirmed_at": datetime.now(timezone.utc).isoformat(),
             }
+            if packet.stage == "development" and "development_base" in record:
+                submission["checkpoint"]["base"] = record["development_base"]
             return submission
 
         # Workspace inspection can run Git commands. Keep the journal available
         # for renewals and verify the reservation again before saving evidence.
-        snapshot = self._transaction(dict)
+        snapshot = self._snapshot()
         submission = verify(snapshot)
 
-        def save_submission(record):
+        def save_submission(record, db):
             if (record.get("lease") != snapshot.get("lease")
                     or record.get("receipt") != snapshot.get("receipt")):
                 raise RunnerError("The original reservation ended; inspect status")
             if "submission" not in record:
                 record["submission"] = submission
 
-        self._transaction(save_submission)
+            return record["submission"]
 
-        def send(record):
-            packet = self._handoff(record).packet
-            if packet.marker != marker:
-                raise RunnerError("A different launch owns the slot")
-            claim = record["claim"]
-            path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
-            response = self.api.call(path, record["submission"]["body"],
-                                     lease=record["lease"], key=marker)
-            record.clear()
-            return response
+        submission = self._transaction(save_submission)
+        claim = snapshot["claim"]
+        path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
+        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=marker)
 
-        return self._transaction(send)
+        def finish(record, db):
+            # A concurrent idempotent submit may already have archived this attempt.
+            if record.get("lease") == snapshot["lease"]:
+                record.clear()
+
+        self._transaction(finish)
+        return response
 
 
 def add_attended_command(commands):
-    parser = commands.add_parser("attended", help="operate a single attended Captain slot")
+    parser = commands.add_parser("attended", help="operate attended Captain reservations")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
+    parser.add_argument("--slot", type=int, default=1)
     actions = parser.add_subparsers(dest="action", required=True)
-    for action in ("prepare", "status", "renew"):
-        actions.add_parser(action)
+    prepare = actions.add_parser("prepare")
+    prepare.add_argument("--draft", action="store_true", help="poll for runner-owned initial draft publication")
+    actions.add_parser("renew")
+    actions.add_parser("status").add_argument("--all", action="store_true")
     receipt = actions.add_parser("receipt")
     receipt.add_argument("marker")
     receipt.add_argument("host_id")
@@ -378,12 +496,16 @@ def run_attended(args):
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
     if not token and args.action in {"prepare", "renew", "submit"}:
         raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
-    runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token))
-    if args.action == "receipt":
+    runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token), slot=args.slot)
+    if args.action == "prepare":
+        result = runner.prepare(draft=args.draft)
+    elif args.action == "receipt":
         result = runner.receipt(args.marker, args.host_id, thread_id=args.thread_id,
                                 client_thread_id=args.client_thread_id)
     elif args.action == "submit":
         result = runner.submit(args.marker, args.host_id, args.thread_id)
+    elif args.action == "status":
+        result = runner.status(all_slots=args.all)
     else:
         result = getattr(runner, args.action)()
     print(json.dumps(result, ensure_ascii=False))

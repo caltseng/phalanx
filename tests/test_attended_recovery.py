@@ -92,6 +92,12 @@ class AttendedRecoveryTests(unittest.TestCase):
         self.assertEqual(decision["status"], "retry")
 
     def test_stop_request_replays_after_restart_until_exact_ack(self):
+        pins = [{"upstream_id": "upstream", "execution_id": "upstream-execution",
+                 "milestone": "report", "reference": "/report", "revision": "pinned-report",
+                 "reviewed_revision": None}]
+        self.packet = replace(self.packet, dependencies=tuple(pins))
+        self.record["packet"]["dependencies"] = pins
+        self.record["claim"]["dependencies"] = pins
         decision = self.decision(discovery_complete=True, observations=[self.observation],
                                  stopped=self.checkpoint)
         self.assertEqual(decision["status"], "send_stop")
@@ -132,6 +138,15 @@ class AttendedRecoveryTests(unittest.TestCase):
         wrong = [self.expired[0] | {"execution_id": "other"}]
         self.assertEqual(self.decision(packet=None, expired=wrong)["status"], "owner_wait")
         self.assertEqual(self.decision(packet=None)["status"], "send_stop")
+
+    def test_draft_claim_requires_publication_reconciliation_without_a_worker(self):
+        del self.record["packet"]
+        self.record["claim"]["execution"]["state"]["stage"] = "pr_creation"
+        expired = [self.expired[0] | {"stage": "pr_creation"}]
+        result = self.decision(packet=None, expired=expired)
+        self.assertEqual(result["status"], "owner_wait")
+        self.assertIn("publication journal", result["next_action"])
+        self.assertNotIn("recover_stop", self.record)
 
     def test_saved_submission_and_unmatched_lease(self):
         self.record["submission"] = {"body": {}}

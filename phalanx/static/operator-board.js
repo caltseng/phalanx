@@ -125,7 +125,8 @@
       if (data.dependencies?.length) {
         const list = element("ul");
         for (const dependency of data.dependencies) {
-          list.append(element("li", dependency.title + " · " + dependency.milestone + " · " + label(dependency.status)));
+          const blocker = dependency.reason || label(dependency.status);
+          list.append(element("li", dependency.title + " · " + label(dependency.milestone) + " · " + blocker));
         }
         content.append(element("h3", "Prerequisites"), list);
       }

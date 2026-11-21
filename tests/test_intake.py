@@ -1,4 +1,6 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import os
 from pathlib import Path
 import subprocess
@@ -10,7 +12,7 @@ import unittest
 from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest
 from phalanx.store import APPLICATION_ID, connect, write_transaction
-from phalanx.transitions import Event, Wait
+from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -161,6 +163,13 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         status, stopping = self.submit(route + "/cancel", cancellation, key="cancel")
         self.assertEqual(status, 200, stopping)
         self.assertEqual(stopping["state"]["stopping"], "cancelled")
+        external = {
+            "expected_version": stopping["version"], "attempt_id": claim["attempt_id"],
+            "stage": claim["stage"], "reason": "Waiting for CI", "gate": "ci",
+            "revision": {"head": "head-one", "base": "base-one"},
+        }
+        self.assertEqual(self.submit(route + "/external-wait", external, token=RUNNER,
+                                     lease=LEASE, key="stopping")[0], 409)
         self.assertIsNone(stopping["state"]["final_output"])
         self.assertEqual(self.submit(route + "/cancel", cancellation, key="cancel"), (200, stopping))
         self.assertEqual(self.submit(route + "/result", dict(claim, report_markdown="# Late"),
@@ -206,6 +215,144 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertIn("report_drafting", self.get(route + "/report", OWNER)[1])
         self.assertEqual([event["event"] for event in self.get(route + "/timeline", OWNER)[1]],
                          ["intake", "claim", "external_wait", "cancel", "stop_confirmed", "finalize"])
+
+    def test_input_wait_reply_survives_restart_and_queues_same_stage_once(self):
+        item, _, _, route = self.create()
+        claim = self.claim(item, item["execution"])
+        question = {"prompt": "Which scope?", "options": ["Current", "Expanded"],
+                    "proposed_default": "Current", "handoff": "Draft is in notes.md"}
+        result = dict(claim, outcome="needs_input")
+        self.assertEqual(self.submit(route + "/result", result, token=RUNNER, lease=LEASE)[0], 409)
+        status, waiting = self.submit(route + "/result", dict(result, question=question),
+                                      token=RUNNER, lease=LEASE, key="wait")
+        self.assertEqual(status, 200, waiting)
+        self.assertEqual(waiting["state"]["status"], "waiting_for_input")
+        with connect(self.path) as db:
+            self.assertIsNotNone(db.execute("SELECT ended_at FROM attempts WHERE id=?",
+                                            (claim["attempt_id"],)).fetchone()[0])
+
+        self.stop_server(self.server)
+        self.server = self.start_server(self.path)
+        self.assertEqual(self.get("/v1/owner/inbox", RUNNER)[0], 403)
+        self.assertEqual(self.get("/v1/owner/inbox")[0], 401)
+        status, inbox = self.get("/v1/owner/inbox", OWNER)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(inbox), 1)
+        self.assertEqual(inbox[0]["question"], question)
+        self.assertEqual(inbox[0]["wait"]["trigger"], "owner reply")
+        path = route + "/reply"
+        answer = {"expected_version": waiting["version"], "answer": "Use current scope"}
+        self.assertEqual(self.submit(path, answer, token=RUNNER, key="answer")[0], 403)
+        self.assertEqual(self.submit(path, answer)[0], 422)
+        self.assertEqual(self.submit(path, dict(answer, expected_version=claim["expected_version"]),
+                                     key="stale")[0], 409)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(self.submit, path, answer, key="answer")
+            replay = pool.submit(self.submit, path, answer, key="answer")
+            status, queued = first.result()
+            self.assertEqual(replay.result(), (status, queued))
+        self.assertEqual(status, 200, queued)
+        self.assertEqual(queued["version"], waiting["version"] + 1)
+        self.assertEqual(queued["state"]["stage"], waiting["state"]["stage"])
+        self.assertEqual(queued["state"]["status"], "queued")
+        self.assertEqual(self.submit(path, answer, key="another")[0], 409)
+        self.assertEqual(self.submit(path, dict(answer, answer="Expanded"), key="answer")[0], 409)
+        self.assertEqual(self.get("/v1/owner/inbox", OWNER), (200, []))
+
+        self.stop_server(self.server)
+        self.server = self.start_server(self.path)
+        cli = subprocess.run(
+            [sys.executable, "-m", "phalanx", "--api-url", self.url, "reply", item["id"],
+             waiting["id"], answer["answer"], "--version", str(waiting["version"]),
+             "--key", "answer"],
+            env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True,
+            timeout=10,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        self.assertEqual(json.loads(cli.stdout), queued)
+        status, resumed = self.submit(
+            "/v1/dispatch/claim", {"runner_id": "local", "repository_ids": ["example"]},
+            token=RUNNER, lease="y" * 32,
+        )
+        self.assertEqual(status, 200, resumed)
+        self.assertEqual(resumed["status"], "claimed")
+        self.assertEqual(resumed["execution"]["state"]["stage"], waiting["state"]["stage"])
+        self.assertEqual(resumed["input_reply"], {
+            "answer": answer["answer"], "wait_version": waiting["version"], "question": question,
+        })
+        self.assertEqual([entry["event"] for entry in self.get(route + "/timeline", OWNER)[1]],
+                         ["intake", "claim", "result", "reply", "claim"])
+
+    def test_external_wait_is_due_after_restart_and_recheck_does_not_pass_gate(self):
+        item, intake_body, _, route = self.create("ready_for_check_in")
+        claim = self.claim(item, item["execution"])
+        body = {key: claim[key] for key in ("expected_version", "attempt_id", "stage")}
+        body.update(reason="Waiting for CI", gate="ci",
+                    revision={"head": "head-one", "base": "base-one"}, retry_after_seconds=60)
+        path = route + "/external-wait"
+        self.assertEqual(self.submit(path, body, token=RUNNER, lease="z" * 32, key="wait")[0], 409)
+        earliest = int(time() * 1000) + 60_000
+        status, waiting = self.submit(path, body, token=RUNNER, lease=LEASE, key="wait")
+        self.assertEqual(status, 200, waiting)
+        self.assertEqual(waiting["state"]["status"], "waiting_for_external")
+        self.assertEqual(self.submit(path, body, token=RUNNER, lease=LEASE, key="wait"),
+                         (200, waiting))
+        due_path = "/v1/runner/due-rechecks?limit=1"
+        self.assertEqual(self.get(due_path, OWNER)[0], 403)
+        self.assertEqual(self.get(due_path, RUNNER), (200, []))
+        recheck = {"expected_version": waiting["version"]}
+        self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="poll")[0], 409)
+        status, unrelated = self.submit("/v1/items", intake_body, key="unrelated")
+        self.assertEqual(status, 201, unrelated)
+        with write_transaction(self.path) as db:
+            due_at = db.execute("SELECT due_at_ms FROM external_rechecks").fetchone()[0]
+            self.assertGreaterEqual(due_at, earliest)
+            self.assertLessEqual(due_at, int(time() * 1000) + 65_000)
+            db.execute("UPDATE external_rechecks SET due_at_ms=1")
+            db.execute("INSERT INTO external_rechecks VALUES (?, ?, 0)",
+                       (unrelated["execution"]["id"], unrelated["execution"]["version"] + 1))
+        self.stop_server(self.server)
+        self.server = self.start_server(self.path)
+        status, batch = self.get(due_path, RUNNER)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(batch), 1)
+        self.assertEqual(batch[0]["revision"], body["revision"])
+        self.assertEqual(batch[0]["version"], waiting["version"])
+        self.assertEqual(self.submit(route + "/recheck", recheck, key="owner")[0], 403)
+        status, queued = self.submit(route + "/recheck", recheck, token=RUNNER, key="poll")
+        self.assertEqual(status, 200, queued)
+        self.assertEqual(queued["state"]["status"], "queued")
+        self.assertEqual(queued["state"]["stage"], waiting["state"]["stage"])
+        self.assertIsNone(queued["state"]["final_output"])
+        self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="poll"),
+                         (200, queued))
+        self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="dupe")[0], 409)
+        self.assertEqual(self.get(due_path, RUNNER), (200, []))
+
+    def test_trusted_success_can_open_a_human_wait_without_worker_question(self):
+        item, _, _, route = self.create("ready_for_check_in")
+        url = "https://github.com/example/project/pull/1"
+        revision = Revision("head-one", "base-one")
+        execution = item["execution"]
+        with write_transaction(self.path) as db:
+            row, state = check_current(db, item["id"], execution["id"], execution["version"])
+            state = replace(state, stage=Stage.PR_RECONCILIATION, primary_pr=url,
+                            candidate=revision.head)
+            claim = claim_attempt(db, row, state, runner_id="local", lease_digest=digest(LEASE),
+                                  lease_expires_at=int(time()) + 3600)
+            row, state = check_current(db, item["id"], execution["id"], claim["execution"]["version"])
+            waiting = apply(
+                db, row, state, Event.RESULT, attempt_id=claim["attempt_id"], details={},
+                outcome=Outcome.SUCCEEDED, evidence=Evidence(pr=PullRequest(url, revision, closed=True)),
+                wait=Wait("PR closed without merge", "owner reply"),
+            )
+        self.assertEqual(waiting["state"]["status"], "waiting_for_input")
+        status, queued = self.submit(
+            route + "/reply", {"expected_version": waiting["version"], "answer": "Investigate"},
+            key="resume-closed-pr",
+        )
+        self.assertEqual(status, 200, queued)
+        self.assertEqual(queued["state"]["stage"], "pr_reconciliation")
 
     def test_cancel_storage_error_rolls_back_and_recovers_after_restart(self):
         item, _, base, route = self.create()

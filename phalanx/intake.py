@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
+from . import dependencies
 from .finalization_schema import enqueue
 from .store import connect
 from .transitions import (
@@ -108,6 +109,7 @@ def execution_view(row):
         "created_at": row["created_at"], "updated_at": row["updated_at"],
         "state": json.loads(row["state_json"]),
         "ready_since_ms": row["ready_since"], "retry_at_ms": row["retry_at"],
+        "unmet_dependencies": json.loads(row["dependency_wait_json"] or "[]"),
     }
 
 
@@ -116,6 +118,7 @@ def inspect(db, item_id):
     return {
         "id": item["id"], "created_at": item["created_at"],
         **json.loads(item["request_json"]),
+        "dependencies": dependencies.configured_dependencies(db, item_id),
         "execution": execution_view(current_execution(db, item_id)),
     }
 
@@ -167,6 +170,10 @@ def new_execution(db, item_id, target, *, previous_id=None):
          int(clock.timestamp() * 1000)),
     )
     record(db, execution_id, 1, "rerun" if previous_id else "intake", {}, state_json, now)
+    now_ms = int(clock.timestamp() * 1000)
+    dependencies.refresh_wait(db, item_id, execution_id, now_ms)
+    if previous_id:
+        dependencies.refresh_dependents(db, item_id, now_ms)
     return execution_view(execution_row(db, item_id, execution_id))
 
 
@@ -174,11 +181,15 @@ def create(db, payload):
     if not db.execute("SELECT 1 FROM repositories WHERE id=?", (payload.repository_id,)).fetchone():
         raise Missing("Repository not registered")
     item_id = uuid4().hex
-    request = payload.model_dump(mode="json")
+    request = payload.model_dump(mode="json", exclude={"dependencies"})
     if payload.runner_affinity is None:
         del request["runner_affinity"]
     db.execute("INSERT INTO work_items VALUES (?, ?, ?, ?)",
                (item_id, payload.repository_id, encode(request), timestamp()))
+    if payload.dependencies:
+        dependencies.replace_dependencies(db, item_id, [
+            dependencies.Dependency(link.upstream_id, link.milestone) for link in payload.dependencies
+        ])
     new_execution(db, item_id, payload.target)
     return inspect(db, item_id)
 
@@ -188,6 +199,35 @@ def check_current(db, item_id, execution_id, version):
     if row["id"] != execution_id or row["version"] != version:
         raise Conflict("Execution or state version has changed")
     return row, STATE.validate_json(row["state_json"])
+
+
+def steer(db, item_id, execution_id, payload):
+    row, state = check_current(db, item_id, execution_id, payload.expected_version)
+    if state.status != Status.QUEUED or state.stopping or state.pending_output:
+        raise Conflict("Steering requires queued work. Resolve the active execution or rerun it first.")
+
+    edits = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_version"})
+    if not edits or any(value is None for name, value in edits.items() if name != "runner_affinity"):
+        raise Conflict("Steering requires at least one edit. Use an empty list to clear list fields.")
+    request = json.loads(item_row(db, item_id)["request_json"])
+    previous = {name: request.get(name) for name in edits if name != "dependencies"}
+    if "dependencies" in edits:
+        previous["dependencies"] = dependencies.configured_dependencies(db, item_id)
+        dependencies.replace_dependencies(db, item_id, [
+            dependencies.Dependency(link.upstream_id, link.milestone) for link in payload.dependencies
+        ])
+    request.update({name: value for name, value in edits.items() if name != "dependencies"})
+    now = timestamp()
+    db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
+    db.execute(
+        """UPDATE executions SET version=?, updated_at=?, queue_priority=?, queue_affinity=? WHERE id=?""",
+        (row["version"] + 1, now, PRIORITY[request.get("priority", "normal")],
+         request.get("runner_affinity") or "", execution_id),
+    )
+    record(db, execution_id, row["version"] + 1, "steer", {"before": previous, "after": edits},
+           row["state_json"], now)
+    dependencies.refresh_wait(db, item_id, execution_id, int(time() * 1000))
+    return inspect(db, item_id)
 
 
 def rerun(db, item_id, execution_id, payload):
@@ -205,6 +245,13 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         next_state = decide(state, event, **options)
     except ValueError as error:
         raise Conflict(str(error)) from error
+    if event == Event.RESULT:
+        has_question = details.get("question") is not None
+        if next_state.status == Status.WAITING_FOR_INPUT:
+            if not has_question and options.get("outcome") == Outcome.NEEDS_INPUT:
+                raise Conflict("A structured question and handoff are required for an input wait")
+        elif has_question:
+            raise Conflict("This result does not open an input wait")
     version = row["version"] + 1
     clock = datetime.now(UTC)
     now = clock.isoformat(timespec="microseconds")
@@ -217,21 +264,34 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         retry_count += 1
     db.execute(
         """UPDATE executions SET version=?, state_json=?, updated_at=?, ready_since=?,
-           retry_at=?, retry_count=? WHERE id=?""",
+           retry_at=?, retry_count=?, dependency_wait_json=NULL WHERE id=?""",
         (version, state_json, now, ready_since, retry_at, retry_count, row["id"]),
     )
     record(db, row["id"], version, event, details, state_json, now, attempt_id)
+    if state.status == Status.WAITING_FOR_EXTERNAL:
+        db.execute("DELETE FROM external_rechecks WHERE execution_id=?", (row["id"],))
     if state.pending_output is None and next_state.pending_output is not None:
         enqueue(db, row["id"], version)
     if attempt_id and event != Event.CLAIM:
         db.execute("UPDATE attempts SET ended_at=? WHERE id=?", (now, attempt_id))
+    now_ms = int(clock.timestamp() * 1000)
+    if next_state.status == Status.QUEUED:
+        dependencies.refresh_wait(db, row["item_id"], row["id"], now_ms)
+    if dependencies.milestone_evidence(state) != dependencies.milestone_evidence(next_state):
+        dependencies.refresh_dependents(db, row["item_id"], now_ms)
     return execution_view(execution_row(db, row["item_id"], row["id"]))
 
 
 def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None):
     """Persist a claim after PH-06 selects and admits it in this same write transaction."""
-    if state.status != Status.QUEUED or lease_expires_at <= (time() if now is None else now):
+    now = time() if now is None else now
+    if state.status != Status.QUEUED or lease_expires_at <= now:
         raise Conflict("Claim requires a queued execution and a live lease")
+    resolved, unmet = dependencies.resolve_dependencies(db, row["item_id"])
+    if unmet:
+        dependencies.update_wait(db, row["id"], unmet, int(now * 1000))
+        return None
+    snapshot = [asdict(link) for link in resolved]
     attempt_id = uuid4().hex
     db.execute(
         """INSERT INTO attempts
@@ -239,9 +299,19 @@ def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, 
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (attempt_id, row["id"], state.stage, runner_id, lease_digest, lease_expires_at, timestamp()),
     )
+    resume = db.execute(
+        """SELECT event, details_json FROM transition_history
+           WHERE execution_id=? AND version=? AND event IN (?, ?)""",
+        (row["id"], row["version"], Event.REPLY, Event.RECHECK),
+    ).fetchone()
     execution = apply(db, row, state, Event.CLAIM, attempt_id=attempt_id,
-                      details={"runner_id": runner_id, "ready_since_ms": row["ready_since"]})
-    return {"attempt_id": attempt_id, "execution": execution}
+                      details={"runner_id": runner_id, "ready_since_ms": row["ready_since"],
+                               "dependencies": snapshot})
+    claim = {"attempt_id": attempt_id, "execution": execution, "dependencies": snapshot}
+    if resume is not None:
+        field = "input_reply" if resume["event"] == Event.REPLY else "external_recheck"
+        claim[field] = json.loads(resume["details_json"])
+    return claim
 
 
 def check_attempt(db, execution_id, state, payload, lease_digest):
@@ -316,8 +386,34 @@ def stopped_retry_at(row, now):
 def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     check_attempt(db, execution_id, state, payload, lease_digest)
+    if payload.review_notes is not None and (
+        state.stage != Stage.SELF_REVIEW
+        or state.candidate is None
+        or state.candidate != (payload.reviewed_candidate if payload.outcome == Outcome.SUCCEEDED
+                               else payload.candidate)
+    ):
+        raise Conflict("Review notes require self-review evidence for the current candidate")
+    if payload.local_checks is not None and (
+        state.stage != Stage.PRE_PR_VALIDATION
+        or state.candidate is None
+        or state.candidate != (payload.prevalidated_candidate if payload.outcome == Outcome.SUCCEEDED
+                               else payload.candidate)
+    ):
+        raise Conflict("Local checks require pre-validation evidence for the current candidate")
+    if payload.local_checks is not None and payload.outcome == Outcome.SUCCEEDED:
+        if len({check.name for check in payload.local_checks}) != len(payload.local_checks):
+            raise Conflict("Successful pre-validation requires one disposition per local check")
+        if any(check.outcome == "failed" or (
+            check.outcome != "passed" and not (check.reason and check.authorization)
+        ) for check in payload.local_checks):
+            raise Conflict("Successful pre-validation requires passing checks or documented bypasses")
     wait = Wait(**payload.wait.model_dump()) if payload.wait else None
-    details = payload.model_dump(mode="json", exclude={"report_markdown", "expected_version"})
+    if payload.question is not None:
+        wait = Wait(wait.reason if wait else payload.question.prompt, "owner reply")
+    excluded = {"report_markdown", "expected_version"}
+    excluded.update(field for field in ("review_notes", "local_checks")
+                    if getattr(payload, field) is None)
+    details = payload.model_dump(mode="json", exclude=excluded)
     retry_at = None
     if payload.failure_reason is not None:
         if payload.outcome != Outcome.FAILED or wait is not None:
