@@ -418,7 +418,7 @@ capacity and recovery within that trusted role.
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, the old secret stops working, and the recovery is recorded. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. |
 
 A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
 `no_eligible_work`. A successful assignment includes the work request,

@@ -235,8 +235,11 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.request(prefix + "/renew", RUNNER, {}, old)[0], 409)
         self.assertEqual(self.request(prefix + "/renew", RUNNER, {}, new)[0], 200)
         with connect(self.path) as db:
-            self.assertEqual(db.execute("SELECT reconciliation FROM lease_recoveries WHERE attempt_id=?",
-                                        (attempt,)).fetchall()[0][0], "Exact writer still active")
+            db.execute("UPDATE attempts SET lease_expires_at=1 WHERE id=?", (attempt,))
+            db.commit()
+        old, new = new, {"Phalanx-Lease": "t" * 32}
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body,
+                                      new | {"Idempotency-Key": "adopt-2"})[0], 200)
         result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
         result = {"expected_version": execution["version"], "attempt_id": attempt,
                   "stage": execution["state"]["stage"], "outcome": "succeeded", "report_markdown": "# Draft\n"}

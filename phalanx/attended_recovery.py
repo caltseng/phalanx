@@ -121,10 +121,12 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
 
     def adopt(candidate, reason):
         # The fresh secret replaces the expired one. Failures are not reset,
-        # so repeated refusals reach an owner wait instead of looping.
+        # so repeated refusals reach an owner wait instead of looping. The
+        # expiry being recovered makes each adoption's key unique, while a
+        # lost reply replays the saved intent with the same key.
         record["recover_claim"] = {
             "attempt_id": attempt,
-            "key": f"attended-adopt-{attempt}-{candidate['version']}",
+            "key": f"attended-adopt-{attempt}-{candidate['version']}-{candidate['lease_expires_at']}",
             "lease": secrets.token_urlsafe(32),
             "body": {"item_id": claim["item_id"], "expected_version": candidate["version"],
                      "reconciliation": reason},

@@ -74,7 +74,7 @@ class RecoveryServiceTests(unittest.TestCase):
                        "worktree": str(self.packet.worktree)},
         }
         self.expired = {"attempt_id": self.packet.attempt_id.hex, "execution_id": "execution",
-                        "item_id": "item", "stage": self.packet.stage, "version": 3}
+                        "item_id": "item", "stage": self.packet.stage, "version": 3, "lease_expires_at": 0}
         self.api = RecoveryAPI(self)
         self.journal.snapshot()
         self.seed()

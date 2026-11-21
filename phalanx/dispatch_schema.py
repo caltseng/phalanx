@@ -33,17 +33,6 @@ DISPATCH_SCHEMA = (
 )
 
 
-LEASE_RECOVERY_SCHEMA = (
-    """CREATE TABLE lease_recoveries (
-        attempt_id TEXT NOT NULL REFERENCES attempts(id),
-        expired_at INTEGER NOT NULL,
-        reconciliation TEXT NOT NULL,
-        recovered_at TEXT NOT NULL
-    )""",
-    "CREATE INDEX lease_recoveries_by_attempt ON lease_recoveries(attempt_id, recovered_at)",
-)
-
-
 STAGE_QUEUE_SCHEMA = (
     """CREATE INDEX queue_stage_heads ON executions
         (queue_repository, queue_affinity, queue_priority, stage, ready_since, item_id, id)

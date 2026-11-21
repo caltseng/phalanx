@@ -609,7 +609,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.api.expired = [{
             "attempt_id": claim["attempt_id"], "item_id": claim["item_id"],
             "execution_id": claim["execution"]["id"], "stage": "report_drafting",
-            "version": claim["execution"]["version"],
+            "version": claim["execution"]["version"], "lease_expires_at": 0,
         }]
         loop.expired = {claim["attempt_id"]: self.api.expired[0]}
         for _ in range(6):
@@ -1009,7 +1009,6 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         execution = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
         self.assertEqual(execution["state"]["stage"], "report_review")
         with closing(sqlite3.connect(database)) as db:
-            self.assertEqual(db.execute("SELECT count(*) FROM lease_recoveries").fetchone()[0], 1)
             self.assertEqual(db.execute(
                 "SELECT count(*) FROM attempts WHERE stage='report_drafting'").fetchone()[0], 1)
         self.stop_server(server)
