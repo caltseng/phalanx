@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from phalanx import dispatch, finalization, intake
+from phalanx.attended_recovery import acknowledge_stop, reconcile
 from phalanx.dispatch_api import Claim, DispatchSettings, ReconciledStop
 from phalanx.intake_models import Cancel, Intake, Result
 from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
@@ -215,17 +216,31 @@ class DispatchTest(ServerFixture, unittest.TestCase):
                 expected_version=execution["version"], reason="Requested by owner",
             ))
         self.assertEqual(pending["state"]["status"], "waiting_for_external")
-        body = ReconciledStop(item_id=item_id, expected_version=pending["version"],
-                              reconciliation="Stopped worker and verified effects")
         with patch.object(dispatch, "time", return_value=claimed["lease_expires_at"]):
             with write_transaction(self.path) as db:
-                self.assertEqual(dispatch.recovery_candidates(db, "local")[0]["version"],
-                                 pending["version"])
-                pending = dispatch.recover_stopped(db, "local", attempt, body)
+                expired = dispatch.recovery_candidates(db, "local")
+                self.assertEqual(expired[0]["version"], pending["version"])
+                reservation = {"runner_id": "local", "claim": claimed}
+                reconcile(reservation, runner_id="local", packet=None, expired=expired, now=NOW)
+                stop = reservation["recover_stop"]
+                pending = dispatch.recover_stopped(
+                    db, "local", attempt, ReconciledStop(**stop["body"]),
+                )
                 self.assertEqual(pending["state"]["pending_output"], "cancelled")
                 self.assertEqual(dispatch.recovery_candidates(db, "local"), [])
         closed = finalization.attempt(self.path, execution["id"])
         self.assertEqual(closed["state"]["status"], "cancelled")
+        self.assertTrue(acknowledge_stop(reservation, stop, pending))
+        self.assertTrue(acknowledge_stop(reservation, stop, closed))
+        self.assertFalse(acknowledge_stop(reservation, stop, closed | {
+            "state": closed["state"] | {"final_output": None},
+        }))
+        self.assertFalse(acknowledge_stop(reservation, stop, closed | {
+            "state": closed["state"] | {"final_output": {"reference": "/other/report"}},
+        }))
+        self.assertFalse(acknowledge_stop(reservation, stop, closed | {
+            "version": closed["version"] + 1,
+        }))
         with connect(self.path, mode="ro") as db:
             self.assertIn("Requested by owner", intake.report(db, item_id, execution["id"]))
 
