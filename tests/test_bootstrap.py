@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from phalanx.store import connect, migrate
+from phalanx.store import connect, migrate, write_transaction
 
 
 OWNER = "o" * 32
@@ -118,3 +119,28 @@ class BootstrapTest(unittest.TestCase):
                 db.execute("PRAGMA user_version = 999")
             with self.assertRaises(ValueError):
                 migrate(future)
+
+    def test_serialized_transactions_commit_and_roll_back(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "writes.sqlite3"
+            migrate(path)
+            with write_transaction(path) as db:
+                self.assertEqual(db.execute("PRAGMA synchronous").fetchone()[0], 3)
+                self.assertEqual(db.execute("PRAGMA busy_timeout").fetchone()[0], 2000)
+                db.execute("CREATE TABLE counter (value INTEGER)")
+                db.execute("INSERT INTO counter VALUES (0)")
+
+            with self.assertRaisesRegex(RuntimeError, "cancel write"):
+                with write_transaction(path) as db:
+                    db.execute("UPDATE counter SET value = -1")
+                    raise RuntimeError("cancel write")
+
+            def increment(_):
+                with write_transaction(path) as db:
+                    value = db.execute("SELECT value FROM counter").fetchone()[0]
+                    db.execute("UPDATE counter SET value = ?", (value + 1,))
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(increment, range(32)))
+            with connect(path, mode="ro") as db:
+                self.assertEqual(db.execute("SELECT value FROM counter").fetchone()[0], 32)

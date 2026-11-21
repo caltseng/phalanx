@@ -3,9 +3,11 @@ from pathlib import Path
 import os
 import sqlite3
 from tempfile import TemporaryDirectory
+from threading import Lock
 
 
 APPLICATION_ID = 0x50484C58  # PHLX
+_write_lock = Lock()
 
 # Each tuple is one migration. Append PH-05 schema statements as migration 2.
 MIGRATIONS = ((f"PRAGMA application_id = {APPLICATION_ID}",),)
@@ -15,16 +17,25 @@ MIGRATIONS = ((f"PRAGMA application_id = {APPLICATION_ID}",),)
 def connect(path: Path, *, mode: str = "rw"):
     """Open a short-lived connection with explicit SQL transaction control."""
     uri = f"{path.resolve().as_uri()}?mode={mode}"
-    with closing(sqlite3.connect(uri, uri=True, timeout=5, autocommit=True)) as db:
+    with closing(sqlite3.connect(uri, uri=True, timeout=2, autocommit=True)) as db:
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys = ON")
+        db.execute("PRAGMA synchronous = EXTRA")
         yield db
+
+
+@contextmanager
+def write_transaction(path: Path, *, create: bool = False):
+    """Serialize short write transactions within the server process."""
+    with _write_lock, connect(path, mode="rwc" if create else "rw") as db:
+        db.execute("BEGIN IMMEDIATE")
+        yield db
+        db.execute("COMMIT")
 
 
 def migrate(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with connect(path, mode="rwc") as db:
-        db.execute("BEGIN IMMEDIATE")
+    with write_transaction(path, create=True) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         app_id = db.execute("PRAGMA application_id").fetchone()[0]
         if version == 0:
@@ -39,7 +50,6 @@ def migrate(path: Path) -> None:
             for statement in statements:
                 db.execute(statement)
             db.execute(f"PRAGMA user_version = {next_version}")
-        db.execute("COMMIT")
 
 
 def snapshot(source: Path, destination: Path) -> None:

@@ -16,16 +16,18 @@ Every closed work item has a final output. If it ends without the requested deli
 
 ## Run the local API
 
-Use Python 3.12 or later. From the repository root in PowerShell:
+Use CPython 3.14 for deployment and pilot runs. Phalanx supports CPython 3.12 and later. From the repository root in PowerShell:
 
 ```powershell
 py -m venv .venv
 .venv/Scripts/Activate.ps1
-python -m pip install -e .
+python -m pip install -r requirements.lock -e .
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
+
+The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Tests use the standard library and the same runtime dependencies.
 
 Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server applies pending migrations before serving requests and defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
 
@@ -50,6 +52,6 @@ python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 
 ### Develop the API
 
-Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Connections enable foreign keys and use explicit SQL transactions for multi-statement writes. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
+Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived read connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`.
