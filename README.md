@@ -124,6 +124,14 @@ require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.
 
+### Load trusted validation policy
+
+The callable [trusted validation policy loader](docs/runner-validation-policy.md)
+loads per-repository local checks, authorized bypasses, and draft/ready
+requirements from a separate operator-owned runner file. It is not yet wired
+into the attended CLI; preview adapters and draft-only recovery remain explicit
+integration requirements.
+
 ### Reconcile an attended reservation
 
 From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.
@@ -245,7 +253,7 @@ results under a recovery claim.
 
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived read connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
-Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
+Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu with CPython 3.14. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
 
 ### Answer a waiting item
 
