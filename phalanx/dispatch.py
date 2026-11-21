@@ -193,5 +193,8 @@ def recover_claim(db, runner_id, attempt_id, lease_digest, body):
     expires = int(now) + LEASE_SECONDS
     db.execute("UPDATE attempts SET lease_digest=?, lease_expires_at=? WHERE id=?",
                (lease_digest, expires, attempt_id))
+    db.execute("INSERT INTO attempt_adoptions VALUES (?, ?, ?, ?, ?, ?)",
+               (row["id"], row["version"], attempt_id, runner_id, body.reconciliation,
+                intake.timestamp()))
     return {"attempt_id": attempt_id, "execution_id": row["id"], "version": row["version"],
             "lease_expires_at": expires}

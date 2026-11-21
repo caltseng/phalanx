@@ -103,6 +103,12 @@ class WorkerHandoffTests(unittest.TestCase):
             with self.subTest(outcome=outcome):
                 self.write_result(outcome=outcome, details=details)
                 self.assertEqual(self.handoff.read_result().details, details)
+        question = {"question": "Keep the link?", "options": "Yes or no", "handoff": "Draft ready"}
+        for default, kept in (("Yes", {"proposed_default": "Yes"}), ("  ", {}), (["Yes"], {})):
+            with self.subTest(proposed_default=default):
+                self.write_result(outcome="needs_input", details=question | {"proposed_default": default})
+                self.assertEqual(self.handoff.read_result().details, question | kept)
+        self.assertIn("(optional: proposed_default)", self.handoff.launch_arguments("project-1")["prompt"])
 
     def test_rejects_malformed_or_oversized_files(self):
         for raw in (

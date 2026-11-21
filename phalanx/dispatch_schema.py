@@ -33,6 +33,21 @@ DISPATCH_SCHEMA = (
 )
 
 
+# An adoption re-leases the same open attempt without changing the execution's
+# version, so the timeline shows it beside the version it happened at.
+ADOPTION_SCHEMA = (
+    """CREATE TABLE attempt_adoptions (
+        execution_id TEXT NOT NULL REFERENCES executions(id),
+        version INTEGER NOT NULL,
+        attempt_id TEXT NOT NULL REFERENCES attempts(id),
+        runner_id TEXT NOT NULL,
+        reconciliation TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX adoptions_by_execution ON attempt_adoptions(execution_id, version, created_at)",
+)
+
+
 STAGE_QUEUE_SCHEMA = (
     """CREATE INDEX queue_stage_heads ON executions
         (queue_repository, queue_affinity, queue_priority, stage, ready_since, item_id, id)

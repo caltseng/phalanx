@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from threading import Lock
 
 from .dependency_schema import DEPENDENCY_SCHEMA
-from .dispatch_schema import DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
+from .dispatch_schema import ADOPTION_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
 from .operator_schema import OPERATOR_SCHEMA, WORKER_SCHEMA
@@ -27,6 +27,7 @@ MIGRATIONS = (
     DEPENDENCY_SCHEMA,
     WAIT_SCHEMA,
     WORKER_SCHEMA,
+    ADOPTION_SCHEMA,
 )
 
 

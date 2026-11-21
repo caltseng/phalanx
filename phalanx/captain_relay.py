@@ -150,4 +150,5 @@ def run_relay(args):
         except ValueError as error:
             raise RunnerError("The relay response is not valid JSON") from error
         result = respond(args.state, args.id, response=response)
-    print(json.dumps(result, ensure_ascii=False))
+    # ASCII escapes survive a Windows pipe in any code page.
+    print(json.dumps(result))

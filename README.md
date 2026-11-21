@@ -310,7 +310,9 @@ projects. The chat needs a shell with write access to the runner state
 directory. Repeat this cycle while the loop runs:
 
 1. `python -m phalanx relay --state C:\phalanx-runner next --wait 30` hands out
-   the oldest request exactly once, or `{"status": "idle"}`.
+   the oldest request exactly once, or `{"status": "idle"}`. Output is
+   ASCII-escaped JSON, so a non-ASCII prompt survives any pipe code page;
+   decode it with a JSON parser before passing it on.
 2. Serve the request with the runtime's tools, following the contract table
    above and the [runtime mapping](#runtime-mapping):
    - `resolve_project`: discover the project; reply with the verified host,
@@ -436,7 +438,7 @@ capacity and recovery within that trusted role.
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. The adoption appears in both timelines as a `recover_claim` event at the same version. |
 
 A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
 `no_eligible_work`. A successful assignment includes the work request,
@@ -563,7 +565,7 @@ Both owner and runner bearer tokens can call these routes.
 | --- | --- |
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
-| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the
 returned `next_cursor` as `cursor` on the same route and list kind until it is

@@ -512,6 +512,7 @@ class AttendedRunner:
                 body["question"] = {
                     "prompt": result.details["question"],
                     "options": [result.details["options"]],
+                    "proposed_default": result.details.get("proposed_default"),
                     "handoff": result.details["handoff"],
                 }
             else:

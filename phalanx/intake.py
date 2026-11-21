@@ -153,13 +153,23 @@ def execution_row(db, item_id, execution_id):
 
 def timeline(db, item_id, execution_id):
     execution_row(db, item_id, execution_id)
-    return [{
+    events = [{
         "version": row["version"], "event": row["event"], "attempt_id": row["attempt_id"],
         "created_at": row["created_at"], "details": json.loads(row["details_json"]),
         "state": json.loads(row["state_json"]),
     } for row in db.execute(
         "SELECT * FROM transition_history WHERE execution_id=? ORDER BY version", (execution_id,),
     )]
+    states = {event["version"]: event["state"] for event in events}
+    events += [{
+        "version": row["version"], "event": "recover_claim", "attempt_id": row["attempt_id"],
+        "created_at": row["created_at"],
+        "details": {"runner_id": row["runner_id"], "reconciliation": row["reconciliation"]},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM attempt_adoptions WHERE execution_id=?", (execution_id,),
+    )]
+    return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 
 def record(db, execution_id, version, event, details, state_json, now, attempt_id=None):
