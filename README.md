@@ -113,7 +113,7 @@ python -m phalanx intake example "Review the test coverage" --target report --ke
 python -m phalanx inspect <item_id>
 ```
 
-Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The later GitHub integration supplies provider-verified facts for PR stages.
+Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
 
 The authenticated API exposes these routes under `/v1`.
 
