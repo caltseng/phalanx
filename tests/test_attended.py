@@ -12,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
+from phalanx.draft_publication import DraftOutcome
 from phalanx.draft_stage import DraftStageResult
 from phalanx.finalization import attempt
 from phalanx.store import connect, write_transaction
@@ -521,6 +522,29 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(result, {"status": "draft_submitted", "execution": {"id": "execution", "version": 4}, "slot": 1})
         self.assertEqual(self.runner().status(), {"status": "idle"})
         self.assertNotIn("runner-only", json.dumps(result))
+
+    def test_unconfirmed_draft_retries_under_the_same_claim(self):
+        runner, marker, thread, worktree, candidate, _ = self.start_development()
+        runner.submit(marker, "local", thread)
+        self.api.attempt = uuid4().hex
+        self.api.stage, self.api.candidate = "pr_creation", candidate
+        claims = len(self.api.claim_leases)
+        results = [
+            DraftStageResult(DraftOutcome("pending", "Draft creation is unconfirmed")),
+            DraftStageResult(DraftOutcome("base_changed", "The remote base moved"),
+                             {"id": "execution", "version": 4}),
+        ]
+        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), patch(
+            "phalanx.attended.publish_draft", side_effect=results,
+        ) as publish:
+            self.assertEqual(self.runner().prepare(draft=True)["status"], "draft_pending")
+            self.assertEqual(self.runner().status()["status"], "draft_pending")
+            routed = self.runner().prepare(draft=True)
+        self.assertEqual(publish.call_count, 2)
+        self.assertEqual(len(self.api.claim_leases), claims + 1)
+        self.assertEqual(publish.call_args_list[0].args[2]["lease"], publish.call_args_list[1].args[2]["lease"])
+        self.assertEqual((routed["status"], routed["reason"]), ("draft_submitted", "The remote base moved"))
+        self.assertEqual(self.runner().status(), {"status": "idle"})
 
     def test_legacy_development_launch_preserves_candidate_and_blocks_draft(self):
         runner, marker, thread, worktree, candidate, _ = self.start_development()

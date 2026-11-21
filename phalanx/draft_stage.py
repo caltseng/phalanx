@@ -11,8 +11,17 @@ from typing import Protocol
 from .draft_publication import DraftIntent, DraftOutcome, DraftPublisher, PublicationClaim
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient
-from .pr_observations import ExpectedRefs, GitHubPull, Publication
+from .pr_observations import ExpectedRefs, GitHubPull, Publication, PublicationBlocker
 from .transitions import Stage
+
+
+def _pull(pull) -> GitHubPull:
+    return GitHubPull(
+        number=pull.number, head_repository=pull.head_repository,
+        base_repository=pull.base_repository, head_ref=pull.head_ref, base_ref=pull.base_ref,
+        head_sha=pull.head_sha.lower(), base_sha=pull.base_sha.lower(), state=pull.state,
+        draft=pull.draft, merged=pull.merged,
+    )
 
 
 class RunnerAPI(Protocol):
@@ -77,15 +86,21 @@ class DraftStageRunner:
             "attempt_id": assignment.attempt_id,
             "stage": Stage.PR_CREATION,
         }
-        key = f"draft-observation:{assignment.attempt_id}:{assignment.state_version}"
+
+        def send(saved):
+            # Bare sealed rows predate blockers and are always observations.
+            route, body = (saved["route"], saved["body"]) if "route" in saved else ("pr-observation", saved)
+            prefix = "draft-blocker" if route == "pr-publication-blocker" else "draft-observation"
+            return self.api.call(
+                f"{path}/{route}", body, lease=assignment.lease,
+                key=f"{prefix}:{assignment.attempt_id}:{assignment.state_version}",
+            )
 
         # Replay a previously sealed body before asking for a live claim. The
         # observation may have committed and ended the attempt before its reply.
         saved = self._receipt(assignment)
         if saved is not None:
-            return DraftStageResult(execution=self.api.call(
-                f"{path}/pr-observation", saved, lease=assignment.lease, key=key,
-            ))
+            return DraftStageResult(execution=send(saved))
 
         def current():
             return self.api.call(
@@ -119,26 +134,32 @@ class DraftStageRunner:
         outcome = DraftPublisher(
             self.journal, git, self.github, check_claim=check_claim,
         ).publish(intent, claim)
-        if outcome.status != "verified":
+        expected = ExpectedRefs(head_ref=intent.head, base_ref=intent.base, base_sha=intent.expected_base)
+        if outcome.status == "verified":
+            assert outcome.primary is not None
+            saved = {"route": "pr-observation", "body": Publication(
+                **event, expected=expected, pull=_pull(outcome.primary),
+                duplicate_numbers=sorted(pr.number for pr in outcome.duplicates),
+            ).model_dump(mode="json")}
+        elif outcome.status == "base_changed" and outcome.observed_base is not None:
+            # Development rebuilds the candidate on the moved base.
+            saved = {"route": "pr-publication-blocker", "body": PublicationBlocker(
+                **event, expected=expected, reason=outcome.reason,
+                observed_base_sha=outcome.observed_base,
+            ).model_dump(mode="json", exclude_none=True)}
+        elif outcome.status == "conflict" and (blocking := [
+            pr for pr in outcome.conflicts if pr.head_repository and pr.head_ref == intent.head
+        ]):
+            # Reconciliation decides what to do with a PR this intent did not produce.
+            saved = {"route": "pr-publication-blocker", "body": PublicationBlocker(
+                **event, expected=expected, reason=outcome.reason, pull=_pull(blocking[0]),
+            ).model_dump(mode="json", exclude_none=True)}
+        else:
+            # Unconfirmed writes stay local and retry under the same journaled intent.
             return DraftStageResult(outcome)
-
-        pull = outcome.primary
-        assert pull is not None
-        payload = Publication(
-            **event,
-            expected=ExpectedRefs(head_ref=intent.head, base_ref=intent.base, base_sha=intent.expected_base),
-            pull=GitHubPull(
-                number=pull.number, head_repository=pull.head_repository,
-                base_repository=pull.base_repository, head_ref=pull.head_ref, base_ref=pull.base_ref,
-                head_sha=pull.head_sha.lower(), base_sha=pull.base_sha.lower(), state=pull.state,
-                draft=pull.draft, merged=pull.merged,
-            ),
-            duplicate_numbers=sorted(pr.number for pr in outcome.duplicates),
-        ).model_dump(mode="json")
-        saved = self._receipt(assignment, payload)
+        saved = self._receipt(assignment, saved)
         assert saved is not None
-        execution = self.api.call(f"{path}/pr-observation", saved, lease=assignment.lease, key=key)
-        return DraftStageResult(outcome, execution)
+        return DraftStageResult(outcome, send(saved))
 
     def _receipt(self, assignment: DraftAssignment, payload: dict | None = None) -> dict | None:
         identity = (assignment.item_id, assignment.execution_id, assignment.runner_id,

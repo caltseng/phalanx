@@ -132,7 +132,7 @@ Integrate the restart core from [PR #27](https://github.com/caltseng/phalanx/pul
 - Record operation intent and expected remote state. After development records a candidate commit, push it and open a draft with the required Phalanx attribution. Reuse a matching PR. If bounded reconciliation cannot confirm creation, retry so the work gets a PR. Record one primary and surface duplicates. Use revision preconditions where supported and reconcile unresolved writes before issuing a conflicting operation.
 - **Done when:** A lost response to draft creation produces a primary PR and repeated publication keeps one attribution footer. Test a writer paused after its claim check, a lease expiry, and an outside push. The old attempt cannot silently overwrite newer work and any unresolved write remains visible for reconciliation.
 
-- **API slice:** The [runner observation contract](docs/runner-pr-observations.md) records verified draft publication and surfaced duplicates. Connect the runner's durable publication intent and reconciliation to this route.
+- **API slice:** The [runner observation contract](docs/runner-pr-observations.md) records verified draft publication and surfaced duplicates. Its publication-blocker route returns a moved base to development and sends a conflicting item-branch PR to reconciliation.
 
 ### PH-14 Validate and promote the current candidate
 

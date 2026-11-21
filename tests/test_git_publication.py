@@ -74,6 +74,15 @@ class GitPublicationTests(unittest.TestCase):
         self.assertEqual(self.publisher.publish(unrelated, expected=self.old).status, "conflict")
         self.assertEqual(self.publisher.read_head(), self.old)
 
+    def test_rewrite_replaces_only_the_leased_tip(self):
+        self.push(self.candidate)
+        tree = git(self.checkout, "rev-parse", f"{self.old}^{{tree}}")
+        rebased = git(self.checkout, "commit-tree", tree, "-p", self.old, "-m", "rebased")
+        self.assertEqual(self.publisher.publish(rebased, expected=self.old, rewrite=True).status, "conflict")
+        self.assertEqual(self.publisher.read_head(), self.candidate)
+        self.assertEqual(self.publisher.publish(rebased, expected=self.candidate, rewrite=True).status, "success")
+        self.assertEqual(self.publisher.read_head(), rebased)
+
     def test_competing_creation_or_advance_after_preflight_preserves_other_push(self):
         rival = self.commit("rival")
         for expected in (None, self.old):

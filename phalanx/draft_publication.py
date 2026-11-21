@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import json
 from pathlib import Path
 import re
@@ -41,6 +41,7 @@ class DraftOutcome:
     primary: PullRequest | None = None
     duplicates: tuple[PullRequest, ...] = ()
     conflicts: tuple[PullRequest, ...] = ()
+    observed_base: str | None = None
 
 
 class _ClaimLost(Exception):
@@ -119,23 +120,36 @@ class DraftPublisher:
                 verified_number INTEGER
             )
         """)
-        payload = json.dumps(asdict(intent), sort_keys=True)
-        claim_payload = json.dumps(asdict(claim))
         row = db.execute(
             "SELECT intent, phase, known_number, verified_number "
             "FROM draft_publication WHERE item_id = ?", (intent.item_id,),
         ).fetchone()
-        if row is not None and row[0] != payload:
+        if row is not None and row[0] != json.dumps(asdict(intent), sort_keys=True):
             previous = DraftIntent(**json.loads(row[0]))
-            if (
-                row[1] != "pushed" or intent.expected_head != previous.candidate
+            if intent.expected_head is None and replace(
+                intent, expected_head=previous.expected_head,
+            ) == previous:
+                # Retry a superseding intent under its journaled lease.
+                intent = previous
+            elif (
+                row[1] == "verified" or row[2] is not None
                 or intent.head != previous.head or intent.base != previous.base
                 or intent.repository.casefold() != previous.repository.casefold()
             ):
                 return DraftOutcome("conflict", "Reconcile the existing journaled publication intent first")
-            # The old push is confirmed and no create was sent. A new candidate
-            # must retain the recorded remote commit as its lease expectation.
-            row = None
+            else:
+                # No draft is known, so a new candidate (for example after a
+                # rebase) may replace the item ref this journal last wrote. The
+                # first observation below still routes any late draft.
+                remote = self.git.read_head(authorize=authorize)
+                if remote not in (previous.candidate, previous.expected_head) or (
+                    intent.expected_head not in (None, remote)
+                ):
+                    return DraftOutcome("conflict", "The remote item ref differs from the journaled publication")
+                intent = replace(intent, expected_head=remote)
+                row = None
+        payload = json.dumps(asdict(intent), sort_keys=True)
+        claim_payload = json.dumps(asdict(claim))
         phase, known, primary = row[1:] if row is not None else ("new", None, None)
 
         def record(next_phase, *, known_number=None, verified_number=None):
@@ -179,15 +193,17 @@ class DraftPublisher:
             phase = "pushed"
         moved = self._check_base(intent, authorize)
         if moved is not None:
-            if phase in ("push", "draft"):
-                return DraftOutcome("conflict", "The base moved while a publication write was unresolved")
+            if phase == "verified" or head not in (intent.candidate, intent.expected_head):
+                return DraftOutcome("conflict", "The base moved and the remote item ref differs from the publication intent")
             return moved
         if head != intent.candidate:
             if phase in ("pushed", "draft", "verified") or head != intent.expected_head:
                 return DraftOutcome("conflict", "The remote item ref differs from the publication intent")
             record("push")
+            # The lease allows replacing only the journaled remote commit, so a
+            # rebased candidate may be published without a fast-forward.
             result = self.git.publish(
-                intent.candidate, expected=intent.expected_head, authorize=authorize,
+                intent.candidate, expected=intent.expected_head, authorize=authorize, rewrite=True,
             )
             if result.status == "conflict":
                 return DraftOutcome("conflict", result.reason)
@@ -212,8 +228,6 @@ class DraftPublisher:
         for _ in range(2):
             moved = self._check_base(intent, authorize)
             if moved is not None:
-                if phase == "draft":
-                    return DraftOutcome("conflict", "The base moved while draft creation was unresolved")
                 return moved
             if self.git.read_head(authorize=authorize) != intent.candidate:
                 return DraftOutcome("conflict", "The remote item ref moved before draft creation")
@@ -239,8 +253,10 @@ class DraftPublisher:
         return DraftOutcome("pending", "Draft creation is unconfirmed. Reconcile the same intent on retry")
 
     def _check_base(self, intent, authorize) -> DraftOutcome | None:
-        if self.git.read_branch(intent.base, authorize=authorize) != intent.expected_base:
-            return DraftOutcome("base_changed", "The remote base differs from the recorded revision")
+        observed = self.git.read_branch(intent.base, authorize=authorize)
+        if observed != intent.expected_base:
+            return DraftOutcome("base_changed", "The remote base differs from the recorded revision",
+                                observed_base=observed)
         return None
 
     def _observe(self, intent, authorize, preferred_number) -> DraftOutcome | None:

@@ -115,9 +115,13 @@ class GitPublication:
 
     def publish(
         self, candidate: str, *, expected: str | None,
-        authorize: Callable[[], None] | None = None,
+        authorize: Callable[[], None] | None = None, rewrite: bool = False,
     ) -> PublicationResult:
-        """Attempt one conditional update and verify the candidate by remote read-back."""
+        """Attempt one conditional update and verify the candidate by remote read-back.
+
+        ``rewrite`` permits a non-fast-forward update, such as a rebased
+        candidate. The lease still rejects any remote ref other than ``expected``.
+        """
         if not _is_oid(candidate) or (expected is not None and not _is_oid(expected)):
             raise PublicationError("Publication requires full lowercase Git object IDs")
         local = self._git("cat-file", "-t", candidate)
@@ -127,7 +131,7 @@ class GitPublication:
         observed = self.read_head(authorize=authorize)
         if observed != expected:
             return PublicationResult("conflict", "The remote ref differs from the expected head")
-        if expected is not None and expected != candidate:
+        if expected is not None and expected != candidate and not rewrite:
             old = self._git("cat-file", "-t", expected)
             if old.returncode or old.stdout.strip() != "commit":
                 raise PublicationError("Fetch the recorded remote commit before checking ancestry")
