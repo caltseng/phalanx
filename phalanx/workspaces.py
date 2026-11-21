@@ -198,6 +198,22 @@ class WorkspaceManager:
         ))
         return Workspace(path, branch, head, dirty)
 
+    def verify_checkout(self) -> None:
+        """Check that the local mapping can represent the registered repository."""
+        self._verify_checkout()
+
+    def inspect(self, item_id: str) -> Workspace:
+        """Verify an existing workspace without creating or repairing it."""
+        common = self._verify_checkout()
+        with _repository_lock(common):
+            path, branch, owner_ref = self._location(common, item_id)
+            if not self._registered(path, branch):
+                raise WorkspaceError("The item worktree is absent")
+            owners = _git(self.checkout, "for-each-ref", "--format=%(refname)", owner_ref)
+            if owner_ref not in owners.splitlines():
+                raise WorkspaceError("Cannot verify workspace ownership")
+            return self._snapshot(path, branch, common)
+
     def prepare(self, item_id: str, *, base: str) -> Workspace:
         """Create from a local base ref, or return the existing checkout as found."""
         common = self._verify_checkout()
