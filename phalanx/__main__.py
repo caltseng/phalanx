@@ -7,8 +7,10 @@ from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from .attended import RunnerError, add_attended_command, run_attended
 from .config import database_path
 from .store import snapshot
+from .workspaces import WorkspaceError
 
 
 def api_request(base_url, route, *, body=None, key=None):
@@ -50,12 +52,15 @@ def main() -> None:
     intake.add_argument("--key", help="reuse this key when retrying the same request")
     inspect = commands.add_parser("inspect", help="show a work item and its current execution")
     inspect.add_argument("item_id")
+    add_attended_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "backup":
             snapshot(database_path(), args.destination)
         elif args.command == "restore":
             snapshot(args.source, database_path())
+        elif args.command == "attended":
+            run_attended(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
@@ -69,7 +74,7 @@ def main() -> None:
         else:
             result = api_request(args.api_url, f"/v1/items/{quote(args.item_id, safe='')}")
             print(json.dumps(result, indent=2))
-    except (OSError, ValueError, sqlite3.Error) as error:
+    except (OSError, ValueError, sqlite3.Error, RunnerError, WorkspaceError) as error:
         parser.exit(1, f"phalanx: {error}\n")
 
 

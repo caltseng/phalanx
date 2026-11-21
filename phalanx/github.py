@@ -315,14 +315,52 @@ class GitHubClient:
         except (AttributeError, KeyError, TypeError, ValueError):
             raise UncertainGitHubWrite(operation, "GitHub did not confirm promotion", 200) from None
 
-    def get_commit_checks(self, sha: str) -> CommitChecks:
+    def get_commit_checks(
+        self, sha: str, *, page_limit: int = 10,
+        include_runs: bool = True, include_statuses: bool = True,
+        all_runs: bool = False,
+    ) -> CommitChecks:
         """Read provider evidence for one immutable revision, including legacy statuses."""
         if not _SHA.fullmatch(sha):
             raise ValueError("a full commit SHA is required")
         commit = f"{self._repo_url}/commits/{sha}"
-        runs = tuple(self._pages("list check runs", f"{commit}/check-runs?per_page=100", "check_runs"))
-        statuses = tuple(self._pages("list commit statuses", f"{commit}/statuses?per_page=100"))
+        run_filter = "&filter=all" if all_runs else ""
+        runs = tuple(self._pages(
+            "list check runs", f"{commit}/check-runs?per_page=100{run_filter}", "check_runs",
+            page_limit=page_limit,
+        )) if include_runs else ()
+        statuses = tuple(self._pages(
+            "list commit statuses", f"{commit}/statuses?per_page=100",
+            page_limit=page_limit,
+        )) if include_statuses else ()
         return CommitChecks(sha, runs, statuses)
+
+    def get_branch_tip(self, branch: str) -> str:
+        operation = "get target branch tip"
+        ref = f"refs/heads/{branch}"
+        data, _ = self._request(
+            operation, "GET", f"{self._repo_url}/git/ref/{quote(ref[5:], safe='/')}",
+        )
+        try:
+            sha = data["object"]["sha"]
+            if data["ref"] == ref and data["object"]["type"] == "commit" and _SHA.fullmatch(sha):
+                return sha
+        except (KeyError, TypeError):
+            pass
+        raise GitHubError(operation, "invalid target branch response")
+
+    def get_commit_parents(self, sha: str) -> tuple[str, ...]:
+        if not _SHA.fullmatch(sha):
+            raise ValueError("a full commit SHA is required")
+        operation = "get test merge commit"
+        data, _ = self._request(operation, "GET", f"{self._repo_url}/git/commits/{sha}")
+        try:
+            parents = tuple(parent["sha"] for parent in data["parents"])
+            if data["sha"] == sha and all(_SHA.fullmatch(parent) for parent in parents):
+                return parents
+        except (KeyError, TypeError):
+            pass
+        raise GitHubError(operation, "invalid test merge commit response")
 
     def merge(self, number: int, *, expected_head: str, method: str) -> str:
         """Request a direct merge. Verify its result by rereading the PR."""

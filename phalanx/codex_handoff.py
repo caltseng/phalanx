@@ -3,13 +3,11 @@
 import json
 import os
 import stat
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, TypedDict
 from uuid import UUID
-
-from .dependencies import ResolvedDependency
 
 CONTRACT_VERSION = 1
 MAX_RESULT_BYTES = 64 * 1024
@@ -46,7 +44,7 @@ class WorkPacket:
     context: str = ""
     handoff: str = ""
     base_branch: str | None = None
-    dependencies: tuple[ResolvedDependency, ...] = ()
+    dependencies: tuple[dict, ...] = ()
 
     @property
     def marker(self) -> str:
@@ -133,7 +131,7 @@ class CodexHandoff:
             "evidence_requirements": packet.evidence_requirements,
             "context": packet.context,
             "handoff": packet.handoff,
-            "dependencies": [asdict(link) for link in packet.dependencies],
+            "dependencies": packet.dependencies,
         }, indent=2, ensure_ascii=False)
         outcomes = "\n".join(
             f"- {outcome}: {', '.join(fields)}"

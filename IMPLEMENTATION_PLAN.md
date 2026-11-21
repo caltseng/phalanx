@@ -89,6 +89,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 ### PH-11 Build the visible Codex adapter
 
 - **Depends on:** PH-01, PH-06, PH-10. **Output:** PR.
+- The attended single-slot bridge prepares development and report-drafting launches and relays verified results. Captain resolves the app project, records native receipts, and attests that the writer stopped. Dispatch filters claims by supported stage. Report review and storage, wider PR stage coverage, and a two-worker desktop run remain.
+- When PH-08 lands, send the worker question, options and handoff as its structured `question` result, carry the recorded question and owner answer into the next claim and work packet, and verify a question, reply and resumed attempt through the attended CLI. Until that integration, the attended runner submits the question and handoff in the owner wait reason.
 - Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
 - **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
 
@@ -99,6 +101,10 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Done when:** Interrupting the Captain on either side of launch or stalling the API never lets a replacement write in the same worktree or oversubscribe the machine. A reply and a finished worker result survive restarting the Captain.
 
 ## PR and report delivery
+
+The independent restart core consumes the original attended journal row, fresh native observations, verified local checkpoint evidence, and the server's expired-attempt list. It keeps uncertain reservations visible, retries temporary uncertainty at 2, 4, 8, and 16 seconds, and records an owner action when further automatic checks cannot help. Stopped-attempt requests retain their exact body and idempotency key until an authenticated response matches the execution and next version, or confirms the following version with its stored cancellation or failure report.
+
+After the attended runner lands, call the core before admitting replacement work. Gather Codex and Git evidence outside the journal transaction, then compare the original reservation and receipt inside it before applying the decision. Persist the stop request before sending it, archive only after verified acknowledgment, and expose retries, owner waits, and unmatched server attempts in runner status. Resolve definite version conflicts against server history before changing a recorded stop request. The runner still needs fresh-claim adoption for verified expired results, operator notification, and the live restart and concurrent capacity pilot.
 
 ### PH-13 Publish drafts and reconcile GitHub writes
 
@@ -113,6 +119,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Depends on:** PH-02, PH-08, PH-13. **Output:** PR.
 - Run self-review and candidate-local pre-validation, recording allowed bypasses. Publish any updated candidate to the primary PR before checks that require that head. Run draft-only gates and then mark the draft ready for review. Observe required CI and previews for the current revision. Distinguish CI that is unconfigured from expected CI that is missing.
 - **Done when:** Revised draft previews run on the intended head and promotion does not wait for checks that only start after it. A pre-validation bypass leaves required CI intact. If a promoted PR later needs a draft-only check that cannot run, follow the repo policy or expose the decision rather than wait indefinitely.
+- Runner collection reads the primary PR and target tip around the check snapshot, verifies test-merge parents, and evaluates bounded, phase-specific provider evidence. The caller supplies complete phase policy, including whether a check uses the head or test-merge SHA, and an adapter for the configured preview provider and served revision. Policy discovery, provider-specific preview reads, promotion orchestration, and scheduled rechecks remain integration work.
 
 - **API slice:** Draft and ready check evidence is bound to the primary PR and exact revision. Remaining integration includes scheduled external rechecks and runner policy and provider discovery.
 
@@ -122,6 +129,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **API follow-up:** Wire independent review, feedback, approvals, and mergeability to the verified primary PR and revision before assigning check-in. Verify a merge against the recorded pre-merge revision and durable write intent.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
 - When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
+- **Coordinator slice:** Verify exact primary identity and current gates, finish ready-only without a write, or reserve and request one authorized direct merge commit. Reconcile by reading the same PR and verifying the ordered base and head parents. Keep an ambiguous attempt reserved even if the PR still appears open.
+- **Remaining integration:** Persist and retire reservations under the runner claim, wire trusted check and review observations and repository-specific policy, record verified results through the server lifecycle, and pilot a live feedback or conflict loop. Add separate adapters for other merge methods or required merge queues.
 - **Done when:** A real PR goes through a feedback or conflict loop, required revision changes invalidate stale evidence, and a verified merge is recorded exactly once. A separate ready-only case completes with a verified PR and no merge.
 
 ### PH-16 Deliver field reports

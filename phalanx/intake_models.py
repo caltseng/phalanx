@@ -71,6 +71,7 @@ class WaitInput(Payload):
 class Result(AttemptEvent):
     outcome: Outcome
     wait: WaitInput | None = None
+    failure_reason: Text | None = None
     candidate: Text | None = None
     report_markdown: Markdown | None = None
     report_revision: RevisionID | None = None

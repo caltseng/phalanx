@@ -47,7 +47,8 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
         return revision
 
     def claim(self, db, name):
-        return dispatch.claim(db, Claim(runner_id="local", repository_ids=["consumer"]), intake.digest(name))
+        request = Claim(runner_id="local", repository_ids=["consumer"], stages=[Stage.REPORT_DRAFTING])
+        return dispatch.claim(db, request, intake.digest(name))
 
     def test_claim_skips_blocked_backlog_then_pins_both_upstreams(self):
         with write_transaction(self.path) as db:
@@ -142,10 +143,10 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             pending_output=Status.COMPLETED, report_draft=revision, wait=Wait("Store report", "finalize"),
         )
         with connect(path, mode="rwc") as db:
-            for migration in MIGRATIONS[:5]:
+            for migration in MIGRATIONS[:6]:
                 for statement in migration:
                     db.execute(statement)
-            db.execute("PRAGMA user_version = 5")
+            db.execute("PRAGMA user_version = 6")
             intake.register(db, "source", "https://example.com/source.git")
             stamp = intake.timestamp()
             db.execute("INSERT INTO work_items VALUES ('item','source','{}',?)", (stamp,))
@@ -160,8 +161,14 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             db.execute("INSERT INTO report_finalizations(execution_id,intent_version,due_at) VALUES ('execution',1,0)")
         migrate(path)
         with connect(path, mode="ro") as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 6)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 7)
             self.assertEqual(db.execute("SELECT wait_since FROM operator_progress").fetchone()[0], stamp)
+            queue_indexes = db.execute(
+                "SELECT sql FROM sqlite_schema WHERE name IN ('queue_heads', 'queue_stage_heads')"
+            ).fetchall()
+            self.assertEqual(len(queue_indexes), 2)
+            for definition in queue_indexes:
+                self.assertIn("dependency_wait_json IS NULL", definition["sql"])
         completed = finalization.attempt(path, "execution")
         self.assertEqual(completed["state"]["final_output"]["draft_revision"], revision)
 
