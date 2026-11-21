@@ -96,6 +96,26 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(query, {"head": ["owner:codex/topic"], "state": ["all"],
                                  "per_page": ["100"]})
 
+    def test_publication_lookup_guards_each_page_and_does_not_accept_partial_results(self):
+        next_url = f"{API}/repositories/123/pulls?page=2"
+        self.responses.extend([response([pull()], next_url=next_url), response([])])
+        calls = []
+
+        def checked():
+            calls.append(len(self.requests))
+
+        with self.assertRaisesRegex(GitHubError, "pagination limit"):
+            self.client.list_matching_pull_requests(
+                head_owner="owner", head="codex/topic", authorize=checked, page_limit=1,
+            )
+        self.assertEqual(calls, [0])
+        self.responses.appendleft(response([pull()], next_url=next_url))
+        matches = self.client.list_matching_pull_requests(
+            head_owner="owner", head="codex/topic", authorize=checked, page_limit=2,
+        )
+        self.assertEqual([p.number for p in matches], [7])
+        self.assertEqual(calls, [0, 1, 2])
+
     def test_pagination_rejects_a_link_to_another_host(self):
         self.responses.append(response([pull()], next_url="https://elsewhere.example/pulls"))
         with self.assertRaisesRegex(GitHubError, "untrusted pagination"):
