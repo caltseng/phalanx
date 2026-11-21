@@ -2,17 +2,20 @@
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event, Thread, get_ident
+from time import sleep
 import unittest
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
-from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
+from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered, RequestRetracted
 from phalanx.captain_relay import RelayTransport, _queue, respond, take_next
+from phalanx.observe import build_reply
 from phalanx.runner_errors import RunnerError
 
 
@@ -232,6 +235,95 @@ class RelayQueueTests(unittest.TestCase):
         self.assertEqual(relay("--state", str(self.root), "respond", taken["id"], "--error", "no app").returncode, 0)
         waiter.join(10)
         self.assertRegex(str(results[0]), "observe failed: no app")
+
+    def test_pending_observation_is_retracted_once_its_marker_stops_observing(self):
+        transport = RelayTransport(self.root, timeout=30, poll=0.01)
+        results = []
+        waiters = [Thread(target=self.call, args=(transport, results, "observe",
+                                                  {"references": [{"marker": marker}]}))
+                   for marker in ("kept", "gone")]
+        for waiter in waiters:
+            waiter.start()
+        def pending():
+            with _queue(self.root) as db:
+                return db.execute("SELECT COUNT(*) FROM request WHERE status='pending'").fetchone()[0]
+        while pending() < 2:
+            sleep(0.01)
+        transport.retract_observations({"kept"})
+        waiters[1].join(10)
+        self.assertIsInstance(results[0], RequestRetracted)
+        taken = take_next(self.root, wait=0)
+        self.assertEqual(taken["arguments"], {"references": [{"marker": "kept"}]})
+        respond(self.root, taken["id"], response={"threads": []})
+        waiters[0].join(10)
+        self.assertEqual(results[1], {"threads": []})
+
+
+def worker_prompt(marker, identity):
+    packet = json.dumps({"result_identity": identity, "goal": "Fix it"}, indent=2)
+    return f"Phalanx attempt marker: {marker}  \n\nExecute the stage.\n\nWork packet:\n{packet}\n\nWrite JSON.\n"
+
+
+class ObserveHelperTests(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.identity = {"item_id": "item", "attempt_id": "attempt", "expected_revision": 3}
+        self.reference = {"slot": 1, "host_id": "local", "project_id": "project", "marker": "phalanx-attempt-a",
+                          "started_at": "2025-11-21T10:00:00+00:00", "assignment": self.identity, "receipt": {}}
+
+    def request(self, references):
+        return {"id": "r", "operation": "observe", "arguments": {"references": references}}
+
+    def test_reply_matches_marker_and_assignment_and_passes_bridge_validation(self):
+        thread, other = str(uuid4()), str(uuid4())
+        sessions = [
+            {"thread_id": thread, "project_id": "project", "state": "stopped",
+             "prompt": worker_prompt("phalanx-attempt-a", self.identity), "started_at": "2025-11-21T10:00:01+00:00"},
+            {"thread_id": other, "project_id": "project", "state": "active",
+             "prompt": worker_prompt("phalanx-attempt-a", {**self.identity, "expected_revision": "3"}),
+             "started_at": "2025-11-21T10:00:02+00:00"},
+        ]
+        reply = build_reply(self.request([self.reference]), sessions, host_id="local", complete=True)
+        batch = BridgeAdapter(lambda operation, arguments: reply).observe([self.reference], cursors={}, timeout=1)
+        self.assertTrue(batch.discovery_complete)
+        self.assertEqual([(str(row.thread_id), row.state, row.assignment) for row in batch.threads],
+                         [(thread, "stopped", self.identity)])
+        self.assertEqual(build_reply(self.request([self.reference]), sessions, host_id="other",
+                                     complete=False)["threads"], [])
+
+    def test_relay_observe_reads_copilot_transcripts_and_writes_a_reply(self):
+        thread = str(uuid4())
+        transcript = self.root / "home" / ".copilot" / "session-state" / thread / "events.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("\n".join(json.dumps(event) for event in [
+            {"type": "session.start", "timestamp": "2025-11-21T10:00:01.000Z",
+             "data": {"sessionId": thread, "startTime": "2025-11-21T10:00:01.000Z"}},
+            {"type": "user.message", "timestamp": "2025-11-21T10:00:02.000Z",
+             "data": {"content": worker_prompt("phalanx-attempt-a", self.identity)}},
+        ]) + "\n", encoding="utf-8")
+        state, results = self.root / "runner", []
+        adapter = BridgeAdapter(RelayTransport(state, timeout=30, poll=0.01))
+
+        def observe():
+            results.append(adapter.observe([self.reference], cursors={}, timeout=1))
+        waiter = Thread(target=observe)
+        waiter.start()
+        taken = take_next(state, wait=10, poll=0.01)
+        out = self.root / "reply.json"
+        env = {**os.environ, "HOME": str(self.root / "home"), "USERPROFILE": str(self.root / "home")}
+        written = subprocess.run(
+            [sys.executable, "-m", "phalanx", "relay", "--state", str(state), "observe", taken["id"],
+             "--runtime", "copilot", "--host", "local", "--session", thread, "active", "project",
+             "--complete", "--out", str(out)],
+            cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(written.returncode, 0, written.stderr)
+        self.assertEqual(relay("--state", str(state), "respond", taken["id"], "--file", str(out)).returncode, 0)
+        waiter.join(10)
+        self.assertEqual([(str(row.thread_id), row.state) for row in results[0].threads], [(thread, "active")])
+        unknown = relay("--state", str(state), "observe", taken["id"], "--runtime", "other", "--host", "local")
+        self.assertNotEqual(unknown.returncode, 0)
 
 
 if __name__ == "__main__":

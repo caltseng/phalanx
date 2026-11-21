@@ -16,7 +16,8 @@ from uuid import UUID
 from .attended import AttendedRunner, RunnerAPI, RunnerError, RUNNER_STAGES, STAGES
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery, unlaunched_proof
-from .captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch
+from .captain_adapter import (BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch,
+                              RequestRetracted)
 from .captain_relay import RelayTransport
 from .runner_preflight import preflight
 from .workspaces import _file_lock, _item_branch
@@ -70,6 +71,7 @@ class CaptainLoop:
             self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
         except RunnerError:
             self.rechecks = False
+        self.observing = set()
         self.closed = False
         self._bind_identity()
 
@@ -480,6 +482,8 @@ class CaptainLoop:
                 del self.observations[slots]
                 try:
                     batch = future.result()
+                except RequestRetracted:
+                    pass
                 except Exception as error:
                     for slot in slots:
                         self._status(slot, "observation_blocked", f"{type(error).__name__}: {error}")
@@ -503,6 +507,16 @@ class CaptainLoop:
         for slot in list(self.cursors):
             if slot not in records and not any(slot in slots for slots in self.observations):
                 del self.cursors[slot]
+        observing = {(slot, record.get("claim", {}).get("attempt_id")) for slot, record in records.items()
+                     if "packet" in record and any(field in record for field in ("relay", "receipt"))}
+        if self.observing - observing:
+            # A queued observation for a finished slot would only cost the Captain a stale answer.
+            try:
+                self.adapter.retract_observations(
+                    {self._runner(slot)._handoff(records[slot]).packet.marker for slot, _ in observing})
+            except Exception as error:
+                self._status(0, "observation_blocked", f"{type(error).__name__}: {error}")
+        self.observing = observing
         if self.recovery_future is not None and self.recovery_future.done():
             future, self.recovery_future = self.recovery_future, None
             try:

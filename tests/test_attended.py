@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
+from phalanx.attended_drafts import draft_title
 from phalanx.attended_recovery_service import RecoveryJournal, run_recovery
 from phalanx.captain_loop import CaptainLoop
 from phalanx.draft_publication import DraftOutcome
@@ -794,6 +795,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertIn("no accepted development base checkpoint", result["reason"])
         self.assertEqual(self.runner().status()["reason"], result["reason"])
         self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), candidate)
+
+
+class DraftTitleTest(unittest.TestCase):
+    def test_title_is_the_goals_first_sentence_cut_at_a_word(self):
+        self.assertEqual(draft_title("\n# Fix the login form. It drops the session cookie.\nMore."),
+                         "Fix the login form")
+        long = draft_title("Implement " + "the retry budget for every flaky integration step " * 3)
+        self.assertEqual(long, "Implement the retry budget for every flaky integration step the retry…")
 
 
 if __name__ == "__main__":

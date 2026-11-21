@@ -16,7 +16,7 @@ import sys
 from time import sleep, time
 from uuid import uuid4
 
-from .captain_adapter import BRIDGE_CONTRACT_VERSION, LaunchNotDelivered
+from .captain_adapter import BRIDGE_CONTRACT_VERSION, LaunchNotDelivered, RequestRetracted
 from .handoff import _unique_object
 from .runner_errors import RunnerError
 
@@ -90,11 +90,31 @@ class RelayTransport:
                 return reply
             if status == "expired":
                 raise LaunchNotDelivered(f"Captain relay never took {operation}; start or resume the Captain chat relay")
+            if status == "retracted":
+                raise RequestRetracted(f"Captain relay {operation} was retracted before the Captain took it")
             if status == "lost":
                 # The Captain may have run the tool. The journal never relaunches; discovery reconciles it.
                 raise RunnerError(f"Captain relay took {operation} but never answered; "
                                   "a launch is reconciled by native discovery")
             sleep(self.poll)
+
+    def retract_observations(self, observing: set[str]) -> None:
+        """Withdraw untaken observations that name any marker whose slot no longer observes."""
+        with _queue(self.root) as db:
+            rows = db.execute("SELECT id, body FROM request WHERE status='pending' AND operation='observe'").fetchall()
+            stale = [request_id for request_id, body in rows
+                     if not {ref["marker"] for ref in json.loads(body)["arguments"]["references"]} <= observing]
+            db.executemany("UPDATE request SET status='retracted', updated_at=? WHERE id=?",
+                           [(time(), request_id) for request_id in stale])
+
+
+def read_request(root: Path, request_id: str) -> dict:
+    """Return a request taken with `relay next`, so a helper can build its reply."""
+    with _queue(Path(root).resolve()) as db:
+        row = db.execute("SELECT status, body FROM request WHERE id=?", (request_id,)).fetchone()
+    if row is None or row[0] != "taken":
+        raise RunnerError("Read only a request taken with `relay next`; it is unknown or settled")
+    return {"id": request_id, **json.loads(row[1])}
 
 
 def take_next(root: Path, wait: float = 30, poll: float = 0.2) -> dict:
@@ -136,10 +156,35 @@ def add_relay_command(commands):
     source = answer.add_mutually_exclusive_group()
     source.add_argument("--file", type=Path, help="JSON reply file; defaults to stdin")
     source.add_argument("--error", help="the runtime action failed with this message")
+    observe = actions.add_parser("observe", help="write an observe reply from worker session transcripts")
+    observe.add_argument("id")
+    observe.add_argument("--runtime", required=True, help="transcript reader, such as copilot")
+    observe.add_argument("--host", required=True, help="host ID the listed sessions run on")
+    observe.add_argument("--session", nargs=3, action="append", default=[],
+                         metavar=("SESSION_ID", "STATE", "PROJECT_ID"),
+                         help="a listed worker session and its active, stopped or unknown state")
+    observe.add_argument("--complete", action="store_true", help="every worker session on the host was listed")
+    observe.add_argument("--out", type=Path, help="reply file for `relay respond --file`; defaults to stdout")
+
+
+def _observe_reply(args) -> dict:
+    from .observe import build_reply, reader
+
+    read = reader(args.runtime)
+    sessions = [{"thread_id": session_id, "state": state, "project_id": project_id, **read(session_id)}
+                for session_id, state, project_id in args.session]
+    return build_reply(read_request(args.state, args.id), sessions, host_id=args.host, complete=args.complete)
 
 
 def run_relay(args):
-    if args.action == "next":
+    if args.action == "observe":
+        reply = json.dumps(_observe_reply(args), indent=2, ensure_ascii=False)
+        if args.out is None:
+            print(reply)
+            return
+        args.out.write_text(reply + "\n", encoding="utf-8")
+        result = {"status": "written", "id": args.id, "file": str(args.out)}
+    elif args.action == "next":
         result = take_next(args.state, args.wait)
     elif args.error is not None:
         result = respond(args.state, args.id, error=args.error)
