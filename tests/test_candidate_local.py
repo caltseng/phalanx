@@ -4,7 +4,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from phalanx.attended import RunnerError
@@ -58,6 +58,14 @@ class CandidateLocalTest(unittest.TestCase):
         operation.submit(body)
         self.api.call.assert_called_with("/items/item/executions/execution/result", body,
                                          lease="secret", key=f"candidate-local-{packet.attempt_id}")
+        question = WorkerResult(packet, Outcome.NEEDS_INPUT, {
+            "question": "Which scope should be reviewed?", "options": "Current or expanded",
+            "handoff": "Reviewed the diff against main",
+        })
+        waiting = operation.self_review(question)
+        self.assertEqual(waiting["question"], {"prompt": question.details["question"],
+                                               "options": [question.details["options"]],
+                                               "handoff": question.details["handoff"]})
         stale = replace(result, packet=replace(packet, expected_revision="b" * 40))
         with self.assertRaisesRegex(RunnerError, "does not match"):
             operation.self_review(stale)
@@ -80,7 +88,10 @@ class CandidateLocalTest(unittest.TestCase):
                          ["passed", "inapplicable"])
         self.assertEqual(body["local_checks"][1]["authorization"], bypass.authorization)
         denied = replace(bypass, policy=PreCheck("platform"))
-        self.assertEqual(operation.pre_validate((denied,))["outcome"], "needs_input")
+        waiting = operation.pre_validate((denied,))
+        self.assertEqual(waiting["outcome"], "needs_input")
+        self.assertIn("policy-authorized disposition", waiting["question"]["prompt"])
+        self.assertTrue(waiting["question"]["handoff"])
         self.assertEqual(operation.pre_validate(None)["outcome"], "needs_input")
         self.assertEqual(operation.pre_validate(())["outcome"], "succeeded")
 
@@ -94,6 +105,24 @@ class CandidateLocalTest(unittest.TestCase):
         self.assertEqual(body["outcome"], "needs_input")
         self.assertEqual(body["local_checks"][0]["outcome"], "failed")
         self.assertNotIn("prevalidated_candidate", body)
+        self.assertIn("clean", body["question"]["prompt"])
+        self.assertTrue(body["question"]["handoff"])
+
+    def test_timed_out_check_retains_reservation_for_process_reconciliation(self):
+        operation = self.operation("pre_pr_validation")
+        check = self.command("timeout", "pass")
+        run = subprocess.run
+
+        def expire(argv, **kwargs):
+            if tuple(argv) == check.argv:
+                raise subprocess.TimeoutExpired(argv, check.timeout_seconds)
+            return run(argv, **kwargs)
+
+        with patch("phalanx.candidate_local.subprocess.run", side_effect=expire):
+            with self.assertRaisesRegex(RunnerError, "Keep the reservation.*processes have stopped"):
+                operation.pre_validate((check,))
+        self.assertFalse(any(call.args[0].endswith("/result")
+                             for call in self.api.call.call_args_list))
 
     def test_stopping_claim_blocks_commands(self):
         operation = self.operation("pre_pr_validation")

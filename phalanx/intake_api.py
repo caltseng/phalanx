@@ -2,21 +2,23 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
-from pydantic import Field
 
-from . import finalization, intake, pr_observations
+from . import finalization, intake, pr_observations, waits
 from .auth import authenticate, require_owner, require_runner
 from .store import write_transaction
 from .intake_models import (
-    AttemptEvent, Cancel, Identifier, Intake, Registration, Rerun, Result, RevisionID, Steering, Versioned,
+    AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
+    RevisionID, Steering, Versioned,
 )
 
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 Key = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
+RequiredKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
 Lease = Annotated[str, Header(alias="Phalanx-Lease", pattern=r"^[A-Za-z0-9_-]{32,200}$")]
+BatchLimit = Annotated[int, Query(ge=1, le=100)]
 
 
 def run(request, operation, *args, write=False, finish=False, scope=None, key=None, payload=None):
@@ -126,11 +128,11 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
     payload = body.model_dump(mode="json")
-    # Preserve receipt digests for result requests written before these fields existed.
+    # Preserve receipt digests for results written before these optional fields existed.
     if isinstance(body, Result):
-        for field in ("failure_reason", "review_notes", "local_checks"):
+        for field in ("failure_reason", "question", "review_notes", "local_checks"):
             if payload[field] is None:
-                del payload[field]
+                payload.pop(field)
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
@@ -152,6 +154,41 @@ def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifi
     return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
 
 
+@router.get("/owner/inbox", dependencies=[Depends(require_owner)])
+def inbox(request: Request, limit: BatchLimit = 50,
+          after_time: Annotated[str, Query(max_length=40)] = "",
+          after_id: Identifier | None = None):
+    return run(request, waits.inbox, limit, after_time, after_id or "")
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/reply",
+             dependencies=[Depends(require_owner)])
+def reply(request: Request, item_id: Identifier, execution_id: Identifier,
+          body: Reply, key: RequiredKey):
+    return run(request, waits.reply, item_id, execution_id, body, write=True,
+               scope=f"reply:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/external-wait",
+             dependencies=[Depends(require_runner)])
+def external_wait(request: Request, item_id: Identifier, execution_id: Identifier,
+                  body: ExternalWait, lease: Lease, key: RequiredKey):
+    return attempt_event(request, waits.external_wait, item_id, execution_id, body, lease, key)
+
+
+@router.get("/runner/due-rechecks", dependencies=[Depends(require_runner)])
+def due_rechecks(request: Request, limit: BatchLimit = 50):
+    return run(request, waits.due_rechecks, limit)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/recheck",
+             dependencies=[Depends(require_runner)])
+def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
+            body: Versioned, key: RequiredKey):
+    return run(request, waits.recheck, item_id, execution_id, body, write=True,
+               scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
              dependencies=[Depends(require_runner)])
 def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
@@ -163,7 +200,6 @@ def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Id
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
              dependencies=[Depends(require_runner)])
 def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,
-                   body: Annotated[pr_observations.Publication | pr_observations.Validation,
-                                   Field(discriminator="stage")],
+                   body: pr_observations.Observation,
                    lease: Lease, key: Key = None):
     return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)

@@ -42,6 +42,8 @@ class CandidateLocal:
 
     Journal the returned body before submission so an uncertain response can be replayed.
     Self-review collection requires a reconciled, stopped worker with validated handoff evidence.
+    A check timeout raises without producing a result. Keep the claim reserved until the
+    runner reconciles the check processes and worktree.
     """
 
     def __init__(self, api: RunnerAPI, workspace: WorkspaceManager, claim: dict,
@@ -82,7 +84,8 @@ class CandidateLocal:
             raise WorkspaceError("Restore the clean item worktree at the recorded candidate before retrying")
         return workspace
 
-    def self_review_packet(self, *, base_branch: str, context: str = "") -> WorkPacket:
+    def self_review_packet(self, *, base_branch: str, context: str = "",
+                           handoff: str = "") -> WorkPacket:
         body = self._body(Stage.SELF_REVIEW)
         self._authorize()
         workspace = self._inspect()
@@ -93,7 +96,7 @@ class CandidateLocal:
             repository=request["repository_id"], worktree=workspace.path,
             branch=workspace.branch, expected_revision=self.candidate,
             goal=request["goal"], output_type="pull_request", base_branch=base_branch,
-            context=context, evidence_requirements=(
+            context=context, handoff=handoff, evidence_requirements=(
                 "Review the exact candidate diff against the target branch and check the "
                 "acceptance criteria. Leave the checkout unchanged. Summarize what you reviewed "
                 "and report actionable findings as changes_required."
@@ -113,14 +116,16 @@ class CandidateLocal:
         if (workspace.path, workspace.branch) != (packet.worktree, packet.branch):
             raise RunnerError("Review evidence does not match the item worktree")
         outcome = Outcome(result.outcome)
-        notes = "\n\n".join(result.details.values())
+        notes = (result.details["question"] if outcome == Outcome.NEEDS_INPUT
+                 else "\n\n".join(result.details.values()))
         body.update(outcome=outcome, review_notes=notes)
         if outcome == Outcome.SUCCEEDED:
             body["reviewed_candidate"] = self.candidate
         else:
             body["candidate"] = self.candidate
         if outcome == Outcome.NEEDS_INPUT:
-            body["wait"] = {"reason": notes, "trigger": "owner reply"}
+            body["question"] = {"prompt": notes, "options": [result.details["options"]],
+                                "handoff": result.details["handoff"]}
         elif outcome == Outcome.FAILED:
             body["failure_reason"] = notes
         return body
@@ -153,10 +158,12 @@ class CandidateLocal:
                 records.append({"name": check.policy.name, "outcome": outcome,
                                 "reason": reason or None, "authorization": check.authorization or None})
                 if problem:
-                    return self._wait(body, problem, trigger="worktree reconciliation")
+                    return self._wait(body, problem, handoff="Reconcile the configured check and "
+                                      "verify the item worktree before retrying.")
             self._inspect()
         except WorkspaceError as exc:
-            return self._wait(body, str(exc), trigger="worktree reconciliation")
+            return self._wait(body, str(exc), handoff="Verify the item worktree is clean at "
+                              "the recorded candidate before retrying.")
 
         policies = None if checks is None else tuple(check.policy for check in checks)
         gate = evaluate_pre_validation(self.candidate, policies, observations)
@@ -164,11 +171,12 @@ class CandidateLocal:
             return dict(body, outcome=Outcome.SUCCEEDED, prevalidated_candidate=self.candidate)
         if gate.state == GateState.FAILED:
             return dict(body, outcome=Outcome.CHANGES_REQUIRED, candidate=self.candidate)
-        return self._wait(body, "\n".join(gate.reasons), trigger="owner reply")
+        return self._wait(body, "\n".join(gate.reasons),
+                          handoff="Verify repository check policy and any proposed bypass.")
 
-    def _wait(self, body: dict, reason: str, *, trigger: str) -> dict:
+    def _wait(self, body: dict, reason: str, *, handoff: str) -> dict:
         return dict(body, outcome=Outcome.NEEDS_INPUT, candidate=self.candidate,
-                    wait={"reason": reason, "trigger": trigger})
+                    question={"prompt": reason, "handoff": handoff})
 
     def submit(self, body: dict) -> dict:
         """Post a journaled result using the existing attempt and version preconditions."""
@@ -191,8 +199,10 @@ def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                 timeout=check.timeout_seconds)
     except subprocess.TimeoutExpired:
-        raise WorkspaceError(
-            f"Timed out after {check.timeout_seconds} seconds. Verify all check processes have stopped"
+        raise RunnerError(
+            f"Check {check.policy.name} timed out after {check.timeout_seconds} seconds. "
+            "Keep the reservation and verify all check processes have stopped and the item "
+            "worktree is reconciled before submitting a result or retrying"
         ) from None
     except OSError as exc:
         raise WorkspaceError(f"Repair the configured check command (OS error {exc.errno})") from None
