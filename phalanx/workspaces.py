@@ -214,6 +214,28 @@ class WorkspaceManager:
                 raise WorkspaceError("Cannot verify workspace ownership")
             return self._snapshot(path, branch, common)
 
+    def resolve_origin_base(self, branch: str) -> str:
+        """Pin the configured origin tracking branch before preparing development."""
+        self._verify_checkout()
+        ref = f"refs/remotes/origin/{branch}"
+        if not branch:
+            raise WorkspaceError("A development base branch is required")
+        _git(self.checkout, "check-ref-format", f"refs/heads/{branch}")
+        sha = _git(self.checkout, "show-ref", "--verify", "--hash", ref).strip()
+        if _git(self.checkout, "--no-replace-objects", "cat-file", "-t", sha).strip() != "commit":
+            raise WorkspaceError("The exact origin tracking ref must point to a commit")
+        return sha
+
+    def verify_base_ancestry(self, workspace: Workspace, base_sha: str) -> None:
+        """Require the verified candidate to contain the pinned development base."""
+        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", base_sha):
+            raise WorkspaceError("The development base is not a full Git object ID")
+        try:
+            _git(workspace.path, "--no-replace-objects", "merge-base", "--is-ancestor",
+                 base_sha, workspace.head)
+        except WorkspaceError as exc:
+            raise WorkspaceError("Candidate does not contain the pinned development base") from exc
+
     def prepare(self, item_id: str, *, base: str) -> Workspace:
         """Create from a local base ref, or return the existing checkout as found."""
         common = self._verify_checkout()

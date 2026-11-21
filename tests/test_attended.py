@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import sqlite3
 from contextlib import closing
 import subprocess
@@ -11,6 +12,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
+from phalanx.draft_stage import DraftStageResult
 from phalanx.workspaces import WorkspaceManager
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -20,23 +22,26 @@ class StubAPI:
     def __init__(self, checkout, item_id="item"):
         self.item_id = item_id
         self.checkout = checkout
+        self.remote = str(checkout)
         self.attempt = uuid4().hex
         self.claim_leases = []
         self.posts = []
         self.drop_claim = True
         self.drop_result = True
         self.stage = "report_drafting"
+        self.candidate = None
         self.dependencies = []
         self.current_version = 3
 
     def call(self, path, body=None, *, lease=None, key=None):
         if path == "/repositories":
-            return [{"id": "repo", "remote": str(self.checkout)}]
+            return [{"id": "repo", "remote": self.remote}]
         if path == f"/items/{self.item_id}":
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
-            assert body["stages"] == ["development", "report_drafting"], body
+            expected = ["pr_creation"] if self.stage == "pr_creation" else ["development", "report_drafting"]
+            assert body["stages"] == expected, body
             self.claim_leases.append(lease)
             if self.drop_claim:
                 self.drop_claim = False
@@ -44,7 +49,7 @@ class StubAPI:
             return {
                 "status": "claimed", "item_id": self.item_id, "attempt_id": self.attempt,
                 "lease_expires_at": 900,
-                "execution": {"id": "execution", "version": 3, "state": {"stage": self.stage}},
+                "execution": {"id": "execution", "version": 3, "state": {"stage": self.stage, "candidate": self.candidate}},
                 "dependencies": self.dependencies,
                 "request": {"repository_id": "repo", "goal": "Document the test suite",
                             "target": "report" if self.stage == "report_drafting" else "ready_for_check_in"},
@@ -344,6 +349,71 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         runner.submit(marker, "local", thread_id)
         self.assertEqual(self.api.posts[0][0]["candidate"], head)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), packet["expected_revision"])
+
+    def start_development(self):
+        self.api.remote = "git@github.com:example/repo.git"
+        self.git(self.checkout, "remote", "set-url", "origin", self.api.remote)
+        self.api.drop_claim = self.api.drop_result = False
+        self.api.stage = "development"
+        runner = self.runner()
+        marker = runner.prepare()["marker"]
+        packet = runner.status()["packet"]
+        thread = str(uuid4())
+        runner.receipt(marker, "local", thread_id=thread)
+        worktree = Path(packet["worktree"])
+        self.git(worktree, "commit", "--allow-empty", "-m", "Candidate")
+        candidate = self.git(worktree, "rev-parse", "HEAD")
+        self.write_result(runner, marker, candidate)
+        return runner, marker, thread, worktree, candidate, packet["expected_revision"]
+
+    def test_accepted_development_checkpoint_keeps_pinned_base_for_draft(self):
+        runner, marker, thread, worktree, candidate, base = self.start_development()
+        self.git(self.checkout, "commit", "--allow-empty", "-m", "Outside base advance")
+        self.git(self.checkout, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+        call = self.api.call
+        def reject(path, *args, **kwargs):
+            if path.endswith("/result"):
+                raise RunnerError("rejected development result")
+            return call(path, *args, **kwargs)
+
+        with patch.object(self.api, "call", side_effect=reject):
+            with self.assertRaisesRegex(RunnerError, "rejected"):
+                runner.submit(marker, "local", thread)
+        self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), candidate)
+        pending = runner._snapshot()
+        self.assertEqual(pending["submission"]["checkpoint"]["base"], {"ref": "main", "sha": base})
+        runner.submit(marker, "local", thread)
+
+        self.api.attempt = uuid4().hex
+        self.api.stage, self.api.candidate = "pr_creation", candidate
+        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), patch(
+            "phalanx.attended.publish_draft",
+            return_value=DraftStageResult(execution={"id": "execution", "version": 4}),
+        ) as publish:
+            result = self.runner().prepare(draft=True)
+        checkpoint = publish.call_args.args[4]
+        self.assertEqual((checkpoint.checkout, checkpoint.candidate, checkpoint.base_ref, checkpoint.base_sha),
+                         (worktree, candidate, "main", base))
+        self.assertEqual(result, {"status": "draft_submitted", "execution": {"id": "execution", "version": 4}, "slot": 1})
+        self.assertEqual(self.runner().status(), {"status": "idle"})
+        self.assertNotIn("runner-only", json.dumps(result))
+
+    def test_legacy_development_launch_preserves_candidate_and_blocks_draft(self):
+        runner, marker, thread, worktree, candidate, _ = self.start_development()
+        runner._transaction(lambda record, db: record.pop("development_base"))
+        runner.submit(marker, "local", thread)
+        self.api.attempt = uuid4().hex
+        self.api.stage, self.api.candidate = "pr_creation", candidate
+        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), patch(
+            "phalanx.attended.publish_draft",
+        ) as publish:
+            result = self.runner().prepare(draft=True)
+        publish.assert_not_called()
+        self.assertEqual(result["status"], "draft_blocked")
+        self.assertIn("no accepted development base checkpoint", result["reason"])
+        self.assertEqual(self.runner().status()["reason"], result["reason"])
+        self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), candidate)
 
 
 if __name__ == "__main__":
