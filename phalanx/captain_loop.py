@@ -119,8 +119,9 @@ class CaptainLoop:
                 continue
             try:
                 self.adapter.resolve_project(mapping)
-            except (RunnerError, OSError) as error:
-                verified[key] = str(error)
+            except Exception as error:
+                # A malformed reply blocks only the slots using this mapping.
+                verified[key] = str(error) if isinstance(error, RunnerError) else f"{type(error).__name__}: {error}"
             else:
                 verified[key] = None
         return verified
@@ -488,11 +489,6 @@ class CaptainLoop:
         for slot in list(self.cursors):
             if slot not in records and not any(slot in slots for slots in self.observations):
                 del self.cursors[slot]
-        if now >= self.discovery_due and (
-            self.discovery_future is None or self.discovery_future.done()
-        ):
-            self.discovery_future = self.native_pool.submit(self._discover, records)
-            self.discovery_due = now + self.poll_seconds
         if self.recovery_future is not None and self.recovery_future.done():
             future, self.recovery_future = self.recovery_future, None
             try:
@@ -513,6 +509,15 @@ class CaptainLoop:
             self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
                          + ", ".join(self.unmatched))
         self.last_unmatched = self.unmatched.copy()
+        # Each desktop check is a Captain request; run it only for a free slot or a pending launch.
+        free = self.recovery_ready and len(records) + len(self.unmatched) < self.runner.capacity
+        launching = any(not any(field in record for field in (*_LAUNCH_EFFECTS, "cancel_stop"))
+                        for record in records.values())
+        if (free or launching) and now >= self.discovery_due and (
+            self.discovery_future is None or self.discovery_future.done()
+        ):
+            self.discovery_future = self.native_pool.submit(self._discover, records)
+            self.discovery_due = now + self.poll_seconds
         if self.recovery_future is None and now >= self.recovery_due:
             route = f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/recovery"
             self.recovery_future = self.control_pool.submit(self.api.call, route)

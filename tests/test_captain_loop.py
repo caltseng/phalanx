@@ -397,7 +397,27 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(len(self.api.claims), 2)
         loop.discovery_due = 0
+        for _ in range(5):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(calls), 1, "launched slots at capacity need no desktop check")
+        self.config["capacity"] = 3
+        loop.runner.capacity = 3
         self.spin(loop, lambda: len(calls) == 2)
+
+    def test_malformed_resolution_blocks_only_its_mapping(self):
+        self.config["repositories"]["healthy"] = {**self.config["repositories"]["repo"],
+                                                   "project_id": "healthy-project"}
+        native = self.native.__call__
+        def malformed(operation, arguments):
+            if operation == "resolve_project" and arguments["project_id"] == "project":
+                return ["not", "an", "object"]
+            return native(operation, arguments)
+        loop = self.loop()
+        loop.adapter = CodexCLIAdapter(malformed)
+        resolved = loop._discover({})
+        self.assertIsNone(resolved[loop._mapping_key(self.config["repositories"]["healthy"])])
+        self.assertRegex(resolved[loop._mapping_key(self.config["repositories"]["repo"])], "AttributeError")
 
     def test_status_changes_have_one_durable_store_and_no_repeated_writes(self):
         runner = AttendedRunner(self.root, self.config, self.api)
