@@ -668,6 +668,84 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         checkpoint = json.loads(archive["cancel_stop"]["proof"].split(". ", 1)[1])
         self.assertEqual(checkpoint["path"], str(packet.worktree))
 
+    def rejected_submission(self):
+        self.config["capacity"] = 1
+        self.start_server(self.directory / "rejected-result.sqlite3")
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        loop = self.loop()
+        loop._prepare(1)
+        packet = self.write_result(1)
+        route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
+        current = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
+        self.assertEqual(self.request(route + "/cancel", OWNER, {
+            "expected_version": current["version"], "reason": "Cancel races with result publication",
+        })[0], 200)
+        runner = AttendedRunner(self.root, self.config, self.api)
+        with self.assertRaisesRegex(RunnerError, "HTTP 409"):
+            runner.submit(packet.marker, "local", runner._snapshot()["receipt"]["thread_id"])
+        self.assertIn("submission", runner._snapshot())
+        self.native.stopped.add(packet.marker)
+        return loop, runner, item
+
+    def test_rejected_submission_stop_archives_exactly_once(self):
+        loop, runner, item = self.rejected_submission()
+        snapshot = runner._snapshot()
+        batch = loop._wait((1,), {1: snapshot})
+        self.assertEqual(loop._advance(1, snapshot, batch)["status"], "stop_confirmed")
+        self.assertFalse(runner._snapshot())
+        with runner._journal() as db:
+            rows = db.execute("SELECT record FROM completed").fetchall()
+        self.assertEqual(len(rows), 1)
+        archive = json.loads(rows[0][0])
+        self.assertEqual(archive["submission"], snapshot["submission"])
+        self.assertEqual(archive["stop_acknowledgment"]["state"]["status"], "cancelled")
+        self.assertNotIn("lease", archive)
+
+    def test_restart_observes_rejected_submission_and_finalizes_stop(self):
+        loop, runner, item = self.rejected_submission()
+        loop.close()
+        self.assertFalse(self.native.waits)
+        restarted = self.loop()
+        self.spin(restarted, lambda: not runner._snapshot(), timeout=15)
+        self.assertTrue(self.native.waits)
+        self.assertEqual(len(self.native.launches), 1)
+        self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "cancelled")
+
+    def test_expired_prepared_packet_without_relay_recovers_without_observation(self):
+        from contextlib import closing
+        import sqlite3
+        self.config["capacity"] = 1
+        database = self.directory / "expired-packet.sqlite3"
+        self.start_server(database)
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        runner = AttendedRunner(self.root, self.config, self.api)
+        runner.prepare()
+        snapshot = runner._snapshot()
+        self.assertIn("packet", snapshot)
+        self.assertNotIn("relay", snapshot)
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("UPDATE attempts SET lease_expires_at=0 WHERE id=?",
+                       (snapshot["claim"]["attempt_id"],))
+        runner._transaction(lambda record, db: record.update(lease_expires_at=0))
+        loop = self.loop()
+        expired = self.api.call("/dispatch/runners/desk/recovery")
+        loop.expired = {row["attempt_id"]: row for row in expired}
+        self.assertEqual(loop._advance(1, runner._snapshot(), None)["status"], "recovered")
+        self.assertFalse(runner._snapshot())
+        self.assertFalse(self.native.launches)
+        self.assertFalse(self.native.waits)
+        self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "queued")
+
     def test_unlaunched_cancel_accepts_clean_ancestor_after_origin_advances(self):
         self.config["capacity"] = 1
         self.api.waiting = ["first"]

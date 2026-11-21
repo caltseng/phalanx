@@ -328,7 +328,7 @@ class CaptainLoop:
                 )}
             return self._prepare(slot)
         if snapshot.get("recover_stop") or snapshot.get("claim", {}).get("attempt_id") in self.expired:
-            if "packet" in snapshot and observation is None and "recover_stop" not in snapshot:
+            if "packet" in snapshot and not unlaunched and observation is None and "recover_stop" not in snapshot:
                 return {"status": "observing", "reason": "Awaiting native observation before recovery"}
             if observation is not None and "packet" in snapshot:
                 self._check_observation(runner, snapshot, observation)
@@ -336,6 +336,7 @@ class CaptainLoop:
                 self.root, self.config["runner_id"], self.api, RecoveryJournal(self.root, slot),
                 observations=observation.threads if observation else (),
                 discovery_complete=observation.discovery_complete if observation else False,
+                no_launch_proof=self._unlaunched_proof(runner, snapshot) if unlaunched else None,
             )
         if "packet" not in snapshot or unlaunched:
             return self._prepare(slot)
@@ -460,7 +461,7 @@ class CaptainLoop:
                 self.work_due[slot] = now + self.poll_seconds
         observed_slots = {slot for slots in self.observations for slot in slots}
         candidates = [slot for slot, record in records.items()
-                      if "packet" in record and "submission" not in record and slot not in observed_slots
+                      if "packet" in record and slot not in observed_slots
                       and any(field in record for field in ("relay", "receipt"))
                       and now >= self.observe_due.get(slot, 0)]
         if candidates:

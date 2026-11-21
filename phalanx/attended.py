@@ -98,7 +98,7 @@ class AttendedRunner:
         with self._journal() as db:
             row = db.execute("SELECT record FROM slot WHERE id=?", (self.slot,)).fetchone()
             record = json.loads(row[0]) if row else {}
-            archived = record.copy() if "submission" in record else None
+            archived = record.copy() if "submission" in record and "cancel_stop" not in record else None
             result = action(record, db)
             if archived is not None and not record:
                 archived.pop("lease")

@@ -198,6 +198,10 @@ A clean unlaunched checkpoint remains accounted when origin advances to a
 descendant. Unmatched expired attempts consume capacity rather than stopping
 all admission. Recovery waits for an observation before starting its uncertainty
 backoff, and malformed native rows block only their associated markers.
+Rejected submissions remain observable across restart and stop confirmation
+archives their evidence once. An expired prepared packet with no relay effects
+uses the verified no-launch checkpoint for recovery without waiting for a
+native observation that cannot exist.
 
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Ctrl+C stops scheduling and drains in-flight

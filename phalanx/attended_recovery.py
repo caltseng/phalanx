@@ -65,7 +65,7 @@ def _matches(record, packet, observation):
 
 def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
               observations=(), discovery_complete=False, stopped=None, now, recheck=False,
-              stop_failure: Literal["unavailable", "conflict"] | None = None):
+              stop_failure: Literal["unavailable", "conflict"] | None = None, no_launch_proof=None):
     """Update the journal record and return a redacted decision for the Captain.
 
     'expired' is a fresh server recovery listing. None means unavailable.
@@ -173,7 +173,7 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
                            next_action="Replay the exact submission receipt before arranging adoption")
         return publish("replay_submission", "Replay the original verified submission and idempotency key")
 
-    if packet:
+    if packet and no_launch_proof is None:
         matches = [obs for obs in observations if _matches(record, packet, obs)]
         if not record.get("receipt", {}).get("thread_id") and not discovery_complete:
             return uncertain("Native discovery is incomplete")
@@ -210,7 +210,7 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
                        next_action="Preserve the evidence and arrange adoption under a fresh claim")
 
     proof = (f"Exact stopped native thread {observation.thread_id}. {stopped.summary}"
-             if stopped else "The original local reservation has no durable launch intent.")
+             if stopped else no_launch_proof or "The original local reservation has no durable launch intent.")
     request = {
         "attempt_id": attempt,
         "key": f"attended-stop-{attempt}",
