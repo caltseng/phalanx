@@ -53,8 +53,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 ### PH-08 Implement waits, notifications, and replies
 
 - **Depends on:** PH-05. **Output:** PR.
-- Persist a focused question and handoff before releasing the slot. Provide a canonical owner reply through the API and CLI, plus one notification route. Add due times for external waits and bounded, retryable rechecks. Surface why an item is waiting and what will resume it.
-- **Done when:** Replying queues the correct stage exactly once, a missed event is recovered by a recheck, and an externally blocked set does not occupy worker slots or drown out lease renewals.
+- Persist a focused question and handoff before releasing the slot. Provide a canonical owner reply through the API and CLI, plus one notification route. Index external recheck times, process due work in bounded batches with jitter and provider-directed backoff, and coalesce duplicate events by gate and revision. Surface why an item is waiting and what will resume it.
+- **Done when:** Replying queues the correct stage exactly once, a missed event is recovered by a recheck, and duplicate events or a wave of overdue waits neither occupy worker slots nor drown out lease renewals.
 
 ### PH-09 Make finalization durable
 
@@ -88,7 +88,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-02, PH-10, PH-11. **Output:** PR.
 - Record operation intent and expected remote state. After development records a candidate commit, push it and open a draft with the required Phalanx attribution. Reuse a matching PR. If bounded reconciliation cannot confirm creation, retry so the work gets a PR. Record one primary and surface duplicates. Use revision preconditions where supported and reconcile unresolved writes before issuing a conflicting operation.
-- **Done when:** A lost response to draft creation produces a primary PR, repeated publication keeps one attribution footer, and an expired claim or outside push cannot silently overwrite newer work.
+- **Done when:** A lost response to draft creation produces a primary PR and repeated publication keeps one attribution footer. Test a writer paused after its claim check, a lease expiry, and an outside push. The old attempt cannot silently overwrite newer work and any unresolved write remains visible for reconciliation.
 
 ### PH-14 Validate and promote the current candidate
 
@@ -100,6 +100,7 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 - **Depends on:** PH-09, PH-12, PH-14. **Output:** PR.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
+- When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
 - **Done when:** A real PR goes through a feedback or conflict loop, required revision changes invalidate stale evidence, and a verified merge is recorded exactly once. A separate ready-only case completes with a verified PR and no merge.
 
 ### PH-16 Deliver field reports
@@ -125,8 +126,9 @@ V1 targets a large queue and many workers on one local machine with visible Code
 ### PH-19 Load-test and harden one-machine execution
 
 - **Depends on:** PH-03, PH-07, PH-12, PH-15, PH-16, PH-18. **Output:** PR with test results.
-- Sweep synthetic backlog and capacity separately from real Codex sessions. Test mostly blocked queues, steady urgent intake, dependency fan-out, a wave of CI waits, provider throttling, interrupted sessions, and finalization outages. Measure scheduling latency, age of eligible work, memory, disk, and restart catch-up. Bound polling and rechecks. Add narrow resource limits only where the measurements show contention among builds, previews, or report work.
+- Sweep synthetic backlog and capacity separately from real Codex sessions. Test mostly blocked queues, steady urgent intake, dependency fan-out, a wave of CI waits, provider throttling, interrupted sessions, and finalization outages. Measure scheduling latency, age of eligible work, memory, disk, and restart catch-up. Restart during a batch of dependent wakeups and verify that no items remain incorrectly blocked. Count live builds and previews until they stop. Isolate writable build paths or preview ports where they collide and add narrower resource limits only where measurements justify them.
 - **Done when:** The tested operating envelope is documented, starvation and overbooking tests pass, pending work recovers without silent loss, and the full v1 muster passes on one machine. Any limit or known degradation has a visible reason.
+- During the load run, stall a PR on provider throttling, leave another item waiting on a failed prerequisite, and interrupt a worker. Verify that ready reports and independent PR work still advance. Lift the throttle, satisfy the prerequisite through recovery or replacement, and reconcile the interrupted session. Verify each affected item resumes from its recorded trigger and checkpoint during the active muster.
 
 ## After the local release
 
