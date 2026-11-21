@@ -208,7 +208,7 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
     if event == Event.RESULT:
         has_question = details.get("question") is not None
         if next_state.status == Status.WAITING_FOR_INPUT:
-            if not has_question and options.get("outcome") != Outcome.FAILED:
+            if not has_question and options.get("outcome") == Outcome.NEEDS_INPUT:
                 raise Conflict("A structured question and handoff are required for an input wait")
         elif has_question:
             raise Conflict("This result does not open an input wait")

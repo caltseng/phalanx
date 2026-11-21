@@ -41,9 +41,9 @@ def reply(db, item_id, execution_id, payload):
 
 def external_wait(db, item_id, execution_id, payload, lease_digest):
     row, state = intake.check_current(db, item_id, execution_id, payload.expected_version)
-    if state.status != Status.RUNNING:
+    if state.status != Status.RUNNING or state.stopping is not None:
         raise intake.Conflict("Scheduling a new external wait requires a running attempt")
-    intake._check_attempt(db, execution_id, state, payload, lease_digest)
+    intake.check_attempt(db, execution_id, state, payload, lease_digest)
     delay = max(30, payload.retry_after_seconds)
     due_at = int(time() * 1000) + delay * 1000 + randint(0, 5000)
     details = {"gate": payload.gate, "revision": payload.revision.model_dump(),
@@ -60,13 +60,11 @@ def external_wait(db, item_id, execution_id, payload, lease_digest):
 def due_rechecks(db, limit):
     rows = db.execute(
         """SELECT due.due_at_ms, e.id, e.item_id, e.version, e.stage, e.state_json, h.details_json
-           FROM (
-               SELECT * FROM external_rechecks WHERE due_at_ms <= ?
-               ORDER BY due_at_ms, execution_id LIMIT ?
-           ) AS due
+           FROM external_rechecks AS due
            JOIN executions AS e ON e.id=due.execution_id AND e.version=due.version
            JOIN transition_history AS h ON h.execution_id=e.id AND h.version=e.version
-           ORDER BY due.due_at_ms, due.execution_id""",
+           WHERE due.due_at_ms <= ? AND e.status = 'waiting_for_external'
+           ORDER BY due.due_at_ms, due.execution_id LIMIT ?""",
         (int(time() * 1000), limit),
     )
     return [{

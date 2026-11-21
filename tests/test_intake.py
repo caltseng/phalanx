@@ -1,5 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import os
 from pathlib import Path
 import subprocess
@@ -11,7 +12,7 @@ import unittest
 from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest
 from phalanx.store import APPLICATION_ID, connect, write_transaction
-from phalanx.transitions import Event, Wait
+from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -162,6 +163,13 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         status, stopping = self.submit(route + "/cancel", cancellation, key="cancel")
         self.assertEqual(status, 200, stopping)
         self.assertEqual(stopping["state"]["stopping"], "cancelled")
+        external = {
+            "expected_version": stopping["version"], "attempt_id": claim["attempt_id"],
+            "stage": claim["stage"], "reason": "Waiting for CI", "gate": "ci",
+            "revision": {"head": "head-one", "base": "base-one"},
+        }
+        self.assertEqual(self.submit(route + "/external-wait", external, token=RUNNER,
+                                     lease=LEASE, key="stopping")[0], 409)
         self.assertIsNone(stopping["state"]["final_output"])
         self.assertEqual(self.submit(route + "/cancel", cancellation, key="cancel"), (200, stopping))
         self.assertEqual(self.submit(route + "/result", dict(claim, report_markdown="# Late"),
@@ -276,7 +284,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
                          ["intake", "claim", "result", "reply", "claim"])
 
     def test_external_wait_is_due_after_restart_and_recheck_does_not_pass_gate(self):
-        item, _, _, route = self.create("ready_for_check_in")
+        item, intake_body, _, route = self.create("ready_for_check_in")
         claim = self.claim(item, item["execution"])
         body = {key: claim[key] for key in ("expected_version", "attempt_id", "stage")}
         body.update(reason="Waiting for CI", gate="ci",
@@ -294,11 +302,15 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(due_path, RUNNER), (200, []))
         recheck = {"expected_version": waiting["version"]}
         self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="poll")[0], 409)
+        status, unrelated = self.submit("/v1/items", intake_body, key="unrelated")
+        self.assertEqual(status, 201, unrelated)
         with write_transaction(self.path) as db:
             due_at = db.execute("SELECT due_at_ms FROM external_rechecks").fetchone()[0]
             self.assertGreaterEqual(due_at, earliest)
             self.assertLessEqual(due_at, int(time() * 1000) + 65_000)
-            db.execute("UPDATE external_rechecks SET due_at_ms=0")
+            db.execute("UPDATE external_rechecks SET due_at_ms=1")
+            db.execute("INSERT INTO external_rechecks VALUES (?, ?, 0)",
+                       (unrelated["execution"]["id"], unrelated["execution"]["version"] + 1))
         self.stop_server(self.server)
         self.server = self.start_server(self.path)
         status, batch = self.get(due_path, RUNNER)
@@ -316,6 +328,31 @@ class IntakeTest(ServerFixture, unittest.TestCase):
                          (200, queued))
         self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="dupe")[0], 409)
         self.assertEqual(self.get(due_path, RUNNER), (200, []))
+
+    def test_trusted_success_can_open_a_human_wait_without_worker_question(self):
+        item, _, _, route = self.create("ready_for_check_in")
+        url = "https://github.com/example/project/pull/1"
+        revision = Revision("head-one", "base-one")
+        execution = item["execution"]
+        with write_transaction(self.path) as db:
+            row, state = check_current(db, item["id"], execution["id"], execution["version"])
+            state = replace(state, stage=Stage.PR_RECONCILIATION, primary_pr=url,
+                            candidate=revision.head)
+            claim = claim_attempt(db, row, state, runner_id="local", lease_digest=digest(LEASE),
+                                  lease_expires_at=int(time()) + 3600)
+            row, state = check_current(db, item["id"], execution["id"], claim["execution"]["version"])
+            waiting = apply(
+                db, row, state, Event.RESULT, attempt_id=claim["attempt_id"], details={},
+                outcome=Outcome.SUCCEEDED, evidence=Evidence(pr=PullRequest(url, revision, closed=True)),
+                wait=Wait("PR closed without merge", "owner reply"),
+            )
+        self.assertEqual(waiting["state"]["status"], "waiting_for_input")
+        status, queued = self.submit(
+            route + "/reply", {"expected_version": waiting["version"], "answer": "Investigate"},
+            key="resume-closed-pr",
+        )
+        self.assertEqual(status, 200, queued)
+        self.assertEqual(queued["state"]["stage"], "pr_reconciliation")
 
     def test_cancel_storage_error_rolls_back_and_recovers_after_restart(self):
         item, _, base, route = self.create()
