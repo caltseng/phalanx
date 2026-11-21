@@ -12,12 +12,17 @@ from time import time
 from urllib.parse import quote
 from uuid import UUID
 
-from .attended import RunnerAPI, RunnerError
+from .attended import AttendedRunner, RunnerAPI, RunnerError
 from .attended_recovery import (
-    NativeObservation, StoppedEvidence, acknowledge_stop, reconcile, unmatched_leases,
+    NativeObservation, StoppedEvidence, acknowledge_claim, acknowledge_stop, reconcile, unmatched_leases,
 )
 from .handoff import WorkerHandoff, InvalidResult, WorkPacket
-from .workspaces import WorkspaceError, WorkspaceManager
+from .workspaces import WorkspaceError, WorkspaceManager, _file_lock, _git
+
+
+# Any of these means a launch or recovery effect may exist, so a no-launch
+# proof must not stand in for reconciling it.
+LAUNCH_EVIDENCE = ("relay", "receipt", "submission", "recover_stop", "recover_claim", "cancel_stop")
 
 
 class RecoveryJournal:
@@ -128,7 +133,8 @@ def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_co
     if original["runner_id"] != runner_id:
         return {"status": "owner_wait", "reason": "Use the original runner identity for this slot"}
 
-    if no_launch_proof is not None and any(field in original for field in ("relay", "receipt", "submission")):
+    if no_launch_proof is not None and any(field in original for field in ("relay", "receipt", "submission",
+                                                                           "recover_claim")):
         raise RunnerError("No-launch proof cannot replace reconciliation of recorded launch effects")
 
     # Keep native observations, filesystem inspection and HTTP outside the lock.
@@ -174,6 +180,8 @@ def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_co
         intent["key"] = f"{intent['key']}-{version}"
     if not journal.save(original, record):
         return {"status": "retry", "reason": "Reservation changed during recovery", "unmatched": orphaned}
+    if result["status"] == "send_claim":
+        return {**_send_claim(api, route, journal, record, decision), "unmatched": orphaned}
     if result["status"] != "send_stop":
         if "recovery_checkpoint" in record:
             result["checkpoint"] = record["recovery_checkpoint"]
@@ -200,6 +208,67 @@ def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_co
     if not journal.save(saved_intent, record):
         return {"status": "retry", "reason": "Reservation changed during stop replay", "unmatched": orphaned}
     return {**result, "unmatched": orphaned}
+
+
+def _send_claim(api, route, journal, record, decision):
+    # The intent and its fresh secret are durable before the request, so a
+    # lost reply replays the same key and lease.
+    request = record["recover_claim"]
+    endpoint = f"{route}/attempts/{quote(request['attempt_id'], safe='')}/recover-claim"
+    try:
+        response = api.call(endpoint, request["body"], lease=request["lease"], key=request["key"])
+    except RunnerError as error:
+        failure = "conflict" if str(error).startswith("Runner API returned HTTP 409 ") else "unavailable"
+    else:
+        if acknowledge_claim(record, request, response):
+            adopted = {key: value for key, value in record.items() if key not in {"recover_claim", "recovery"}}
+            adopted.update(lease=request["lease"], lease_expires_at=response["lease_expires_at"])
+            if journal.save(record, adopted):
+                return {"status": "adopted", "attempt_id": request["attempt_id"],
+                        "reason": "Adopted the exact attempt under a fresh lease",
+                        "lease_expires_at": response["lease_expires_at"]}
+            return {"status": "retry", "reason": "Reservation changed before adoption was saved"}
+        failure = "unavailable"
+    saved_intent = json.loads(json.dumps(record))
+    result = decision(claim_failure=failure)
+    if not journal.save(saved_intent, record):
+        return {"status": "retry", "reason": "Reservation changed during adoption replay"}
+    return result
+
+
+def unlaunched_proof(runner, snapshot):
+    """Return a no-launch proof for a reservation, or raise if evidence of a launch exists."""
+    claim = snapshot["claim"]
+    attempt = UUID(claim["attempt_id"])
+    for identity in (str(attempt), attempt.hex):
+        result = runner.results / f"phalanx-attempt-{identity}.json"
+        if os.path.lexists(result) or os.path.lexists(result.with_suffix(".json.tmp")):
+            raise RunnerError("Attempt evidence exists; reconcile it before confirming stop or launch")
+    repo = claim["request"]["repository_id"]
+    mapping = runner.config["repositories"][repo]
+    manager = runner._manager(mapping, snapshot["repositories"][repo])
+    common = manager._verify_checkout()
+    with _file_lock(common / "phalanx-workspaces.lock"):
+        path, branch, owner = manager._location(common, claim["item_id"])
+        if manager._registered(path, branch):
+            workspace = manager._snapshot(path, branch, common)
+            base = claim["request"].get("target_branch") or mapping["base_branch"]
+            packet = runner._handoff(snapshot).packet if "packet" in snapshot else None
+            candidate = claim["execution"]["state"].get("candidate")
+            expected = packet.expected_revision if packet else candidate or manager.resolve_origin_base(base)
+            if packet and (packet.worktree != workspace.path or packet.branch != workspace.branch):
+                raise RunnerError("Prepared packet does not match the owned worktree; reconcile it")
+            accounted = workspace.head == expected
+            if not accounted and not packet and not candidate and not workspace.dirty:
+                accounted = _git(manager.checkout, "merge-base", workspace.head, expected).strip() == workspace.head
+            if workspace.dirty or not accounted:
+                raise RunnerError("Unlaunched workspace has unaccounted changes; preserve it and reconcile stop")
+            return f"Unlaunched clean workspace {path} at accounted revision {workspace.head}"
+        refs = _git(manager.checkout, "for-each-ref", "--format=%(refname)", owner,
+                    f"refs/heads/{branch}").strip()
+        if refs:
+            raise RunnerError("Partial workspace refs exist; reconcile them before confirming stop")
+        return "No item worktree, owned branch, launch packet, relay, receipt or result"
 
 
 def add_recovery_command(commands):
@@ -235,8 +304,17 @@ def run_recovery_command(args):
                 "client_thread_id": UUID(row["client_thread_id"]) if row.get("client_thread_id") else None,
             }))
     root = args.state.resolve(strict=True)
+    api = RunnerAPI(config["base_url"], token)
+    journal = RecoveryJournal(root, args.slot)
+    snapshot, _ = journal.snapshot()
+    proof = None
+    if ("claim" in snapshot and snapshot.get("runner_id") == config["runner_id"]
+            and not any(field in snapshot for field in LAUNCH_EVIDENCE)):
+        # Release an unlaunched slot only after checking its worktree and result path.
+        proof = unlaunched_proof(AttendedRunner(root, config, api, slot=args.slot), snapshot)
     result = run_recovery(
-        root, config["runner_id"], RunnerAPI(config["base_url"], token), RecoveryJournal(root, args.slot),
+        root, config["runner_id"], api, journal,
         observations=observations, discovery_complete=complete, recheck=args.recheck,
+        no_launch_proof=proof,
     )
     print(json.dumps(result, ensure_ascii=False))

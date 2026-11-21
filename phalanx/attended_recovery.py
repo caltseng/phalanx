@@ -7,6 +7,7 @@ and persists any returned stop request before sending it.
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import secrets
 from typing import Literal
 from uuid import UUID
 
@@ -65,13 +66,16 @@ def _matches(record, packet, observation):
 
 def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
               observations=(), discovery_complete=False, stopped=None, now, recheck=False,
-              stop_failure: Literal["unavailable", "conflict"] | None = None, no_launch_proof=None):
+              stop_failure: Literal["unavailable", "conflict"] | None = None, no_launch_proof=None,
+              claim_failure: Literal["unavailable", "conflict"] | None = None):
     """Update the journal record and return a redacted decision for the Captain.
 
     'expired' is a fresh server recovery listing. None means unavailable.
     'discovery_complete' means all scoped pages were checked for this probe.
     An empty listing never establishes that an attempt ended. Native status is
     trusted only for the exact launch, and silence never establishes stop.
+    A known active writer, verified result or saved submission is adopted
+    under a fresh lease for the same attempt rather than released.
     """
     if not record:
         return {"status": "idle"}
@@ -115,8 +119,27 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         progress.update(failures=failures + 1, retry_at=now + RECHECK_SECONDS[failures])
         return publish("retry", reason)
 
+    def adopt(candidate, reason):
+        # The fresh secret replaces the expired one. Failures are not reset,
+        # so repeated refusals reach an owner wait instead of looping. The
+        # expiry being recovered makes each adoption's key unique, while a
+        # lost reply replays the saved intent with the same key.
+        record["recover_claim"] = {
+            "attempt_id": attempt,
+            "key": f"attended-adopt-{attempt}-{candidate['version']}-{candidate['lease_expires_at']}",
+            "lease": secrets.token_urlsafe(32),
+            "body": {"item_id": claim["item_id"], "expected_version": candidate["version"],
+                     "reconciliation": reason},
+        }
+        return publish("send_claim", reason, **_redacted_claim(record))
+
     if recheck:
         progress.clear()
+    if "recover_claim" in record and claim_failure == "conflict":
+        del record["recover_claim"]
+        return uncertain("The server refused adoption; recheck the attempt")
+    if "recover_claim" in record and claim_failure == "unavailable":
+        return uncertain("The adoption response is unavailable")
     if "recover_stop" in record and stop_failure == "conflict":
         return publish("owner_wait", "The server rejected the saved stopped-attempt request",
                        next_action="Reconcile the exact attempt and version before retrying")
@@ -151,6 +174,8 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
     if "recover_stop" in record:
         return publish("send_stop", "Replay the original stopped-attempt request",
                        **record["recover_stop"])
+    if "recover_claim" in record:
+        return publish("send_claim", "Replay the original adoption claim", **_redacted_claim(record))
 
     candidate = None
     if expired is not None:
@@ -169,8 +194,7 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
 
     if "submission" in record:
         if candidate is not None:
-            return publish("owner_wait", "Saved submission needs reconciliation under a fresh claim",
-                           next_action="Replay the exact submission receipt before arranging adoption")
+            return adopt(candidate, "Saved verified submission for the exact attempt; adopt it to replay")
         return publish("replay_submission", "Replay the original verified submission and idempotency key")
 
     if packet and no_launch_proof is None:
@@ -182,6 +206,8 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         observation = matches[0]
         record.setdefault("receipt", {})["thread_id"] = str(observation.thread_id)
         if observation.state == "active":
+            if candidate is not None:
+                return adopt(candidate, f"Exact native writer {observation.thread_id} is still active")
             progress.clear()
             return publish("reattach", "The recorded writer is active",
                            next_action="Resume observing the exact thread and renew while authorized")
@@ -205,12 +231,13 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         return publish("reconcile_server", "The server has no matching expired attempt",
                        next_action="Replay a saved submission or verify the current lease and execution")
     if stopped and stopped.disposition == "verified_result":
-        progress.clear()
-        return publish("owner_wait", "Verified result needs a server-authorized recovery claim",
-                       next_action="Preserve the evidence and arrange adoption under a fresh claim")
+        return adopt(candidate, f"Exact stopped native thread {observation.thread_id}. {stopped.summary}")
+    if not stopped and not no_launch_proof:
+        return publish("owner_wait", "Releasing this reservation needs proof that no launch happened",
+                       next_action="Run attended-recover --recheck on the runner that owns the worktree")
 
     proof = (f"Exact stopped native thread {observation.thread_id}. {stopped.summary}"
-             if stopped else no_launch_proof or "The original local reservation has no durable launch intent.")
+             if stopped else no_launch_proof)
     request = {
         "attempt_id": attempt,
         "key": f"attended-stop-{attempt}",
@@ -220,6 +247,20 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
     record["recover_stop"] = request
     progress.clear()
     return publish("send_stop", "Stopped reservation is ready for server reconciliation", **request)
+
+
+def _redacted_claim(record):
+    return {key: value for key, value in record["recover_claim"].items() if key != "lease"}
+
+
+def acknowledge_claim(record, request, response):
+    """Validate a recovery claim reply before swapping in its lease."""
+    claim = record.get("claim")
+    return (claim is not None and record.get("recover_claim") == request
+            and isinstance(response, dict)
+            and response.get("attempt_id") == request["attempt_id"] == claim["attempt_id"]
+            and response.get("execution_id") == claim["execution"]["id"]
+            and type(response.get("lease_expires_at")) is int)
 
 
 def acknowledge_stop(record, request, response):

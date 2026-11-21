@@ -32,7 +32,7 @@ class AttendedRecoveryTests(unittest.TestCase):
             self.packet.result_identity(), "stopped",
         )
         self.expired = [{"attempt_id": attempt.hex, "execution_id": "execution",
-                         "item_id": "item", "stage": "development", "version": 3}]
+                         "item_id": "item", "stage": "development", "version": 3, "lease_expires_at": 100}]
         self.checkpoint = StoppedEvidence(attempt, self.observation.thread_id,
                                          str(self.packet.worktree), "retry_safe",
                                          "Git checkpoint verified and effects accounted for.")
@@ -53,6 +53,12 @@ class AttendedRecoveryTests(unittest.TestCase):
         self.assertEqual(self.decision(now=100)["checked_at"], 30)
         self.assertNotIn("recover_stop", self.record)
         decision = self.decision(now=101, recheck=True, discovery_complete=True,
+                                 observations=[replace(self.observation, state="active")])
+        self.assertEqual(decision["status"], "send_claim")
+        self.assertNotIn("lease", decision)
+        self.assertEqual(self.record["recover_claim"]["body"]["expected_version"], 3)
+        del self.record["recover_claim"]
+        decision = self.decision(now=102, expired=[], recheck=True,
                                  observations=[replace(self.observation, state="active")])
         self.assertEqual(decision["status"], "reattach")
 
@@ -124,7 +130,7 @@ class AttendedRecoveryTests(unittest.TestCase):
         for evidence, status in (
             (replace(self.checkpoint, worktree="wrong"), "verify_outputs"),
             (replace(self.checkpoint, thread_id=uuid4()), "verify_outputs"),
-            (replace(self.checkpoint, disposition="verified_result"), "owner_wait"),
+            (replace(self.checkpoint, disposition="verified_result"), "send_claim"),
         ):
             decision = self.decision(discovery_complete=True, observations=[self.observation],
                                      stopped=evidence)
@@ -137,7 +143,11 @@ class AttendedRecoveryTests(unittest.TestCase):
         self.assertEqual(self.decision(packet=None, expired=[])["status"], "reconcile_server")
         wrong = [self.expired[0] | {"execution_id": "other"}]
         self.assertEqual(self.decision(packet=None, expired=wrong)["status"], "owner_wait")
-        self.assertEqual(self.decision(packet=None)["status"], "send_stop")
+        self.assertEqual(self.decision(packet=None)["status"], "owner_wait")
+        self.assertNotIn("recover_stop", self.record)
+        decision = self.decision(packet=None, no_launch_proof="Clean worktree at the original revision")
+        self.assertEqual(decision["status"], "send_stop")
+        self.assertEqual(decision["body"]["reconciliation"], "Clean worktree at the original revision")
 
     def test_draft_claim_requires_publication_reconciliation_without_a_worker(self):
         del self.record["packet"]
@@ -151,7 +161,46 @@ class AttendedRecoveryTests(unittest.TestCase):
     def test_saved_submission_and_unmatched_lease(self):
         self.record["submission"] = {"body": {}}
         self.assertEqual(self.decision(expired=[])["status"], "replay_submission")
-        self.assertEqual(self.decision()["status"], "owner_wait")
+        self.assertEqual(self.decision()["status"], "send_claim")
         self.assertNotIn("recover_stop", self.record)
         self.assertEqual(unmatched_leases(self.expired, {self.packet.attempt_id.hex}), [])
         self.assertEqual(unmatched_leases(self.expired, set())[0]["status"], "owner_wait")
+
+    def test_adoption_claim_replays_then_rebuilds_after_refusal(self):
+        self.record["submission"] = {"body": {}}
+        self.decision()
+        intent = self.record["recover_claim"]
+        self.assertEqual(intent["key"], f"attended-adopt-{self.packet.attempt_id.hex}-3-100")
+        self.record = json.loads(json.dumps(self.record))
+        # A lost reply replays the same key and secret, even without a listing.
+        self.assertEqual(self.decision(expired=None)["status"], "send_claim")
+        self.assertEqual(self.record["recover_claim"], intent)
+        self.assertEqual(self.decision(now=1, claim_failure="unavailable")["status"], "retry")
+        self.assertEqual(self.record["recover_claim"], intent)
+        self.assertEqual(self.decision(now=3, claim_failure="conflict")["status"], "retry")
+        self.assertNotIn("recover_claim", self.record)
+        moved = [self.expired[0] | {"version": 4}]
+        self.assertEqual(self.decision(now=10, expired=moved)["status"], "send_claim")
+        self.assertTrue(self.record["recover_claim"]["key"].endswith("-4-100"))
+        self.assertNotEqual(self.record["recover_claim"]["lease"], intent["lease"])
+        # Repeated refusals back off to an owner wait rather than looping.
+        for now in range(11, 200):
+            failure = "conflict" if "recover_claim" in self.record else None
+            decision = self.decision(now=now, expired=moved, claim_failure=failure)
+            if decision["status"] == "owner_wait":
+                break
+        self.assertEqual(decision["status"], "owner_wait")
+        self.assertNotIn("recover_claim", self.record)
+        self.assertEqual(self.decision(now=300, expired=moved)["status"], "owner_wait")
+
+    def test_same_attempt_can_be_adopted_again_after_a_later_expiry(self):
+        self.record["submission"] = {"body": {}}
+        keys = []
+        for now, expiry in ((200, 100), (400, 290)):
+            decision = self.decision(now=now, expired=[self.expired[0] | {"lease_expires_at": expiry}])
+            self.assertEqual(decision["status"], "send_claim")
+            keys.append(decision["key"])
+            # An acknowledged adoption swaps the lease and clears the intent and progress.
+            self.record["lease"] = self.record.pop("recover_claim")["lease"]
+            self.record.pop("recovery", None)
+        self.assertNotEqual(keys[0], keys[1])

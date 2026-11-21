@@ -178,3 +178,20 @@ def recover_stopped(db, runner_id, attempt_id, body):
         db, row, state, Event.RETRY, attempt_id=attempt_id,
         details={**details, "retry_at_ms": retry_at}, retry_at=retry_at, retry_allowed=True,
     )
+
+
+def recover_claim(db, runner_id, attempt_id, lease_digest, body):
+    # Re-lease the same expired attempt so its writer, checkpoint and saved
+    # submission stay bound to one attempt. The old secret stops working.
+    attempt = open_attempt(db, runner_id, attempt_id)
+    now = time()
+    if attempt["lease_expires_at"] > now:
+        raise intake.Conflict("The existing lease is still live. Renew it instead")
+    row, state = intake.check_current(db, body.item_id, attempt["execution_id"], body.expected_version)
+    if state.status != Status.RUNNING or state.stage != attempt["stage"]:
+        raise intake.Conflict("This attempt can no longer be adopted")
+    expires = int(now) + LEASE_SECONDS
+    db.execute("UPDATE attempts SET lease_digest=?, lease_expires_at=? WHERE id=?",
+               (lease_digest, expires, attempt_id))
+    return {"attempt_id": attempt_id, "execution_id": row["id"], "version": row["version"],
+            "lease_expires_at": expires}

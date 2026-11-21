@@ -14,6 +14,7 @@ from unittest.mock import ANY, patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
+from phalanx.attended_recovery_service import unlaunched_proof
 from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_loop import CaptainLoop
 from phalanx.workspaces import WorkspaceManager
@@ -23,7 +24,7 @@ from test_bootstrap import OWNER, RUNNER, ServerFixture
 class QueueAPI:
     def __init__(self, checkout):
         self.checkout = checkout
-        self.requests, self.renewed, self.submissions = [], [], []
+        self.requests, self.renewed, self.submissions, self.recovered = [], [], [], []
         self.claims = {}
         self.waiting = ["first", "second"]
         self.stages = {}
@@ -76,6 +77,14 @@ class QueueAPI:
                     self.drop_result = False
                     raise RunnerError("lost result response")
                 return {"version": 4}
+            if route.endswith("/recover-claim"):
+                attempt = route.split("/")[-2]
+                old = next(key for key, row in self.claims.items() if row["attempt_id"] == attempt)
+                row = self.claims.pop(old)
+                self.claims[lease] = row
+                self.recovered.append((attempt, body, key))
+                return {"attempt_id": attempt, "execution_id": row["execution"]["id"],
+                        "version": row["execution"]["version"], "lease_expires_at": int(time.time()) + 90}
             raise AssertionError(route)
 
 
@@ -590,7 +599,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(loop._records()) + len(loop.unmatched), self.config["capacity"])
         self.assertTrue(any(event["status"] == "unmatched_attempts" for event in self.events))
 
-    def test_expired_packet_waits_for_observation_without_recovery_backoff(self):
+    def test_expired_active_writer_is_adopted_after_observation_and_keeps_renewing(self):
         self.config["capacity"] = 1
         self.api.waiting = ["first"]
         loop = self.loop()
@@ -600,15 +609,26 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.api.expired = [{
             "attempt_id": claim["attempt_id"], "item_id": claim["item_id"],
             "execution_id": claim["execution"]["id"], "stage": "report_drafting",
-            "version": claim["execution"]["version"],
+            "version": claim["execution"]["version"], "lease_expires_at": 0,
         }]
         loop.expired = {claim["attempt_id"]: self.api.expired[0]}
         for _ in range(6):
             result = loop._advance(1, loop._records()[1], None)
             self.assertEqual(result["status"], "observing")
         self.assertNotIn("recovery", loop._records()[1])
+        old_lease = loop._records()[1]["lease"]
         batch = loop._wait((1,), loop._records())
-        self.assertEqual(loop._advance(1, loop._records()[1], batch)["status"], "reattach")
+        self.assertEqual(loop._advance(1, loop._records()[1], batch)["status"], "adopted")
+        record = loop._records()[1]
+        self.assertNotEqual(record["lease"], old_lease)
+        self.assertNotIn("recover_claim", record)
+        self.assertEqual(len(self.api.recovered), 1)
+        self.api.expired, loop.expired = [], {}
+        renewed = len(self.api.renewed)
+        AttendedRunner(self.root, self.config, self.api, slot=1).renew()
+        self.assertEqual(len(self.api.renewed), renewed + 1)
+        self.assertEqual(loop._records()[1]["lease"], record["lease"])
+        self.assertEqual(len(self.native.launches), 1)
 
     def test_malformed_row_blocks_only_its_marker_in_shared_batch(self):
         native = self.native.__call__
@@ -663,7 +683,8 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "lost result"):
             runner.submit(packet.marker, row["host_id"], self.native.threads[packet.marker]["thread_id"])
         runner._transaction(lambda record, db: record.update(lease_expires_at=0))
-        loop.expired = {row["claim"]["attempt_id"]: {}}
+        # The server ended the attempt on the lost accepted reply, so it is not listed as expired.
+        loop.expired = {}
         loop._advance(1, runner._snapshot(), None)
         self.assertEqual(self.api.submissions[0], self.api.submissions[1])
         self.assertFalse(runner._snapshot())
@@ -946,6 +967,94 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
                          "queued")
 
+    def test_restart_adopts_expired_attempt_before_and_after_receipt_without_redraft(self):
+        for before_receipt in (True, False):
+            with self.subTest(before_receipt=before_receipt):
+                self.adopt_after_restart(before_receipt)
+
+    def adopt_after_restart(self, before_receipt):
+        self.config["capacity"] = 1
+        root = self.root = self.directory / f"runner-{before_receipt}"
+        self.native = NativeFixture()
+        self.events.clear()
+        database = self.directory / f"adopt-{before_receipt}.sqlite3"
+        server = self.start_server(database)
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        self.native.fail_launch = before_receipt
+        loop = self.loop()
+        self.spin(loop, lambda: len(self.native.launches) == 1 and (
+            before_receipt or bool(loop._records()[1].get("receipt"))))
+        loop.close()
+        runner = AttendedRunner(root, self.config, self.api)
+        snapshot = runner._snapshot()
+        self.assertEqual(bool(snapshot.get("receipt")), not before_receipt)
+        old = snapshot["lease"]
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("UPDATE attempts SET lease_expires_at=0 WHERE id=?",
+                       (snapshot["claim"]["attempt_id"],))
+        self.native.fail_launch = False
+        restarted = self.loop()
+        self.spin(restarted, lambda: any(event["status"] == "adopted" for event in self.events))
+        self.assertNotIn(runner._snapshot()["lease"], (None, old))
+        self.assertEqual(len(self.native.launches), 1)
+        self.assertEqual(runner.renew()["attempt_id"], snapshot["claim"]["attempt_id"])
+        packet = self.write_result(1)
+        self.native.stopped.add(packet.marker)
+        self.spin(restarted, lambda: not runner._snapshot())
+        restarted.close()
+        execution = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
+        self.assertEqual(execution["state"]["stage"], "report_review")
+        with closing(sqlite3.connect(database)) as db:
+            self.assertEqual(db.execute(
+                "SELECT count(*) FROM attempts WHERE stage='report_drafting'").fetchone()[0], 1)
+        self.stop_server(server)
+
+    def test_recheck_cli_releases_unlaunched_slot_only_after_no_launch_proof(self):
+        from argparse import Namespace
+        from io import StringIO
+        from phalanx.attended_recovery_service import run_recovery_command
+        self.config["capacity"] = 1
+        database = self.directory / "recheck.sqlite3"
+        self.start_server(database)
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        runner = AttendedRunner(self.root, self.config, self.api)
+        runner.prepare()
+        snapshot = runner._snapshot()
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("UPDATE attempts SET lease_expires_at=0 WHERE id=?",
+                       (snapshot["claim"]["attempt_id"],))
+        config = self.directory / "runner.json"
+        config.write_text(json.dumps(self.config | {"base_url": self.url}), encoding="utf-8")
+        args = Namespace(config=config, state=self.root, slot=1, observation=None, recheck=True)
+
+        def recover():
+            with patch.dict(os.environ, {"PHALANX_RUNNER_TOKEN": RUNNER}), \
+                    patch("sys.stdout", new_callable=StringIO) as output:
+                run_recovery_command(args)
+            return json.loads(output.getvalue())
+
+        workspace = Path(snapshot["packet"]["worktree"])
+        (workspace / "unrecorded.txt").write_text("Preserve this change", encoding="utf-8")
+        with self.assertRaisesRegex(RunnerError, "unaccounted changes"):
+            recover()
+        (workspace / "unrecorded.txt").unlink()
+        runner._transaction(lambda record, db: record.update(relay={"status": "started"}))
+        self.assertEqual(recover()["status"], "retry")
+        self.assertTrue(runner._snapshot())
+        runner._transaction(lambda record, db: record.pop("relay") and record.pop("recovery"))
+        self.assertEqual(recover()["status"], "recovered")
+        self.assertFalse(runner._snapshot())
+        self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "queued")
+
     def test_unlaunched_cancel_accepts_clean_ancestor_after_origin_advances(self):
         self.config["capacity"] = 1
         self.api.waiting = ["first"]
@@ -1069,7 +1178,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         manager = runner._manager(self.config["repositories"]["repo"], str(self.checkout))
         workspace = manager.inspect("first")
         (workspace.path / "unrecorded.txt").unlink()
-        proof = loop._unlaunched_proof(runner, runner._snapshot())
+        proof = unlaunched_proof(runner, runner._snapshot())
         runner._transaction(lambda record, db: record.update(cancel_stop={
             "proof": proof, "key": "saved-stop", "disposition": "cancelled",
             "body": {"attempt_id": record["claim"]["attempt_id"], "stage": "report_drafting",

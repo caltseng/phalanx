@@ -22,14 +22,26 @@ class RecoveryAPI:
         self.expired = [test.expired]
         self.requests = []
         self.response = {"id": "execution", "version": 4, "state": {"status": "queued"}}
+        self.claims = []
+        self.claim_response = {"attempt_id": test.packet.attempt_id.hex, "execution_id": "execution",
+                               "version": 3, "lease_expires_at": 500}
         self.error = None
 
-    def call(self, path, body=None, *, key=None):
+    def call(self, path, body=None, *, lease=None, key=None):
         prefix = "/dispatch/runners/desk"
         if path == prefix + "/recovery":
             return self.expired
-        self.test.assertEqual(path, f"{prefix}/attempts/{self.test.packet.attempt_id.hex}/recover-stopped")
         record, _ = self.test.journal.snapshot()
+        if path.endswith("/recover-claim"):
+            self.test.assertEqual(path, f"{prefix}/attempts/{self.test.packet.attempt_id.hex}/recover-claim")
+            self.test.assertEqual(record["recover_claim"], {
+                "attempt_id": self.test.packet.attempt_id.hex, "body": body, "key": key, "lease": lease,
+            })
+            self.claims.append((body, key, lease))
+            if self.error is not None:
+                raise RunnerError(self.error)
+            return self.claim_response
+        self.test.assertEqual(path, f"{prefix}/attempts/{self.test.packet.attempt_id.hex}/recover-stopped")
         self.test.assertEqual(record["recover_stop"], {
             "attempt_id": self.test.packet.attempt_id.hex, "body": body, "key": key,
         })
@@ -62,7 +74,7 @@ class RecoveryServiceTests(unittest.TestCase):
                        "worktree": str(self.packet.worktree)},
         }
         self.expired = {"attempt_id": self.packet.attempt_id.hex, "execution_id": "execution",
-                        "item_id": "item", "stage": self.packet.stage, "version": 3}
+                        "item_id": "item", "stage": self.packet.stage, "version": 3, "lease_expires_at": 0}
         self.api = RecoveryAPI(self)
         self.journal.snapshot()
         self.seed()
@@ -125,26 +137,42 @@ class RecoveryServiceTests(unittest.TestCase):
         self.assertNotEqual(self.api.requests[0][1], self.api.requests[1][1])
         self.assertEqual(self.api.requests[1][0]["expected_version"], 4)
 
-    def test_active_writer_retained_and_other_slot_is_accounted_for(self):
+    def test_active_writer_is_adopted_and_other_slot_is_accounted_for(self):
         other = self.expired | {"attempt_id": uuid4().hex}
         orphan = self.expired | {"attempt_id": uuid4().hex}
         self.seed(slot=2, record=self.record | {"claim": {"attempt_id": other["attempt_id"]}})
         self.api.expired.extend((other, orphan))
         decision = self.step(observations=[replace(self.native, state="active")])
-        self.assertEqual(decision["status"], "reattach")
+        self.assertEqual(decision["status"], "adopted")
         self.assertEqual([row["attempt_id"] for row in decision["unmatched"]], [orphan["attempt_id"]])
         self.assertEqual(self.api.requests, [])
-        self.assertEqual(self.journal.snapshot()[0]["lease"], "local-secret")
+        [(body, key, lease)] = self.api.claims
+        self.assertEqual(body["expected_version"], 3)
+        record = self.journal.snapshot()[0]
+        self.assertEqual((record["lease"], record["lease_expires_at"]), (lease, 500))
+        self.assertNotIn("recover_claim", record)
+        self.assertNotIn(lease, json.dumps(decision))
 
-    def test_verified_result_is_saved_for_adoption_without_releasing_writer_slot(self):
+    def test_verified_result_is_adopted_without_releasing_writer_slot(self):
         result = self.packet.result_identity() | {"outcome": "succeeded", "details": {"evidence": "# Report"}}
         path = self.root / "results" / f"{self.packet.marker}.json"
         path.write_text(json.dumps(result), encoding="utf-8")
-        decision = self.step()
-        self.assertEqual(decision["status"], "owner_wait")
-        checkpoint = self.journal.snapshot()[0]["recovery_checkpoint"]
+        self.api.error = "Runner API response unavailable"
+        self.assertEqual(self.step()["status"], "retry")
+        saved = self.journal.snapshot()[0]
+        self.assertEqual(saved["lease"], "local-secret")
+        checkpoint = saved["recovery_checkpoint"]
         self.assertEqual(checkpoint["thread_id"], str(self.native.thread_id))
         self.assertEqual(checkpoint["workspace"]["result_path"], str(path))
+        # A mismatched reply never swaps the lease, and the replay reuses key and secret.
+        self.api.error = None
+        self.api.claim_response = self.api.claim_response | {"execution_id": "other"}
+        self.assertEqual(self.step(now=2, observations=[])["status"], "retry")
+        self.assertEqual(self.journal.snapshot()[0]["lease"], "local-secret")
+        self.api.claim_response["execution_id"] = "execution"
+        self.assertEqual(self.step(now=6, observations=[])["status"], "adopted")
+        self.assertEqual(self.api.claims, [self.api.claims[0]] * 3)
+        self.assertEqual(self.journal.snapshot()[0]["lease"], self.api.claims[0][2])
         self.assertEqual(self.api.requests, [])
 
     def test_incomplete_result_exhausts_bounded_rechecks(self):
@@ -160,7 +188,7 @@ class RecoveryServiceTests(unittest.TestCase):
         self.api.error = "Runner API response unavailable"
 
         def prepare(snapshot):
-            self.assertEqual(self.step(observations=[])["status"], "retry")
+            self.assertEqual(self.step(observations=[], no_launch_proof="No worktree")["status"], "retry")
             snapshot.update(self.record)
             snapshot["lease_expires_at"] = 100
             return {}

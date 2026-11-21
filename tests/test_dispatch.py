@@ -213,6 +213,50 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.assertIsNotNone(accepted["ready_since_ms"])
         self.assertEqual(self.request(renew_path, RUNNER, {}, headers)[0], 409)
 
+    def test_recover_claim_http_adopts_expired_attempt_and_fences_old_lease(self):
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/example/repo.git")
+            item = intake.create(db, Intake(repository_id="repo", goal="Test adoption", target="report"))
+        self.start_server(self.path)
+        old, new = {"Phalanx-Lease": LEASE}, {"Phalanx-Lease": "n" * 32}
+        status, assigned = self.request(CLAIM_PATH, RUNNER, {"runner_id": "local", "repository_ids": ["repo"]}, old)
+        self.assertEqual(status, 200)
+        attempt, execution = assigned["attempt_id"], assigned["execution"]
+        prefix = f"/v1/dispatch/runners/local/attempts/{attempt}"
+        body = {"item_id": item["id"], "expected_version": execution["version"],
+                "reconciliation": "Exact writer still active"}
+        claim = new | {"Idempotency-Key": "adopt-1"}
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, claim)[0], 409)
+        with connect(self.path) as db:
+            db.execute("UPDATE attempts SET lease_expires_at=0 WHERE id=?", (attempt,))
+            db.commit()
+        stale = body | {"expected_version": execution["version"] + 1}
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, stale, new)[0], 409)
+        status, adopted = self.request(prefix + "/recover-claim", RUNNER, body, claim)
+        self.assertEqual(status, 200)
+        self.assertEqual((adopted["attempt_id"], adopted["execution_id"], adopted["version"]),
+                         (attempt, execution["id"], execution["version"]))
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, claim), (200, adopted))
+        other = {"Phalanx-Lease": "o" * 32, "Idempotency-Key": "adopt-1"}
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, other)[0], 409)
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, new)[0], 409)
+        self.assertEqual(self.request(prefix + "/renew", RUNNER, {}, old)[0], 409)
+        self.assertEqual(self.request(prefix + "/renew", RUNNER, {}, new)[0], 200)
+        with connect(self.path) as db:
+            db.execute("UPDATE attempts SET lease_expires_at=1 WHERE id=?", (attempt,))
+            db.commit()
+        old, new = new, {"Phalanx-Lease": "t" * 32}
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body,
+                                      new | {"Idempotency-Key": "adopt-2"})[0], 200)
+        result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
+        result = {"expected_version": execution["version"], "attempt_id": attempt,
+                  "stage": execution["state"]["stage"], "outcome": "succeeded", "report_markdown": "# Draft\n"}
+        self.assertEqual(self.request(result_path, RUNNER, result, old)[0], 409)
+        status, accepted = self.request(result_path, RUNNER, result, new)
+        self.assertEqual(status, 200)
+        self.assertEqual(accepted["state"]["stage"], "report_review")
+        self.assertEqual(self.request(prefix + "/recover-claim", RUNNER, body, new)[0], 409)
+
     def test_expired_cancellation_closes_only_after_reconciled_stop(self):
         item_id, = self.seed("repo", [("normal", -1, None)])
         with patch.object(dispatch, "time", return_value=NOW):
@@ -229,7 +273,8 @@ class DispatchTest(ServerFixture, unittest.TestCase):
                 expired = dispatch.recovery_candidates(db, "local")
                 self.assertEqual(expired[0]["version"], pending["version"])
                 reservation = {"runner_id": "local", "claim": claimed}
-                reconcile(reservation, runner_id="local", packet=None, expired=expired, now=NOW)
+                reconcile(reservation, runner_id="local", packet=None, expired=expired, now=NOW,
+                          no_launch_proof="No item worktree, owned branch or launch packet")
                 stop = reservation["recover_stop"]
                 pending = dispatch.recover_stopped(
                     db, "local", attempt, ReconciledStop(**stop["body"]),
