@@ -18,6 +18,7 @@ from .transitions import (
 
 
 STATE = TypeAdapter(Execution)
+PRIORITY = {"low": 0, "normal": 1, "urgent": 2}
 
 
 class Missing(ValueError):
@@ -48,7 +49,7 @@ def read_transaction(path):
         db.execute("COMMIT")
 
 
-def replayable(db, scope, key, payload, perform):
+def replayable(db, scope, key, payload, perform, *, should_record=None):
     if key is None:
         return perform()
     fingerprint = digest(encode(payload))
@@ -61,8 +62,9 @@ def replayable(db, scope, key, payload, perform):
             raise Conflict("Idempotency key was already used with a different request")
         return json.loads(receipt["response_json"])
     result = perform()
-    db.execute("INSERT INTO request_receipts VALUES (?, ?, ?, ?)",
-               (scope, key, fingerprint, encode(result)))
+    if should_record is None or should_record(result):
+        db.execute("INSERT INTO request_receipts VALUES (?, ?, ?, ?)",
+                   (scope, key, fingerprint, encode(result)))
     return result
 
 
@@ -104,6 +106,7 @@ def execution_view(row):
         "id": row["id"], "previous_id": row["previous_id"], "version": row["version"],
         "created_at": row["created_at"], "updated_at": row["updated_at"],
         "state": json.loads(row["state_json"]),
+        "ready_since_ms": row["ready_since"], "retry_at_ms": row["retry_at"],
     }
 
 
@@ -149,12 +152,18 @@ def record(db, execution_id, version, event, details, state_json, now, attempt_i
 
 def new_execution(db, item_id, target, *, previous_id=None):
     execution_id = uuid4().hex
-    now = timestamp()
+    clock = datetime.now(UTC)
+    now = clock.isoformat(timespec="microseconds")
     state_json = encode(asdict(start(target)))
+    item = item_row(db, item_id)
+    request = json.loads(item["request_json"])
     db.execute(
-        """INSERT INTO executions (id, item_id, previous_id, version, state_json, created_at, updated_at)
-           VALUES (?, ?, ?, 1, ?, ?, ?)""",
-        (execution_id, item_id, previous_id, state_json, now, now),
+        """INSERT INTO executions (id, item_id, previous_id, version, state_json,
+               created_at, updated_at, queue_repository, queue_affinity, queue_priority, ready_since)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)""",
+        (execution_id, item_id, previous_id, state_json, now, now, item["repository_id"],
+         request.get("runner_affinity") or "", PRIORITY[request.get("priority", "normal")],
+         int(clock.timestamp() * 1000)),
     )
     record(db, execution_id, 1, "rerun" if previous_id else "intake", {}, state_json, now)
     return execution_view(execution_row(db, item_id, execution_id))
@@ -164,8 +173,11 @@ def create(db, payload):
     if not db.execute("SELECT 1 FROM repositories WHERE id=?", (payload.repository_id,)).fetchone():
         raise Missing("Repository not registered")
     item_id = uuid4().hex
+    request = payload.model_dump(mode="json")
+    if payload.runner_affinity is None:
+        del request["runner_affinity"]
     db.execute("INSERT INTO work_items VALUES (?, ?, ?, ?)",
-               (item_id, payload.repository_id, encode(payload.model_dump(mode="json")), timestamp()))
+               (item_id, payload.repository_id, encode(request), timestamp()))
     new_execution(db, item_id, payload.target)
     return inspect(db, item_id)
 
@@ -186,26 +198,36 @@ def rerun(db, item_id, execution_id, payload):
     return new_execution(db, item_id, payload.target, previous_id=execution_id)
 
 
-def apply(db, row, state, event, *, details, attempt_id=None, **options):
+def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **options):
     """Apply the verified event and append history in the caller's write transaction."""
     try:
         next_state = decide(state, event, **options)
     except ValueError as error:
         raise Conflict(str(error)) from error
     version = row["version"] + 1
-    now = timestamp()
+    clock = datetime.now(UTC)
+    now = clock.isoformat(timespec="microseconds")
     state_json = encode(asdict(next_state))
-    db.execute("UPDATE executions SET version=?, state_json=?, updated_at=? WHERE id=?",
-               (version, state_json, now, row["id"]))
+    ready_since = None
+    if next_state.status == Status.QUEUED:
+        ready_since = retry_at if retry_at is not None else int(clock.timestamp() * 1000)
+    retry_count = row["retry_count"] if next_state.stage == state.stage else 0
+    if event == Event.RETRY:
+        retry_count += 1
+    db.execute(
+        """UPDATE executions SET version=?, state_json=?, updated_at=?, ready_since=?,
+           retry_at=?, retry_count=? WHERE id=?""",
+        (version, state_json, now, ready_since, retry_at, retry_count, row["id"]),
+    )
     record(db, row["id"], version, event, details, state_json, now, attempt_id)
     if attempt_id and event != Event.CLAIM:
         db.execute("UPDATE attempts SET ended_at=? WHERE id=?", (now, attempt_id))
     return execution_view(execution_row(db, row["item_id"], row["id"]))
 
 
-def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at):
+def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None):
     """Persist a claim after PH-06 selects and admits it in this same write transaction."""
-    if state.status != Status.QUEUED or lease_expires_at <= int(time()):
+    if state.status != Status.QUEUED or lease_expires_at <= (time() if now is None else now):
         raise Conflict("Claim requires a queued execution and a live lease")
     attempt_id = uuid4().hex
     db.execute(
@@ -215,7 +237,7 @@ def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at):
         (attempt_id, row["id"], state.stage, runner_id, lease_digest, lease_expires_at, timestamp()),
     )
     execution = apply(db, row, state, Event.CLAIM, attempt_id=attempt_id,
-                      details={"runner_id": runner_id})
+                      details={"runner_id": runner_id, "ready_since_ms": row["ready_since"]})
     return {"attempt_id": attempt_id, "execution": execution}
 
 
@@ -284,16 +306,20 @@ def cancel(db, item_id, execution_id, payload):
 def stop_confirmed(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     _check_attempt(db, execution_id, state, payload, lease_digest)
+    return confirm_cancellation(db, row, state, payload.attempt_id, details={})
+
+
+def confirm_cancellation(db, row, state, attempt_id, *, details):
     if state.stopping != Status.CANCELLED:
         raise Conflict("No worker cancellation is awaiting confirmation")
     cancellation = db.execute(
         "SELECT details_json FROM transition_history WHERE execution_id=? AND version=?",
-        (execution_id, row["version"]),
+        (row["id"], row["version"]),
     ).fetchone()
     reason = json.loads(cancellation["details_json"])["reason"]
     stored = _cancellation_report(db, row, state, reason)
-    return apply(db, row, state, Event.STOP_CONFIRMED, details={},
-                 attempt_id=payload.attempt_id, evidence=Evidence(stored_report=stored))
+    return apply(db, row, state, Event.STOP_CONFIRMED, details=details,
+                 attempt_id=attempt_id, evidence=Evidence(stored_report=stored))
 
 
 def result(db, item_id, execution_id, payload, lease_digest):

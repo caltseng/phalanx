@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 
 from .auth import require_owner, require_runner
 from .config import Credentials, database_path
+from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
 from .store import connect, migrate
 
@@ -40,3 +41,4 @@ def runner_status():
     return {"role": "runner"}
 
 app.include_router(intake_router)
+app.include_router(dispatch_router)

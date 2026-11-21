@@ -39,8 +39,9 @@ def repositories(request: Request):
 
 @router.post("/items", status_code=201, dependencies=[Depends(require_owner)])
 def create(request: Request, body: Intake, key: Key = None):
+    payload = body.model_dump(mode="json", exclude={"runner_affinity"} if body.runner_affinity is None else None)
     return run(request, intake.create, body, write=True,
-               scope="intake", key=key, payload=body.model_dump(mode="json"))
+               scope="intake", key=key, payload=payload)
 
 
 @router.get("/items/{item_id}")
