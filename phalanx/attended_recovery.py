@@ -84,10 +84,13 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
     if packet is not None:
         serialized = {**asdict(packet), "attempt_id": str(packet.attempt_id),
                       "worktree": str(packet.worktree)}
-        if (record.get("packet") != serialized or packet.attempt_id.hex != attempt.replace("-", "")
+        saved = record.get("packet") or {}
+        saved = {**saved, "dependencies": tuple(saved.get("dependencies", ()))}
+        if (saved != serialized or packet.attempt_id.hex != attempt.replace("-", "")
                 or packet.item_id != claim["item_id"]
                 or packet.stage != claim["execution"]["state"]["stage"]
-                or packet.state_version != claim["execution"]["version"]):
+                or packet.state_version != claim["execution"]["version"]
+                or packet.dependencies != tuple(claim.get("dependencies", ()))):
             return {"status": "owner_wait", "reason": "Restore the exact packet from the original reservation"}
     elif "packet" in record:
         return {"status": "owner_wait", "reason": "Load the original launch packet before recovery"}

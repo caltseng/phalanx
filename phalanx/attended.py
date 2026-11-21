@@ -227,6 +227,7 @@ class AttendedRunner:
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
             evidence_requirements=STAGES[stage], base_branch=base,
             report_checkpoint=report_checkpoint, handoff=findings or "",
+            dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps({field: request.get(field, []) for field in
                                 ("context_links", "acceptance_criteria")}, ensure_ascii=False),
         )
@@ -307,6 +308,7 @@ class AttendedRunner:
         packet = record["packet"]
         return CodexHandoff(WorkPacket(**{
             **packet, "attempt_id": UUID(packet["attempt_id"]), "worktree": Path(packet["worktree"]),
+            "dependencies": tuple(packet.get("dependencies", ())),
         }), self.results)
 
     def submit(self, marker, host_id, thread_id):

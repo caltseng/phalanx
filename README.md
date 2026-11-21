@@ -155,8 +155,36 @@ interval. Within the effective band, the server chooses the oldest eligible
 timestamp and breaks ties by item ID. Execution views report
 `ready_since_ms` and `retry_at_ms` as Unix milliseconds. A reconciled retry
 starts accruing age when its delay elapses. A newly queued stage gets its
-own clock. Prerequisite handling can keep a queued stage out of the claim
-index by clearing `ready_since`, then set it when the last gate clears.
+own clock. The claim index excludes blocked stages. A stage begins to age
+once its last prerequisite clears and any retry delay elapses.
+
+#### Prerequisites and queued steering
+
+An owner can include `dependencies` in `POST /v1/items`. Each entry names
+an `upstream_id` and a `milestone` of `report`, `ready_for_check_in`, or
+`checked_in` (the default). Prerequisites may belong to other repositories.
+Item inspection includes configured links and the execution's
+`unmet_dependencies`, with an explanation for each wait.
+
+An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with
+`expected_version` and changes to `goal`, `context_links`,
+`acceptance_criteria`, `priority`, `runner_affinity`, or `dependencies`.
+Omitted fields keep their values. An empty list clears a list field, and
+`null` clears runner affinity. The patch accepts `Idempotency-Key`.
+Stale versions and executions outside the queued state return HTTP 409.
+
+A successful claim includes a `dependencies` snapshot with each upstream
+execution ID, output reference, and exact revision. For a reviewed PR it
+includes the reviewed head and base. For a check-in it also identifies the
+verified merge commit. Use these revisions in the work packet. The snapshot
+is recorded on the attempt's claim event and returned on claim replay even
+if an upstream execution is rerun.
+
+Milestone changes refresh up to 32 dependents in the upstream transaction.
+The API processes larger fan-outs and restart audits in indexed batches
+across short transactions. Queued dependents in later batches may become
+eligible after the upstream transaction commits. The claim transaction
+always checks the current durable evidence before assigning work.
 
 An expired lease prevents stale results and renewals. Its attempt still holds
 the slot and item reservation. Leave uncertain or live workers reserved.

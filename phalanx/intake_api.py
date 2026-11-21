@@ -9,7 +9,9 @@ from pydantic import Field
 from . import finalization, intake, pr_observations
 from .auth import authenticate, require_owner, require_runner
 from .store import write_transaction
-from .intake_models import AttemptEvent, Cancel, Identifier, Intake, Registration, Rerun, Result, RevisionID, Versioned
+from .intake_models import (
+    AttemptEvent, Cancel, Identifier, Intake, Registration, Rerun, Result, RevisionID, Steering, Versioned,
+)
 
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
@@ -43,7 +45,12 @@ def repositories(request: Request):
 
 @router.post("/items", status_code=201, dependencies=[Depends(require_owner)])
 def create(request: Request, body: Intake, key: Key = None):
-    payload = body.model_dump(mode="json", exclude={"runner_affinity"} if body.runner_affinity is None else None)
+    omitted = set()
+    if body.runner_affinity is None:
+        omitted.add("runner_affinity")
+    if not body.dependencies:
+        omitted.add("dependencies")
+    payload = body.model_dump(mode="json", exclude=omitted)
     return run(request, intake.create, body, write=True,
                scope="intake", key=key, payload=payload)
 
@@ -51,6 +58,14 @@ def create(request: Request, body: Intake, key: Key = None):
 @router.get("/items/{item_id}")
 def inspect(request: Request, item_id: Identifier):
     return run(request, intake.inspect, item_id)
+
+
+@router.patch("/items/{item_id}/executions/{execution_id}", dependencies=[Depends(require_owner)])
+def steer(request: Request, item_id: Identifier, execution_id: Identifier,
+          body: Steering, key: Key = None):
+    return run(request, intake.steer, item_id, execution_id, body, write=True,
+               scope=f"steer:{item_id}:{execution_id}", key=key,
+               payload=body.model_dump(mode="json", exclude_unset=True))
 
 
 @router.get("/items/{item_id}/executions")
@@ -135,6 +150,14 @@ def result(request: Request, item_id: Identifier, execution_id: Identifier,
 def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifier,
                    body: AttemptEvent, lease: Lease, key: Key = None):
     return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
+             dependencies=[Depends(require_runner)])
+def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
+                         body: pr_observations.PublicationClaimCheck, lease: Lease):
+    return run(request, pr_observations.check_publication_claim, item_id, execution_id, body,
+               intake.digest(lease))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
