@@ -19,6 +19,7 @@
 - Allow independent work to run in parallel, including within one repo. Use atomic per-item claims and isolated worktrees for PR tasks. Check for previously created outputs before retrying publication.
 - Make max concurrency and dispatch pause configurable. Apply gates before claiming new work and keep the reason visible when an item cannot run.
 - Keep lifecycle transitions explicit and server-owned. Every active state needs a next action, a resume trigger, or a clear recovery path. Bind validation and review evidence to the revision checked, and reconcile GitHub state before retrying publication or check-in.
+- Define transitions in the authoritative Markdown specs, with the detailed rules in [STATE_MACHINE.md](STATE_MACHINE.md). Treat HTML as a visual reference and sync it to the Markdown when transitions change.
 
 ## Working in repositories
 
