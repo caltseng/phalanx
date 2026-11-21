@@ -106,6 +106,12 @@
           item: item(page.item),
           attempt: page.attempt,
           resumeTrigger: page.item.resume_trigger,
+          dependencies: pageRows(page.prerequisites ?? [], 100).map(dependency => ({
+            title: dependency.title || identifier(dependency.item_id),
+            milestone: dependency.milestone,
+            status: "waiting",
+            reason: dependency.reason
+          })),
           events: pageRows(page.events, limit).map(event => ({
             at: event.created_at, fromStage: event.from_stage,
             stage: event.stage, status: event.status, reason: event.reason
