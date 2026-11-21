@@ -6,7 +6,6 @@ from threading import Barrier
 import unittest
 
 from phalanx.dependencies import Dependency, dependents, replace_dependencies, resolve_dependencies
-from phalanx.dependency_schema import DEPENDENCY_SCHEMA
 from phalanx.intake import Conflict, current_execution, digest, encode, new_execution, register, timestamp
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import PullRequest, Revision, Stage, Status, StoredReport, Target, start
@@ -18,8 +17,6 @@ class DependencyTests(unittest.TestCase):
         self.path = Path(directory) / "dependencies.sqlite3"
         migrate(self.path)
         with write_transaction(self.path) as db:
-            for statement in DEPENDENCY_SCHEMA:
-                db.execute(statement)
             register(db, "consumer", "https://example.com/consumer")
             register(db, "producer", "https://example.com/producer")
             for item, repository, target in (

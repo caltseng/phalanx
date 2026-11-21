@@ -11,7 +11,7 @@ from .auth import authenticate, require_owner, require_runner
 from .store import write_transaction
 from .intake_models import (
     AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
-    RevisionID, Versioned,
+    RevisionID, Steering, Versioned,
 )
 
 
@@ -48,7 +48,12 @@ def repositories(request: Request):
 
 @router.post("/items", status_code=201, dependencies=[Depends(require_owner)])
 def create(request: Request, body: Intake, key: Key = None):
-    payload = body.model_dump(mode="json", exclude={"runner_affinity"} if body.runner_affinity is None else None)
+    omitted = set()
+    if body.runner_affinity is None:
+        omitted.add("runner_affinity")
+    if not body.dependencies:
+        omitted.add("dependencies")
+    payload = body.model_dump(mode="json", exclude=omitted)
     return run(request, intake.create, body, write=True,
                scope="intake", key=key, payload=payload)
 
@@ -56,6 +61,14 @@ def create(request: Request, body: Intake, key: Key = None):
 @router.get("/items/{item_id}")
 def inspect(request: Request, item_id: Identifier):
     return run(request, intake.inspect, item_id)
+
+
+@router.patch("/items/{item_id}/executions/{execution_id}", dependencies=[Depends(require_owner)])
+def steer(request: Request, item_id: Identifier, execution_id: Identifier,
+          body: Steering, key: Key = None):
+    return run(request, intake.steer, item_id, execution_id, body, write=True,
+               scope=f"steer:{item_id}:{execution_id}", key=key,
+               payload=body.model_dump(mode="json", exclude_unset=True))
 
 
 @router.get("/items/{item_id}/executions")
@@ -115,10 +128,16 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
 
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
+    payload = body.model_dump(mode="json")
+    # Preserve receipt digests for results written before these optional fields existed.
+    if isinstance(body, Result):
+        for field in ("failure_reason", "question"):
+            if payload[field] is None:
+                payload.pop(field)
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
-        payload={"body": body.model_dump(mode="json"), "lease_digest": lease_digest},
+        payload={"body": payload, "lease_digest": lease_digest},
     )
 
 
@@ -169,6 +188,14 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
             body: Versioned, key: RequiredKey):
     return run(request, waits.recheck, item_id, execution_id, body, write=True,
                scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
+             dependencies=[Depends(require_runner)])
+def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
+                         body: pr_observations.PublicationClaimCheck, lease: Lease):
+    return run(request, pr_observations.check_publication_claim, item_id, execution_id, body,
+               intake.digest(lease))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",

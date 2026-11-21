@@ -33,6 +33,70 @@ Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlit
 
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
+### Run one attended Codex assignment
+
+Use a server with durable intake and dispatch enabled. Register the repository
+with the owner API, fetch the desired origin branch into its local checkout,
+and file a development or report-drafting item. Give the machine one stable
+runner ID and use one private local state directory for this slice. The state
+directory contains the runner's current lease. Put it outside the mapped
+checkouts and restrict its access to the runner account. Keep the runner token
+in the shell that runs these commands.
+
+Save a local JSON config such as:
+
+```json
+{
+  "base_url": "http://127.0.0.1:8000",
+  "runner_id": "desktop",
+  "repositories": {
+    "registered-repo-id": {
+      "checkout": "C:/enlistments/example",
+      "base_branch": "main",
+      "host_id": "local",
+      "project_id": "project-id-from-Codex"
+    }
+  }
+}
+```
+
+From an authorized Captain muster:
+
+1. Verify the project and host with Codex project discovery. Run
+   `python -m phalanx attended --config runner.json --state C:/phalanx-runner prepare`.
+   On `launch_intent`, invoke the app's create-thread action **once** with the
+   returned `create_thread` arguments. Save the marker for receipt and result
+   commands. The worker targets its assigned Git worktree explicitly.
+2. With the same command prefix, run
+   `receipt MARKER HOST --thread-id THREAD` for a native chat receipt, or
+   `receipt MARKER HOST --client-thread-id CLIENT` for queued setup. Resolve a
+   queued or lost receipt in the app and verify the exact launch marker and
+   assignment before recording the native ID. Use `status` to inspect a
+   reservation. Keep ambiguous launches reserved and avoid another app launch.
+3. Run `renew` independently of app observation, comfortably before the current
+   lease expires. The CLI supports manual renewal. Use short observation waits.
+4. Read the native chat and verify the exact marker, assignment, and that the
+   worker and any writers it started have stopped. Then run
+   `submit MARKER HOST THREAD --confirmed-stopped`. The runner verifies the
+   result file and current worktree before posting. If the submission response
+   is lost, repeat the same command to replay the recorded submission.
+
+Development success requires a new local candidate commit and a clean
+worktree. Report drafting sends the Markdown to the server as a draft.
+Both stages record local checkpoints for questions and failures. Questions
+wait for an owner reply. A technical failure from a confirmed-stopped worker
+enters the shared 5, 10, 20, and 40 second retry backoff. Exhausting the budget
+asks for owner intervention.
+The runner claims only development and report drafting. Later stages stay in
+the queue for a handler that supports them. Keep the state directory when
+restarting. Expired leases and unverified results require reconciliation.
+Automatic desktop recovery and independent heartbeat scheduling remain
+follow-up work.
+
+### Operator work board
+
+Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text.
+
 ### Back up and restore SQLite
 
 Run these commands in the same environment as the server, or set `PHALANX_DB` to the same absolute path. The backup command uses SQLite's snapshot API and can run while the server is up. The destination directory must already exist and support hard links, such as NTFS. Each command validates its copy before creating the destination and refuses to overwrite an existing file.
@@ -63,7 +127,7 @@ capacity and recovery within that trusted role.
 | --- | --- |
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
 | `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
-| `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), and optional `slots` to lower the capacity for this muster. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
+| `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
@@ -84,8 +148,36 @@ interval. Within the effective band, the server chooses the oldest eligible
 timestamp and breaks ties by item ID. Execution views report
 `ready_since_ms` and `retry_at_ms` as Unix milliseconds. A reconciled retry
 starts accruing age when its delay elapses. A newly queued stage gets its
-own clock. Prerequisite handling can keep a queued stage out of the claim
-index by clearing `ready_since`, then set it when the last gate clears.
+own clock. The claim index excludes blocked stages. A stage begins to age
+once its last prerequisite clears and any retry delay elapses.
+
+#### Prerequisites and queued steering
+
+An owner can include `dependencies` in `POST /v1/items`. Each entry names
+an `upstream_id` and a `milestone` of `report`, `ready_for_check_in`, or
+`checked_in` (the default). Prerequisites may belong to other repositories.
+Item inspection includes configured links and the execution's
+`unmet_dependencies`, with an explanation for each wait.
+
+An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with
+`expected_version` and changes to `goal`, `context_links`,
+`acceptance_criteria`, `priority`, `runner_affinity`, or `dependencies`.
+Omitted fields keep their values. An empty list clears a list field, and
+`null` clears runner affinity. The patch accepts `Idempotency-Key`.
+Stale versions and executions outside the queued state return HTTP 409.
+
+A successful claim includes a `dependencies` snapshot with each upstream
+execution ID, output reference, and exact revision. For a reviewed PR it
+includes the reviewed head and base. For a check-in it also identifies the
+verified merge commit. Use these revisions in the work packet. The snapshot
+is recorded on the attempt's claim event and returned on claim replay even
+if an upstream execution is rerun.
+
+Milestone changes refresh up to 32 dependents in the upstream transaction.
+The API processes larger fan-outs and restart audits in indexed batches
+across short transactions. Queued dependents in later batches may become
+eligible after the upstream transaction commits. The claim transaction
+always checks the current durable evidence before assigning work.
 
 An expired lease prevents stale results and renewals. Its attempt still holds
 the slot and item reservation. Leave uncertain or live workers reserved.

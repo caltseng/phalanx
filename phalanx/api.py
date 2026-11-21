@@ -4,13 +4,14 @@ import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 
-from . import finalization
+from . import dependencies, finalization
 from .auth import require_owner, require_runner
 from .config import Credentials, database_path
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
 from .operator_api import router as operator_router
-from .store import connect, migrate
+from .operator_web import assets as operator_assets, router as operator_web_router
+from .store import connect, migrate, write_transaction
 
 
 @asynccontextmanager
@@ -18,15 +19,23 @@ async def lifespan(app: FastAPI):
     app.state.credentials = Credentials.from_env()
     app.state.database_path = database_path()
     migrate(app.state.database_path)
-    task = asyncio.create_task(finalization.run(app.state.database_path))
+    with write_transaction(app.state.database_path) as db:
+        dependencies.start_reconciliation(db)
+    tasks = (
+        asyncio.create_task(finalization.run(app.state.database_path)),
+        asyncio.create_task(dependencies.run_refresh(app.state.database_path)),
+    )
     try:
         yield
     finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 app = FastAPI(title="Phalanx", lifespan=lifespan)
+app.include_router(operator_web_router)
+app.mount("/operator/assets", operator_assets, name="operator-assets")
 
 
 @app.get("/health")

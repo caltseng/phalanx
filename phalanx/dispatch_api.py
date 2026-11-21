@@ -9,6 +9,7 @@ from . import dispatch, intake
 from .auth import require_owner, require_runner
 from .intake_api import Key, Lease, run
 from .intake_models import Identifier, Payload, Text, Versioned
+from .transitions import Stage
 
 
 router = APIRouter(prefix="/v1")
@@ -28,6 +29,7 @@ class Claim(Payload):
     runner_id: Identifier
     repository_ids: list[Identifier] = Field(min_length=1, max_length=100)
     slots: Slots | None = None
+    stages: list[Stage] | None = Field(default=None, min_length=1, max_length=len(Stage))
 
 
 class ReconciledStop(Versioned):

@@ -7,8 +7,8 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints
 
 from . import intake, validation
-from .intake_models import AttemptEvent, Payload
-from .transitions import Evidence, Event, Outcome, PullRequest, Revision, Stage
+from .intake_models import AttemptEvent, Identifier, Payload
+from .transitions import Evidence, Event, Outcome, PullRequest, Revision, Stage, Status
 from .workspaces import _item_branch
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -64,6 +64,11 @@ class GateObservation(Payload):
     observations: list[CheckObservation] = Field(max_length=200)
 
 
+class PublicationClaimCheck(AttemptEvent):
+    stage: Literal[Stage.PR_CREATION]
+    runner_id: Identifier
+
+
 class Publication(AttemptEvent):
     stage: Literal[Stage.PR_CREATION]
     expected: ExpectedRefs
@@ -82,6 +87,35 @@ _GITHUB_REMOTE = re.compile(
     r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
     r"([a-z0-9_.-]+/[a-z0-9_.-]+?)(?:\.git)?/?", re.IGNORECASE | re.ASCII,
 )
+
+
+def check_publication_claim(db, item_id, execution_id, body, lease_digest):
+    try:
+        _, state = intake.check_current(db, item_id, execution_id, body.expected_version)
+        attempt = intake.check_attempt(db, execution_id, state, body, lease_digest)
+    except (intake.Conflict, intake.Missing):
+        return {"current": False}
+    if (
+        attempt["runner_id"] != body.runner_id or state.status != Status.RUNNING
+        or state.stopping is not None or state.primary_pr is not None
+        or not re.fullmatch(r"[0-9a-f]{40}", state.candidate or "")
+    ):
+        return {"current": False}
+
+    item = intake.item_row(db, item_id)
+    remote, = db.execute("SELECT remote FROM repositories WHERE id=?",
+                         (item["repository_id"],)).fetchone()
+    match = _GITHUB_REMOTE.fullmatch(remote)
+    if match is None:
+        raise intake.Conflict("Draft publication requires a registered github.com remote")
+    return {
+        "current": True,
+        "candidate": state.candidate,
+        "head_ref": _item_branch(item_id),
+        "target_branch": json.loads(item["request_json"])["target_branch"],
+        "repository": match[1].lower(),
+        "remote": remote,
+    }
 
 
 def submit(db, item_id, execution_id, body, lease_digest):

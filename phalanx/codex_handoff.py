@@ -44,6 +44,7 @@ class WorkPacket:
     context: str = ""
     handoff: str = ""
     base_branch: str | None = None
+    dependencies: tuple[dict, ...] = ()
 
     @property
     def marker(self) -> str:
@@ -130,6 +131,7 @@ class CodexHandoff:
             "evidence_requirements": packet.evidence_requirements,
             "context": packet.context,
             "handoff": packet.handoff,
+            "dependencies": packet.dependencies,
         }, indent=2, ensure_ascii=False)
         outcomes = "\n".join(
             f"- {outcome}: {', '.join(fields)}"
