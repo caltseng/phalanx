@@ -348,8 +348,8 @@ def request_stop(db, item_id, execution_id, payload, event):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     details = {"reason": payload.reason}
     updated = apply(db, row, state, event, details=details)
-    # A passive report wait with no open attempt has no outstanding effects.
-    if state.status == Status.WAITING_FOR_EXTERNAL and state.target == Target.REPORT:
+    # A scheduled external wait has released its attempt and has no outstanding effects.
+    if state.status == Status.WAITING_FOR_EXTERNAL:
         active = db.execute(
             "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
         ).fetchone()

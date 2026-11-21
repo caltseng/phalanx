@@ -199,20 +199,20 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(closed["state"]["status"], "cancelled")
         self.assertIn("No stages claimed", self.get(route + "/report", OWNER)[1])
 
-    def test_cancel_passive_report_wait_without_an_open_attempt(self):
-        item, _, _, route = self.create()
+    def test_cancel_scheduled_external_wait_without_an_open_attempt(self):
+        item, _, _, route = self.create("ready_for_check_in")
         claim = self.claim(item, item["execution"])
         with write_transaction(self.path) as db:
             row, state = check_current(db, item["id"], item["execution"]["id"],
                                        claim["expected_version"])
             waiting = apply(db, row, state, Event.EXTERNAL_WAIT, details={},
-                            attempt_id=claim["attempt_id"], wait=Wait("Storage wait", "recheck"))
+                            attempt_id=claim["attempt_id"], wait=Wait("Waiting for CI", "recheck"))
         status, closed = self.submit(
             route + "/cancel", {"expected_version": waiting["version"], "reason": "Withdrawn"},
         )
         self.assertEqual(status, 200, closed)
         self.assertEqual(closed["state"]["status"], "cancelled")
-        self.assertIn("report_drafting", self.get(route + "/report", OWNER)[1])
+        self.assertIn("development", self.get(route + "/report", OWNER)[1])
         self.assertEqual([event["event"] for event in self.get(route + "/timeline", OWNER)[1]],
                          ["intake", "claim", "external_wait", "cancel", "stop_confirmed", "finalize"])
 
