@@ -3,7 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from urllib.request import urlopen
 
-from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_bootstrap import OWNER, REQUEST_TIMEOUT, RUNNER, ServerFixture
 
 
 class OperatorWebTest(ServerFixture, unittest.TestCase):
@@ -11,7 +11,7 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         with TemporaryDirectory() as directory:
             server = self.start_server(Path(directory) / "operator.sqlite3")
             try:
-                with urlopen(self.url + "/operator/", timeout=2) as response:
+                with urlopen(self.url + "/operator/", timeout=REQUEST_TIMEOUT) as response:
                     self.assertEqual(response.headers.get_content_type(), "text/html")
                     self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
                     self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
@@ -23,7 +23,7 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                 ):
                     path = f"/operator/assets/{asset}"
                     self.assertIn(path, shell)
-                    with urlopen(self.url + path, timeout=2) as response:
+                    with urlopen(self.url + path, timeout=REQUEST_TIMEOUT) as response:
                         content = response.read().decode("utf-8")
                         self.assertIn(marker, content)
                         self.assertNotIn(OWNER, content)

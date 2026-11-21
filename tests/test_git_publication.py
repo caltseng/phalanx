@@ -14,6 +14,11 @@ def git(path, *args):
     ).stdout.strip()
 
 
+def bare_git(repository, *args):
+    # Address bare repositories explicitly so hosts with safe.bareRepository=explicit work.
+    return git(repository.parent, f"--git-dir={repository}", *args)
+
+
 class GitPublicationTests(unittest.TestCase):
     def setUp(self):
         directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -50,13 +55,13 @@ class GitPublicationTests(unittest.TestCase):
         git(self.checkout, "branch", self.candidate, self.old)
         self.assertEqual(self.publisher.publish(self.candidate, expected=self.old).status, "success")
         self.assertEqual(self.publisher.read_head(), self.candidate)
-        self.assertEqual(git(self.remote, "for-each-ref", "--format=%(refname)").splitlines(),
+        self.assertEqual(bare_git(self.remote, "for-each-ref", "--format=%(refname)").splitlines(),
                          [self.ref, self.ref + "-neighbor"])
 
     def test_expected_absence_and_deleted_ref_are_distinct(self):
         self.push(self.old)
         self.assertEqual(self.publisher.publish(self.candidate, expected=None).status, "conflict")
-        git(self.remote, "update-ref", "-d", self.ref)
+        bare_git(self.remote, "update-ref", "-d", self.ref)
         self.assertEqual(
             self.publisher.publish(self.candidate, expected=self.old).status, "conflict",
         )
@@ -82,11 +87,13 @@ class GitPublicationTests(unittest.TestCase):
                         self.push(rival)
                     return run_git(*args)
 
-                with patch.object(self.publisher, "_git", side_effect=competing_push):
-                    result = self.publisher.publish(self.candidate, expected=expected)
-                self.assertEqual(result.status, "conflict")
-                self.assertEqual(self.publisher.read_head(), rival)
-                git(self.remote, "update-ref", "-d", self.ref)
+                try:
+                    with patch.object(self.publisher, "_git", side_effect=competing_push):
+                        result = self.publisher.publish(self.candidate, expected=expected)
+                    self.assertEqual(result.status, "conflict")
+                    self.assertEqual(self.publisher.read_head(), rival)
+                finally:
+                    bare_git(self.remote, "update-ref", "-d", self.ref)
 
     def test_lost_push_response_is_uncertain_and_can_be_read_back(self):
         run_git = self.publisher._git
@@ -151,8 +158,8 @@ class GitPublicationTests(unittest.TestCase):
         git(self.checkout, "remote", "set-url", "--push", "origin", str(other))
         with self.assertRaisesRegex(PublicationError, "registered repository"):
             self.publisher.publish(self.candidate, expected=None)
-        self.assertEqual(git(other, "for-each-ref"), "")
-        self.assertEqual(git(self.remote, "for-each-ref"), "")
+        self.assertEqual(bare_git(other, "for-each-ref"), "")
+        self.assertEqual(bare_git(self.remote, "for-each-ref"), "")
 
     def test_candidate_requires_full_commit_id(self):
         blob = git(self.checkout, "hash-object", "-w", ".git/config")
