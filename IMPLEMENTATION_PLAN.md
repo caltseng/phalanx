@@ -106,8 +106,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 
 #### PH-11a Continuous attended scheduling slice
 
-- **Review:** [PR #43](https://github.com/caltseng/phalanx/pull/43) is draft pending locked dependency restoration and execution of its Captain scheduling tests; dependency-free handoff and executable bridge protocol checks passed.
-- The `captain` CLI loop uses the existing journal, stable runner ID and numbered slots. It enumerates reservations and server recovery before admission, preserves claim replay filters, combines implemented worker and runner-only routes, and separates per-slot work, heartbeats and bounded native observation.
+- **Review:** [PR #43](https://github.com/caltseng/phalanx/pull/43) remains draft. Four exact-head review findings are fixed with focused regressions: queued/native receipt replay, pre-launch cancellation confirmation, separate worker/runner-only eligibility, and inherited-stdio transport bounds. Sixteen Captain fixture/Git tests, four transport tests and ten handoff tests passed; the two localhost report/cancellation tests remain blocked by missing locked API dependencies.
+- The `captain` CLI loop uses the existing journal, stable runner ID and numbered slots. It enumerates reservations and server recovery before admission, preserves claim replay filters, alternates implemented worker and runner-only claim groups, and separates per-slot work, heartbeats and bounded native observation.
 - The injectable subprocess JSON adapter and executable fixture cover exact project/host resolution, at-most-once relay, native/queued receipts, original assignment correlation and per-attempt cursor retention. Existing ambiguous packets remain reserved across restart; saved results replay through the existing collector.
 - **Not fully accepted:** A production bridge from this CLI entry point to the actual Codex desktop is not bundled. The desktop session must verify two visible chats and restart/receipt recovery. Wider PR stage routing, owner notification and due external rechecks, and adopting expired valid results under a fresh server claim remain separate slices.
 

@@ -146,11 +146,15 @@ The loop enumerates durable reservations and the server's expired attempts
 before admitting work. An unavailable recovery listing or unmatched attempt
 pauses admission with a visible recovery reason. Existing reservations,
 including slots above a reduced capacity, still run and renew. New claims
-combine the implemented worker stages (`development`, `report_drafting`,
-`report_review`) with runner-only `pr_creation` and `report_storage`. An optional
+route implemented worker stages (`development`, `report_drafting`,
+`report_review`) separately from runner-only `pr_creation` and `report_storage`. An optional
 config `stages` array restricts this set. Initial draft claims are excluded
 without `PHALANX_GITHUB_TOKEN`. The server's atomic eligible-stage claim still
 applies pause, capacity, priority, repository, dependency and affinity gates.
+Worker claims require verified desktop mappings; runner-only claims retain all
+Git-verified mappings even when their desktop is unavailable. The loop alternates
+which group it polls first and preserves each pending claim's exact original
+filters and secret.
 
 Each slot has one work lane. Lease renewals have separate lanes (20 seconds
 by default), as do bounded native observation batches (eight slots, two-second
@@ -168,11 +172,21 @@ Discovery must correlate its original marker, assignment, host, project, launch
 time and any queued ID to exactly one native thread. A stopped turn also requires
 an explicit attestation that downstream writers stopped. The existing result
 collector validates the local result and checkpoint before submitting it.
+Once a queued ID has been correlated to a native thread, repeated observations
+of that same native ID preserve the queued identity and remain idempotent.
 Saved submissions replay their exact original receipt even when the local lease
 deadline has passed; the server decides whether they were already accepted.
 Expired results remain reserved for server-authorized adoption, which is not
 implemented by this slice. Existing stopped-attempt recovery can release only
 verified safe reservations.
+
+A stopping worker assignment with no committed packet, relay, receipt or result
+can use the leased `stop-confirmed` route without waiting for expiry. The loop
+checks its absent or clean, accounted worktree and records the exact stop request
+before sending it. Retries recheck that proof and replay the original request.
+Only a verified finalization acknowledgment releases the slot. Dirty checkpoints,
+partial workspace refs, attempt evidence, ambiguous launches and runner-only
+publication/storage effects still require explicit reconciliation.
 
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Ctrl+C stops scheduling and drains in-flight
@@ -184,8 +198,14 @@ The journal refuses a different runner ID or API URL.
 The runner invokes the adapter command once per operation, with one UTF-8 JSON
 request on stdin and one JSON object on stdout. The request contains
 `contract_version: 1`, `operation`, and `arguments`. Commands must not write
-diagnostic text to stdout; nonzero exits, malformed replies and a 15-second
-command timeout are visible failures. The bridge receives no queue token or
+diagnostic text to stdout; nonzero exits, malformed replies, replies exceeding
+1 MiB and a 15-second command timeout are visible failures. Stdin/stdout use
+temporary files, not pipes whose inherited handles could keep a timed-out helper
+or loop shutdown waiting for EOF. Timeout terminates only the direct helper, not
+native workers or its process tree; an uncertain launch stays reserved. Bridges
+must detach native workers' stdio from these short-lived request files. Shutdown
+still drains in-flight runner/Git operations.
+The bridge receives no queue token or
 lease in the protocol. Phalanx runner, owner and GitHub token environment
 variables are removed from its subprocess environment; keep the bridge trusted.
 

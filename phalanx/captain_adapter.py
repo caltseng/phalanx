@@ -10,12 +10,17 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from tempfile import TemporaryFile
+from time import monotonic
 from typing import Callable
 from uuid import UUID
 
-from .attended import RunnerError
+from .runner_errors import RunnerError
 from .attended_recovery import NativeObservation
 from .codex_handoff import _unique_object
+
+
+MAX_ADAPTER_REPLY_BYTES = 1024 * 1024
 
 
 class CommandTransport:
@@ -27,19 +32,47 @@ class CommandTransport:
 
     def __call__(self, operation: str, arguments: dict) -> dict:
         request = {"contract_version": 1, "operation": operation, "arguments": arguments}
+        process = None
         try:
-            result = subprocess.run(
-                self.command, input=json.dumps(request), encoding="utf-8",
-                capture_output=True, timeout=self.timeout, shell=False,
-                env={key: value for key, value in os.environ.items()
-                     if key.upper() not in {"PHALANX_RUNNER_TOKEN", "PHALANX_OWNER_TOKEN", "PHALANX_GITHUB_TOKEN"}},
-            )
+            # Inherited pipes can keep communicate() draining after the helper
+            # is killed on Windows. Files require neither EOF nor a writer join.
+            with TemporaryFile() as request_file, TemporaryFile() as response_file:
+                request_file.write(json.dumps(request).encode("utf-8"))
+                request_file.seek(0)
+                deadline = monotonic() + self.timeout
+                process = subprocess.Popen(
+                    self.command, stdin=request_file, stdout=response_file, stderr=subprocess.DEVNULL,
+                    shell=False,
+                    env={key: value for key, value in os.environ.items()
+                         if key.upper() not in {"PHALANX_RUNNER_TOKEN", "PHALANX_OWNER_TOKEN", "PHALANX_GITHUB_TOKEN"}},
+                )
+                while process.poll() is None:
+                    if os.fstat(response_file.fileno()).st_size > MAX_ADAPTER_REPLY_BYTES:
+                        raise RunnerError(f"Desktop adapter {operation} response exceeds the size limit")
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        raise subprocess.TimeoutExpired(self.command, self.timeout)
+                    try:
+                        process.wait(timeout=min(remaining, 0.05))
+                    except subprocess.TimeoutExpired:
+                        continue
+                if process.returncode:
+                    raise RunnerError(f"Desktop adapter {operation} failed with exit code {process.returncode}")
+                response_file.seek(0)
+                raw = response_file.read(MAX_ADAPTER_REPLY_BYTES + 1)
+                if len(raw) > MAX_ADAPTER_REPLY_BYTES:
+                    raise RunnerError(f"Desktop adapter {operation} response exceeds the size limit")
         except (OSError, subprocess.TimeoutExpired) as error:
             raise RunnerError(f"Desktop adapter {operation} unavailable; reconcile before retrying launch") from error
-        if result.returncode:
-            raise RunnerError(f"Desktop adapter {operation} failed with exit code {result.returncode}")
+        finally:
+            if process is not None and process.poll() is None:
+                process.kill()
+                try:
+                    process.wait(timeout=0.25)
+                except subprocess.TimeoutExpired as error:
+                    raise RunnerError(f"Desktop adapter {operation} helper did not exit; retain its reservation") from error
         try:
-            response = json.loads(result.stdout, object_pairs_hook=_unique_object)
+            response = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
         except (ValueError, RecursionError) as error:
             raise RunnerError(f"Desktop adapter {operation} returned invalid JSON") from error
         if not isinstance(response, dict):

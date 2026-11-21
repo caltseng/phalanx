@@ -17,11 +17,8 @@ from uuid import UUID
 from .attended_drafts import development_checkpoint, github_repository, publish_draft
 from . import report_execution as reports
 from .codex_handoff import CodexHandoff, WorkPacket
+from .runner_errors import RunnerError
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
-
-
-class RunnerError(RuntimeError):
-    pass
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -159,6 +156,8 @@ class AttendedRunner:
             raise RunnerError("Continuous dispatch requires a nonempty supported stage list")
         github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
         snapshot = self._snapshot()
+        if "cancel_stop" in snapshot:
+            raise RunnerError("Unlaunched stop confirmation owns this reservation; resume the Captain loop")
         if not snapshot:
             if draft and not github_token:
                 raise RunnerError("Set PHALANX_GITHUB_TOKEN in the runner environment for draft publication")
@@ -217,7 +216,7 @@ class AttendedRunner:
             self._ensure_reservation(record, lease)
             if "packet" in record:
                 raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
-            if "recover_stop" in record:
+            if "recover_stop" in record or "cancel_stop" in record:
                 raise RunnerError("Recovery owns this reservation; inspect attended-recover")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
                 record[field] = snapshot[field]
@@ -347,7 +346,9 @@ class AttendedRunner:
                 return {"status": "idle"}
             packet = record.get("packet")
             claim = record.get("claim")
-            if "submission" in record:
+            if "cancel_stop" in record:
+                status = "stop_confirming"
+            elif "submission" in record:
                 status = "submitting"
             elif "receipt" in record:
                 status = "attached" if "thread_id" in record["receipt"] else "launch_pending"
@@ -392,12 +393,12 @@ class AttendedRunner:
             receipt = ({"thread_id": str(UUID(thread_id))} if thread_id else
                        {"client_thread_id": str(UUID(client_thread_id))})
             current = record.get("receipt")
-            if current and current != receipt:
-                if "thread_id" in current or "thread_id" not in receipt:
+            if current:
+                if (any(field in current and current[field] != value for field, value in receipt.items())
+                        or ("client_thread_id" in receipt and "thread_id" in current
+                            and "client_thread_id" not in current)):
                     raise RunnerError("Receipt conflicts with the recorded identity")
-                receipt.update(current)
-            elif current:
-                return {"status": "receipt_recorded", **current}
+                receipt = {**current, **receipt}
             record["receipt"] = receipt
             return {"status": "receipt_recorded", **receipt}
 

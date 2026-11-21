@@ -9,12 +9,13 @@ from pathlib import Path
 from threading import Event
 from time import monotonic, time
 from urllib.parse import quote
+from uuid import UUID
 
 from .attended import AttendedRunner, RunnerAPI, RunnerError, STAGES
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, run_recovery
 from .captain_adapter import CodexCLIAdapter, CommandTransport, ObservationBatch
-from .workspaces import _file_lock
+from .workspaces import _file_lock, _git
 
 
 class CaptainLoop:
@@ -95,30 +96,7 @@ class CaptainLoop:
         runner = self._runner(slot)
         original = runner._snapshot()
         if not original:
-            capabilities = self.config.get("stages", sorted(set(STAGES) | {"pr_creation", "report_storage"}))
-            if not capabilities or set(capabilities) - (set(STAGES) | {"pr_creation", "report_storage"}):
-                raise RunnerError("Runner stage capabilities contain an unsupported stage")
-            stages = [stage for stage in capabilities
-                      if stage != "pr_creation" or os.environ.get("PHALANX_GITHUB_TOKEN")]
-            if not stages:
-                raise RunnerError("No configured stages are available; set PHALANX_GITHUB_TOKEN for initial drafts")
-            # Report storage needs no desktop. Worker stages verify their exact
-            # configured target before any new claim is admitted.
-            if set(stages) & set(STAGES):
-                verified = {}
-                for repo, mapping in self.config["repositories"].items():
-                    try:
-                        self.adapter.resolve_project(mapping)
-                    except (RunnerError, OSError) as error:
-                        self.emit({"slot": slot, "status": "mapping_blocked", "repository": repo,
-                                   "reason": str(error)})
-                    else:
-                        verified[repo] = mapping
-                if not verified:
-                    raise RunnerError("No exact desktop project and host passed discovery; restore the adapter or mappings")
-                config = {**self.config, "repositories": verified}
-                runner = AttendedRunner(self.root, config, self.api, slot=slot)
-            result = runner.prepare(stages=stages)
+            runner, result = self._claim_new(slot)
         else:
             # A legacy or interrupted claim retains the original filters and
             # secret. Do not substitute this loop's capabilities on replay.
@@ -133,7 +111,7 @@ class CaptainLoop:
         runner.renew()
         def relay_intent(record, db):
             runner._ensure_reservation(record, snapshot["lease"])
-            if record.get("receipt") or record.get("relay") or record.get("recover_stop"):
+            if record.get("receipt") or record.get("relay") or record.get("recover_stop") or record.get("cancel_stop"):
                 raise RunnerError("Launch relay already attempted or owned by recovery; reconcile its exact marker")
             if record.get("packet") != snapshot["packet"]:
                 raise RunnerError("The original launch packet changed; reconcile before any relay")
@@ -143,10 +121,145 @@ class CaptainLoop:
         runner.receipt(result["marker"], result["host_id"], **receipt)
         return {"status": "receipt_recorded", "slot": slot, **receipt}
 
+    def _claim_new(self, slot):
+        capabilities = self.config.get("stages", sorted(set(STAGES) | {"pr_creation", "report_storage"}))
+        if not capabilities or set(capabilities) - (set(STAGES) | {"pr_creation", "report_storage"}):
+            raise RunnerError("Runner stage capabilities contain an unsupported stage")
+        available = [stage for stage in capabilities
+                     if stage != "pr_creation" or os.environ.get("PHALANX_GITHUB_TOKEN")]
+        if not available:
+            raise RunnerError("No configured stages are available; set PHALANX_GITHUB_TOKEN for initial drafts")
+        groups = {
+            "runner": [stage for stage in available if stage not in STAGES],
+            "worker": [stage for stage in available if stage in STAGES],
+        }
+        first = self._metadata(f"admission-{slot}") or "runner"
+        second = "worker" if first == "runner" else "runner"
+        self._metadata(f"admission-{slot}", second)
+        result = None
+        blocked = []
+        for mode in (first, second):
+            stages = groups[mode]
+            if not stages:
+                continue
+            mappings = self.config["repositories"]
+            if mode == "worker":
+                verified = {}
+                for repo, mapping in mappings.items():
+                    try:
+                        self.adapter.resolve_project(mapping)
+                    except (RunnerError, OSError) as error:
+                        blocked.append(repo)
+                        self.emit({"slot": slot, "status": "mapping_blocked", "repository": repo,
+                                   "reason": str(error)})
+                    else:
+                        verified[repo] = mapping
+                mappings = verified
+                if not mappings:
+                    continue
+            runner = AttendedRunner(self.root, {**self.config, "repositories": mappings}, self.api, slot=slot)
+            result = runner.prepare(stages=stages)
+            if result["status"] != "no_eligible_work":
+                return runner, result
+        if blocked:
+            return self._runner(slot), {
+                "status": "desktop_blocked", "slot": slot,
+                "reason": "No eligible runner-only work; restore desktop mappings: " + ", ".join(blocked),
+            }
+        if result is None:
+            raise RunnerError("No mapping is eligible for configured stages; restore the repository/desktop mappings")
+        return self._runner(slot), result
+
+    def _unlaunched_proof(self, runner, snapshot):
+        claim = snapshot["claim"]
+        attempt = UUID(claim["attempt_id"])
+        for identity in (str(attempt), attempt.hex):
+            result = runner.results / f"phalanx-attempt-{identity}.json"
+            if os.path.lexists(result) or os.path.lexists(result.with_suffix(".json.tmp")):
+                raise RunnerError("Attempt evidence exists without a packet; reconcile it before confirming stop")
+        repo = claim["request"]["repository_id"]
+        mapping = self.config["repositories"][repo]
+        manager = runner._manager(mapping, snapshot["repositories"][repo])
+        common = manager._verify_checkout()
+        with _file_lock(common / "phalanx-workspaces.lock"):
+            path, branch, owner = manager._location(common, claim["item_id"])
+            if manager._registered(path, branch):
+                workspace = manager._snapshot(path, branch, common)
+                base = claim["request"].get("target_branch") or mapping["base_branch"]
+                expected = claim["execution"]["state"].get("candidate") or manager.resolve_origin_base(base)
+                if workspace.dirty or workspace.head != expected:
+                    raise RunnerError("Unlaunched workspace has unaccounted changes; preserve it and reconcile stop")
+                return f"Unlaunched clean workspace {path} at accounted revision {workspace.head}"
+            refs = _git(manager.checkout, "for-each-ref", "--format=%(refname)", owner,
+                        f"refs/heads/{branch}").strip()
+            if refs:
+                raise RunnerError("Partial workspace refs exist; reconcile them before confirming stop")
+            return "No item worktree, owned branch, launch packet, relay, receipt or result"
+
+    def _confirm_unlaunched_stop(self, runner, current=None):
+        # Exclude preparations while proving no launch or unaccounted local
+        # effect exists, and persist the exact stop request before sending it.
+        with _file_lock(self.root / f"attended-prepare-{runner.slot}.lock"):
+            snapshot = runner._snapshot()
+            unsafe = ("packet", "receipt", "relay", "submission", "recover_stop")
+            if any(field in snapshot for field in unsafe):
+                raise RunnerError("Stop needs native/effect reconciliation; an ambiguous launch is not a stopped writer")
+            claim = snapshot["claim"]
+            if claim["execution"]["state"]["stage"] not in STAGES:
+                raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
+            request = snapshot.get("cancel_stop")
+            proof = self._unlaunched_proof(runner, snapshot)
+            if request is not None and request["proof"] != proof:
+                raise RunnerError("Unlaunched checkpoint changed; reconcile it before replaying stop")
+            if request is None:
+                if (current is None or current["id"] != claim["execution"]["id"]
+                        or current["state"]["stopping"] not in {"cancelled", "failed"}
+                        or current["state"]["stage"] != claim["execution"]["state"]["stage"]):
+                    raise RunnerError("Unlaunched stop does not match the current execution")
+                request = {
+                    "key": f"attended-unlaunched-stop-{claim['attempt_id']}-{current['version']}",
+                    "body": {"attempt_id": claim["attempt_id"], "stage": current["state"]["stage"],
+                             "expected_version": current["version"]},
+                    "disposition": current["state"]["stopping"], "proof": proof,
+                }
+                def save(record, db):
+                    runner._ensure_reservation(record, snapshot["lease"])
+                    if any(field in record for field in unsafe):
+                        raise RunnerError("Launch changed during stop verification; retain the reservation")
+                    record["cancel_stop"] = request
+                runner._transaction(save)
+            route = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/stop-confirmed"
+            response = self.api.call(route, request["body"], lease=snapshot["lease"], key=request["key"])
+            state = response.get("state", {})
+            version, disposition = request["body"]["expected_version"], request["disposition"]
+            pending = (response.get("version") == version + 1 and state.get("status") == "waiting_for_external"
+                       and state.get("pending_output") == disposition)
+            output = state.get("final_output")
+            finalized = (
+                response.get("version") == version + 2 and state.get("status") == disposition
+                and isinstance(output, dict)
+                and output.get("reference") == route.removesuffix("/stop-confirmed") + "/report"
+            )
+            if response.get("id") != claim["execution"]["id"] or not (pending or finalized):
+                raise RunnerError("Unlaunched stop acknowledgment did not verify finalization; retain its exact request")
+            def finish(record, db):
+                runner._ensure_reservation(record, snapshot["lease"])
+                if record.get("cancel_stop") != request or any(field in record for field in unsafe):
+                    raise RunnerError("Reservation changed before stop acknowledgment; reconcile it")
+                archive = {key: value for key, value in record.items() if key != "lease"}
+                archive["stop_acknowledgment"] = response
+                db.execute("CREATE TABLE IF NOT EXISTS completed (attempt_id TEXT PRIMARY KEY, record TEXT)")
+                db.execute("INSERT INTO completed VALUES (?, ?)", (claim["attempt_id"], json.dumps(archive)))
+                record.clear()
+            runner._transaction(finish)
+            return {"status": "stop_confirmed", "execution": response, "reason": request["proof"]}
+
     def _advance(self, slot, snapshot, observation):
         runner = self._runner(slot)
         if not snapshot:
             return self._prepare(slot)
+        if "cancel_stop" in snapshot:
+            return self._confirm_unlaunched_stop(runner)
         if "submission" in snapshot:
             packet = snapshot.get("packet")
             if packet:
@@ -155,6 +268,10 @@ class CaptainLoop:
                     runner._handoff(snapshot).packet.marker, snapshot["host_id"], receipt["thread_id"],
                 )}
             return self._prepare(slot)
+        if "packet" not in snapshot and "claim" in snapshot:
+            current = self.api.call(f"/items/{snapshot['claim']['item_id']}")["execution"]
+            if current["state"].get("stopping") in {"cancelled", "failed"}:
+                return self._confirm_unlaunched_stop(runner, current)
         if observation is not None and (
             datetime.now(timezone.utc) - observation.observed_at
         ).total_seconds() > 60:

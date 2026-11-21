@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 import sqlite3
 
-from .draft_stage import DevelopmentCheckpoint, DraftAssignment, DraftStageRunner
 from .github import GitHubClient
-from .pr_observations import _GITHUB_REMOTE
 
 
 def github_repository(remote):
+    from .pr_observations import _GITHUB_REMOTE
+
     match = _GITHUB_REMOTE.fullmatch(remote)
     return match[1].lower() if match else None
 
@@ -42,6 +42,8 @@ def development_checkpoint(journal, claim):
     provenance = checkpoint.get("base")
     if provenance is None:
         return None
+    from .draft_stage import DevelopmentCheckpoint
+
     return DevelopmentCheckpoint(
         claim["item_id"], execution["id"], Path(checkpoint["path"]), checkpoint["head"],
         provenance["ref"], provenance["sha"],
@@ -49,6 +51,8 @@ def development_checkpoint(journal, claim):
 
 
 def publish_draft(root, api, record, mapping, checkpoint, token):
+    from .draft_stage import DraftAssignment, DraftStageRunner
+
     claim = record["claim"]
     execution = claim["execution"]
     repository = github_repository(record["repositories"][claim["request"]["repository_id"]])
