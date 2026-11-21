@@ -11,9 +11,10 @@ from uuid import uuid4
 
 from pydantic import TypeAdapter
 
+from .finalization_schema import enqueue
 from .store import connect
 from .transitions import (
-    Event, Evidence, Execution, Outcome, Stage, Status, StoredReport, Target, TERMINAL, Wait, decide, start,
+    Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
 
 
@@ -220,6 +221,8 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         (version, state_json, now, ready_since, retry_at, retry_count, row["id"]),
     )
     record(db, row["id"], version, event, details, state_json, now, attempt_id)
+    if state.pending_output is None and next_state.pending_output is not None:
+        enqueue(db, row["id"], version)
     if attempt_id and event != Event.CLAIM:
         db.execute("UPDATE attempts SET ended_at=? WHERE id=?", (now, attempt_id))
     return execution_view(execution_row(db, row["item_id"], row["id"]))
@@ -252,74 +255,54 @@ def _check_attempt(db, execution_id, state, payload, lease_digest):
         raise Conflict("Attempt, stage, or lease is no longer current")
 
 
-def _store_report(db, item_id, execution_id, markdown, revision=None):
-    db.execute("INSERT INTO reports VALUES (?, ?)", (execution_id, markdown))
-    return StoredReport(f"/v1/items/{item_id}/executions/{execution_id}/report", revision)
-
-
 def report(db, item_id, execution_id):
-    execution_row(db, item_id, execution_id)
+    execution = execution_row(db, item_id, execution_id)
+    if execution["status"] not in TERMINAL:
+        raise Missing("Stored report not found")
     row = db.execute("SELECT markdown FROM reports WHERE execution_id=?", (execution_id,)).fetchone()
     if row is None:
         raise Missing("Stored report not found")
     return row["markdown"]
 
 
-def _cancellation_report(db, row, state, reason):
-    stages = db.execute(
-        "SELECT DISTINCT stage FROM attempts WHERE execution_id=?", (row["id"],),
-    )
-    attempted = ", ".join(sorted(stage[0] for stage in stages)) or "No stages claimed"
-    markdown = (
-        f"# Cancellation report\n\n"
-        f"Last stage: {state.stage}\n\n"
-        f"Reason: {reason}\n\n"
-        f"Stages attempted: {attempted}\n\n"
-        f"Partial PR: {state.primary_pr or 'None recorded'}\n\n"
-        f"Candidate: {state.candidate or 'None recorded'}\n\n"
-        "Review existing artifacts before rerunning the item.\n"
-    )
-    return _store_report(db, row["item_id"], row["id"], markdown)
-
-
 def cancel(db, item_id, execution_id, payload):
+    return request_stop(db, item_id, execution_id, payload, Event.CANCEL)
+
+
+def close_failure(db, item_id, execution_id, payload):
+    return request_stop(db, item_id, execution_id, payload, Event.CLOSE_FAILURE)
+
+
+def request_stop(db, item_id, execution_id, payload, event):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    stored = None
-    if state.status in {Status.QUEUED, Status.WAITING_FOR_INPUT}:
-        stored = _cancellation_report(db, row, state, payload.reason)
-    updated = apply(db, row, state, Event.CANCEL, details={"reason": payload.reason},
-                    evidence=Evidence(stored_report=stored))
-    # Report storage is local and atomic. A passive report wait with no
-    # open attempt has no worker or provider write left to reconcile.
+    details = {"reason": payload.reason}
+    updated = apply(db, row, state, event, details=details)
+    # A passive report wait with no open attempt has no outstanding effects.
     if state.status == Status.WAITING_FOR_EXTERNAL and state.target == Target.REPORT:
         active = db.execute(
             "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
         ).fetchone()
         if active is None:
             row, state = check_current(db, item_id, execution_id, updated["version"])
-            stored = _cancellation_report(db, row, state, payload.reason)
-            return apply(db, row, state, Event.STOP_CONFIRMED, details={},
-                         evidence=Evidence(stored_report=stored))
+            return apply(db, row, state, Event.STOP_CONFIRMED, details=details)
     return updated
 
 
 def stop_confirmed(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     _check_attempt(db, execution_id, state, payload, lease_digest)
-    return confirm_cancellation(db, row, state, payload.attempt_id, details={})
+    return confirm_stop(db, row, state, payload.attempt_id, details={})
 
 
-def confirm_cancellation(db, row, state, attempt_id, *, details):
-    if state.stopping != Status.CANCELLED:
-        raise Conflict("No worker cancellation is awaiting confirmation")
-    cancellation = db.execute(
+def confirm_stop(db, row, state, attempt_id, *, details):
+    if state.stopping not in {Status.CANCELLED, Status.FAILED}:
+        raise Conflict("No stop request is awaiting worker confirmation")
+    request = db.execute(
         "SELECT details_json FROM transition_history WHERE execution_id=? AND version=?",
         (row["id"], row["version"]),
     ).fetchone()
-    reason = json.loads(cancellation["details_json"])["reason"]
-    stored = _cancellation_report(db, row, state, reason)
-    return apply(db, row, state, Event.STOP_CONFIRMED, details=details,
-                 attempt_id=attempt_id, evidence=Evidence(stored_report=stored))
+    return apply(db, row, state, Event.STOP_CONFIRMED,
+                 details={**details, **json.loads(request["details_json"])}, attempt_id=attempt_id)
 
 
 def result(db, item_id, execution_id, payload, lease_digest):
@@ -342,24 +325,22 @@ def result(db, item_id, execution_id, payload, lease_digest):
     elif state.stage == Stage.REPORT_DRAFTING and payload.outcome == Outcome.SUCCEEDED:
         raise Conflict("Successful drafting requires the draft Markdown")
 
-    stored = None
     if state.stage == Stage.REPORT_STORAGE and payload.outcome == Outcome.SUCCEEDED:
         if draft_revision is None or draft_revision != state.report_draft:
             raise Conflict("Storage requires the current reviewed draft revision")
         draft = db.execute(
-            "SELECT markdown FROM report_drafts WHERE execution_id=? AND revision=?",
+            "SELECT 1 FROM report_drafts WHERE execution_id=? AND revision=?",
             (execution_id, draft_revision),
         ).fetchone()
         if draft is None:
             raise Conflict("Reviewed draft Markdown is unavailable")
-        stored = _store_report(db, item_id, execution_id, draft["markdown"], draft_revision)
 
     return apply(
         db, row, state, Event.RESULT, details=details, attempt_id=payload.attempt_id,
         outcome=payload.outcome, wait=wait,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
                           prevalidated_candidate=payload.prevalidated_candidate,
-                          report_draft=draft_revision, reviewed_report=draft_revision, stored_report=stored),
+                          report_draft=draft_revision, reviewed_report=draft_revision),
     )
 
 def draft(db, item_id, execution_id, revision):

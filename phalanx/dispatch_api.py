@@ -65,6 +65,6 @@ def recovery(request: Request, runner_id: Identifier):
              dependencies=[Depends(require_runner)])
 def recover_stopped(request: Request, runner_id: Identifier, attempt_id: Identifier,
                     body: ReconciledStop, key: Key = None):
-    return run(request, dispatch.recover_stopped, runner_id, attempt_id, body, write=True,
+    return run(request, dispatch.recover_stopped, runner_id, attempt_id, body, write=True, finish=True,
                scope=f"recover-stopped:{runner_id}:{attempt_id}", key=key,
                payload=body.model_dump(mode="json"))
