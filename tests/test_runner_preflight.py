@@ -36,7 +36,7 @@ class RunnerPreflightTests(ServerFixture, unittest.TestCase):
         with (patch.dict(os.environ, environment, clear=True), patch.object(RunnerAPI, "call", call),
               patch.dict(sys.modules, {"pydantic": None}), patch("sys.argv", argv),
               patch("sys.stderr") as stderr, self.assertRaises(SystemExit) as stopped):
-            for module in ("phalanx.draft_stage", "phalanx.pr_observations"):
+            for module in ("phalanx.draft_stage", "phalanx.pr_models"):
                 sys.modules.pop(module, None)
             main()
         self.assertEqual(stopped.exception.code, 1)

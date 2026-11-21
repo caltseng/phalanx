@@ -18,7 +18,7 @@ def preflight(config: dict, token: str | None) -> None:
     blockers = []
     try:
         # Draft publication imports these lazily; fail now instead of mid-claim.
-        for module in ("phalanx.draft_stage", "phalanx.pr_observations"):
+        for module in ("phalanx.draft_stage", "phalanx.pr_models"):
             importlib.import_module(module)
     except ImportError as error:
         blockers.append(f"Missing package {error.name}; run `pip install -r requirements.lock` "
