@@ -51,6 +51,8 @@ The server owns transitions. Each stage has required evidence, allowed next stag
 | `ready_for_check_in` | Complete a ready-only item with the verified PR link and head. For a merge-authorized item, proceed to `check_in`. | A stale head, new blocking comment, failed check, or conflict returns the item to `pr_reconciliation` while it is active. If authorization is missing or withdrawn, wait for input or complete as ready-only with explicit disposition. |
 | `check_in` | Recheck the expected head, base, required checks, and merge policy immediately before merging. Complete only after GitHub confirms the merge and the item records the resulting commit. | Reconcile ambiguous merge responses before retrying. Return stale or unmergeable PRs to `pr_reconciliation`. Pause for an authorization or policy blocker. |
 
+The server durably records report finalization before writing the final artifact. Finalization retries independently of worker capacity or dispatch pause. The owner can retry a stalled finalization after addressing the storage blocker.
+
 Field reports use a shorter path. Draft and self-review the report, verify its supporting evidence and links, then store the Markdown and complete the item. Findings return it to drafting. Reports share the same pause, retry, and handoff behavior.
 
 ### Execution status and recovery
@@ -87,6 +89,8 @@ The agent returns one JSON result for its assigned stage. It reports an outcome 
 | `changes_required` | Findings tied to the reviewed or tested revision, with enough detail to reproduce or act on them. |
 | `needs_input` | A focused question, relevant options or tradeoffs, and a handoff describing what is done and how to resume. Include workspace or output references when available. |
 | `failed` | Why the attempt could not produce a stage outcome, what was tried, and whether a retry is likely to help. Include references to any partial result. |
+
+The authenticated runner submits GitHub observations through the versioned, leased PR observation route. The runner obtains exact provider reads, resolves repository policy, and correlates gate evidence to the observed PR and revision. The server matches the registered repository and current assignment, evaluates the normalized gate evidence, and records the accepted observation with the transition. See the [runner contract](docs/runner-pr-observations.md).
 
 For example, `self_review` plus `succeeded` with findings and revision evidence advances to `pre_pr_validation`. `self_review` plus `changes_required` returns to `development`. Required external checks can still keep an item waiting even after a successful worker result. Only the server marks the whole item completed when its completion target is satisfied.
 

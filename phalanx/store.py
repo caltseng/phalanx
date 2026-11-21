@@ -6,7 +6,9 @@ from tempfile import TemporaryDirectory
 from threading import Lock
 
 from .dispatch_schema import DISPATCH_SCHEMA
+from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
+from .operator_schema import OPERATOR_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
 
@@ -18,6 +20,8 @@ MIGRATIONS = (
     (f"PRAGMA application_id = {APPLICATION_ID}",),
     INTAKE_SCHEMA,
     DISPATCH_SCHEMA,
+    FINALIZATION_SCHEMA,
+    OPERATOR_SCHEMA,
     WAIT_SCHEMA,
 )
 

@@ -4,8 +4,9 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from pydantic import Field
 
-from . import intake, waits
+from . import finalization, intake, pr_observations, waits
 from .auth import authenticate, require_owner, require_runner
 from .store import write_transaction
 from .intake_models import (
@@ -21,11 +22,14 @@ Lease = Annotated[str, Header(alias="Phalanx-Lease", pattern=r"^[A-Za-z0-9_-]{32
 BatchLimit = Annotated[int, Query(ge=1, le=100)]
 
 
-def run(request, operation, *args, write=False, scope=None, key=None, payload=None):
+def run(request, operation, *args, write=False, finish=False, scope=None, key=None, payload=None):
     try:
         transaction = write_transaction if write else intake.read_transaction
         with transaction(request.app.state.database_path) as db:
-            return intake.replayable(db, scope, key, payload, lambda: operation(db, *args))
+            result = intake.replayable(db, scope, key, payload, lambda: operation(db, *args))
+        if finish and result["state"]["pending_output"] is not None:
+            return finalization.attempt(request.app.state.database_path, result["id"]) or result
+        return result
     except intake.Missing as error:
         raise HTTPException(404, str(error)) from error
     except intake.Conflict as error:
@@ -79,8 +83,26 @@ def draft(request: Request, item_id: Identifier, execution_id: Identifier, revis
              dependencies=[Depends(require_owner)])
 def cancel(request: Request, item_id: Identifier, execution_id: Identifier,
            body: Cancel, key: Key = None):
-    return run(request, intake.cancel, item_id, execution_id, body, write=True,
+    return run(request, intake.cancel, item_id, execution_id, body, write=True, finish=True,
                scope=f"cancel:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/close-failure",
+             dependencies=[Depends(require_owner)])
+def close_failure(request: Request, item_id: Identifier, execution_id: Identifier,
+                  body: Cancel, key: Key = None):
+    return run(request, intake.close_failure, item_id, execution_id, body, write=True, finish=True,
+               scope=f"close-failure:{item_id}:{execution_id}", key=key,
+               payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/retry-finalization",
+             dependencies=[Depends(require_owner)])
+def retry_finalization(request: Request, item_id: Identifier, execution_id: Identifier,
+                       body: Versioned, key: Key = None):
+    return run(request, finalization.retry, item_id, execution_id, body, write=True, finish=True,
+               scope=f"retry-finalization:{item_id}:{execution_id}", key=key,
+               payload=body.model_dump(mode="json"))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/rerun",
@@ -94,7 +116,7 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
     return run(
-        request, operation, item_id, execution_id, body, lease_digest, write=True,
+        request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
         payload={"body": body.model_dump(mode="json"), "lease_digest": lease_digest},
     )
@@ -147,3 +169,12 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
             body: Versioned, key: RequiredKey):
     return run(request, waits.recheck, item_id, execution_id, body, write=True,
                scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
+             dependencies=[Depends(require_runner)])
+def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,
+                   body: Annotated[pr_observations.Publication | pr_observations.Validation,
+                                   Field(discriminator="stage")],
+                   lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)

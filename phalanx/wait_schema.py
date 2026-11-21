@@ -1,4 +1,4 @@
-"""Operator inbox and durable external rechecks (migration 4)."""
+"""Operator inbox and durable external rechecks."""
 
 WAIT_SCHEMA = (
     """CREATE INDEX input_wait_inbox ON executions(updated_at, id)

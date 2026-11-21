@@ -6,7 +6,7 @@ from threading import Barrier
 import unittest
 from unittest.mock import patch
 
-from phalanx import dispatch, intake
+from phalanx import dispatch, finalization, intake
 from phalanx.dispatch_api import Claim, DispatchSettings, ReconciledStop
 from phalanx.intake_models import Cancel, Intake, Result
 from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
@@ -183,10 +183,13 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             with write_transaction(self.path) as db:
                 self.assertEqual(dispatch.recovery_candidates(db, "local")[0]["version"],
                                  pending["version"])
-                closed = dispatch.recover_stopped(db, "local", attempt, body)
-                self.assertEqual(closed["state"]["status"], "cancelled")
-                self.assertIn("Requested by owner", intake.report(db, item_id, execution["id"]))
+                pending = dispatch.recover_stopped(db, "local", attempt, body)
+                self.assertEqual(pending["state"]["pending_output"], "cancelled")
                 self.assertEqual(dispatch.recovery_candidates(db, "local"), [])
+        closed = finalization.attempt(self.path, execution["id"])
+        self.assertEqual(closed["state"]["status"], "cancelled")
+        with connect(self.path, mode="ro") as db:
+            self.assertIn("Requested by owner", intake.report(db, item_id, execution["id"]))
 
     def test_fifth_stopped_attempt_parks_stage(self):
         item_id, = self.seed("repo", [("normal", -1, None)])

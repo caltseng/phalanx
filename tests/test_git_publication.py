@@ -113,6 +113,26 @@ class GitPublicationTests(unittest.TestCase):
         self.assertEqual(result.status, "uncertain")
         self.assertEqual(self.publisher.read_head(), self.candidate)
 
+    def test_claim_is_checked_after_preflight_and_before_push(self):
+        class Expired(Exception):
+            pass
+
+        calls = 0
+
+        def authorize():
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise Expired
+
+        self.push(self.old, "refs/heads/main")
+        self.assertEqual(self.publisher.read_branch("main"), self.old)
+        self.assertIsNone(self.publisher.read_branch("missing"))
+        with self.assertRaises(Expired):
+            self.publisher.publish(self.candidate, expected=None, authorize=authorize)
+        self.assertEqual(calls, 2)
+        self.assertIsNone(self.publisher.read_head())
+
     def test_wrong_push_destination_is_rejected(self):
         other = self.remote.with_name("other.git")
         git(other.parent, "init", "--bare", str(other))
