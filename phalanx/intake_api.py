@@ -130,7 +130,7 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     payload = body.model_dump(mode="json")
     # Preserve receipt digests for results written before these optional fields existed.
     if isinstance(body, Result):
-        for field in ("failure_reason", "question"):
+        for field in ("failure_reason", "question", "review_notes", "local_checks"):
             if payload[field] is None:
                 payload.pop(field)
     return run(
