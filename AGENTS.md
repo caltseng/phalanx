@@ -7,9 +7,12 @@
 
 ## Design priorities
 
-- Caleb prioritizes reliability and simplicity. Choose the simplest design that preserves correct state, makes failures visible, and lets interrupted work resume predictably.
+- Prioritize reliable delivery and simplicity. Choose the smallest design that keeps state correct and lets interrupted work resume. Design and test for a large queue and many concurrent workers on one machine. Multi-device execution and handoff are P2.
 - Add abstractions, services, settings, and gates when they solve a concrete problem. Keep constraints scoped to the operation that needs them, and leave teams and runtimes room to work within their own repo’s requirements.
-- Default to self-resolution within the work item’s scope. Ask for human judgment when a choice materially changes the outcome, an approval is required, or further attempts cannot make progress.
+- Aim for end-to-end autonomy from dispatch through delivery. Set up standing permissions and credentials for routine, in-scope operations so they can run without interactive permission prompts. Respect repository rules and external approval gates. Surface missing access as an actionable blocker when it prevents delivery.
+- Default to self-resolution. Run checks, diagnose failures, retry transient errors, fix routine conflicts, and address actionable review feedback independently. Escalate when human judgment materially affects the outcome, authority is genuinely missing, or further attempts cannot make progress.
+- Never fail silently. Give every wait or failure a visible reason and a recovery path. Notify Caleb when a blocker needs his attention. Every closed execution records exactly one verified PR or stored Markdown report, including a failure or cancellation report when the requested deliverable could not be produced.
+- Two PRs are better than zero. Reuse a matching PR when found. After a bounded search, retry uncertain PR creation rather than lose delivery. Record one primary PR and surface any duplicates. Reconcile an uncertain merge before retrying and check in only the verified primary PR.
 
 ## Architecture
 
@@ -17,8 +20,10 @@
 - Keep queue state, claims, work history, and reports behind the API. Keep checkout mappings and Git credentials local to the runner. The runner talks to the backend and holds queue credentials and leases.
 - Prioritize visible Codex worker chats for v1. Keep the work packet and result contract independent of the execution runtime so Claude Code and GitHub Copilot CLI can be added in P2. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
 - Allow independent work to run in parallel, including within one repo. Use atomic per-item claims and isolated worktrees for PR tasks. Check for previously created outputs before retrying publication.
-- Make max concurrency and dispatch pause configurable. Apply gates before claiming new work and keep the reason visible when an item cannot run.
+- Reuse the item’s worktree across stages on the same machine. Support interdependent work in v1, with explicit upstream milestones and parallel execution when dependencies allow. Campaign grouping, task decomposition, and automatic replanning can come later.
+- Make max concurrency and dispatch pause configurable. Rank eligible stages with priority aging so older work gets a turn during sustained intake. Keep the wait reason visible when an item cannot run.
 - Keep lifecycle transitions explicit and server-owned. Every active state needs a next action, a resume trigger, or a clear recovery path. Bind validation and review evidence to the revision checked, and reconcile GitHub state before retrying publication or check-in.
+- Assign each worker one stage. Keep GitHub writes on the runner-owned path. Open the draft after development, then promote it when pre-validation and draft-only checks are satisfied. Allow documented pre-validation bypasses where repo policy permits. Check required CI and approvals before check-in.
 - Define transitions in the authoritative Markdown specs, with the detailed rules in [STATE_MACHINE.md](STATE_MACHINE.md). Treat HTML as a visual reference and sync it to the Markdown when transitions change.
 
 ## Working in repositories

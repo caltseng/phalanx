@@ -1,51 +1,139 @@
-# Phalanx execution and implementation plan
+# Phalanx implementation work items
 
-Implement Phalanx in stages, starting with a real HTTP server running locally and a Captain-launched muster in Codex. The first end-to-end release should produce a Markdown field report and a checked-in PR across two registered repos, recover from an interruption, and resume after a user reply. Read [SPEC.md](SPEC.md) for the design and [STATE_MACHINE.md](STATE_MACHINE.md) for authoritative transitions. The HTML view illustrates those rules.
+Each item produces a reviewable PR or a Markdown field report. Dependencies below are required milestones. A prerequisite PR must be checked in unless the dependent explicitly consumes a pinned reviewed revision. Independent items can proceed in parallel. Revisit queued items after an upstream check-in or new steering. [SPEC.md](SPEC.md) defines the product and [STATE_MACHINE.md](STATE_MACHINE.md) defines transitions.
 
-## 0 Validate the integration assumptions
+V1 targets a large queue and many workers on one local machine with visible Codex chats, backed by a real HTTP server running locally. It is complete when one muster across two repos produces a field report and a checked-in PR, recovers an interrupted worker, resumes after user input, and passes the single-machine load and fault gates. Cloud hosting is a follow-on deployment of the same API. Multi-device execution and handoff, campaigns, and alternate runtimes are P2.
 
-- **Visible Codex chats.** Launch two worker chats from a Captain in their target projects. Capture chat IDs, a result, and a question answered in the worker chat. Stop the Captain while a worker is active, then test reattaching, collecting a completed result, and handling an unreachable chat. Record which steps use supported interfaces and need user involvement. If automatic reattachment cannot be verified, start with an explicit recovery action in the Captain chat and keep an unknown attempt from being redispatched blindly.
-- **GitHub workflow.** Use a disposable branch or test repo to open a draft, confirm which draft-only checks and previews run, mark it ready for review, and observe checks and approvals on the new head. Test an outside push and a base change. Identify the GitHub operations the runner will perform and how its permissions will be scoped.
-- **Decisions before implementation.** Choose the server language and storage library, first notification channel, initial aging and retry settings, and how to report a prolonged finalization outage. SQLite and periodic polling are reasonable starting candidates. Keep advanced integrations out of this milestone.
+## Integration pilots
 
-## 1 Build the server and durable state
+### PH-01 Prove visible Codex execution and recovery
 
-- Create a standalone HTTP process with a configurable bind address, persistence path or connection string, and authentication. Start with one owner credential and a separate runner credential. Keep Git authentication and local checkout paths on runners. Document local startup and reserve a configuration path for HTTPS, persistent storage, and backups when hosted.
-- Persist registered repos, work items and executions, dependency links and required milestones, attempts and leases, revision-bound evidence, questions and replies, output references, and transition history in one store. Add schema migrations and backup and restore instructions. Keep claim and transition transactions in the same store as the work item.
-- Expose HTTP operations for creating, inspecting, listing, claiming, renewing, reporting a stage result, replying, cancelling, and rerunning. Include idempotency keys for submissions and retried operations. Return the item ID, stage, status, and reason whenever an item is waiting. Use a thin CLI for basic intake and status so the same API can later accept phone submissions.
-- Implement transitions from the Markdown rules as one server-side, testable decision function. Check stage, attempt, lease, and expected state version before accepting results. Persist state transitions and history together. Write tests from the documented event, guard, outcome, and recovery cases. Check diagram and HTML parity when rules change.
-- **Exit:** Demonstrate a CLI-created item surviving a server restart and duplicate delivery. Prove that stale results cannot advance the item and that retries produce one recorded result.
+- **Depends on:** Nothing. **Output:** Field report.
+- Launch two visible workers in their target projects and collect an outcome plus a question and reply. Interrupt Captain observation before and after saving a chat ID. Determine which supported operations can find, reattach to, and recover a worker. Identify how the worktree is selected.
+- **Done when:** The report identifies an attended v1 path, the smallest explicit recovery action if automatic recovery is unavailable, and how to keep a possibly live worker counted and prevent a replacement writer. Include evidence or a concrete blocker for each capability.
 
-## 2 Implement scheduling and workspace reuse
+### PH-02 Map real GitHub draft and check-in gates
 
-- Register per-device repo access and runtime capabilities. Atomically claim one runnable stage when a runner has capacity. Enforce one active claim per item across devices, dispatch pause, prerequisites, retry delays, and local-only checkpoint affinity. Keep concurrency limits scoped to each runner initially.
-- Rank eligible work by aged priority, then oldest `ready_since`, then stable item ID. Start with urgent, normal, and low. Preserve age through ordinary claim contention, start a new clock on each new runnable stage, and back off retries. Return a reason and elapsed wait for ineligible work.
-- Support fan-out and fan-in through multiple prerequisites per work item. Validate link updates for cycles. Check that all required upstream milestones are verified before dispatch, and include their outputs in the work packet. Recheck blocked items on upstream completion and allow versioned edits to queued work when the owner steers it.
-- Create an isolated worktree and deterministic item branch for PR work. Record runner, branch, and candidate SHA, plus any local-only checkpoint. Reuse on the same device after verifying state. On another device, reconstruct from a durable fetched SHA and the handoff. Preserve unrecorded edits and clean up closed worktrees only after verifying they are safe to remove.
-- **Exit:** Two devices compete for one item without double-claiming it, concurrently work different items, and hand off one item after a published checkpoint. A downstream item waits for two parallel upstream items and starts only after the last required milestone, including a merge when specified. A load test with a steady stream of urgent items shows that older normal and low items eventually run. A local-only checkpoint remains pinned and explains its wait.
+- **Depends on:** Nothing. **Output:** Field report.
+- In a disposable repo or branch, verify draft creation, draft-only checks, push-dependent previews, promotion, required CI, and authorized check-in. Test an outside push and a base change. Check which Git and GitHub writes accept revision preconditions and which outcomes can be recovered by inspection.
+- **Done when:** The report distinguishes checks before upload, checks on the draft candidate, and checks after promotion. Record how the runner can verify the expected head and merge candidate, and how it should handle a provider guarantee it cannot establish.
 
-## 3 Run visible worker stages
+### PH-03 Define the local operating envelope
 
-- Implement a small Codex execution adapter for a Captain-launched muster. Pass one stage assignment and evidence requirements per claim. Record a durable association between the attempt and visible worker chat. Workers prepare artifacts and return structured outcomes. The runner holds backend claims and interprets the adapter output for the server.
-- Track interrupted launch and observation separately. If a known chat is active, reattach. If it finished, verify and submit its result through an authorized recovery claim. If it stopped, resume from the checkpoint. When state is unknown, recheck before assigning a replacement and escalate only if it stays unclear.
-- Save questions and responses on the item. Release the worker slot while waiting. Start with one notification route and a canonical API reply, then test whether a reply in Codex can be captured reliably. Validate work packets, outcomes, and revisable evidence independently of the adapter. Keep Claude Code and GitHub Copilot CLI as P2 adapters.
-- **Exit:** A visible worker produces a field report, another pauses and resumes after input, and a fresh Captain turn recovers an interrupted attempt without prematurely launching duplicate work.
+- **Depends on:** Nothing. **Output:** Field report.
+- Measure pilot hardware, worker startup and memory, representative build and disk use, and queue operations with representative blocked and historical rows. Propose concurrency, aging, retry, and polling defaults, plus a load-test workload. Select the initial server stack and SQLite library with a short decision record.
+- **Done when:** The report includes measurable targets for dispatch and renewal latency, oldest eligible wait, backlog recovery time, and resource headroom. Separate synthetic load from the observed number of viable real Codex workers.
 
-## 4 Complete the PR lifecycle
+## Server and queue
 
-- Put GitHub writes behind one runner-owned path per item. Verify the claim and candidate revision before pushing, opening, promoting, or merging. Workers prepare commits and report evidence. Track operation intent and reconcile what GitHub recorded after an uncertain response. Reuse an existing matching PR. After bounded lookup, retry uncertain creation rather than drop the PR. Select and record a primary if duplicates appear, and surface the others. Reconcile uncertain merges before any retry.
-- Open a draft after development produces a candidate commit. Use the [required attribution](SPEC.md#dispatch-and-execution). Run self-review and pre-validation. Record any permitted skip or bypass and keep failures visible. Publish updated candidates to the existing PR and mark it ready after draft-only checks pass. Keep an already promoted PR open for review when updating it.
-- Observe expected CI and required previews. Distinguish unconfigured CI from missing expected CI. Run the independent review on the current diff. Reconcile feedback, conflicting revisions, stale evidence, and failed checks using the documented loops. Revalidate outside pushes and ask for input if the new scope is unclear. Poll pending external results on a schedule so missed notifications cannot strand an item.
-- Check in only when authorized, using GitHub’s required checks and approvals on the current revision. Verify the recorded merge commit. For ready-only work, finish with verified PR identity and head evidence. Exercise cancellation during an in-flight GitHub operation and a merge response that is lost.
-- **Exit:** A draft PR goes through promotion, CI, independent review, and a fix or conflict loop. It publishes exactly one verified merge for the authorized test, or yields a verified ready-only PR for a separate test. Confirm the attribution appears once.
+### PH-04 Bootstrap the HTTP service and store
 
-## 5 Harden finalization and prepare hosting
+- **Depends on:** PH-03. **Output:** PR.
+- Create the runnable HTTP service, config for bind address and storage, owner and runner authentication, schema migrations, and local startup instructions. Keep Git credentials and checkout paths on the runner. Add a minimal health endpoint and backup and restore procedure.
+- **Done when:** A second process can call the server over HTTP, authorization boundaries are tested, and data persists through restart and backup restore.
 
-- Persist the final PR reference or report and terminal status together. Generate failure and cancellation reports from durable history, including work cancelled before the first claim. Make finalization reviewable and retryable without rerunning the worker. Exercise storage failure before and after an artifact was written. Decide when to notify for a sustained outage and keep output-less work open for recovery.
-- Add an operator view or CLI query showing stage, claim owner, wait reason and age, active attempt link, primary PR or field report, and recently failed actions. Validate the backlog and recovery flows with workload above available concurrency. Run the full lifecycle tests against real test checkouts after the simulated fault tests pass.
-- Deploy the same HTTP server with configured authentication, HTTPS, persistence, and backups. Verify restore, then point an existing runner at the hosted URL and rerun the first milestone. Add phone intake after validating its supported integration and authentication. Keep runners and their repo credentials on local machines.
-- **Exit:** A storage outage cannot silently discard work or close an item without an output. Two local runners can use the hosted API with the same work packet and state rules.
+### PH-05 Implement work intake and stage transitions
 
-## Later campaign planning
+- **Depends on:** PH-04. **Output:** PR.
+- Add registered repos, work items, executions, attempts, revision-bound evidence, and an append-only transition history. Implement create, inspect, stage result, cancel, and rerun operations. Define one server decision function from the authoritative Markdown rules. Use request idempotency and expected versions for state-changing operations.
+- **Done when:** A repeated intake returns the same item, stale results cannot advance it, and transition tests cover PR and report routes, including loops, pauses, and durable recovery. The CLI can file and inspect an item.
 
-Use the v1 dependency model to group work under a campaign goal. Add decomposition and re-evaluation of remaining work after verified check-ins or owner steering. Keep that planning layer separate from stage dispatch. It can propose or update queued work through the same versioned work-item operations. V1 acceptance depends on interdependent execution, and campaign creation and automatic replanning can follow later.
+### PH-06 Implement leases, capacity, and fair queue claims
+
+- **Depends on:** PH-05. **Output:** PR.
+- In a short transaction, claim the highest-ranked eligible stage and assign one lease. Enforce capacity and dispatch pause. Rank by aged priority, oldest eligible `ready_since`, then stable ID. Preserve age through claim contention and record retry delays separately. Index candidates so claims and lease renewals do not scan retained history or the blocked backlog.
+- **Done when:** Competing local slots cannot claim the same item or exceed the configured limit. Old eligible items run during sustained urgent intake. Measure claim and heartbeat latency under the PH-03 workload.
+
+### PH-07 Add prerequisites and steering
+
+- **Depends on:** PH-05, PH-06. **Output:** PR.
+- Store multiple dependencies and required milestones across repos with indexed reverse links. Reject cycles in the transaction that changes links. Bind claims to exact upstream execution and output revisions. Treat a ready-only milestone as evidence for a pinned reviewed revision and carry that reference forward. Reconcile missed prerequisite events and support versioned edits to queued work.
+- **Done when:** Two upstream items can run in parallel, a dependent waits for the last required milestone, and a failed upstream report does not satisfy the dependency. Concurrent cycle edits and a prerequisite rerun racing a claim are covered.
+
+### PH-08 Implement waits, notifications, and replies
+
+- **Depends on:** PH-05. **Output:** PR.
+- Persist a focused question and handoff before releasing the slot. Provide a canonical owner reply through the API and CLI, plus one notification route. Add due times for external waits and bounded, retryable rechecks. Surface why an item is waiting and what will resume it.
+- **Done when:** Replying queues the correct stage exactly once, a missed event is recovered by a recheck, and an externally blocked set does not occupy worker slots or drown out lease renewals.
+
+### PH-09 Make finalization durable
+
+- **Depends on:** PH-05. **Output:** PR.
+- Use a retryable finalization operation keyed by execution ID. Persist each terminal outcome and final output together. Generate failure and cancellation reports from durable history when necessary. Keep finalization retries independent of worker slots. Define when a prolonged outage calls for operator attention.
+- **Done when:** Storage failure and restart do not rerun agent work, duplicate outputs, or close any execution without a PR or report. Include cancellation before first claim and a merge that succeeded before the local response was lost.
+
+## Local execution
+
+### PH-10 Isolate and reuse local worktrees
+
+- **Depends on:** PH-04, PH-06. **Output:** PR.
+- Verify registered remotes, allocate an item-specific topic branch and worktree, and record recoverable checkpoints. Reuse a verified worktree across stages, preserve unrecorded changes, and keep local-only checkpoints associated with their owner. Clean up only after verifying a closed worktree is safe.
+- **Done when:** Unrelated items can work in the same repo with separate worktrees. Recovery preserves dirty work, and low disk or an unavailable checkout produces a visible reason without blocking eligible work in other repos.
+
+### PH-11 Build the visible Codex adapter
+
+- **Depends on:** PH-01, PH-06, PH-10. **Output:** PR.
+- Launch and observe visible worker chats from a user-started muster. Pass one stage assignment, the workspace and handoff, and evidence requirements. Normalize the result into the shared schema. Keep leases and GitHub writes with the runner.
+- **Done when:** Two visible workers run in separate slots and return independently validated stage outcomes. The adapter exposes each chat reference and releases a slot when the stage ends or pauses.
+
+### PH-12 Recover interrupted sessions and enforce real capacity
+
+- **Depends on:** PH-08, PH-10, PH-11. **Output:** PR.
+- Record launch intent before spawning, attach the chat ID, and keep active or uncertain local sessions counted while reconciling. Reserve their worktrees until stopped or accounted for. Keep heartbeat scheduling independent of chat observation. Adopt a verified finished result through a recovery claim.
+- **Done when:** Interrupting the Captain on either side of launch or stalling the API never lets a replacement write in the same worktree or oversubscribe the machine. A reply and a finished worker result survive restarting the Captain.
+
+## PR and report delivery
+
+### PH-13 Publish drafts and reconcile GitHub writes
+
+- **Depends on:** PH-02, PH-10, PH-11. **Output:** PR.
+- Record operation intent and expected remote state. After development records a candidate commit, push it and open a draft with the required Phalanx attribution. Reuse a matching PR. If bounded reconciliation cannot confirm creation, retry so the work gets a PR. Record one primary and surface duplicates. Use revision preconditions where supported and reconcile unresolved writes before issuing a conflicting operation.
+- **Done when:** A lost response to draft creation produces a primary PR, repeated publication keeps one attribution footer, and an expired claim or outside push cannot silently overwrite newer work.
+
+### PH-14 Validate and promote the current candidate
+
+- **Depends on:** PH-02, PH-08, PH-13. **Output:** PR.
+- Run self-review and candidate-local pre-validation, recording allowed bypasses. Publish any updated candidate to the primary PR before checks that require that head. Run draft-only gates and then mark the draft ready for review. Observe required CI and previews for the current revision. Distinguish CI that is unconfigured from expected CI that is missing.
+- **Done when:** Revised draft previews run on the intended head and promotion does not wait for checks that only start after it. A pre-validation bypass leaves required CI intact. If a promoted PR later needs a draft-only check that cannot run, follow the repo policy or expose the decision rather than wait indefinitely.
+
+### PH-15 Review, reconcile, and check in
+
+- **Depends on:** PH-09, PH-12, PH-14. **Output:** PR.
+- Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
+- **Done when:** A real PR goes through a feedback or conflict loop, required revision changes invalidate stale evidence, and a verified merge is recorded exactly once. A separate ready-only case completes with a verified PR and no merge.
+
+### PH-16 Deliver field reports
+
+- **Depends on:** PH-09, PH-11. **Output:** PR.
+- Draft, review, and store Markdown reports with sources or evidence, limitations, and open questions where applicable. Persist reviewed draft checkpoints and use the same stage outcome and finalization rules as PR work.
+- **Done when:** A report request completes end to end without a PR and the verified report can be retrieved with the runner offline. Retrying report storage does not redraft the report.
+
+## Operator visibility and local release
+
+### PH-17 Expose bounded queue and history reads
+
+- **Depends on:** PH-05, PH-06, PH-09. **Output:** PR.
+- Add cursor-paginated queries for open work and recent closures, and a bounded item timeline query. Include repo, stage, execution status, wait reason and age, last progress, attempt reference, and verified output. Load detailed events on demand.
+- **Done when:** The API serves a large backlog and history without reading it all for each refresh, and results remain accurate across pagination while items advance and close.
+
+### PH-18 Build the operator work board
+
+- **Depends on:** PH-08, PH-17. **Output:** PR.
+- Implement the [operator view](SPEC.md#operator-view). Show active stages, actionable waits, and recently closed outcomes with final PR or report links. Select an item to inspect its transition history and attempt. Refresh from the API and expose stale or disconnected state.
+- **Done when:** Users can follow a stage loop, find an item needing input, and open a recent success or failure output. A closed item appears in recent history with its last outcome, and persisted results remain browsable when the runner is offline.
+
+### PH-19 Load-test and harden one-machine execution
+
+- **Depends on:** PH-03, PH-07, PH-12, PH-15, PH-16, PH-18. **Output:** PR with test results.
+- Sweep synthetic backlog and capacity separately from real Codex sessions. Test mostly blocked queues, steady urgent intake, dependency fan-out, a wave of CI waits, provider throttling, interrupted sessions, and finalization outages. Measure scheduling latency, age of eligible work, memory, disk, and restart catch-up. Bound polling and rechecks. Add narrow resource limits only where the measurements show contention among builds, previews, or report work.
+- **Done when:** The tested operating envelope is documented, starvation and overbooking tests pass, pending work recovers without silent loss, and the full v1 muster passes on one machine. Any limit or known degradation has a visible reason.
+
+## After the local release
+
+| Item | Depends on | Deliverable and acceptance |
+| --- | --- | --- |
+| **PH-20 Host the API** | PH-19 | Deploy the same server with HTTPS, persistence, backups, and restore validation. Point a local runner at the hosted URL and repeat the v1 muster through the same API. |
+| **PH-21 Add phone intake** | PH-20 | Verify the supported ChatGPT integration and authorization. File an item by phone and return its durable link. |
+| **PH-22 Support multi-device execution** | PH-19 | Validate claims across machines, checkpoint portability, affinity, GitHub write reconciliation, and device loss with work in flight. |
+| **PH-23 Add alternate runtimes** | PH-11, PH-19 | Verify and add Claude Code and GitHub Copilot CLI adapters as needed. Pass the shared stage contract and recovery tests for each supported runtime. |
+| **PH-24 Add campaigns** | PH-07, PH-19 | Group items under a goal. Propose parallel and dependent items, then revisit queued work after verified check-ins or steering. Preserve history and apply updates through versioned work-item operations. |
