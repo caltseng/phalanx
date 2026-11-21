@@ -127,6 +127,7 @@ class WorkspaceTests(unittest.TestCase):
             extra = workspace.path / relative
             extra.parent.mkdir(exist_ok=True)
             extra.write_text("local data")
+            self.assertEqual(self.prepare().dirty, relative == "untracked")
             with self.assertRaisesRegex(WorkspaceError, "local changes"):
                 remove("item", closed=True, expected_head=workspace.head)
             self.assertEqual(extra.read_text(), "local data")
