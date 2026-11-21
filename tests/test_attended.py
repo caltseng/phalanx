@@ -1,9 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
 import json
+import sqlite3
+from contextlib import closing
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from threading import Event
+from threading import Barrier, Event
 import unittest
 from unittest.mock import patch
 from uuid import uuid4
@@ -13,7 +15,8 @@ from phalanx.workspaces import WorkspaceManager
 
 
 class StubAPI:
-    def __init__(self, checkout):
+    def __init__(self, checkout, item_id="item"):
+        self.item_id = item_id
         self.checkout = checkout
         self.attempt = uuid4().hex
         self.claim_leases = []
@@ -27,7 +30,7 @@ class StubAPI:
     def call(self, path, body=None, *, lease=None, key=None):
         if path == "/repositories":
             return [{"id": "repo", "remote": str(self.checkout)}]
-        if path == "/items/item":
+        if path == f"/items/{self.item_id}":
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
@@ -37,7 +40,7 @@ class StubAPI:
                 self.drop_claim = False
                 raise RunnerError("lost claim response")
             return {
-                "status": "claimed", "item_id": "item", "attempt_id": self.attempt,
+                "status": "claimed", "item_id": self.item_id, "attempt_id": self.attempt,
                 "lease_expires_at": 900,
                 "execution": {"id": "execution", "version": 3, "state": {"stage": self.stage}},
                 "dependencies": self.dependencies,
@@ -46,7 +49,7 @@ class StubAPI:
             }
         if path == f"/dispatch/runners/desk/attempts/{self.attempt}/renew":
             return {"attempt_id": self.attempt, "lease_expires_at": 901}
-        if path == "/items/item/executions/execution/result":
+        if path == f"/items/{self.item_id}/executions/execution/result":
             self.posts.append((body, lease, key))
             if self.drop_result:
                 self.drop_result = False
@@ -79,8 +82,8 @@ class AttendedTest(unittest.TestCase):
             cwd=path, stderr=subprocess.STDOUT, text=True,
         ).strip()
 
-    def runner(self):
-        return AttendedRunner(self.root, self.config, self.api)
+    def runner(self, slot=1):
+        return AttendedRunner(self.root, self.config, self.api, slot=slot)
 
     def write_result(self, runner, marker, evidence, outcome="succeeded"):
         p = runner.status()["packet"]
@@ -154,6 +157,101 @@ class AttendedTest(unittest.TestCase):
             finally:
                 resume.set()
             self.assertEqual(preparing.result(timeout=15)["status"], "launch_intent")
+
+    def test_parallel_slots_use_distinct_worktrees_and_exact_receipts(self):
+        self.config["capacity"] = 2
+        second_api = StubAPI(self.checkout, "item-2")
+        for api in (self.api, second_api):
+            api.drop_claim = api.drop_result = False
+        first = self.runner()
+        second = AttendedRunner(self.root, self.config, second_api, slot=2)
+        original_call = StubAPI.call
+        claims = Barrier(2)
+
+        def call(api, path, body=None, **kwargs):
+            if path == "/dispatch/claim":
+                self.assertEqual(body["slots"], 2)
+                claims.wait(timeout=10)
+            return original_call(api, path, body, **kwargs)
+
+        with patch.object(StubAPI, "call", call), ThreadPoolExecutor(2) as pool:
+            first_launch = pool.submit(first.prepare)
+            second_launch = pool.submit(second.prepare)
+            launches = [first_launch.result(timeout=30), second_launch.result(timeout=30)]
+        self.assertEqual([launch["slot"] for launch in launches], [1, 2])
+        self.assertNotEqual(first.status()["packet"]["worktree"], second.status()["packet"]["worktree"])
+        self.assertNotEqual(first.status()["packet"]["branch"], second.status()["packet"]["branch"])
+        self.assertNotEqual(self.api.claim_leases, second_api.claim_leases)
+        self.assertEqual([row["slot"] for row in first.status(all_slots=True)["reservations"]], [1, 2])
+        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+            self.runner(3).prepare()
+
+        marker = launches[0]["marker"]
+        native_id = str(uuid4())
+        with self.assertRaisesRegex(RunnerError, "Receipt does not match"):
+            second.receipt(marker, "local", thread_id=native_id)
+        first.receipt(marker, "local", thread_id=native_id)
+        self.write_result(first, marker, "# Report")
+        entered = Event()
+        resume = Event()
+
+        def slow_submit(api, path, body=None, **kwargs):
+            if path.endswith("/result"):
+                entered.set()
+                if not resume.wait(timeout=10):
+                    raise AssertionError("Submission did not resume")
+            return original_call(api, path, body, **kwargs)
+
+        with patch.object(StubAPI, "call", slow_submit), ThreadPoolExecutor(2) as pool:
+            submitted = pool.submit(first.submit, marker, "local", native_id)
+            try:
+                self.assertTrue(entered.wait(timeout=10))
+                heartbeat = pool.submit(second.renew)
+                self.assertEqual(heartbeat.result(timeout=5)["attempt_id"], second_api.attempt)
+            finally:
+                resume.set()
+            self.assertEqual(submitted.result(timeout=15), {"version": 4})
+
+        self.assertEqual(first.status(), {"status": "idle"})
+        self.assertEqual(second.status()["status"], "launch_uncertain")
+        # Reducing capacity preserves the outstanding high-numbered slot and
+        # counts it against admission of a replacement in a lower slot.
+        self.config["capacity"] = 1
+        with self.assertRaisesRegex(RunnerError, "Local capacity is full"):
+            self.runner().prepare()
+        self.assertEqual(self.runner(2).status()["attempt_id"], second_api.attempt)
+
+    def test_legacy_pending_claim_can_replay_while_another_slot_launches(self):
+        with self.assertRaisesRegex(RunnerError, "lost claim"):
+            self.runner().prepare()
+        with closing(sqlite3.connect(self.runner().journal)) as db, db:
+            record = json.loads(db.execute("SELECT record FROM slot WHERE id=1").fetchone()[0])
+            del record["slots"]
+            db.execute("UPDATE slot SET record=? WHERE id=1", (json.dumps(record),))
+
+        self.config["capacity"] = 2
+        self.config["repositories"]["broken"] = {"checkout": str(self.root / "missing")}
+        second_api = StubAPI(self.checkout, "item-2")
+        second_api.drop_claim = False
+        second = AttendedRunner(self.root, self.config, second_api, slot=2)
+        original_call = StubAPI.call
+
+        def call(api, path, body=None, **kwargs):
+            if path == "/repositories":
+                return original_call(api, path, body, **kwargs) + [
+                    {"id": "broken", "remote": str(self.checkout)}
+                ]
+            if path == "/dispatch/claim":
+                self.assertEqual(body["repository_ids"], ["repo"])
+                self.assertEqual(body["slots"], 1 if api is self.api else 2)
+            return original_call(api, path, body, **kwargs)
+
+        with patch.object(StubAPI, "call", call):
+            launch = second.prepare()
+            self.assertEqual(launch["unverified_mappings"], ["broken"])
+            self.assertEqual(self.runner().status()["status"], "claim_pending")
+            self.assertEqual(self.runner().prepare()["status"], "launch_intent")
+        self.assertEqual(self.api.claim_leases, [record["lease"], record["lease"]])
 
     def test_failure_and_owner_question_send_distinct_results(self):
         self.api.drop_claim = self.api.drop_result = False
