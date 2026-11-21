@@ -3,7 +3,7 @@
 ## Start here
 
 - Read [README.md](README.md) for the project goal and [SPEC.md](SPEC.md) for the current design. Treat options in the design questions as proposals. Record decisions in the spec as they are made.
-- Keep the project in design until Caleb asks to start implementation. Keep design changes focused on the current decisions.
+- Implement against the current Markdown spec in small, independently reviewable PRs. Track completed slices and remaining integration in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Design priorities
 

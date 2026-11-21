@@ -4,6 +4,20 @@ Each item produces a reviewable PR or a Markdown field report. Dependencies belo
 
 V1 targets a large queue and many workers on one local machine with visible Codex chats, backed by a real HTTP server running locally. It is complete when one muster across two repos produces a field report and a checked-in PR, recovers an interrupted worker, resumes after user input, and passes the single-machine load and fault gates. Cloud hosting is a follow-on deployment of the same API. Multi-device execution and handoff, campaigns, and alternate runtimes are P2.
 
+## Implementation checkpoints
+
+| Work item | Merged deliverable | Remaining verification or integration |
+| --- | --- | --- |
+| PH-01 | [Codex recovery field report](docs/pilots/codex-recovery.md) in [PR #3](https://github.com/caltseng/phalanx/pull/3). | Exercise interrupted launch and reply recovery against the integrated runner. |
+| PH-02 | [GitHub lifecycle field report](docs/pilots/github-lifecycle.md) in [PR #2](https://github.com/caltseng/phalanx/pull/2). | Check real repo preview and CI triggers and race handling in the integrated lifecycle. |
+| PH-03 | [Local operating envelope](docs/pilots/local-operating-envelope.md) in [PR #4](https://github.com/caltseng/phalanx/pull/4). | Confirm the real worker capacity and repeat the synthetic benchmark against the full service. |
+| PH-04 | Standalone FastAPI and SQLite server, migrations, bearer roles, and verified backups in [PR #7](https://github.com/caltseng/phalanx/pull/7). | Use the same API process for subsequent deployment. |
+| PH-05 | Server-owned transition engine in [PR #5](https://github.com/caltseng/phalanx/pull/5). | Wire phase decisions to durable intake, history, and versioned results. |
+| PH-10 | Local worktree allocation, reuse, and safe cleanup in [PR #9](https://github.com/caltseng/phalanx/pull/9). | Connect workspace reservations and cleanup to the runner and queue. |
+| PH-11 | Codex work packets and bounded attempt evidence ingestion in [PR #10](https://github.com/caltseng/phalanx/pull/10). | Wire live Captain launch receipts and observation to runner claims, results, and recovery. |
+| PH-13 | Runner-side GitHub client primitives in [PR #6](https://github.com/caltseng/phalanx/pull/6). | Wire Git ref publication, write intent and recovery, and exact-head verification. |
+| PH-18 | Operator board component with browser fixtures in [PR #8](https://github.com/caltseng/phalanx/pull/8). | Connect it to the authenticated PH-17 read API and package its static assets. |
+
 ## Integration pilots
 
 ### PH-01 Prove visible Codex execution and recovery
