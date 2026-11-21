@@ -61,6 +61,39 @@ After the run, each attempt marker had exactly one session in `list_sessions_and
 
 Each gap has a fix row ahead of PH-12a in the [implementation plan](../../IMPLEMENTATION_PLAN.md#remaining-v1-integration-work).
 
+## Live rerun 1 on November 21, 2026
+
+**Setup.** The same Captain, checkouts and capacity as the muster above. The server and loop ran from `main` at `98fd6a9` (#63, #69) and were redeployed to `895e602` (#70) mid-run. Two fresh items: a PR item for [phalanx-pilot-web#2](https://github.com/caltseng/phalanx-pilot-web/issues/2) (clamp) and a report item for [phalanx-pilot-py#1](https://github.com/caltseng/phalanx-pilot-py/issues/1) (truncate) whose goal asks one question first. All times are UTC.
+
+| Check | Evidence |
+| --- | --- |
+| Runner restart during a live worker | The loop and server were stopped at about 14:28 with worker `c885db53` (pilot-py, attempt `675d0560`) running and launch `1984c51c` (pilot-web, attempt `70661a69`) queued but not taken. After the restart, slot 1 kept its receipt and slot 2 was `launch_uncertain`. The new loop served the same pending launch once. `list_sessions_and_chats` showed one session per marker. |
+| Captain-answered question | Attempt `675d0560` returned `needs_input` at 14:30:28. The Captain answered with the proposed default using `phalanx reply --answered-by captain` at 14:40:45. `inspect` shows `answered_by: captain`, and the next launch (`ad7b861c`, state version 5) carried the answer and `answered_by` in its handoff. Caleb was not asked. |
+| Adoption (PH-12a) | Worker `9ded7d4f` wrote a `succeeded` result for `ad7b861c`. The Captain stopped the loop at 14:47:57 before it submitted, and waited past the 90-second lease. After the restart at 14:50:29 the loop reported "Awaiting native observation before recovery". It took a `stopped` observation and then called `recover-claim` (HTTP 200) for the same attempt. It submitted the result at 14:51:28 under the new lease. Nothing was relaunched or redrafted. |
+| Stored report | Review `0e8d362b` (worker `cdfa1b5a`) succeeded. The report was stored at 14:54:51, and the item completed. |
+| Published draft | Development `70661a69` (worker `6453a4f8`) succeeded with candidate `b8c06d9`. The runner published draft [phalanx-pilot-web#4](https://github.com/caltseng/phalanx-pilot-web/pull/4) at 14:45:47 with that head and the Phalanx footer. |
+| Board (PH-18a) | The board's API showed `worker_reference` for both live items. The owner question with its options reached `inbox`, and the board script renders it. `recheck_at_ms` stayed null because no external gate was pending. The token was not typed into the browser, so this check used the API and the board script. |
+
+**Where it stopped.** The report item completed. The PR item stopped at `self_review` (queued) after the draft, as before, because nothing on `main` dispatches `self_review` yet (PH-14a part 2).
+
+### Findings
+
+**What worked live**
+- The runner restart, the Captain-answered reply and the adoption all ran without a duplicate session, attempt or draft.
+- The report path, including a mid-run redeploy, finished without Caleb.
+
+**What broke**
+- **Relay output encoding.** `phalanx relay next` prints JSON with raw non-ASCII. On Windows, Python writes a piped stdout in the locale code page, so a Captain reading it through a shell got U+FFFD where the stored report had U+2026. The relay database and the stored report were correct. The Captain launched from the database copy. A Captain pasting the corrupted prompt would start a worker whose first turn fails the exact-prompt check.
+- **No proposed default.** The `needs_input` result contract has no `proposed_default` field. The worker put its default inside `options`, so the board's "Proposed default" line never shows.
+- **Silent history.** The timeline has no event for the adoption (version 5 `claim` is followed directly by version 6 `result`), and the `reply` event does not carry `answered_by`. Only `inspect` shows who answered.
+
+**What surprised us**
+- A finished Copilot app session ends its transcript with `session.shutdown`, not `assistant.turn_end`. The muster's busy check had to treat both as idle.
+- The muster's own relay script once hung after taking an observation. The loop showed it as "took observe but never answered" and later "never took observe". A restarted script recovered with no lost slot.
+- A queued `self_review` that nothing dispatches shows `queued` on the board with no wait reason. PH-14a part 2 removes this case.
+
+The gaps have a fix row (PH-11f) in the [implementation plan](../../IMPLEMENTATION_PLAN.md#remaining-v1-integration-work).
+
 ## Attended path for PH-11
 
 1. Start the runner independently of the Captain. On an authorized muster, claim a stage, reserve a slot, and prepare the item's worktree. Persist launch intent before calling the app. Include the item/stage/attempt IDs, one unique marker, host, project, worktree, expected revision and state version, and start time. Give one Captain launch ownership of the attempt. The runner retains queue credentials and leases.
