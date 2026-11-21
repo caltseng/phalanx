@@ -232,7 +232,7 @@ class DraftPublicationTests(unittest.TestCase):
 
         def pause():
             paused.set()
-            self.assertTrue(release.wait(5))
+            self.assertTrue(release.wait(30))
 
         def check_claim(_intent, claim):
             if claim == second:
@@ -246,20 +246,23 @@ class DraftPublicationTests(unittest.TestCase):
 
         self.git.on_push = pause
         writer = threading.Thread(target=publish, args=("first", self.intent, first))
+        successor = None
         writer.start()
         try:
-            self.assertTrue(paused.wait(5))
+            self.assertTrue(paused.wait(30))
             self.active = second
             self.git.head = OTHER
             newer = replace(self.intent, candidate=OTHER)
             successor = threading.Thread(target=publish, args=("second", newer, second))
             successor.start()
-            self.assertTrue(successor_started.wait(5))
+            self.assertTrue(successor_started.wait(30))
             self.assertNotIn("second", results)
         finally:
             release.set()
-            writer.join(5)
-        successor.join(5)
+            for thread in (writer, successor):
+                if thread is not None:
+                    thread.join(30)
+                    self.assertFalse(thread.is_alive())
         self.assertEqual(results["first"].status, "conflict")
         self.assertEqual(results["second"].status, "conflict")
         self.assertEqual(self.git.head, OTHER)

@@ -1,11 +1,8 @@
 from dataclasses import asdict, replace
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import time
 import unittest
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 from phalanx import dependencies, dispatch, finalization, intake
 from phalanx.dispatch_api import Claim
@@ -198,15 +195,8 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
         path = f"/v1/items/{consumer['id']}/executions/{execution['id']}"
 
         def steer(token, version):
-            data = json.dumps({"expected_version": version, "goal": "New goal", "dependencies": []}).encode()
-            request = Request(self.url + path, method="PATCH", data=data,
-                              headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
-            try:
-                with urlopen(request, timeout=5) as response:
-                    return response.status, json.load(response)
-            except HTTPError as error:
-                with error:
-                    return error.code, json.load(error)
+            return self.request(path, token, {"expected_version": version, "goal": "New goal",
+                                              "dependencies": []}, method="PATCH")
 
         self.assertEqual(steer(RUNNER, execution["version"])[0], 403)
         status, changed = steer(OWNER, execution["version"])

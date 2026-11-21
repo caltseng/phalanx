@@ -376,7 +376,8 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             db.execute("DROP TRIGGER terminal_write_outage")
             db.execute("UPDATE report_finalizations SET due_at=0 WHERE execution_id=?", (execution_id,))
         self.server = self.start_server(self.path)
-        deadline = monotonic() + 5
+        # Background finalization runs on the server's schedule; poll generously.
+        deadline = monotonic() + 30
         while monotonic() < deadline:
             closed = self.get(base, OWNER)[1]["execution"]
             if closed["state"]["status"] == "cancelled":

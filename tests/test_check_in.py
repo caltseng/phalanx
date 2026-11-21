@@ -14,6 +14,9 @@ PRIMARY = PrimaryPull("owner/repo", 12, "PR_node", "https://github.com/owner/rep
 
 class CheckInTests(unittest.TestCase):
     def setUp(self):
+        self.reset()
+
+    def reset(self):
         self.pull = {
             "number": PRIMARY.number,
             "node_id": PRIMARY.node_id,
@@ -105,7 +108,7 @@ class CheckInTests(unittest.TestCase):
             {"checks": GateResult(GateState.WAITING)},
         ):
             with self.subTest(changes=changes):
-                self.setUp()
+                self.reset()
                 self.gates = replace(self.gates, **changes)
                 self.assertEqual(self.run_check_in().status, "blocked")
                 self.assertIsNone(self.intent)
@@ -132,7 +135,7 @@ class CheckInTests(unittest.TestCase):
     def test_write_and_lost_response_both_require_verified_merge_commit(self):
         for mode in ("success", "lost"):
             with self.subTest(mode=mode):
-                self.setUp()
+                self.reset()
                 self.mode = mode
                 result = self.run_check_in()
                 self.assertEqual(result.status, "merged")

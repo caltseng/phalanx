@@ -16,6 +16,10 @@ from phalanx.store import connect, migrate, write_transaction
 
 OWNER = "o" * 32
 RUNNER = "r" * 32
+# Generous bounds: loaded or hosted machines can stall a single fsync-heavy request
+# or server start for seconds. Tests never assert on these timeouts.
+REQUEST_TIMEOUT = 30
+STARTUP_TIMEOUT = 30
 
 # Let the real server exit before its Python launcher exits on Windows.
 SERVER_PROCESS = """
@@ -50,10 +54,10 @@ class ServerFixture:
                 env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
             )
         self.addCleanup(self.stop_server, server)
-        deadline = time.monotonic() + 10
+        deadline = time.monotonic() + STARTUP_TIMEOUT
         while server.poll() is None and time.monotonic() < deadline:
             try:
-                if self.get("/health") == (200, {"status": "ok"}):
+                if self.request("/health", timeout=1) == (200, {"status": "ok"}):
                     return server
             except (URLError, TimeoutError):
                 pass
@@ -75,7 +79,8 @@ class ServerFixture:
     def get(self, path, token=None):
         return self.request(path, token=token)
 
-    def request(self, path, token=None, body=None, headers=None):
+    def request(self, path, token=None, body=None, headers=None, *, method=None,
+                timeout=REQUEST_TIMEOUT):
         headers = dict(headers or {})
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -83,7 +88,8 @@ class ServerFixture:
         if data is not None:
             headers["Content-Type"] = "application/json"
         try:
-            response = urlopen(Request(self.url + path, data=data, headers=headers), timeout=1)
+            response = urlopen(Request(self.url + path, data=data, headers=headers, method=method),
+                               timeout=timeout)
         except HTTPError as error:
             response = error
         with response:
