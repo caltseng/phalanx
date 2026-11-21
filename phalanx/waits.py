@@ -44,16 +44,20 @@ def external_wait(db, item_id, execution_id, payload, lease_digest):
     if state.status != Status.RUNNING or state.stopping is not None:
         raise intake.Conflict("Scheduling a new external wait requires a running attempt")
     intake.check_attempt(db, execution_id, state, payload, lease_digest)
-    delay = max(30, payload.retry_after_seconds)
+    return schedule(db, row, state, payload.attempt_id, payload.reason, payload.retry_after_seconds,
+                    {"gate": payload.gate, "revision": payload.revision.model_dump()})
+
+
+def schedule(db, row, state, attempt_id, reason, retry_after_seconds, details):
+    """Record a verified stage's wait and its recheck in the same transaction."""
+    delay = max(30, retry_after_seconds)
     due_at = int(time() * 1000) + delay * 1000 + randint(0, 5000)
-    details = {"gate": payload.gate, "revision": payload.revision.model_dump(),
-               "due_at_ms": due_at}
     updated = intake.apply(
-        db, row, state, Event.EXTERNAL_WAIT, details=details, attempt_id=payload.attempt_id,
-        wait=Wait(payload.reason, "scheduled external recheck"),
+        db, row, state, Event.EXTERNAL_WAIT, details={**details, "due_at_ms": due_at},
+        attempt_id=attempt_id, wait=Wait(reason, "scheduled external recheck"),
     )
     db.execute("INSERT INTO external_rechecks VALUES (?, ?, ?)",
-               (execution_id, updated["version"], due_at))
+               (row["id"], updated["version"], due_at))
     return updated
 
 
@@ -70,7 +74,7 @@ def due_rechecks(db, limit):
     return [{
         "item_id": row["item_id"], "execution_id": row["id"], "version": row["version"],
         "stage": row["stage"], "wait": json.loads(row["state_json"])["wait"],
-        **json.loads(row["details_json"]),
+        **_gate_details(row["details_json"]),
         "due_at_ms": row["due_at_ms"],
     } for row in rows]
 
@@ -87,6 +91,12 @@ def recheck(db, item_id, execution_id, payload):
         raise intake.Conflict("No scheduled external recheck is active")
     if due["due_at_ms"] > int(time() * 1000):
         raise intake.Conflict("External recheck is not due yet")
-    details = json.loads(due["details_json"])
+    details = _gate_details(due["details_json"])
+    details["due_at_ms"] = due["due_at_ms"]
     details["wait_version"] = row["version"]
     return intake.apply(db, row, state, Event.RECHECK, details=details)
+
+
+def _gate_details(encoded):
+    details = json.loads(encoded)
+    return {"gate": details["gate"], "revision": details["revision"]}
