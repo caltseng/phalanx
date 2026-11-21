@@ -215,7 +215,7 @@ def _publish_update(snapshot, local, pull, base_ref):
             return None
         outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize)
     except (PublicationError, WorkspaceError) as error:
-        return _question(snapshot, f"Could not publish the reviewed candidate: {error}", handoff)
+        return _retry(snapshot, f"Could not publish the reviewed candidate: {error}")
     if outcome.status == "uncertain":
         return _retry(snapshot, outcome.reason)
     if outcome.status == "conflict":

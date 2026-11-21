@@ -868,6 +868,31 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                         "authorization": "Policy 3"}],
                       [entry["details"].get("local_checks") for entry in timeline])
 
+    def test_transient_reviewed_update_error_retries_instead_of_asking_owner(self):
+        from phalanx import validation_stages
+        from phalanx.git_publication import PublicationError
+
+        class Git:
+            def __init__(self, *_):
+                pass
+
+            def read_head(self, **_):
+                raise PublicationError("git ls-remote failed: 502")
+
+        item_id = "item-1"
+        snapshot = {"repositories": {"repo": object()}, "claim": {
+            "attempt_id": "a", "item_id": item_id, "request": {"repository_id": "repo"},
+            "execution": {"version": 3, "state": {"stage": "pr_promotion", "candidate": "b" * 40,
+                                                  "primary_pr": "#7"}}}}
+        local = SimpleNamespace(_inspect=lambda: SimpleNamespace(path="."), _authorize=lambda: None)
+        pr = SimpleNamespace(state="open", merged=False, head_ref=_item_branch(item_id), base_ref="main",
+                             head_sha="a" * 40)
+        with patch("phalanx.validation_stages.GitPublication", Git):
+            body = validation_stages._publish_update(snapshot, local, pr, "main")["body"]
+        self.assertEqual(body["outcome"], "failed")
+        self.assertIn("502", body["failure_reason"])
+        self.assertGreater(body["retry_after_seconds"], 0)
+
     def test_validation_policy_gap_waits_for_owner_with_reason(self):
         self.api.stage, self.api.candidate = "pre_pr_validation", "a" * 40
         self.api.drop_claim = self.api.drop_result = False
