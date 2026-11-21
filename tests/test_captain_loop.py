@@ -282,6 +282,80 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertFalse(self.native.launches)
         self.assertIn("packet", loop._records()[1])
 
+    def test_cancel_during_post_packet_discovery_confirms_stop_without_launch(self):
+        self.config["capacity"] = 1
+        self.start_server(self.directory / "packet-cancel.sqlite3")
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        execution_route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
+        native, call = self.native.__call__, self.api.call
+        stop_posts, prepared = [], []
+        loop = self.loop()
+        def discover(operation, arguments):
+            if operation == "resolve_project" and "packet" in loop._records().get(1, {}) and not prepared:
+                prepared.append(loop._records()[1])
+                current = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
+                status, stopping = self.request(execution_route + "/cancel", OWNER, {
+                    "expected_version": current["version"], "reason": "Cancelled during desktop discovery",
+                })
+                self.assertEqual(status, 200, stopping)
+            return native(operation, arguments)
+        def stop(route, body=None, **kwargs):
+            if route.endswith("/stop-confirmed"):
+                saved = loop._records()[1]["cancel_stop"]
+                self.assertEqual(saved["body"], body)
+                self.assertEqual(saved["key"], kwargs["key"])
+                stop_posts.append((body.copy(), kwargs.copy()))
+            return call(route, body, **kwargs)
+        loop.adapter = CodexCLIAdapter(discover)
+        self.api.call = stop
+        self.spin(loop, lambda: bool(stop_posts) and not loop._records(), timeout=15)
+        self.assertEqual(len(stop_posts), 1)
+        self.assertFalse(self.native.launches)
+        self.assertNotIn("relay", prepared[0])
+        self.assertNotIn("receipt", prepared[0])
+        with loop.runner._journal() as db:
+            archive = json.loads(db.execute("SELECT record FROM completed").fetchone()[0])
+        self.assertEqual(archive["packet"], prepared[0]["packet"])
+        self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "cancelled")
+        timeline = self.get(execution_route + "/timeline", OWNER)[1]
+        self.assertEqual(sum(event["event"] == "stop_confirmed" for event in timeline), 1)
+
+    def test_transient_post_packet_discovery_resumes_original_launch_once(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        native = self.native.__call__
+        failed = False
+        loop = self.loop()
+        def discover(operation, arguments):
+            nonlocal failed
+            if operation == "resolve_project" and "packet" in loop._records().get(1, {}) and not failed:
+                failed = True
+                raise OSError("Transient post-packet discovery failure")
+            return native(operation, arguments)
+        loop.adapter = CodexCLIAdapter(discover)
+        with self.assertRaisesRegex(OSError, "Transient post-packet"):
+            loop._prepare(1)
+        original = loop._records()[1]
+        claim_requests = len(self.api.requests)
+        self.assertNotIn("relay", original)
+        self.assertFalse(self.native.launches)
+        self.spin(loop, lambda: bool(loop._records()[1].get("receipt")))
+        for _ in range(10):
+            loop.step()
+            time.sleep(0.01)
+        resumed = loop._records()[1]
+        self.assertEqual(len(self.native.launches), 1)
+        self.assertEqual(len(self.api.requests), claim_requests)
+        self.assertEqual(resumed["packet"], original["packet"])
+        self.assertEqual(resumed["lease"], original["lease"])
+        self.assertEqual(resumed["started_at"], original["started_at"])
+        self.assertEqual(resumed["relay"]["marker"], self.native.launches[0]["marker"])
+
     def test_pause_capacity_reduction_and_unmatched_attempts_prevent_admission(self):
         self.api.paused = True
         loop = self.loop()

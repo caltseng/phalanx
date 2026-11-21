@@ -167,7 +167,10 @@ they never prove stop or authorize replacement.
 
 Every prepared launch is relayed at most once. The loop journals relay intent
 before invoking the bridge and immediately saves a native or queued receipt.
-After timeout, failure or restart, an existing packet is **never** relayed again.
+After timeout, failure or restart, a recorded relay intent is **never** repeated.
+A prepared packet with no relay intent, receipt, submission or recovery ownership
+can resume discovery and launch using its original claim and packet. Its clean,
+accounted worktree and live claim are rechecked before relaying.
 Discovery must correlate its original marker, assignment, host, project, launch
 time and any queued ID to exactly one native thread. A stopped turn also requires
 an explicit attestation that downstream writers stopped. The existing result
@@ -180,7 +183,8 @@ Expired results remain reserved for server-authorized adoption, which is not
 implemented by this slice. Existing stopped-attempt recovery can release only
 verified safe reservations.
 
-A stopping worker assignment with no committed packet, relay, receipt or result
+A stopping worker assignment with no relay intent, receipt, submission or recovery
+ownership (whether or not its packet was committed)
 can use the leased `stop-confirmed` route without waiting for expiry. The loop
 checks its absent or clean, accounted worktree and records the exact stop request
 before sending it. Retries recheck that proof and replay the original request.

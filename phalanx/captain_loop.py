@@ -18,6 +18,9 @@ from .captain_adapter import CodexCLIAdapter, CommandTransport, ObservationBatch
 from .workspaces import _file_lock, _git
 
 
+_LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop")
+
+
 class CaptainLoop:
     def __init__(self, root: Path, config: dict, api, adapter: CodexCLIAdapter, *,
                  poll_seconds: float = 2, heartbeat_seconds: float = 20,
@@ -97,6 +100,17 @@ class CaptainLoop:
         original = runner._snapshot()
         if not original:
             runner, result = self._claim_new(slot)
+        elif "packet" in original:
+            if any(field in original for field in (*_LAUNCH_EFFECTS, "cancel_stop")):
+                raise RunnerError("Launch relay already attempted or owned by recovery; reconcile its exact marker")
+            self._unlaunched_proof(runner, original)
+            handoff = runner._handoff(original)
+            if not handoff.packet.worktree.is_dir():
+                raise RunnerError("Prepared worktree is missing; restore it before launch")
+            result = {
+                "status": "launch_intent", "marker": handoff.packet.marker, "host_id": original["host_id"],
+                "create_thread": handoff.create_thread_arguments(original["project_id"]),
+            }
         else:
             # A legacy or interrupted claim retains the original filters and
             # secret. Do not substitute this loop's capabilities on replay.
@@ -111,7 +125,7 @@ class CaptainLoop:
         runner.renew()
         def relay_intent(record, db):
             runner._ensure_reservation(record, snapshot["lease"])
-            if record.get("receipt") or record.get("relay") or record.get("recover_stop") or record.get("cancel_stop"):
+            if any(field in record for field in (*_LAUNCH_EFFECTS, "cancel_stop")):
                 raise RunnerError("Launch relay already attempted or owned by recovery; reconcile its exact marker")
             if record.get("packet") != snapshot["packet"]:
                 raise RunnerError("The original launch packet changed; reconcile before any relay")
@@ -176,7 +190,7 @@ class CaptainLoop:
         for identity in (str(attempt), attempt.hex):
             result = runner.results / f"phalanx-attempt-{identity}.json"
             if os.path.lexists(result) or os.path.lexists(result.with_suffix(".json.tmp")):
-                raise RunnerError("Attempt evidence exists without a packet; reconcile it before confirming stop")
+                raise RunnerError("Attempt evidence exists; reconcile it before confirming stop or launch")
         repo = claim["request"]["repository_id"]
         mapping = self.config["repositories"][repo]
         manager = runner._manager(mapping, snapshot["repositories"][repo])
@@ -186,7 +200,11 @@ class CaptainLoop:
             if manager._registered(path, branch):
                 workspace = manager._snapshot(path, branch, common)
                 base = claim["request"].get("target_branch") or mapping["base_branch"]
-                expected = claim["execution"]["state"].get("candidate") or manager.resolve_origin_base(base)
+                packet = runner._handoff(snapshot).packet if "packet" in snapshot else None
+                expected = (packet.expected_revision if packet else
+                            claim["execution"]["state"].get("candidate") or manager.resolve_origin_base(base))
+                if packet and (packet.worktree != workspace.path or packet.branch != workspace.branch):
+                    raise RunnerError("Prepared packet does not match the owned worktree; reconcile it")
                 if workspace.dirty or workspace.head != expected:
                     raise RunnerError("Unlaunched workspace has unaccounted changes; preserve it and reconcile stop")
                 return f"Unlaunched clean workspace {path} at accounted revision {workspace.head}"
@@ -201,7 +219,7 @@ class CaptainLoop:
         # effect exists, and persist the exact stop request before sending it.
         with _file_lock(self.root / f"attended-prepare-{runner.slot}.lock"):
             snapshot = runner._snapshot()
-            unsafe = ("packet", "receipt", "relay", "submission", "recover_stop")
+            unsafe = _LAUNCH_EFFECTS
             if any(field in snapshot for field in unsafe):
                 raise RunnerError("Stop needs native/effect reconciliation; an ambiguous launch is not a stopped writer")
             claim = snapshot["claim"]
@@ -268,7 +286,8 @@ class CaptainLoop:
                     runner._handoff(snapshot).packet.marker, snapshot["host_id"], receipt["thread_id"],
                 )}
             return self._prepare(slot)
-        if "packet" not in snapshot and "claim" in snapshot:
+        unlaunched = not any(field in snapshot for field in _LAUNCH_EFFECTS)
+        if unlaunched and "claim" in snapshot:
             current = self.api.call(f"/items/{snapshot['claim']['item_id']}")["execution"]
             if current["state"].get("stopping") in {"cancelled", "failed"}:
                 return self._confirm_unlaunched_stop(runner, current)
@@ -282,7 +301,7 @@ class CaptainLoop:
                 observations=observation.threads if observation else (),
                 discovery_complete=observation.discovery_complete if observation else False,
             )
-        if "packet" not in snapshot:
+        if "packet" not in snapshot or unlaunched:
             return self._prepare(slot)
         if observation is None:
             return {"status": "observing", "reason": "Awaiting an exact native observation; launch is never replayed"}
@@ -389,6 +408,7 @@ class CaptainLoop:
         observed_slots = {slot for slots in self.observations for slot in slots}
         candidates = [slot for slot, record in records.items()
                       if "packet" in record and "submission" not in record and slot not in observed_slots
+                      and any(field in record for field in ("relay", "receipt"))
                       and now >= self.observe_due.get(slot, 0)]
         if candidates:
             offset = self.rotation % len(candidates)
