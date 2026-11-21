@@ -5,12 +5,18 @@
 - Read [README.md](README.md) for the project goal and [SPEC.md](SPEC.md) for the current design. Treat options in the design questions as proposals. Record decisions in the spec as they are made.
 - Keep the project in design until Caleb asks to start implementation. Keep design changes focused on the current decisions.
 
+## Design priorities
+
+- Caleb prioritizes reliability and simplicity. Choose the simplest design that preserves correct state, makes failures visible, and lets interrupted work resume predictably.
+- Add abstractions, services, settings, and gates when they solve a concrete problem. Keep constraints scoped to the operation that needs them, and leave teams and runtimes room to work within their own repo’s requirements.
+- Default to self-resolution within the work item’s scope. Ask for human judgment when a choice materially changes the outcome, an approval is required, or further attempts cannot make progress.
+
 ## Architecture
 
 - Run a standalone HTTP API server locally first. Keep its API contract usable when hosted. The CLI and runner connect using a configurable base URL and credentials.
 - Keep queue state, claims, work history, and reports behind the API. Keep checkout mappings and Git credentials local to the runner. The runner talks to the backend and holds queue credentials and leases.
 - Prioritize visible Codex worker chats for v1. Keep the work packet and result contract independent of the execution runtime so Claude Code and GitHub Copilot CLI can be added in P2. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
-- Prefer the smallest design that meets the current need. Allow independent work to run in parallel, including within one repo. Use atomic per-item claims and isolated worktrees for PR tasks. Check for previously created outputs before retrying publication.
+- Allow independent work to run in parallel, including within one repo. Use atomic per-item claims and isolated worktrees for PR tasks. Check for previously created outputs before retrying publication.
 - Make max concurrency and dispatch pause configurable. Apply gates before claiming new work and keep the reason visible when an item cannot run.
 - Keep lifecycle transitions explicit and server-owned. Every active state needs a next action, a resume trigger, or a clear recovery path. Bind validation and review evidence to the revision checked, and reconcile GitHub state before retrying publication or check-in.
 

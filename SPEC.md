@@ -7,28 +7,32 @@ Phalanx lets Caleb dispatch work across registered repositories and have local a
 - A work item has an ID, repository, goal, output type (`report` or `pull_request`), status, and timestamps. Optional fields include context links, acceptance criteria, a target branch, and a prerequisite work item. An API caller may provide an idempotency key so resubmitting the same request returns the original item.
 - A registered repository has a stable ID and expected remote. Each runner maps that ID to a local checkout and verifies the remote before starting. Repository instructions apply to each run. An item waits if no eligible runner can access its repo.
 - A **field report** is a Markdown deliverable with findings, sources or evidence where relevant, and open questions. PR items specify a completion target of `ready_for_check_in` or `checked_in`. A check-in target authorizes merging only when the dispatch explicitly requests it or a repo policy enables it. Repository rules still govern the merge.
+- The requested output type defines the intended path. Every closed execution records exactly one final output, either a verified PR reference or a stored Markdown report. If work closes without the requested deliverable, store a disposition report explaining the failure or cancellation, what was attempted, and what remains. Include any partial PR as a reference in that report. Work still in progress can have intermediate evidence and no final output yet.
 
 ## Dispatch and execution
 
 1. An authenticated client files an item through the API and receives its ID. The API supports listing and inspecting work, claiming eligible items, renewing claims, posting progress and results, and responding to a question.
 2. A runner requests an atomic claim for an eligible repo only when it has a free slot and dispatch is enabled. Agents can run concurrently, including on the same repo when their tasks are independent. A runner uses a separate worktree and topic branch for each PR item.
-3. An agent reads the repo instructions, executes the request, and runs appropriate checks. It reports the result or asks a focused question when a material decision remains. A waiting item releases its worker slot and retains the question, prior work, and resume context.
+3. An agent reads the repo instructions, executes one assigned stage, and returns its outcome and evidence or a focused question. The server applies the transition rules before the item is eligible for another stage. A waiting item releases its worker slot and retains the question, prior work, and resume context.
 4. A reply makes the item eligible again. A runner can resume from the recorded handoff and branch rather than require the original agent process to stay alive.
 
-Each work item exposes both its lifecycle stage and its execution status. For example, `live_validation / waiting_for_input` preserves where work paused and what must happen next.
+Each work item exposes both its lifecycle stage and its execution status. For example, `pr_validation / waiting_for_external` shows that a published PR is waiting for CI or a preview.
 
 ## Development lifecycle state machine
+
+See the [state machine document](STATE_MACHINE.md) for the lifecycle and execution graphs, stage guards, and recovery rules. Workers try to self-resolve within scope and repository rules, escalating when human judgment or authorization is required or further attempts cannot make progress.
 
 The server owns transitions. Each stage has required evidence, allowed next stages, and a recovery path. A worker reports an outcome and evidence for its current stage. The server validates the transition and atomically records the new state and timeline event. Stages that need agent work become eligible for another claim. Stages waiting for GitHub checks, reviews, or approval release their worker slot.
 
 | Stage | Advance when | Recovery or loop |
 | --- | --- | --- |
 | `development` | Changes are ready for self-review and the item records the candidate revision. | Retry transient execution failures or pause for a focused decision. |
-| `self_review` | The implementing agent checks the diff against the request and repo rules, with findings recorded. Advance to `live_validation`. | Return to `development` for findings that require changes. |
-| `live_validation` | Required local tests and relevant live or preview checks pass, with evidence attached. Advance to `pr_creation` for initial publication or an update. | Route failures to `development`. Missing access or a check that cannot run needs a visible blocker or an authorized disposition consistent with repo rules. |
-| `pr_creation` | Create the PR or update the existing PR for this item. Verify that its head matches the validated revision and advance to `adversarial_review`. | Retry publication after reconciling the branch and existing PR. Route conflicts to `pr_reconciliation`. |
+| `self_review` | The implementing agent checks the diff against the request and repo rules, with findings recorded. Advance to `pre_pr_validation`. | Return to `development` for findings that require changes. |
+| `pre_pr_validation` | Run applicable local tests and live checks by default. Advance to `pr_creation` after a pass or a recorded bypass allowed by repo policy. | Route actionable failures to `development`. For unavailable checks, try to restore validation or record a permitted bypass or blocker. |
+| `pr_creation` | Create or update the PR, using a draft when needed to get a preview. Verify that its head matches the candidate and advance to `pr_validation`. | Retry publication after reconciling the branch and existing PR. Route conflicts to `pr_reconciliation`. |
+| `pr_validation` | Observe CI for the current PR revision and run required preview checks once available. Advance to `adversarial_review` after required checks pass, or return to reconciliation if a current review already exists. | Wait for pending external checks without holding a worker slot. Route failures to `pr_reconciliation` for diagnosis and fixes. |
 | `adversarial_review` | An independent review pass examines the current PR diff for correctness, regressions, and missing validation. Record findings and advance to `pr_reconciliation`. | Retry an interrupted review on the current head. A newer head invalidates review evidence for the old one. |
-| `pr_reconciliation` | Confirm the branch is mergeable, actionable review comments are addressed, the independent review is current, and required checks and approvals are satisfied. Advance to `ready_for_check_in`. | Resolve conflicts and address feedback on the existing PR. Any code change returns to `self_review`, then runs validation and independent review again on the updated head. New feedback or failed checks return here. |
+| `pr_reconciliation` | Confirm the branch is mergeable, actionable review comments are addressed, the independent review is current, and required checks and approvals are satisfied. Advance to `ready_for_check_in`. | Resolve conflicts and address feedback on the existing PR. Candidate changes return to `self_review`, then rerun validation and independent review. Stale CI or preview evidence returns to `pr_validation` when a new result is expected. New feedback or failed checks return here. |
 | `ready_for_check_in` | Complete a ready-only item with the verified PR link and head. For a merge-authorized item, proceed to `check_in`. | A stale head, new blocking comment, failed check, or conflict returns the item to `pr_reconciliation` while it is active. If authorization is missing or withdrawn, wait for input or complete as ready-only with explicit disposition. |
 | `check_in` | Recheck the expected head, base, required checks, and merge policy immediately before merging. Complete only after GitHub confirms the merge and the item records the resulting commit. | Reconcile ambiguous merge responses before retrying. Return stale or unmergeable PRs to `pr_reconciliation`. Pause for an authorization or policy blocker. |
 
@@ -52,19 +56,23 @@ The runner passes the agent a packet with these fields and instructions.
 | Field | Contents |
 | --- | --- |
 | Work item | ID, goal, context links, acceptance criteria when supplied, and expected output type (`report` or `pull_request`). |
+| Stage assignment | Current stage, attempt ID, expected state version and revision when applicable, and the outcome and evidence requirements for this stage. |
 | Workspace | Verified repository and local working directory. For PR work, include the base and topic branches and use the item’s isolated worktree. |
 | Handoff | Attempt history relevant to resuming, known branch or PR, remaining work, and any answer supplied by the user. |
 | Execution instructions | Read applicable repository instructions, stay within the assigned scope, run relevant checks, and ask for input when a missing decision materially affects the outcome. |
 
 ### Result contract
 
-The agent returns one JSON result with a `status` and fields appropriate to that status. A successful process exit alone does not complete an item.
+The agent returns one JSON result for its assigned stage. It reports an outcome and evidence. The server uses the current stage, outcome, and applicable gates to determine the next stage or execution status. The runner attaches the attempt ID, expected state version, and lease to the submission. Advancing a stage ends that attempt and releases its slot. The next stage gets a new claim, which may reuse the workspace or chat when appropriate.
 
-| Status | Required result |
+| Outcome | Required result |
 | --- | --- |
-| `completed` | For a report, the Markdown content. For a PR, the URL and head commit. Include checks run and their outcomes, plus known limitations. |
+| `succeeded` | Evidence the stage passed, such as a candidate revision, validation results, a PR URL and verified head, or final report Markdown, as appropriate. |
+| `changes_required` | Findings tied to the reviewed or tested revision, with enough detail to reproduce or act on them. |
 | `needs_input` | A focused question, relevant options or tradeoffs, and a handoff describing what is done and how to resume. Include workspace or output references when available. |
-| `failed` | What failed, what was attempted, and whether a retry is likely to help. Include references to any partial result. |
+| `failed` | Why the attempt could not produce a stage outcome, what was tried, and whether a retry is likely to help. Include references to any partial result. |
+
+For example, `self_review` plus `succeeded` with findings and revision evidence advances to `pre_pr_validation`. `self_review` plus `changes_required` returns to `development`. Required external checks can still keep an item waiting even after a successful worker result. Only the server marks the whole item completed when its completion target is satisfied.
 
 On `needs_input`, the runner records the question and handoff, releases the slot, and triggers the notification flow. A user reply requeues the item and becomes part of the next work packet. If a process stops before returning a valid result, the runner records the attempt failure. Before retrying, it checks for an existing branch, PR, or stored report so work completed just before the interruption can be recovered.
 

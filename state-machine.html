@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Phalanx State Machine</title>
+  <style>
+    :root { font: 16px/1.55 system-ui, sans-serif; color: #edece5; background: #101418; --muted: #aeb9c4; --border: #343e48; --accent: #f2cc83; --panel: #171d23; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1320px; margin: auto; padding: 42px clamp(16px, 4vw, 54px); }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(2.5rem, 6vw, 4.3rem); line-height: 1.06; letter-spacing: -.055em; }
+    h2 { font-size: 1.15rem; }
+    h3 { margin: 16px 0 4px; font-size: .84rem; color: var(--accent); }
+    header p { margin-top: 12px; color: var(--muted); }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 26px 0 12px; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    nav button, .transition { border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 8px 14px; }
+    nav button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #231a0e; font-weight: 650; }
+    :focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
+    .map { overflow: auto; border: 1px solid var(--border); border-radius: 14px; background-color: #13191e; background-image: radial-gradient(#28333e 1px, transparent 1px); background-size: 20px 20px; }
+    .canvas { position: relative; width: 952px; margin: auto; }
+    svg { display: block; width: 100%; position: absolute; inset: 0; pointer-events: none; }
+    .edge { fill: none; stroke: #688094; stroke-width: 1.6; opacity: .55; }
+    .edge.return { stroke-dasharray: 5 5; }
+    .edge.selected { stroke: var(--accent); stroke-width: 2.4; opacity: 1; }
+    .stage { position: absolute; width: 148px; min-height: 52px; padding: 6px 9px; border: 1px solid #526271; border-radius: 8px; background: #202a33; font-size: .81rem; line-height: 1.2; font-weight: 650; }
+    .stage[data-kind="report"] { background: #183330; border-color: #548881; }
+    .stage[data-kind="terminal"] { background: #342c1d; border-color: #9d8250; }
+    .stage[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .legend { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 10px 1px; color: var(--muted); font-size: .83rem; }
+    .details { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; margin-top: 8px; }
+    article { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 20px; }
+    article p { color: var(--muted); margin-top: 6px; }
+    #transitions { list-style: none; padding: 0; margin: 6px 0 0; }
+    #transitions li + li { margin-top: 6px; }
+    .transition { display: block; width: 100%; text-align: left; font-size: .9rem; }
+    .transition:hover { border-color: var(--accent); }
+    .transition span { display: block; color: var(--muted); font-size: .82rem; }
+    footer { margin-top: 20px; }
+    footer a { color: var(--accent); }
+    @media (max-width: 700px) { .details { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Phalanx State Machine</h1>
+    <p>Select a state to inspect its evidence, transitions, and recovery paths.</p>
+  </header>
+  <nav aria-label="Graph view">
+    <button type="button" data-view="lifecycle" aria-pressed="true">Lifecycle stages</button>
+    <button type="button" data-view="status" aria-pressed="false">Execution status</button>
+  </nav>
+  <div class="map" role="region" aria-label="Scrollable state graph" tabindex="0">
+    <div class="canvas" id="graph"></div>
+  </div>
+  <div class="legend"><span>Solid line · Forward transition</span><span>Dashed line · Recovery or follow-up</span><span>Gold line · Selected state’s outgoing transitions</span></div>
+  <div class="details">
+    <article aria-live="polite">
+      <h2 id="selection"></h2>
+      <h3 id="evidence-label">Required evidence</h3>
+      <p id="evidence"></p>
+      <h3>Next step or recovery</h3>
+      <p id="recovery"></p>
+      <ul id="transitions" aria-label="Outgoing transitions"></ul>
+    </article>
+    <article>
+      <h2>Final output</h2>
+      <p>Every closed execution records one verified PR or stored Markdown report. If the requested deliverable is unavailable when work stops, the report explains why and links any partial work.</p>
+      <h3>Validation</h3>
+      <p>Pre-PR checks run by default. A permitted bypass records the reason and skipped checks. CI and required preview checks run after publication and must match the relevant revision.</p>
+      <h3>Human judgment</h3>
+      <p>Workers resolve routine issues within scope. A material decision, required approval, or stalled recovery can pause an item without occupying a worker slot.</p>
+    </article>
+  </div>
+  <footer><a href="STATE_MACHINE.md">State machine source</a></footer>
+</main>
+<script id="graph-data" type="application/json">{"lifecycle":{"labels":{"Start":"New execution","Kind":"Output type","Dev":"Development","Draft":"Report drafting","Self":"Self review","Pre":"Pre-PR validation","Publish":"Create or update PR","Post":"PR validation","Review":"Adversarial review","Reconcile":"PR reconciliation","Ready":"Ready for check-in","Done":"Completed","Merge":"Check-in","ReportReview":"Report review","Store":"Store field report"},"edges":[{"from":"Start","to":"Kind","label":""},{"from":"Kind","to":"Dev","label":"Pull request"},{"from":"Kind","to":"Draft","label":"Field report"},{"from":"Dev","to":"Self","label":""},{"from":"Self","to":"Dev","label":"Changes required"},{"from":"Self","to":"Pre","label":"Pass"},{"from":"Pre","to":"Dev","label":"Validation fails"},{"from":"Pre","to":"Publish","label":"Checks pass or permitted bypass recorded"},{"from":"Publish","to":"Post","label":"Head verified"},{"from":"Post","to":"Review","label":"CI and required preview checks pass"},{"from":"Post","to":"Reconcile","label":"Checks pass and review is current"},{"from":"Post","to":"Reconcile","label":"Check fails"},{"from":"Publish","to":"Reconcile","label":"Conflict on an existing PR"},{"from":"Publish","to":"Dev","label":"Base changed before initial publication"},{"from":"Review","to":"Reconcile","label":"Findings recorded"},{"from":"Reconcile","to":"Self","label":"Fixes or conflict resolution changed the candidate"},{"from":"Reconcile","to":"Review","label":"Current review is missing"},{"from":"Reconcile","to":"Post","label":"Current CI or preview evidence needed"},{"from":"Reconcile","to":"Ready","label":"Gates satisfied on current revision"},{"from":"Ready","to":"Done","label":"Ready-only target"},{"from":"Ready","to":"Merge","label":"Merge-authorized target"},{"from":"Ready","to":"Reconcile","label":"New blocker"},{"from":"Merge","to":"Reconcile","label":"Stale revision or new blocker"},{"from":"Merge","to":"Done","label":"Merge verified"},{"from":"Draft","to":"ReportReview","label":""},{"from":"ReportReview","to":"Draft","label":"Changes required"},{"from":"ReportReview","to":"Store","label":"Evidence verified"},{"from":"Store","to":"Done","label":"Artifact recorded"}],"details":{"Dev":["Scoped changes have a recoverable candidate revision.","self_review"],"Self":["Candidate diff has been checked against the work item and repo rules.","pre_pr_validation if it passes. development if fixes are needed."],"Pre":["Run the repo’s applicable local tests and any live checks available before publication. Record commands, results, and candidate revision. A permitted bypass records the skipped checks and reason.","pr_creation after passing or recording a permitted bypass. Actionable failures return to development. Unavailable checks can be retried, bypassed if permitted, or escalated."],"Publish":["Reconcile by work item and topic branch. Create or update the PR and verify its head matches the candidate. Use a draft when needed to obtain a preview.","pr_validation. A conflicting existing PR goes to pr_reconciliation. If the base moved and initial publication requires changes, return to development."],"Post":["Observe CI and perform required preview validation for the current PR revision. Wait for pending checks or previews with a scheduled recheck.","Advance to adversarial_review after required checks pass, or to pr_reconciliation if an independent review is already current. Send failures to pr_reconciliation to diagnose and resolve."],"Review":["An independent reviewer records findings and severity against the current PR diff.","pr_reconciliation, including when there are zero findings. An interrupted review can retry on the current revision."],"Reconcile":["Resolve conflicts, address actionable review comments, and confirm CI, previews, review, approvals, and mergeability for the current revision.","Candidate changes return to self_review and reuse the existing PR on the next publication. Missing or stale CI or preview evidence returns to pr_validation when a new check or result is expected. Missing or stale review returns to adversarial_review. Diagnose failures before retrying. Proceed to ready_for_check_in only when all required evidence is current."],"Ready":["Verify current PR identity, head, base, and gates against the completion target.","Complete a ready-only item. Advance to check_in when merge is authorized. A new blocker returns to pr_reconciliation; missing authorization waits for input. An explicit change to a ready-only target can complete the item."],"Merge":["Recheck merge authorization, required approvals and checks, and the expected head before requesting merge. Verify the resulting merge through GitHub.","Complete with PR link and merge commit. A stale head, conflict, or failing check returns to pr_reconciliation. An unknown merge outcome waits for reconciliation before retry."],"Draft":["Produce a recoverable Markdown draft.","report_review"],"ReportReview":["Check the draft against the request and verify supporting evidence and links.","report_storage when it passes. Return to report_drafting for fixes."],"Store":["Store the reviewed Markdown idempotently and record its reference.","Complete with the stored report. Retry storage failures without redrafting."],"Start":["A new execution records the goal, repo, and requested output.","Choose the lifecycle according to the output type."],"Kind":["The work item asks for a pull request or a Markdown field report.","Start development for a PR or drafting for a report."],"Done":["The completion target is verified and exactly one final output is recorded.","A rerun creates a linked execution with its own result."]}},"status":{"labels":{"queued":"Queued","running":"Running","waiting_for_input":"Waiting for input","cancelled":"Cancelled","waiting_for_external":"Waiting for external","completed":"Completed","failed":"Failed"},"edges":[{"from":"[*]","to":"queued","label":""},{"from":"queued","to":"running","label":"Eligible claim"},{"from":"queued","to":"waiting_for_input","label":"User decision needed"},{"from":"queued","to":"cancelled","label":"Cancel"},{"from":"running","to":"queued","label":"Stage advances or bounded retry"},{"from":"running","to":"waiting_for_input","label":"Human judgment required"},{"from":"running","to":"waiting_for_external","label":"External result pending"},{"from":"running","to":"completed","label":"Completion evidence verified"},{"from":"running","to":"failed","label":"Failure explicitly closed"},{"from":"running","to":"cancelled","label":"Stop confirmed"},{"from":"waiting_for_input","to":"queued","label":"Reply or retry"},{"from":"waiting_for_input","to":"failed","label":"Failure explicitly closed"},{"from":"waiting_for_input","to":"cancelled","label":"Cancel"},{"from":"waiting_for_external","to":"queued","label":"Event or recheck makes work runnable"},{"from":"waiting_for_external","to":"waiting_for_input","label":"Human action required"},{"from":"waiting_for_external","to":"completed","label":"Completion verified on reconciliation"},{"from":"waiting_for_external","to":"failed","label":"Failure explicitly closed"},{"from":"waiting_for_external","to":"cancelled","label":"Stop confirmed"},{"from":"completed","to":"[*]","label":""},{"from":"failed","to":"[*]","label":""},{"from":"cancelled","to":"[*]","label":""}]}}</script>
+<script>
+  const data = JSON.parse(document.getElementById('graph-data').textContent);
+  const layouts = {
+    lifecycle: {
+      Start: [24, 20], Kind: [212, 20], Dev: [24, 112], Self: [212, 112],
+      Pre: [400, 112], Publish: [588, 112], Post: [776, 112], Review: [776, 234],
+      Reconcile: [588, 234], Ready: [400, 234], Merge: [212, 234], Done: [24, 234],
+      Draft: [212, 354], ReportReview: [400, 354], Store: [588, 354]
+    },
+    status: {
+      queued: [24, 134], running: [270, 134], waiting_for_input: [516, 38],
+      waiting_for_external: [516, 230], completed: [762, 38], failed: [762, 134], cancelled: [762, 230]
+    }
+  };
+  const statusDetails = {
+    queued: ['The stage is eligible once dispatch, capacity, repo, runtime, and prerequisite gates pass.', 'Claim a free slot. If a prerequisite fails, resolve its disposition before dispatch.'],
+    running: ['A worker holds a current lease for one stage and reports evidence for the expected revision.', 'Advance, retry with backoff, or wait. An expired attempt cannot advance the item.'],
+    waiting_for_input: ['A question, proposed options, prior work, and a handoff are recorded.', 'A reply or retry queues another attempt for the same stage.'],
+    waiting_for_external: ['Record the external gate, expected revision, and next recheck.', 'An event or scheduled recheck resumes work. Escalate conflicts or persistent stalls.'],
+    completed: ['The requested completion target is verified and the final output is stored.', 'A rerun starts a linked execution and preserves the original result.'],
+    failed: ['The execution is closed with its final PR or a failure report.', 'Use the report and available checkpoints to decide whether to rerun.'],
+    cancelled: ['Stop is confirmed, in-flight operations are reconciled, and a final output is stored.', 'If an attempted merge already succeeded, record the verified outcome.']
+  };
+  const chart = document.getElementById('graph');
+  const evidence = document.getElementById('evidence');
+  const recovery = document.getElementById('recovery');
+  const heading = document.getElementById('selection');
+  const transitions = document.getElementById('transitions');
+  const viewButtons = [...document.querySelectorAll('[data-view]')];
+  const svgNS = 'http://www.w3.org/2000/svg';
+  let view = 'lifecycle';
+  let selected = 'Dev';
+
+  function svgElement(name, attrs) {
+    const element = document.createElementNS(svgNS, name);
+    for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
+    return element;
+  }
+
+  function edgePath(from, to, offset) {
+    if (view === 'lifecycle' && from === 'Kind' && to === 'Draft') {
+      return 'M212,46 H192 V380 H212';
+    }
+    const [x, y] = layouts[view][from];
+    const [tx, ty] = layouts[view][to];
+    if (y === ty) {
+      const right = tx > x;
+      const start = x + (right ? 148 : 0);
+      const end = tx + (right ? 0 : 148);
+      const mid = y + 26 + offset;
+      if (Math.abs(tx - x) > 260 || !right && y === 112) {
+        const bend = mid - 47 - Math.abs(offset);
+        const step = right ? 19 : -19;
+        return `M${start},${mid} C${start + step},${mid} ${start + step},${bend} ${start + 2 * step},${bend} L${end - 2 * step},${bend} C${end - step},${bend} ${end - step},${mid} ${end},${mid}`;
+      }
+      return `M${start},${mid} L${end},${mid}`;
+    }
+    const down = ty > y;
+    const sx = x + 74 + offset;
+    const ex = tx + 74 + offset;
+    const sy = y + (down ? 52 : 0);
+    const ey = ty + (down ? 0 : 52);
+    const mid = (sy + ey) / 2;
+    return `M${sx},${sy} C${sx},${mid} ${ex},${mid} ${ex},${ey}`;
+  }
+
+  function render() {
+    const graph = data[view];
+    const height = view === 'lifecycle' ? 429 : 305;
+    chart.style.height = `${height}px`;
+    chart.replaceChildren();
+    const svg = svgElement('svg', { viewBox: `0 0 952 ${height}`, 'aria-hidden': 'true' });
+    const defs = svgElement('defs', {});
+    for (const [id, fill] of [['arrow', '#688094'], ['active-arrow', '#f2cc83']]) {
+      const marker = svgElement('marker', { id, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto' });
+      marker.append(svgElement('path', { d: 'M0 0 L8 4 L0 8 Z', fill }));
+      defs.append(marker);
+    }
+    svg.append(defs);
+    const edges = graph.edges.filter(({ from, to }) => layouts[view][from] && layouts[view][to]);
+    const counts = new Map();
+    for (const { from, to } of edges) {
+      const key = [from, to].sort().join('/');
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const seen = new Map();
+    const highlights = [];
+    for (const { from, to, label } of edges) {
+      const key = [from, to].sort().join('/');
+      const index = seen.get(key) || 0;
+      seen.set(key, index + 1);
+      const offset = (index - (counts.get(key) - 1) / 2) * 14;
+      const active = from === selected;
+      const retry = /fail|changes required|blocker|conflict|missing|retry|changed|needed|stale|already current/i.test(label);
+      const path = svgElement('path', { d: edgePath(from, to, offset), class: `edge${retry ? ' return' : ''}${active ? ' selected' : ''}`, 'marker-end': `url(#${active ? 'active-arrow' : 'arrow'})` });
+      if (active) highlights.push(path); else svg.append(path);
+    }
+    svg.append(...highlights);
+    chart.append(svg);
+    for (const [id, [x, y]] of Object.entries(layouts[view])) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'stage';
+      button.dataset.id = id;
+      button.dataset.kind = /Done|completed|failed|cancelled/.test(id) ? 'terminal' : /Draft|ReportReview|Store/.test(id) ? 'report' : 'stage';
+      button.style.left = `${x}px`;
+      button.style.top = `${y}px`;
+      button.textContent = graph.labels[id];
+      button.setAttribute('aria-pressed', String(selected === id));
+      button.addEventListener('click', () => select(id, true));
+      chart.append(button);
+    }
+    heading.textContent = graph.labels[selected];
+    const details = view === 'status' ? statusDetails[selected] : graph.details[selected];
+    evidence.textContent = details[0];
+    recovery.textContent = details[1];
+    transitions.replaceChildren();
+    for (const { to, label } of edges.filter(({ from }) => from === selected)) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'transition';
+      button.textContent = `→ ${graph.labels[to]}`;
+      if (label) {
+        const description = document.createElement('span');
+        description.textContent = label;
+        button.append(description);
+      }
+      button.addEventListener('click', () => select(to, true));
+      item.append(button);
+      transitions.append(item);
+    }
+  }
+
+  function select(id, focus = false) {
+    selected = id;
+    render();
+    if (focus) chart.querySelector(`[data-id="${id}"]`).focus();
+  }
+
+  for (const button of viewButtons) {
+    button.addEventListener('click', () => {
+      view = button.dataset.view;
+      for (const tab of viewButtons) tab.setAttribute('aria-pressed', String(tab === button));
+      chart.parentElement.scrollLeft = 0;
+      select(view === 'lifecycle' ? 'Dev' : 'queued');
+    });
+  }
+  render();
+</script>
+</body>
+</html>
