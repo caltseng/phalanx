@@ -51,6 +51,8 @@ The server owns transitions. Each stage has required evidence, allowed next stag
 | `ready_for_check_in` | Complete a ready-only item with the verified PR link and head. For a merge-authorized item, proceed to `check_in`. | A stale head, new blocking comment, failed check, or conflict returns the item to `pr_reconciliation` while it is active. If authorization is missing or withdrawn, wait for input or complete as ready-only with explicit disposition. |
 | `check_in` | Recheck the expected head, base, required checks, and merge policy immediately before merging. Complete only after GitHub confirms the merge and the item records the resulting commit. | Reconcile ambiguous merge responses before retrying. Return stale or unmergeable PRs to `pr_reconciliation`. Pause for an authorization or policy blocker. |
 
+The server durably records report finalization before writing the final artifact. Finalization retries independently of worker capacity or dispatch pause. The owner can retry a stalled finalization after addressing the storage blocker.
+
 Field reports use a shorter path. Draft and self-review the report, verify its supporting evidence and links, then store the Markdown and complete the item. Findings return it to drafting. Reports share the same pause, retry, and handoff behavior.
 
 ### Execution status and recovery

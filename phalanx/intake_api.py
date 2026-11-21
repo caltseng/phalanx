@@ -5,10 +5,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
-from . import intake
+from . import finalization, intake
 from .auth import authenticate, require_owner, require_runner
 from .store import write_transaction
-from .intake_models import AttemptEvent, Cancel, Identifier, Intake, Registration, Rerun, Result, RevisionID
+from .intake_models import AttemptEvent, Cancel, Identifier, Intake, Registration, Rerun, Result, RevisionID, Versioned
 
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
@@ -16,11 +16,14 @@ Key = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_le
 Lease = Annotated[str, Header(alias="Phalanx-Lease", pattern=r"^[A-Za-z0-9_-]{32,200}$")]
 
 
-def run(request, operation, *args, write=False, scope=None, key=None, payload=None):
+def run(request, operation, *args, write=False, finish=False, scope=None, key=None, payload=None):
     try:
         transaction = write_transaction if write else intake.read_transaction
         with transaction(request.app.state.database_path) as db:
-            return intake.replayable(db, scope, key, payload, lambda: operation(db, *args))
+            result = intake.replayable(db, scope, key, payload, lambda: operation(db, *args))
+        if finish and result["state"]["pending_output"] is not None:
+            return finalization.attempt(request.app.state.database_path, result["id"]) or result
+        return result
     except intake.Missing as error:
         raise HTTPException(404, str(error)) from error
     except intake.Conflict as error:
@@ -74,8 +77,26 @@ def draft(request: Request, item_id: Identifier, execution_id: Identifier, revis
              dependencies=[Depends(require_owner)])
 def cancel(request: Request, item_id: Identifier, execution_id: Identifier,
            body: Cancel, key: Key = None):
-    return run(request, intake.cancel, item_id, execution_id, body, write=True,
+    return run(request, intake.cancel, item_id, execution_id, body, write=True, finish=True,
                scope=f"cancel:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/close-failure",
+             dependencies=[Depends(require_owner)])
+def close_failure(request: Request, item_id: Identifier, execution_id: Identifier,
+                  body: Cancel, key: Key = None):
+    return run(request, intake.close_failure, item_id, execution_id, body, write=True, finish=True,
+               scope=f"close-failure:{item_id}:{execution_id}", key=key,
+               payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/retry-finalization",
+             dependencies=[Depends(require_owner)])
+def retry_finalization(request: Request, item_id: Identifier, execution_id: Identifier,
+                       body: Versioned, key: Key = None):
+    return run(request, finalization.retry, item_id, execution_id, body, write=True, finish=True,
+               scope=f"retry-finalization:{item_id}:{execution_id}", key=key,
+               payload=body.model_dump(mode="json"))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/rerun",
@@ -89,7 +110,7 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     lease_digest = intake.digest(lease)
     return run(
-        request, operation, item_id, execution_id, body, lease_digest, write=True,
+        request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
         payload={"body": body.model_dump(mode="json"), "lease_digest": lease_digest},
     )

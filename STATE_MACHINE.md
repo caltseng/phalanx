@@ -1,10 +1,10 @@
 # Phalanx work item state machine
 
-The transition tables and rules in this Markdown document define Phalanx’s behavior. The diagrams and [HTML visualization](state-machine.html) are visual references. If a diagram differs from the transition rules, correct the diagram against the rules.
+The transition tables and rules in this Markdown document define Phalanxâ€™s behavior. The diagrams and [HTML visualization](state-machine.html) are visual references. If a diagram differs from the transition rules, correct the diagram against the rules.
 
 Each execution has a **stage**, which describes what must happen next, and a **status**, which describes whether it can happen now. For example, `pr_validation / waiting_for_external` can mean the current PR head is awaiting CI. The server owns both values. A worker attempts one stage and reports its outcome and evidence. The server determines the transition and releases or reassigns the slot.
 
-Phalanx tries to self-resolve within the work item’s scope and the repository’s rules. Fix failing tests, reconcile routine conflicts, and address actionable review feedback independently when the expected result is clear. Ask for human judgment when competing choices would materially change the requested behavior, an approval is required, or continued attempts cannot make progress. Record material assumptions and how they were verified.
+Phalanx tries to self-resolve within the work itemâ€™s scope and the repositoryâ€™s rules. Fix failing tests, reconcile routine conflicts, and address actionable review feedback independently when the expected result is clear. Ask for human judgment when competing choices would materially change the requested behavior, an approval is required, or continued attempts cannot make progress. Record material assumptions and how they were verified.
 
 ## Lifecycle stages
 
@@ -62,14 +62,14 @@ The arrows below apply only when their guards pass. A blocked guard keeps the st
 | `report_review` | Check the draft against the request and verify supporting evidence and links. | `report_storage` when it passes. Return to `report_drafting` for fixes. |
 | `report_storage` | Store the reviewed Markdown idempotently and record its reference. | Complete with the stored report. Retry storage failures without redrafting. |
 
-If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. An unexpected merge or a PR closed without merge requires a decision if the action’s intent cannot be established. Never open a replacement PR just because an existing one is closed.
+If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. An unexpected merge or a PR closed without merge requires a decision if the actionâ€™s intent cannot be established. Never open a replacement PR just because an existing one is closed.
 
 ## Repository validation policy
 
-- Each repo can define applicable pre-validation commands, when they may be skipped, draft-only checks, expected CI, and required previews. Start from repository instructions and GitHub’s required checks. If no CI is expected or required, advance. If expected CI is absent, recheck and surface a blocker if it stays missing.
+- Each repo can define applicable pre-validation commands, when they may be skipped, draft-only checks, expected CI, and required previews. Start from repository instructions and GitHubâ€™s required checks. If no CI is expected or required, advance. If expected CI is absent, recheck and surface a blocker if it stays missing.
 - Run candidate-local pre-validation before uploading an update. Run checks that need a published candidate after the candidate reaches the PR. Check draft-only gates before promotion and post-promotion CI afterward. If a previously promoted PR needs a check that can only run in draft, follow the repo policy for rerunning it or ask for a decision when the policy leaves the path unclear.
 - Pre-validation runs before promotion by default. A work item can request a bypass for urgency, or the runner can skip checks that repo policy marks inapplicable to the change. Record the candidate revision, affected checks, reason, and basis for authorization. Record a bypass as skipped, and retain any earlier failures. Draft-only gates, CI, required previews, and check-in rules still apply.
-- A changed PR head invalidates candidate-bound checks, CI and preview evidence, and independent review for the old head. A changed base invalidates mergeability and checks tied to the old merge candidate, and requires review of the new diff if it changes. Head-only evidence may carry forward when its inputs are unchanged and repo policy allows it. Recheck the provider’s latest approval and merge gates before check-in.
+- A changed PR head invalidates candidate-bound checks, CI and preview evidence, and independent review for the old head. A changed base invalidates mergeability and checks tied to the old merge candidate, and requires review of the new diff if it changes. Head-only evidence may carry forward when its inputs are unchanged and repo policy allows it. Recheck the providerâ€™s latest approval and merge gates before check-in.
 - If someone pushes outside Phalanx, reconcile the new head and revalidate it. Continue when the changes fit the work item. Ask for judgment if scope or intent is unclear. Preserve the external change rather than overwriting it.
 
 ## Execution status
@@ -78,22 +78,19 @@ If GitHub reports the PR already merged, verify the merge matches this work item
 stateDiagram-v2
     [*] --> queued
     queued --> running: Eligible claim
+    queued --> waiting_for_external: Cancellation or failure finalization
     queued --> waiting_for_input: User decision needed
-    queued --> cancelled: Cancel
     running --> queued: Stage advances or bounded retry
     running --> waiting_for_input: Human judgment required
     running --> waiting_for_external: External result pending
     running --> completed: Completion evidence verified
-    running --> failed: Failure explicitly closed
-    running --> cancelled: Stop confirmed
     waiting_for_input --> queued: Reply or retry
-    waiting_for_input --> failed: Failure explicitly closed
-    waiting_for_input --> cancelled: Cancel
+    waiting_for_input --> waiting_for_external: Cancellation or failure finalization
     waiting_for_external --> queued: Event or recheck makes work runnable
     waiting_for_external --> waiting_for_input: Human action required
-    waiting_for_external --> completed: Completion verified on reconciliation
-    waiting_for_external --> failed: Failure explicitly closed
-    waiting_for_external --> cancelled: Stop confirmed
+    waiting_for_external --> completed: Reviewed report stored or completion verified
+    waiting_for_external --> failed: Failure report stored
+    waiting_for_external --> cancelled: Cancellation report stored
     completed --> [*]
     failed --> [*]
     cancelled --> [*]
@@ -109,6 +106,7 @@ stateDiagram-v2
 | External gate pending | Save the gate and expected revision, release the slot, and recheck periodically as well as on events. A result schedules the work needed to continue. Escalate persistent stalls or conflicting evidence. |
 | Repeated lack of progress | Stop repeating the same ineffective attempt. Try a scoped recovery with a different path when evidence supports it. Otherwise ask for a decision with prior attempts and a recommended next action. Release the slot and keep unrelated eligible work running. Reservations for live or uncertain processes still apply. The user can reply, retry, redirect, or close the execution. |
 | Cancel requested | Stop new work. For active work, record the cancellation request and reconcile any in-flight publication before marking it cancelled. If the merge already succeeded, record that verified outcome. |
+| Finalize a report | Record the terminal intent and release the attempt before storage. The server retries independently of dispatch. Store or reuse the exact report and close the execution in one transaction. |
 | Rerun a closed execution | Create a linked execution with an explicit target. Preserve history and reconcile any existing branch, PR, or report before repeating effects. |
 
 Before yielding a slot, record the workspace, candidate revision or local checkpoint, relevant validation evidence, and remaining work. Keep the item on the same runner while a required checkpoint exists only there. If that runner cannot recover, ask whether to rebuild from the last durable checkpoint or close the execution.
@@ -118,7 +116,7 @@ Before yielding a slot, record the workspace, candidate revision or local checkp
 - A `completed`, `failed`, or `cancelled` execution always has exactly one final output. A running, queued, or waiting execution may have progress notes, a draft report, or a PR link without a final output. The requested output type remains in the work item even if its final output differs.
 - On successful PR work, the final output is the verified PR link and head, with the merge commit when the completion target is `checked_in`. On successful report work, the final output is the stored reviewed Markdown report.
 - On failure or cancellation without the requested deliverable, the final output is a Markdown report with the disposition, last stage, what was attempted, the blocker or reason for stopping, partial artifacts, and any useful next action. A partial PR can be linked from the report. The server can produce the report from the execution history even when the worker has exited or work was cancelled before the first claim.
-- Store the final output reference and terminal status together. If output storage fails, keep the execution open with a retryable finalization step. Reuse the stored artifact after an interrupted finalization rather than creating a second final output.
+- Store the final output reference and terminal status together. If output storage fails, keep the execution open with a retryable finalization step. Reuse an existing matching artifact and leave a conflicting artifact intact for investigation. The server retries after 2, 4, 8, and 16 seconds. After five recorded failures, the execution wait and timeline show the blocker. The owner can restore database access or resolve the report integrity issue, then POST the current expected version to the execution’s `retry-finalization` endpoint. A full database outage leaves the intent due and appears in server logs while the API cannot record retry history.
 
 ## Transition tests
 
