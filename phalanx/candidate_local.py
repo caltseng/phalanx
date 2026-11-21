@@ -1,6 +1,7 @@
 """Runner operations for candidate-local stages under a reserved item claim."""
 
 import os
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,8 +43,7 @@ class CandidateLocal:
 
     Journal the returned body before submission so an uncertain response can be replayed.
     Self-review collection requires a reconciled, stopped worker with validated handoff evidence.
-    A check timeout raises without producing a result. Keep the claim reserved until the
-    runner reconciles the check processes and worktree.
+    A check timeout stops the check's process tree and records a failed check.
     """
 
     def __init__(self, api: RunnerAPI, workspace: WorkspaceManager, claim: dict,
@@ -195,17 +195,31 @@ def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
     env = {key: value for key, value in os.environ.items()
            if not key.upper().startswith(("GIT_", "PHALANX_"))}
     try:
-        result = subprocess.run(check.argv, cwd=path, env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                timeout=check.timeout_seconds)
-    except subprocess.TimeoutExpired:
-        raise RunnerError(
-            f"Check {check.policy.name} timed out after {check.timeout_seconds} seconds. "
-            "Keep the reservation and verify all check processes have stopped and the item "
-            "worktree is reconciled before submitting a result or retrying"
-        ) from None
+        process = subprocess.Popen(check.argv, cwd=path, env=env, stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   start_new_session=os.name != "nt")
     except OSError as exc:
         raise WorkspaceError(f"Repair the configured check command (OS error {exc.errno})") from None
-    if result.returncode:
-        return PreOutcome.FAILED, f"Exited with status {result.returncode}"
+    try:
+        returncode = process.wait(timeout=check.timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_tree(process)
+        return PreOutcome.FAILED, f"Timed out after {check.timeout_seconds} seconds"
+    if returncode:
+        return PreOutcome.FAILED, f"Exited with status {returncode}"
     return PreOutcome.PASSED, ""
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """Stop a timed-out check and the processes it started."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, check=False)
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    process.kill()
+    process.wait()
