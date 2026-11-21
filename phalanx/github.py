@@ -339,3 +339,33 @@ class GitHubClient:
         except (KeyError, TypeError):
             pass
         raise UncertainGitHubWrite(operation, "GitHub did not confirm the merge", 200)
+    def get_branch_tip(self, branch: str) -> str:
+        """Read the exact branch independently of any pull request snapshot."""
+        operation = "get branch tip"
+        ref = f"heads/{branch}"
+        data, _ = self._request(operation, "GET", f"{self._repo_url}/git/ref/{quote(ref, safe='/')}")
+        try:
+            sha = data["object"]["sha"]
+            if (
+                data["ref"] == f"refs/{ref}" and data["object"]["type"] == "commit"
+                and _SHA.fullmatch(sha)
+            ):
+                return sha
+        except (KeyError, TypeError):
+            pass
+        raise GitHubError(operation, "invalid branch reference response")
+
+    def get_commit_parents(self, sha: str) -> tuple[str, ...]:
+        """Read the ordered parents of one exact Git commit object."""
+        if not _SHA.fullmatch(sha):
+            raise ValueError("a full commit SHA is required")
+        operation = "get commit parents"
+        data, _ = self._request(operation, "GET", f"{self._repo_url}/git/commits/{sha}")
+        try:
+            if data["sha"] == sha and isinstance(data["parents"], list):
+                parents = tuple(parent["sha"] for parent in data["parents"])
+                if all(_SHA.fullmatch(parent) for parent in parents):
+                    return parents
+        except (KeyError, TypeError):
+            pass
+        raise GitHubError(operation, "invalid commit response")

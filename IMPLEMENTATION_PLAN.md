@@ -116,6 +116,8 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Depends on:** PH-09, PH-12, PH-14. **Output:** PR.
 - Run an independent review on the current diff, fix actionable feedback and routine conflicts, and loop through validation on changed revisions. Preserve outside changes and revalidate their scope. Respect ready-only and authorized merge targets, verify required checks and approvals and the expected head and base, and reconcile any uncertain merge before retrying.
 - When evidence depends on the base, use the repo’s verified mechanism for checking the merge candidate. Revalidate or report a blocker if that assurance is unavailable.
+- **Coordinator slice:** Verify exact primary identity and current gates, finish ready-only without a write, or reserve and request one authorized direct merge commit. Reconcile by reading the same PR and verifying the ordered base and head parents. Keep an ambiguous attempt reserved even if the PR still appears open.
+- **Remaining integration:** Persist and retire reservations under the runner claim, wire trusted check and review observations and repository-specific policy, record verified results through the server lifecycle, and pilot a live feedback or conflict loop. Add separate adapters for other merge methods or required merge queues.
 - **Done when:** A real PR goes through a feedback or conflict loop, required revision changes invalidate stale evidence, and a verified merge is recorded exactly once. A separate ready-only case completes with a verified PR and no merge.
 
 ### PH-16 Deliver field reports
