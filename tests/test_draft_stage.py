@@ -78,6 +78,7 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         self.drop_response = False
         self.lose_create = False
         self.fail_lookups = False
+        self.on_create = None
         self.revoke_during_lookup = False
         development = self.claim("development")
         self.call(f"{self.path}/result", {
@@ -121,6 +122,8 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
             self.posts.append(json.loads(request.data))
             self.pull = pull(head=self.branch)
             self.pull["head"]["repo"]["full_name"] = "Owner/Repo"
+            if self.on_create:
+                self.on_create()
             if self.lose_create:
                 raise TimeoutError("lost create response")
             return response(self.pull, status=201)
@@ -220,6 +223,20 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         self.assertEqual(result.execution["state"]["stage"], "self_review")
         self.assertEqual((len(self.posts), self.git.pushes), (1, [(CANDIDATE, None)]))
         self.assertFalse(any(path == "/dispatch/claim" for path, _, _ in self.calls[before:]))
+
+    def test_base_move_after_lost_create_still_records_the_draft(self):
+        def land_then_black_out():
+            self.git.base = OTHER
+            self.fail_lookups = True
+
+        self.lose_create, self.on_create = True, land_then_black_out
+        self.assertEqual(self.run_stage().publication.status, "pending")
+        self.lose_create, self.on_create, self.fail_lookups = False, None, False
+        result = self.run_stage()
+        self.assertEqual(result.publication.status, "verified")
+        self.assertEqual((result.execution["state"]["stage"], result.execution["state"]["primary_pr"]),
+                         ("self_review", "https://github.com/owner/repo/pull/7"))
+        self.assertEqual(len(self.posts), 1)
 
     def test_base_drift_routes_to_development_and_replays_lost_response(self):
         self.git.base = OTHER

@@ -297,9 +297,6 @@ class DraftPublisher:
         if conflicts:
             return DraftOutcome("conflict", "Found a PR that differs from the draft intent",
                                 primary, duplicates, tuple(conflicts))
-        if self.git.read_branch(intent.base, authorize=authorize) != intent.expected_base:
-            return DraftOutcome("conflict", "The remote base moved while verifying the draft",
-                                primary, duplicates)
         if self.git.read_head(authorize=authorize) != intent.candidate:
             return DraftOutcome("conflict", "The remote item ref moved while verifying the draft",
                                 primary, duplicates)
