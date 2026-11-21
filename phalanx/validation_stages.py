@@ -128,6 +128,7 @@ def _promotion(runner, snapshot):
     base_ref = claim["request"].get("target_branch") or mapping["base_branch"]
     local = _candidate(runner, snapshot)
     blocked = []
+    changed = []
 
     def claim_current():
         try:
@@ -140,7 +141,9 @@ def _promotion(runner, snapshot):
         if not draft_checks:
             return DraftChecks(draft_checks)
         checks = collect_github_checks(github, pull, Phase.DRAFT, draft_checks)
-        if checks.gate.state is GateState.BLOCKED:
+        if checks.retry_after_seconds is not None:
+            changed.append(checks)
+        elif checks.gate.state is GateState.BLOCKED:
             blocked.extend(checks.gate.reasons)
         return DraftChecks(draft_checks, checks.observations,
                            checks.candidate.merge_sha if checks.candidate else None)
@@ -150,7 +153,7 @@ def _promotion(runner, snapshot):
     except GitHubError as error:
         return _retry(snapshot, str(error), error.retry_after_seconds)
     if pull.head_sha != candidate:
-        update = _publish_update(snapshot, local, pull, base_ref)
+        update = _publish_update(snapshot, local, pull, base_ref, _verified_head(runner, snapshot, url))
         if update is not None:
             return update
         try:
@@ -177,6 +180,8 @@ def _promotion(runner, snapshot):
         # Only the target moved. A later attempt observes the new base revision.
         return _retry(snapshot, "The target branch moved during promotion; observing the new base")
     gates = result.gates
+    if changed:
+        return _retry(snapshot, "; ".join(changed[-1].gate.reasons), changed[-1].retry_after_seconds)
     if blocked or (result.status == "gates_unresolved" and gates.state is not GateState.FAILED):
         if not blocked and gates.state is GateState.WAITING:
             reason = ("; ".join(gates.reasons) or "Draft checks are pending")[:16000]
@@ -186,18 +191,38 @@ def _promotion(runner, snapshot):
                 "revision": {"head": candidate, "base": observed.base_sha},
                 "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
             }}
-        return _question(snapshot, "; ".join(blocked or gates.reasons) or result.reason, handoff)
+        reason = "; ".join(blocked or gates.reasons) or result.reason
+        observed = result.pull or pull
+        if not blocked and not observed.draft and gates.state is GateState.BLOCKED:
+            # Policy has no automatic draft-only recovery, so the owner decides.
+            reason += (". Convert the PR back to draft so its draft-only checks can run, or remove "
+                       "them from the runner's validation policy, then reply.")
+        return _question(snapshot, reason, handoff)
     # Verified evidence advances; failed draft checks return the item to development.
     return {"route": "pr-observation", "body": _validation(
         snapshot, result.pull, base_ref, draft_checks, result.checks,
     ), **({"reason": result.reason} if result.status != "verified" else {})}
 
 
-def _publish_update(snapshot, local, pull, base_ref):
-    """Fast-forward the primary PR's branch to the reviewed candidate, or explain why not.
+def _verified_head(runner, snapshot, url):
+    """Return the latest primary PR head the server verified for this execution."""
+    claim = snapshot["claim"]
+    timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
+    for entry in reversed(timeline):
+        details = entry.get("details") or {}
+        pull = details.get("pull")
+        if details.get("pr_url") == url and isinstance(pull, dict) and pull.get("head_sha"):
+            return pull["head_sha"]
+    return None
 
-    The lease is the observed PR head, so a concurrent push is never overwritten.
-    Returns None once the remote branch holds the candidate.
+
+def _publish_update(snapshot, local, pull, base_ref, verified_head):
+    """Replace the primary PR's head with the reviewed candidate, or explain why not.
+
+    Only a head the server last verified for this PR is replaced, leased on that
+    head so a concurrent push is never overwritten. A rebased candidate therefore
+    publishes like a fast-forward. Returns None once the remote branch holds the
+    candidate.
     """
     claim = snapshot["claim"]
     candidate = claim["execution"]["state"]["candidate"]
@@ -213,7 +238,10 @@ def _publish_update(snapshot, local, pull, base_ref):
                              claim["item_id"])
         if git.read_head(authorize=local._authorize) == candidate:
             return None
-        outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize)
+        if pull.head_sha != verified_head:
+            return _question(snapshot, f"The primary PR head {pull.head_sha} is not the head Phalanx last "
+                             "verified; reconcile it before publishing the reviewed candidate.", handoff)
+        outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize, rewrite=True)
     except (PublicationError, WorkspaceError) as error:
         return _retry(snapshot, f"Could not publish the reviewed candidate: {error}")
     if outcome.status == "uncertain":

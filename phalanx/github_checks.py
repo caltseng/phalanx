@@ -33,6 +33,9 @@ PreviewReader = Callable[
     [PublishedCandidate, Phase, RequiredCheck, str], PublishedEvidence | None
 ]
 
+# A moved target or a concurrent PR update is observed afresh on the next attempt.
+_CHANGED_RETRY_SECONDS = 30
+
 _RUN_OUTCOMES = {
     "success": CheckOutcome.PASSED,
     "neutral": CheckOutcome.NEUTRAL,
@@ -129,9 +132,11 @@ def collect_github_checks(
     try:
         pull = github.get_pull_request(expected.number)
         if pull.state != "open" or _identity(pull) != _identity(expected):
-            return _blocked("The primary PR identity, revision, or open state changed")
+            return _blocked("The primary PR identity, revision, or open state changed",
+                            retry_after_seconds=_CHANGED_RETRY_SECONDS)
         if github.get_branch_tip(pull.base_ref) != pull.base_sha:
-            return _blocked("The target branch tip differs from the PR base revision")
+            return _blocked("The target branch tip differs from the PR base revision",
+                            retry_after_seconds=_CHANGED_RETRY_SECONDS)
 
         revision = Revision(pull.head_sha, pull.base_sha)
         merge_sha = None
@@ -185,7 +190,8 @@ def collect_github_checks(
             ))
             or github.get_branch_tip(pull.base_ref) != revision.base
         ):
-            return _blocked("The primary PR or target branch changed during check collection")
+            return _blocked("The primary PR or target branch changed during check collection",
+                            retry_after_seconds=_CHANGED_RETRY_SECONDS)
         return CheckCollection(
             evaluate_published_checks(current, phase, required, observations),
             current, tuple(observations),

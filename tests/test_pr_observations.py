@@ -202,6 +202,15 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual((updated["state"]["stage"], updated["state"]["development_findings"]),
                          ("development", "Local check unit tests failed: Exited with status 1"))
 
+    def test_failed_draft_check_returns_to_development_with_findings(self):
+        self.publish()
+        status, updated = self.submit(self.observation(
+            self.claim("pr_promotion"), draft=True, gates=self.gates("draft", outcome="failed"),
+        ))
+        self.assertEqual(status, 200, updated)
+        self.assertEqual(updated["state"]["stage"], "development")
+        self.assertIn("build", updated["state"]["development_findings"])
+
     def test_promotion_and_validation_require_the_primary_pr_and_current_gates(self):
         self.publish()
         claim = self.claim("pr_promotion")

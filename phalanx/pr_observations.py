@@ -183,7 +183,10 @@ def submit(db, item_id, execution_id, body, lease_digest):
             evidence = gate_evidence(db, execution_id, body, state, pr)
         elif (gates.state is validation.GateState.FAILED
               and body.stage != Stage.PR_RECONCILIATION):
-            evidence = Evidence(pr=pr)
+            findings = None
+            if body.stage == Stage.PR_PROMOTION:
+                findings = ("Draft checks did not pass: " + "; ".join(gates.reasons))[:16000]
+            evidence = Evidence(pr=pr, development_findings=findings)
             outcome = Outcome.CHANGES_REQUIRED
         elif gates.state is validation.GateState.WAITING and schedule_recheck:
             return _wait_for_published_gates(db, row, state, body, gates, details)

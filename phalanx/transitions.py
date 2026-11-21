@@ -372,6 +372,8 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
         if stage is Stage.PR_PROMOTION and (evidence.issue is Issue.PR_BLOCKER
                                            or pr.revision.head != state.candidate):
             return _queue(state, Stage.PR_RECONCILIATION)
+        if stage is Stage.PR_PROMOTION:
+            return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
     _require(stage in CHANGES, "Changes-required outcome is unsupported at this stage")
     return _queue(state, CHANGES[stage])
 
