@@ -195,6 +195,15 @@ Execute the rows in table order. PH-04a comes first so later slices merge on ver
 | PH-19a Verify the integrated local operating envelope | Supplement [the scheduler probe](docs/pilots/local-operating-envelope.md) with mixed authenticated HTTP traffic and the dependency/wait/recovery fault cases above. Record latency and fairness separately from live worker capacity. |
 | PH-V1 Pass the release acceptance muster | This is the v1 release gate and runs last, after every row above has merged. Start a real end-to-end muster from the normal entry points: the API server, the runner, the Captain chat and visible native Codex workers, across the two acceptance repositories. Use no fixtures, test doubles or manual state edits. In one muster, (1) a report item reaches verified storage and stays readable with the runner offline; (2) a PR item goes from draft to ready, passes its validation gates and an independent review, and is checked in with the merge verified exactly once; (3) a worker asks a question, Caleb answers it through the owner inbox and the worker resumes with the answer and preserved context; (4) restarting the Captain and runner mid-stage recovers the in-flight work without a replacement writer or redrafting; and (5) one item blocked on a failed prerequisite or a pending external gate does not stall the other items. Record the commands, item and PR links, timeline and any deviation in `docs/pilots/v1-acceptance.md`. Any failure becomes a fix row ahead of this one, and the muster reruns until it passes. v1 is not done until it passes. |
 
+### Acceptance repositories
+
+PH-11b, PH-14a and PH-V1 run against these two public scratch repositories. Each has an `AGENTS.md` with its build and test instructions, a CI workflow on `ubuntu-latest` and `windows-latest`, and open bug, feature and docs issues for workers to pick up. A ruleset on `main` requires both checks (non-strict), blocks deletion and force-push, and has no bypass actors. Neither needs a preview gate. Runner registration and validation policy files are still to be recorded before PH-14a part 3.
+
+| Repository | Stack | Test command | Required checks | Ruleset |
+| --- | --- | --- | --- | --- |
+| [caltseng/phalanx-pilot-py](https://github.com/caltseng/phalanx-pilot-py) | Python 3.12+, standard library, `unittest` | `python -m unittest discover -s tests -v` | `test (ubuntu-latest)`, `test (windows-latest)` | `27783095` |
+| [caltseng/phalanx-pilot-web](https://github.com/caltseng/phalanx-pilot-web) | Node.js 20+ ESM, `node:test`, no dependencies | `npm ci` then `npm test` | `test (ubuntu-latest)`, `test (windows-latest)` | `27783096` |
+
 ## After the local release
 
 | Item | Depends on | Deliverable and acceptance |
