@@ -1,11 +1,11 @@
-"""Single-slot attended Captain bridge. Native app calls belong to the Captain."""
+"""Attended Captain bridge. Native app calls belong to the Captain."""
 
 import json
 import os
 import re
 import secrets
 import sqlite3
-from contextlib import closing
+from contextlib import closing, contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,7 +15,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID
 
 from .codex_handoff import CodexHandoff, WorkPacket
-from .workspaces import WorkspaceError, WorkspaceManager
+from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
 
 class RunnerError(RuntimeError):
@@ -67,96 +67,129 @@ STAGES = {
 
 
 class AttendedRunner:
-    def __init__(self, root, config, api):
+    def __init__(self, root, config, api, *, slot=1):
         self.root = root.resolve()
         self.config = config
         self.api = api
+        self.capacity = config.get("capacity", 1)
+        if type(self.capacity) is not int or not 1 <= self.capacity <= 256:
+            raise RunnerError("Local capacity must be an integer from 1 to 256")
+        if type(slot) is not int or not 1 <= slot <= 256:
+            raise RunnerError("Slot must be an integer from 1 to 256")
+        self.slot = slot
         self.root.mkdir(parents=True, exist_ok=True)
         self.results = self.root / "results"
         self.results.mkdir(exist_ok=True)
         self.journal = self.root / "attended.sqlite3"
 
-    def _transaction(self, action):
+    @contextmanager
+    def _journal(self):
         with closing(sqlite3.connect(self.journal, timeout=30)) as db, db:
             db.execute("PRAGMA synchronous=EXTRA")
             db.execute("BEGIN IMMEDIATE")
             db.execute("CREATE TABLE IF NOT EXISTS slot (id INTEGER PRIMARY KEY, record TEXT)")
-            row = db.execute("SELECT record FROM slot WHERE id=1").fetchone()
+            yield db
+
+    def _transaction(self, action):
+        # Keep network, Git and evidence reads outside the journal lock.
+        with self._journal() as db:
+            row = db.execute("SELECT record FROM slot WHERE id=?", (self.slot,)).fetchone()
             record = json.loads(row[0]) if row else {}
             archived = record.copy() if "submission" in record else None
-            result = action(record)
+            result = action(record, db)
             if archived is not None and not record:
                 archived.pop("lease")
                 db.execute("CREATE TABLE IF NOT EXISTS completed (attempt_id TEXT PRIMARY KEY, record TEXT)")
                 db.execute("INSERT INTO completed VALUES (?, ?)",
                            (archived["claim"]["attempt_id"], json.dumps(archived)))
             if record:
-                db.execute("INSERT OR REPLACE INTO slot VALUES (1, ?)", (json.dumps(record),))
-            else:
-                db.execute("DELETE FROM slot WHERE id=1")
+                serialized = json.dumps(record)
+                if row is None or serialized != row[0]:
+                    db.execute("INSERT OR REPLACE INTO slot VALUES (?, ?)", (self.slot, serialized))
+            elif row is not None:
+                db.execute("DELETE FROM slot WHERE id=?", (self.slot,))
             return result
 
     def _manager(self, mapping, remote):
         return WorkspaceManager(Path(mapping["checkout"]), remote, self.root / "worktrees")
 
+    def _snapshot(self):
+        return self._transaction(lambda record, db: record)
+
+    @staticmethod
+    def _ensure_reservation(record, lease):
+        if record.get("lease") != lease:
+            raise RunnerError("The original reservation has ended; inspect status")
+
+    def _verified_mappings(self):
+        eligible = {}
+        blocked = []
+        for registered in self.api.call("/repositories"):
+            repo = registered["id"]
+            mapping = self.config["repositories"].get(repo)
+            if mapping is None:
+                continue
+            try:
+                self._manager(mapping, registered["remote"]).verify_checkout()
+            except WorkspaceError:
+                blocked.append(repo)
+                continue
+            eligible[repo] = registered["remote"]
+        if not eligible:
+            raise RunnerError("No registered checkout passed verification; check local mappings and origins")
+        return eligible, blocked
+
     def prepare(self):
-        def reserve(record):
-            if record:
-                return record["lease"]
-            registrations = self.api.call("/repositories")
-            eligible = {}
-            blocked = []
-            for registered in registrations:
-                repo = registered["id"]
-                mapping = self.config["repositories"].get(repo)
-                if mapping is None:
-                    continue
-                try:
-                    self._manager(mapping, registered["remote"]).verify_checkout()
-                except WorkspaceError:
-                    blocked.append(repo)
-                    continue
-                eligible[repo] = registered["remote"]
-            if not eligible:
-                raise RunnerError("No registered checkout passed verification; check local mappings and origins")
-            record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                          repositories=eligible, blocked=blocked, stages=sorted(STAGES))
-            return record["lease"]
+        # Only competing preparations of this slot wait here. Heartbeats and
+        # other slots can still use the journal during HTTP and Git operations.
+        with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
+            return self._prepare_slot()
 
-        lease = self._transaction(reserve)
+    def _prepare_slot(self):
+        snapshot = self._snapshot()
+        if not snapshot:
+            if self.slot > self.capacity:
+                raise RunnerError("Slot exceeds local capacity; use an enabled slot")
+            eligible, blocked = self._verified_mappings()
 
-        def ensure_reservation(record):
-            if record.get("lease") != lease:
-                raise RunnerError("The original reservation has ended; inspect status")
+            def reserve(record, db):
+                if db.execute("SELECT count(*) FROM slot").fetchone()[0] >= self.capacity:
+                    raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
+                record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
+                              repositories=eligible, blocked=blocked, stages=sorted(STAGES),
+                              slots=self.capacity)
+                return record
 
-        def claim(record):
-            ensure_reservation(record)
-            if "claim" in record:
-                return None
+            snapshot = self._transaction(reserve)
+
+        lease = snapshot["lease"]
+        if "claim" not in snapshot:
             request = {
-                "runner_id": record["runner_id"], "repository_ids": sorted(record["repositories"]),
-                "slots": 1,
+                "runner_id": snapshot["runner_id"],
+                "repository_ids": sorted(snapshot["repositories"]),
+                "slots": snapshot.get("slots", 1),
             }
-            if "stages" in record:
-                request["stages"] = record["stages"]
-            result = self.api.call("/dispatch/claim", request, lease=record["lease"])
-            if result["status"] != "claimed":
-                status = {"status": result["status"], "unverified_mappings": record["blocked"]}
-                record.clear()
-                return status
-            record.update(claim=result, lease_expires_at=result["lease_expires_at"])
-            return None
+            if "stages" in snapshot:
+                request["stages"] = snapshot["stages"]
+            result = self.api.call("/dispatch/claim", request, lease=lease)
 
-        result = self._transaction(claim)
-        if result is not None:
-            return result
+            def save_claim(record, db):
+                self._ensure_reservation(record, lease)
+                if result["status"] != "claimed":
+                    record.clear()
+                else:
+                    record.update(claim=result, lease_expires_at=result["lease_expires_at"])
+                return record
 
-        snapshot = self._transaction(dict)
-        ensure_reservation(snapshot)
+            blocked = snapshot["blocked"]
+            snapshot = self._transaction(save_claim)
+            if not snapshot:
+                return {"status": result["status"], "slot": self.slot, "unverified_mappings": blocked}
+
         launch = self._prepare_launch(snapshot)
 
-        def commit_launch(record):
-            ensure_reservation(record)
+        def commit_launch(record, db):
+            self._ensure_reservation(record, lease)
             if "packet" in record:
                 raise RunnerError("Launch intent already issued; inspect status and reconcile in Codex")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
@@ -164,7 +197,7 @@ class AttendedRunner:
             record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
 
         self._transaction(commit_launch)
-        return launch
+        return {**launch, "slot": self.slot}
 
     def _prepare_launch(self, record):
         if "packet" in record:
@@ -213,7 +246,7 @@ class AttendedRunner:
                 "unverified_mappings": record["blocked"],
                 "create_thread": handoff.create_thread_arguments(record["project_id"])}
 
-    def status(self):
+    def status(self, *, all_slots=False):
         def view(record):
             if not record:
                 return {"status": "idle"}
@@ -231,12 +264,20 @@ class AttendedRunner:
                     "stage": claim and claim["execution"]["state"]["stage"],
                     "project_id": record.get("project_id"), "host_id": record.get("host_id"),
                     "started_at": record.get("started_at"), "receipt": record.get("receipt"),
-                    "lease_expires_at": record.get("lease_expires_at")}
+                    "lease_expires_at": record.get("lease_expires_at"),
+                    "unverified_mappings": record.get("blocked", [])}
 
-        return self._transaction(view)
+        if not all_slots:
+            return view(self._snapshot())
+
+        with self._journal() as db:
+            rows = db.execute("SELECT id, record FROM slot ORDER BY id").fetchall()
+        return {"capacity": self.capacity, "reservations": [
+            {"slot": slot, **view(json.loads(data))} for slot, data in rows
+        ]}
 
     def receipt(self, marker, host_id, *, thread_id=None, client_thread_id=None):
-        def save(record):
+        def save(record, db):
             packet = self._handoff(record).packet
             if marker != packet.marker or host_id != record["host_id"]:
                 raise RunnerError("Receipt does not match the launch marker and host")
@@ -266,7 +307,15 @@ class AttendedRunner:
         return result
 
     def renew(self):
-        return self._transaction(self._renew)
+        snapshot = self._snapshot()
+        result = self._renew(snapshot)
+
+        def save_renewal(record, db):
+            self._ensure_reservation(record, snapshot["lease"])
+            record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
+
+        self._transaction(save_renewal)
+        return result
 
     def _handoff(self, record):
         if "packet" not in record:
@@ -336,39 +385,41 @@ class AttendedRunner:
 
         # Workspace inspection can run Git commands. Keep the journal available
         # for renewals and verify the reservation again before saving evidence.
-        snapshot = self._transaction(dict)
+        snapshot = self._snapshot()
         submission = verify(snapshot)
 
-        def save_submission(record):
+        def save_submission(record, db):
             if (record.get("lease") != snapshot.get("lease")
                     or record.get("receipt") != snapshot.get("receipt")):
                 raise RunnerError("The original reservation ended; inspect status")
             if "submission" not in record:
                 record["submission"] = submission
 
-        self._transaction(save_submission)
+            return record["submission"]
 
-        def send(record):
-            packet = self._handoff(record).packet
-            if packet.marker != marker:
-                raise RunnerError("A different launch owns the slot")
-            claim = record["claim"]
-            path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
-            response = self.api.call(path, record["submission"]["body"],
-                                     lease=record["lease"], key=marker)
-            record.clear()
-            return response
+        submission = self._transaction(save_submission)
+        claim = snapshot["claim"]
+        path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
+        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=marker)
 
-        return self._transaction(send)
+        def finish(record, db):
+            # A concurrent idempotent submit may already have archived this attempt.
+            if record.get("lease") == snapshot["lease"]:
+                record.clear()
+
+        self._transaction(finish)
+        return response
 
 
 def add_attended_command(commands):
-    parser = commands.add_parser("attended", help="operate a single attended Captain slot")
+    parser = commands.add_parser("attended", help="operate attended Captain reservations")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
+    parser.add_argument("--slot", type=int, default=1)
     actions = parser.add_subparsers(dest="action", required=True)
-    for action in ("prepare", "status", "renew"):
+    for action in ("prepare", "renew"):
         actions.add_parser(action)
+    actions.add_parser("status").add_argument("--all", action="store_true")
     receipt = actions.add_parser("receipt")
     receipt.add_argument("marker")
     receipt.add_argument("host_id")
@@ -387,12 +438,14 @@ def run_attended(args):
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
     if not token and args.action in {"prepare", "renew", "submit"}:
         raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
-    runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token))
+    runner = AttendedRunner(args.state, config, RunnerAPI(config["base_url"], token), slot=args.slot)
     if args.action == "receipt":
         result = runner.receipt(args.marker, args.host_id, thread_id=args.thread_id,
                                 client_thread_id=args.client_thread_id)
     elif args.action == "submit":
         result = runner.submit(args.marker, args.host_id, args.thread_id)
+    elif args.action == "status":
+        result = runner.status(all_slots=args.all)
     else:
         result = getattr(runner, args.action)()
     print(json.dumps(result, ensure_ascii=False))

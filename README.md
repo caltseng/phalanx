@@ -33,15 +33,15 @@ Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlit
 
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
-### Run one attended Codex assignment
+### Run attended Codex assignments
 
 Use a server with durable intake and dispatch enabled. Register the repository
 with the owner API, fetch the desired origin branch into its local checkout,
 and file a development or report-drafting item. Give the machine one stable
-runner ID and use one private local state directory for this slice. The state
-directory contains the runner's current lease. Put it outside the mapped
-checkouts and restrict its access to the runner account. Keep the runner token
-in the shell that runs these commands.
+runner ID and share one private local state directory and config across all
+Captain commands for that runner. The directory contains active lease secrets.
+Put it outside the mapped checkouts and restrict access to the runner account.
+Keep the runner token in the shell that runs these commands.
 
 Save a local JSON config such as:
 
@@ -49,6 +49,7 @@ Save a local JSON config such as:
 {
   "base_url": "http://127.0.0.1:8000",
   "runner_id": "desktop",
+  "capacity": 2,
   "repositories": {
     "registered-repo-id": {
       "checkout": "C:/enlistments/example",
@@ -60,21 +61,35 @@ Save a local JSON config such as:
 }
 ```
 
+Local capacity defaults to 1. Use numbered slots from 1 through the configured
+capacity. The server still applies dispatch pause, stage and item eligibility,
+and its per-runner capacity. A local capacity reduction applies to new
+reservations. Existing reservations in higher-numbered slots can still be
+inspected, renewed, and submitted, and count toward local capacity. When
+upgrading the bridge, finish any in-flight CLI commands and use the new
+version for all subsequent commands. The existing journal remains usable
+and its original reservation is slot 1.
+
 From an authorized Captain muster:
 
 1. Verify the project and host with Codex project discovery. Run
-   `python -m phalanx attended --config runner.json --state C:/phalanx-runner prepare`.
+   `python -m phalanx attended --config runner.json --state C:/phalanx-runner --slot 1 prepare`.
    On `launch_intent`, invoke the app's create-thread action **once** with the
    returned `create_thread` arguments. Save the marker for receipt and result
-   commands. The worker targets its assigned Git worktree explicitly.
-2. With the same command prefix, run
+   commands. Prepare each additional assignment in a free slot, such as
+   `--slot 2 prepare`. The worker targets its assigned Git worktree explicitly.
+2. With the same command prefix and slot number, run
    `receipt MARKER HOST --thread-id THREAD` for a native chat receipt, or
    `receipt MARKER HOST --client-thread-id CLIENT` for queued setup. Resolve a
    queued or lost receipt in the app and verify the exact launch marker and
    assignment before recording the native ID. Use `status` to inspect a
-   reservation. Keep ambiguous launches reserved and avoid another app launch.
-3. Run `renew` independently of app observation, comfortably before the current
-   lease expires. The CLI supports manual renewal. Use short observation waits.
+   reservation or `status --all` to list occupied slots. If the claim response
+   was lost, repeat `prepare` in the original slot to replay the claim. Keep an
+   ambiguous app launch reserved and reconcile it using the original marker.
+   Other free slots can continue preparing eligible assignments.
+3. Run `renew` for every known active claim in its slot independently of app
+   observation, comfortably before that lease expires. The CLI supports manual
+   renewal. Use short observation waits.
 4. Read the native chat and verify the exact marker, assignment, and that the
    worker and any writers it started have stopped. Then run
    `submit MARKER HOST THREAD --confirmed-stopped`. The runner verifies the
