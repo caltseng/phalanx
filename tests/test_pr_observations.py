@@ -177,6 +177,67 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(updated["state"]["stage"], "pr_reconciliation")
         self.assertIsNone(updated["state"]["final_output"])
 
+    def test_published_validation_wait_replays_and_reclaims_exact_revision(self):
+        self.publish()
+        promotion = self.observation(self.claim("pr_promotion"), gates=self.gates("draft"))
+        self.assertEqual(self.submit(promotion)[0], 200)
+        claim = self.claim("pr_validation")
+        authority = f"{self.execution}/pr-validation-claim"
+        claim_body = dict(claim, runner_id="local")
+        self.assertEqual(self.request(authority, OWNER, claim_body, self.lease)[0], 403)
+        self.assertEqual(self.request(authority, RUNNER, dict(claim_body, runner_id="other"),
+                                      self.lease), (200, {"current": False}))
+        status, current = self.request(authority, RUNNER, claim_body, self.lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(current["promotion"], promotion["pull"])
+
+        for cycle in range(6):
+            body = self.observation(claim, gates=self.gates("ready", outcome="pending"),
+                                    schedule_recheck=True)
+            if cycle == 0:
+                changed_base = dict(
+                    body, pull=dict(body["pull"], base_sha=OTHER),
+                    expected=dict(body["expected"], base_sha=OTHER),
+                )
+                self.assertEqual(self.submit(changed_base)[0], 409)
+            key = {"Idempotency-Key": f"pending-ready-{cycle}"}
+            status, updated = self.submit(body, **key)
+            self.assertEqual(status, 200)
+            self.assertEqual(self.submit(body, **key), (status, updated))
+            if cycle == 5:
+                self.assertEqual(updated["state"]["status"], "waiting_for_input")
+                _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+                self.assertIn("stalled", timeline[-1]["details"]["question"]["prompt"])
+                break
+            self.assertEqual(updated["state"]["status"], "waiting_for_external")
+            self.assertEqual(self.request(authority, RUNNER, dict(claim, runner_id="local"),
+                                          self.lease), (200, {"current": False}))
+            with write_transaction(self.path) as db:
+                due = db.execute("SELECT version FROM external_rechecks WHERE version=?",
+                                 (updated["version"],)).fetchone()
+                self.assertIsNotNone(due)
+                db.execute("UPDATE external_rechecks SET due_at_ms=0 WHERE version=?",
+                           (updated["version"],))
+            status, due = self.request("/v1/runner/due-rechecks", RUNNER)
+            self.assertEqual(status, 200)
+            self.assertEqual(len(due), 1)
+            self.assertEqual(due[0]["revision"], {"head": HEAD, "base": BASE})
+            self.assertEqual(due[0]["gate"], "pr_validation")
+            status, queued = self.request(f"{self.execution}/recheck", RUNNER, {
+                "expected_version": updated["version"],
+            }, {"Idempotency-Key": f"recheck-ready-{cycle}"})
+            self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
+            claim = self.claim("pr_validation")
+
+        status, queued = self.request(f"{self.execution}/reply", OWNER, {
+            "expected_version": updated["version"], "answer": "The CI provider recovered",
+        }, {"Idempotency-Key": "ready-policy-reply"})
+        self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
+        ready = self.observation(self.claim("pr_validation"), gates=self.gates("ready"),
+                                 schedule_recheck=True)
+        status, updated = self.submit(ready, **{"Idempotency-Key": "ready-passed"})
+        self.assertEqual((status, updated["state"]["stage"]), (200, "adversarial_review"))
+
     def test_cancelling_attempt_cannot_record_publication(self):
         claim = self.claim("pr_creation")
         status, updated = self.request(f"{self.execution}/cancel", OWNER, {

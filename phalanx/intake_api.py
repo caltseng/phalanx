@@ -133,6 +133,8 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
         for field in ("failure_reason", "question"):
             if payload[field] is None:
                 payload.pop(field)
+    if isinstance(body, pr_observations.Validation) and not body.schedule_recheck:
+        payload.pop("schedule_recheck")
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
@@ -203,3 +205,11 @@ def pr_observation(request: Request, item_id: Identifier, execution_id: Identifi
                    body: pr_observations.Observation,
                    lease: Lease, key: Key = None):
     return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
+             dependencies=[Depends(require_runner)])
+def pr_validation_claim(request: Request, item_id: Identifier, execution_id: Identifier,
+                        body: pr_observations.PublishedValidationClaimCheck, lease: Lease):
+    return run(request, pr_observations.check_published_validation_claim,
+               item_id, execution_id, body, intake.digest(lease))
