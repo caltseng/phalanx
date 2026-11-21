@@ -152,6 +152,21 @@ V1 targets a large queue and many workers on one local machine with visible Code
 - **Done when:** The tested operating envelope is documented, starvation and overbooking tests pass, pending work recovers without silent loss, and the full v1 muster passes on one machine. Any limit or known degradation has a visible reason.
 - During the load run, stall a PR on provider throttling, leave another item waiting on a failed prerequisite, and interrupt a worker. Verify that ready reports and independent PR work still advance. Lift the throttle, satisfy the prerequisite through recovery or replacement, and reconcile the interrupted session. Verify each affected item resumes from its recorded trigger and checkpoint during the active muster.
 
+## Remaining v1 integration work
+
+The merged components can be tested in isolation. The release still needs an attended muster that connects them through the same API and verifies delivery across two repositories. The acceptance criteria below refine the work items above and use the transitions in [STATE_MACHINE.md](STATE_MACHINE.md).
+
+| Work item | Implementation and acceptance |
+| --- | --- |
+| PH-11a Dispatch and observe several native workers | Use separate durable local reservations and worktrees under a configured runner limit. Have a user-started Captain maintain native chat receipts and observe completion while heartbeats run independently. Two occupied slots, a blocked third, and a completed slot must produce the same observed capacity in the runner and server. |
+| PH-12a Reattach and adopt | Connect the local recovery decision to the Captain and the recovery API. Replay lost receipts, reattach to a known active writer, and preserve ambiguous reservations until verified. Adopt a stopped worker's valid checkpoint under server authority and test restart both before and after the launch receipt. A verified result must survive without redrafting or overwriting another attempt. |
+| PH-13a Advance the draft stage | Claim draft publication as runner work. Build its intent from the recorded candidate, target and item branch. Reconcile the durable Git operations and record the primary and duplicate PRs using the exact attempt. Test a lost write or response without starting another development worker. |
+| PH-14a Execute local and published validation | Run self-review and configured local checks on the candidate, capture permitted bypass dispositions, and publish reviewed updates to the primary PR. Collect draft policy and gate observations, promote, then collect ready-phase checks. Turn pending gates into durable due rechecks. Test fallback when draft-only evidence is missing on a ready PR. |
+| PH-15a Connect review, reconciliation and check-in | Run a separate review stage and record the current revision. Resolve actionable feedback and conflicts, revalidate a changed revision, and derive merge authorization and base assurance from repo policy. Persist merge intent before the provider call and verify the resulting merge or report the unresolved state. Exercise ready-only disposition and the merge loop separately. |
+| PH-16a Complete the field report path | Feed the stored Markdown to an independent report reviewer, record the reviewed draft revision, and advance storage through the durable finalizer. Retry finalization without asking an agent to redraft. Retrieve the final report with the runner offline. |
+| PH-18a Surface waits and native chats | Show prerequisite blockers, scheduled rechecks, worker references, current PRs and final outputs in the board. Confirm that the owner can see the prompt and respond through the existing authenticated inbox or API, and that the resumed worker receives the answer and preserved context. |
+| PH-19a Verify the integrated local operating envelope | Supplement [the scheduler probe](docs/pilots/local-operating-envelope.md) with mixed authenticated HTTP traffic and the dependency/wait/recovery fault cases above. Record latency and fairness separately from live worker capacity. Run the two-repository acceptance muster once the components are connected. |
+
 ## After the local release
 
 | Item | Depends on | Deliverable and acceptance |
