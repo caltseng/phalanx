@@ -26,6 +26,8 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.14"
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
