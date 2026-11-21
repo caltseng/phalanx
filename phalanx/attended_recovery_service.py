@@ -85,8 +85,8 @@ def _verify_local(root, record, packet, thread_id):
         elif result is None:
             summary = "Preserve and reconcile local changes before allowing a replacement"
         elif (
-            (packet.stage == "report_drafting" and unchanged
-             and result.outcome in {"succeeded", "needs_input", "failed"})
+            (packet.stage in {"report_drafting", "report_review"} and unchanged
+             and result.outcome in {"succeeded", "changes_required", "needs_input", "failed"})
             or (packet.stage == "development" and result.outcome == "succeeded"
                 and not workspace.dirty and workspace.head != packet.expected_revision
                 and result.details["evidence"].strip() == workspace.head)

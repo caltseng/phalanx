@@ -191,6 +191,13 @@ before sending it. Retries recheck that proof and replay the original request.
 Only a verified finalization acknowledgment releases the slot. Dirty checkpoints,
 partial workspace refs, attempt evidence, ambiguous launches and runner-only
 publication/storage effects still require explicit reconciliation.
+For a launched stopping worker, the same stop path requires its exact stopped
+native turn and verifies the worktree and any result through the recovery
+verifier; it never submits a worker result as a cancellation acknowledgment.
+A clean unlaunched checkpoint remains accounted when origin advances to a
+descendant. Unmatched expired attempts consume capacity rather than stopping
+all admission. Recovery waits for an observation before starting its uncertainty
+backoff, and malformed native rows block only their associated markers.
 
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Ctrl+C stops scheduling and drains in-flight

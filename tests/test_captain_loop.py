@@ -383,6 +383,65 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertTrue(any(row["status"] == "unmatched_attempts"
                             for row in blocked.runner.status(all_slots=True)["loop_status"]))
 
+    def test_unmatched_attempt_reserves_capacity_without_blocking_other_slot(self):
+        self.api.expired = [{"attempt_id": "unmatched", "item_id": "missing"}]
+        loop = self.loop()
+        self.spin(loop, lambda: len(self.native.launches) == 1)
+        for _ in range(20):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(self.native.launches), 1)
+        self.assertEqual(len(loop._records()) + len(loop.unmatched), self.config["capacity"])
+        self.assertTrue(any(event["status"] == "unmatched_attempts" for event in self.events))
+
+    def test_expired_packet_waits_for_observation_without_recovery_backoff(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        loop = self.loop()
+        loop._prepare(1)
+        snapshot = loop._records()[1]
+        claim = snapshot["claim"]
+        self.api.expired = [{
+            "attempt_id": claim["attempt_id"], "item_id": claim["item_id"],
+            "execution_id": claim["execution"]["id"], "stage": "report_drafting",
+            "version": claim["execution"]["version"],
+        }]
+        loop.expired = {claim["attempt_id"]: self.api.expired[0]}
+        for _ in range(6):
+            result = loop._advance(1, loop._records()[1], None)
+            self.assertEqual(result["status"], "observing")
+        self.assertNotIn("recovery", loop._records()[1])
+        batch = loop._wait((1,), loop._records())
+        self.assertEqual(loop._advance(1, loop._records()[1], batch)["status"], "reattach")
+
+    def test_malformed_row_blocks_only_its_marker_in_shared_batch(self):
+        native = self.native.__call__
+        loop = self.loop()
+        self.spin(loop, lambda: len(self.native.launches) == 2)
+        loop.close()
+        records = loop._records()
+        bad_slot, good_slot = sorted(records)
+        bad_marker = AttendedRunner(self.root, self.config, self.api, slot=bad_slot)._handoff(
+            records[bad_slot],
+        ).packet.marker
+        def malformed(operation, arguments):
+            reply = native(operation, arguments)
+            if operation == "wait_threads":
+                for row in reply["threads"]:
+                    if row["marker"] == bad_marker:
+                        row["thread_id"] = "malformed UUID"
+            return reply
+        loop.adapter = CodexCLIAdapter(malformed)
+        packet = self.write_result(good_slot)
+        self.native.stopped.add(packet.marker)
+        batch = loop._wait(tuple(records), records)
+        with self.assertRaisesRegex(RunnerError, "Malformed native observation"):
+            loop._advance(bad_slot, records[bad_slot], batch)
+        self.assertEqual(loop._advance(good_slot, records[good_slot], batch)["status"], "submitted")
+        self.assertIn(bad_slot, loop._records())
+        self.assertNotIn(good_slot, loop._records())
+        self.assertEqual(len(self.api.submissions), 1)
+
     def test_cursor_retention_is_per_attempt_and_not_authority(self):
         loop = self.loop()
         self.spin(loop, lambda: len(self.native.waits) >= 4 and len(self.native.launches) == 2)
@@ -565,6 +624,86 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(sum(event["event"] == "stop_confirmed" for event in timeline), 1)
         self.assertEqual(self.get(execution_route + "/report", OWNER)[0], 200)
 
+    def test_cancel_after_launch_confirms_stop_without_submitting_worker_result(self):
+        self.config["capacity"] = 1
+        self.start_server(self.directory / "launched-cancel.sqlite3")
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        loop = self.loop()
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        packet = self.write_result(1)
+        execution_route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
+        current = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
+        self.assertEqual(self.request(execution_route + "/cancel", OWNER, {
+            "expected_version": current["version"], "reason": "Cancel the launched report writer",
+        })[0], 200)
+        self.native.stopped.add(packet.marker)
+        call = self.api.call
+        stop_posts, submissions = [], []
+        def stop(route, body=None, **kwargs):
+            if route.endswith("/result"):
+                submissions.append(body)
+            response = call(route, body, **kwargs)
+            if route.endswith("/stop-confirmed"):
+                snapshot = loop._records()[1]
+                self.assertNotIn("submission", snapshot)
+                self.assertIn("thread_id", snapshot["cancel_stop"])
+                stop_posts.append((body.copy(), kwargs.copy()))
+                if len(stop_posts) == 1:
+                    raise RunnerError("Lost launched stop acknowledgment")
+            return response
+        self.api.call = stop
+        self.spin(loop, lambda: not loop._records() and len(stop_posts) == 2, timeout=15)
+        self.assertFalse(submissions)
+        self.assertEqual(stop_posts[0], stop_posts[1])
+        self.assertEqual(len(self.native.launches), 1)
+        self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "cancelled")
+        self.assertEqual(self.get(execution_route + "/report", OWNER)[0], 200)
+        with loop.runner._journal() as db:
+            archive = json.loads(db.execute("SELECT record FROM completed").fetchone()[0])
+        checkpoint = json.loads(archive["cancel_stop"]["proof"].split(". ", 1)[1])
+        self.assertEqual(checkpoint["path"], str(packet.worktree))
+
+    def test_unlaunched_cancel_accepts_clean_ancestor_after_origin_advances(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        prepare, call = WorkspaceManager.prepare, self.api.call
+        current, stop_posts = {}, []
+        def cancelled_prepare(manager, item_id, **kwargs):
+            workspace = prepare(manager, item_id, **kwargs)
+            subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.test",
+                            "commit", "--allow-empty", "-m", "Advance origin base"], cwd=self.checkout,
+                           check=True, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+                           cwd=self.checkout, check=True, capture_output=True)
+            claim = next(iter(self.api.claims.values()))
+            current.update(id=claim["execution"]["id"], version=claim["execution"]["version"] + 1,
+                           state={"stage": "report_drafting", "status": "waiting_for_external",
+                                  "stopping": "cancelled"})
+            return workspace
+        def stop(route, body=None, **kwargs):
+            if route == "/items/first" and current:
+                return {"execution": current}
+            if route.endswith("/stop-confirmed"):
+                stop_posts.append(body)
+                return {"id": current["id"], "version": current["version"] + 2,
+                        "state": {"status": "cancelled", "final_output": {
+                            "reference": "/v1" + route.removesuffix("/stop-confirmed") + "/report",
+                        }}}
+            return call(route, body, **kwargs)
+        self.api.call = stop
+        loop = self.loop()
+        with patch.object(WorkspaceManager, "prepare", cancelled_prepare):
+            with self.assertRaisesRegex(RunnerError, "changed before launch"):
+                loop._prepare(1)
+            self.spin(loop, lambda: bool(stop_posts) and not loop._records())
+        self.assertEqual(len(stop_posts), 1)
+        self.assertFalse(self.native.launches)
+
     def test_no_writer_cancellation_replays_exact_stop_through_repeated_ticks(self):
         self.api.waiting = ["first"]
         original_prepare, original_call = WorkspaceManager.prepare, self.api.call
@@ -647,7 +786,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             loop._prepare(1)
         current = self.api.call("/items/first")["execution"]
         with self.assertRaisesRegex(RunnerError, "unaccounted changes"):
-            loop._confirm_unlaunched_stop(runner, current)
+            loop._confirm_stop(runner, current)
         self.assertNotIn("cancel_stop", runner._snapshot())
         manager = runner._manager(self.config["repositories"]["repo"], str(self.checkout))
         workspace = manager.inspect("first")
@@ -660,13 +799,14 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         }))
         (workspace.path / "unrecorded.txt").write_text("New effects after the first stop request")
         with self.assertRaisesRegex(RunnerError, "unaccounted changes"):
-            loop._confirm_unlaunched_stop(runner)
+            loop._confirm_stop(runner)
         runner._transaction(lambda record, db: record.update(relay={"status": "started"}))
         with self.assertRaisesRegex(RunnerError, "ambiguous launch"):
-            loop._confirm_unlaunched_stop(runner, current)
+            loop._confirm_stop(runner, current)
         self.assertTrue(runner._snapshot())
 
     def test_identity_and_stopped_attestation_are_rejected(self):
+        started_at = datetime.now(timezone.utc).isoformat()
         adapter = CodexCLIAdapter(lambda operation, arguments: {
             "host_id": "wrong", "project_id": "project", "checkout": str(self.checkout),
         })
@@ -675,11 +815,13 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         adapter = CodexCLIAdapter(lambda operation, arguments: {
             "observed_at": datetime.now(timezone.utc).isoformat(), "discovery_complete": True,
             "threads": [{"host_id": "local", "project_id": "project", "marker": "marker",
-                         "thread_id": str(uuid4()), "started_at": datetime.now(timezone.utc).isoformat(),
+                         "thread_id": str(uuid4()), "started_at": started_at,
                          "assignment": {}, "state": "stopped"}],
         })
-        with self.assertRaisesRegex(RunnerError, "invalid or stale"):
-            adapter.wait_threads([{"marker": "marker"}], cursors={}, timeout=1)
+        batch = adapter.wait_threads([{"marker": "marker"}], cursors={}, timeout=1)
+        self.assertFalse(batch.threads)
+        self.assertIn("marker", batch.errors)
+        self.assertIn("attestation", batch.errors["marker"])
         loop = self.loop()
         loop.close()
         self.config["runner_id"] = "other"

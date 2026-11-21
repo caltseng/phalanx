@@ -4,7 +4,7 @@ The external bridge owns actual desktop discovery, thread creation and reads.
 This module validates its replies; it does not simulate native acceptance.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 import os
@@ -86,6 +86,7 @@ class ObservationBatch:
     discovery_complete: bool
     cursors: dict[str, str | None]
     observed_at: datetime
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 def _timestamp(value: str) -> datetime:
@@ -144,8 +145,12 @@ class CodexCLIAdapter:
                 or any(value is not None and not isinstance(value, str) for value in next_cursors.values())
             ):
                 raise ValueError("Invalid freshness, discovery or cursor evidence")
-            threads = []
-            for row in rows:
+        except (KeyError, ValueError, TypeError, AttributeError) as error:
+            raise RunnerError("Desktop observation has invalid or stale identity evidence") from error
+        threads, errors = [], {}
+        markers = {ref["marker"] for ref in references}
+        for row in rows:
+            try:
                 state = row["state"]
                 started = _timestamp(row["started_at"])
                 if (
@@ -162,6 +167,10 @@ class CodexCLIAdapter:
                     marker=row["marker"], assignment=row["assignment"], state=state,
                     client_thread_id=UUID(row["client_thread_id"]) if row.get("client_thread_id") else None,
                 ))
-        except (KeyError, ValueError, TypeError, AttributeError) as error:
-            raise RunnerError("Desktop observation has invalid or stale identity evidence") from error
-        return ObservationBatch(tuple(threads), complete, next_cursors, observed)
+            except (KeyError, ValueError, TypeError, AttributeError) as error:
+                marker = row.get("marker") if isinstance(row, dict) else None
+                marker = marker if isinstance(marker, str) and marker in markers else ""
+                errors[marker] = f"Malformed native observation for {marker or 'unidentified writer'}: {error}"
+                if not marker:
+                    complete = False
+        return ObservationBatch(tuple(threads), complete, next_cursors, observed, errors)

@@ -13,7 +13,7 @@ from uuid import UUID
 
 from .attended import AttendedRunner, RunnerAPI, RunnerError, STAGES
 from .attended_recovery import _matches
-from .attended_recovery_service import RecoveryJournal, run_recovery
+from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery
 from .captain_adapter import CodexCLIAdapter, CommandTransport, ObservationBatch
 from .workspaces import _file_lock, _git
 
@@ -201,11 +201,14 @@ class CaptainLoop:
                 workspace = manager._snapshot(path, branch, common)
                 base = claim["request"].get("target_branch") or mapping["base_branch"]
                 packet = runner._handoff(snapshot).packet if "packet" in snapshot else None
-                expected = (packet.expected_revision if packet else
-                            claim["execution"]["state"].get("candidate") or manager.resolve_origin_base(base))
+                candidate = claim["execution"]["state"].get("candidate")
+                expected = packet.expected_revision if packet else candidate or manager.resolve_origin_base(base)
                 if packet and (packet.worktree != workspace.path or packet.branch != workspace.branch):
                     raise RunnerError("Prepared packet does not match the owned worktree; reconcile it")
-                if workspace.dirty or workspace.head != expected:
+                accounted = workspace.head == expected
+                if not accounted and not packet and not candidate and not workspace.dirty:
+                    accounted = _git(manager.checkout, "merge-base", workspace.head, expected).strip() == workspace.head
+                if workspace.dirty or not accounted:
                     raise RunnerError("Unlaunched workspace has unaccounted changes; preserve it and reconcile stop")
                 return f"Unlaunched clean workspace {path} at accounted revision {workspace.head}"
             refs = _git(manager.checkout, "for-each-ref", "--format=%(refname)", owner,
@@ -214,35 +217,60 @@ class CaptainLoop:
                 raise RunnerError("Partial workspace refs exist; reconcile them before confirming stop")
             return "No item worktree, owned branch, launch packet, relay, receipt or result"
 
-    def _confirm_unlaunched_stop(self, runner, current=None):
-        # Exclude preparations while proving no launch or unaccounted local
-        # effect exists, and persist the exact stop request before sending it.
+    def _confirm_stop(self, runner, current=None, native=None):
+        # Exclude preparations while accounting for the writer and local effects,
+        # and persist the exact stop request before sending it.
         with _file_lock(self.root / f"attended-prepare-{runner.slot}.lock"):
             snapshot = runner._snapshot()
-            unsafe = _LAUNCH_EFFECTS
+            unsafe = ("recover_stop",)
             if any(field in snapshot for field in unsafe):
                 raise RunnerError("Stop needs native/effect reconciliation; an ambiguous launch is not a stopped writer")
             claim = snapshot["claim"]
             if claim["execution"]["state"]["stage"] not in STAGES:
                 raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
             request = snapshot.get("cancel_stop")
-            proof = self._unlaunched_proof(runner, snapshot)
+            launched = any(field in snapshot for field in ("relay", "receipt"))
+            if launched:
+                if "packet" not in snapshot or (native is None and not (request or {}).get("thread_id")):
+                    raise RunnerError("An ambiguous launch is not a stopped writer; verify its native receipt")
+                packet = runner._handoff(snapshot).packet
+                thread_id = request.get("thread_id") if request else None
+                if native is not None:
+                    if native.state != "stopped" or not _matches(snapshot, packet, native):
+                        raise RunnerError("An ambiguous launch is not a stopped writer; observe its exact stopped turn")
+                    thread_id = str(native.thread_id)
+                if not thread_id or snapshot.get("receipt", {}).get("thread_id") != thread_id:
+                    raise RunnerError("An ambiguous launch is not a stopped writer; verify its native receipt")
+                evidence, checkpoint = _verify_local(self.root, snapshot, packet, UUID(thread_id))
+                if evidence.disposition not in {"retry_safe", "verified_result"}:
+                    raise RunnerError(evidence.summary)
+                proof = f"Exact stopped native thread {thread_id}. " + json.dumps(checkpoint, sort_keys=True)
+            else:
+                if "submission" in snapshot:
+                    raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
+                proof = self._unlaunched_proof(runner, snapshot)
             if request is not None and request["proof"] != proof:
-                raise RunnerError("Unlaunched checkpoint changed; reconcile it before replaying stop")
+                raise RunnerError("Stopped checkpoint changed; reconcile it before replaying stop")
             if request is None:
                 if (current is None or current["id"] != claim["execution"]["id"]
                         or current["state"]["stopping"] not in {"cancelled", "failed"}
                         or current["state"]["stage"] != claim["execution"]["state"]["stage"]):
-                    raise RunnerError("Unlaunched stop does not match the current execution")
+                    raise RunnerError("Stop does not match the current execution")
                 request = {
                     "key": f"attended-unlaunched-stop-{claim['attempt_id']}-{current['version']}",
                     "body": {"attempt_id": claim["attempt_id"], "stage": current["state"]["stage"],
                              "expected_version": current["version"]},
                     "disposition": current["state"]["stopping"], "proof": proof,
                 }
+                if launched:
+                    request["thread_id"] = thread_id
+                if ("submission" in snapshot
+                        and snapshot["submission"]["body"]["expected_version"] >= current["version"]):
+                    raise RunnerError("Reconcile the saved result before confirming stop")
                 def save(record, db):
                     runner._ensure_reservation(record, snapshot["lease"])
-                    if any(field in record for field in unsafe):
+                    if (any(field in record for field in unsafe)
+                            or any(record.get(field) != snapshot.get(field) for field in _LAUNCH_EFFECTS)):
                         raise RunnerError("Launch changed during stop verification; retain the reservation")
                     record["cancel_stop"] = request
                 runner._transaction(save)
@@ -259,10 +287,11 @@ class CaptainLoop:
                 and output.get("reference") == "/v1" + route.removesuffix("/stop-confirmed") + "/report"
             )
             if response.get("id") != claim["execution"]["id"] or not (pending or finalized):
-                raise RunnerError("Unlaunched stop acknowledgment did not verify finalization; retain its exact request")
+                raise RunnerError("Stop acknowledgment did not verify finalization; retain its exact request")
             def finish(record, db):
                 runner._ensure_reservation(record, snapshot["lease"])
-                if record.get("cancel_stop") != request or any(field in record for field in unsafe):
+                if (record.get("cancel_stop") != request or any(field in record for field in unsafe)
+                        or any(record.get(field) != snapshot.get(field) for field in _LAUNCH_EFFECTS)):
                     raise RunnerError("Reservation changed before stop acknowledgment; reconcile it")
                 archive = {key: value for key, value in record.items() if key != "lease"}
                 archive["stop_acknowledgment"] = response
@@ -277,8 +306,20 @@ class CaptainLoop:
         if not snapshot:
             return self._prepare(slot)
         if "cancel_stop" in snapshot:
-            return self._confirm_unlaunched_stop(runner)
-        if "submission" in snapshot:
+            native = None
+            if observation is not None and "thread_id" in snapshot["cancel_stop"]:
+                native = self._native(runner, snapshot, observation)
+            return self._confirm_stop(runner, native=native)
+        unlaunched = not any(field in snapshot for field in _LAUNCH_EFFECTS)
+        current, stopping = None, False
+        if "claim" in snapshot and (unlaunched or "packet" in snapshot):
+            current = self.api.call(f"/items/{snapshot['claim']['item_id']}")["execution"]
+            stopping = (current["id"] == snapshot["claim"]["execution"]["id"]
+                        and current["state"]["stage"] == snapshot["claim"]["execution"]["state"]["stage"]
+                        and current["state"].get("stopping") in {"cancelled", "failed"})
+        if unlaunched and stopping:
+            return self._confirm_stop(runner, current)
+        if "submission" in snapshot and not stopping:
             packet = snapshot.get("packet")
             if packet:
                 receipt = snapshot["receipt"]
@@ -286,16 +327,11 @@ class CaptainLoop:
                     runner._handoff(snapshot).packet.marker, snapshot["host_id"], receipt["thread_id"],
                 )}
             return self._prepare(slot)
-        unlaunched = not any(field in snapshot for field in _LAUNCH_EFFECTS)
-        if unlaunched and "claim" in snapshot:
-            current = self.api.call(f"/items/{snapshot['claim']['item_id']}")["execution"]
-            if current["state"].get("stopping") in {"cancelled", "failed"}:
-                return self._confirm_unlaunched_stop(runner, current)
-        if observation is not None and (
-            datetime.now(timezone.utc) - observation.observed_at
-        ).total_seconds() > 60:
-            raise RunnerError("Native observation aged while this slot was busy; read the exact writer again")
         if snapshot.get("recover_stop") or snapshot.get("claim", {}).get("attempt_id") in self.expired:
+            if "packet" in snapshot and observation is None and "recover_stop" not in snapshot:
+                return {"status": "observing", "reason": "Awaiting native observation before recovery"}
+            if observation is not None and "packet" in snapshot:
+                self._check_observation(runner, snapshot, observation)
             return run_recovery(
                 self.root, self.config["runner_id"], self.api, RecoveryJournal(self.root, slot),
                 observations=observation.threads if observation else (),
@@ -306,18 +342,32 @@ class CaptainLoop:
         if observation is None:
             return {"status": "observing", "reason": "Awaiting an exact native observation; launch is never replayed"}
         packet = runner._handoff(snapshot).packet
+        native = self._native(runner, snapshot, observation)
+        runner.receipt(packet.marker, snapshot["host_id"], thread_id=str(native.thread_id))
+        if native.state == "stopped":
+            if stopping:
+                return self._confirm_stop(runner, current, native)
+            return {"status": "submitted", "execution": runner.submit(
+                packet.marker, snapshot["host_id"], str(native.thread_id),
+            )}
+        return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
+
+    def _check_observation(self, runner, snapshot, observation):
+        if (datetime.now(timezone.utc) - observation.observed_at).total_seconds() > 60:
+            raise RunnerError("Native observation aged while this slot was busy; read the exact writer again")
+        packet = runner._handoff(snapshot).packet
+        if packet.marker in observation.errors:
+            raise RunnerError(observation.errors[packet.marker])
+        return packet
+
+    def _native(self, runner, snapshot, observation):
+        packet = self._check_observation(runner, snapshot, observation)
         matches = [row for row in observation.threads if _matches(snapshot, packet, row)]
         if len(matches) != 1 or (
             not snapshot.get("receipt", {}).get("thread_id") and not observation.discovery_complete
         ):
             raise RunnerError("Native discovery has not established one exact writer; retain this slot and inspect history")
-        native = matches[0]
-        runner.receipt(packet.marker, snapshot["host_id"], thread_id=str(native.thread_id))
-        if native.state == "stopped":
-            return {"status": "submitted", "execution": runner.submit(
-                packet.marker, snapshot["host_id"], str(native.thread_id),
-            )}
-        return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
+        return matches[0]
 
     def _wait(self, slots, records):
         references = []
@@ -361,6 +411,8 @@ class CaptainLoop:
                     for slot in slots:
                         self._status(slot, "observation_blocked", f"{type(error).__name__}: {error}")
                 else:
+                    if "" in batch.errors:
+                        self._status(0, "observation_blocked", batch.errors[""])
                     for slot in slots:
                         self.pending_observations[slot] = batch
         for slot, future in list(self.work.items()):
@@ -390,7 +442,8 @@ class CaptainLoop:
         owned = {record["claim"]["attempt_id"] for record in records.values() if "claim" in record}
         self.unmatched = sorted(set(self.expired) - owned)
         if self.unmatched and self.recovery_ready and self.unmatched != self.last_unmatched:
-            self._status(0, "unmatched_attempts", "Restore original reservations before admission: " + ", ".join(self.unmatched))
+            self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
+                         + ", ".join(self.unmatched))
         self.last_unmatched = self.unmatched.copy()
         if self.recovery_future is None and now >= self.recovery_due:
             route = f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/recovery"
@@ -419,9 +472,9 @@ class CaptainLoop:
                 self.observations[slots] = self.native_pool.submit(self._wait, slots, records)
                 for slot in slots:
                     self.observe_due[slot] = now + self.poll_seconds
-        if self.recovery_ready and not self.unmatched:
+        if self.recovery_ready:
             occupied = set(records) | set(self.work)
-            room = max(0, self.runner.capacity - len(occupied))
+            room = max(0, self.runner.capacity - len(occupied) - len(self.unmatched))
             for slot in range(1, self.runner.capacity + 1):
                 if room and slot not in occupied and now >= self.work_due.get(slot, 0):
                     self.work[slot] = self.slot_pool.submit(self._prepare, slot)
