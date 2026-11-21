@@ -33,15 +33,15 @@ Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlit
 
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health`. This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
-### Run one attended Codex assignment
+### Run attended Codex assignments
 
 Use a server with durable intake and dispatch enabled. Register the repository
 with the owner API, fetch the desired origin branch into its local checkout,
 and file a development or report item. Give the machine one stable
-runner ID and use one private local state directory for this slice. The state
-directory contains the runner's current lease. Put it outside the mapped
-checkouts and restrict its access to the runner account. Keep the runner token
-in the shell that runs these commands.
+runner ID and share one private local state directory and config across all
+Captain commands for that runner. The directory contains active lease secrets.
+Put it outside the mapped checkouts and restrict access to the runner account.
+Keep the runner token in the shell that runs these commands.
 
 Save a local JSON config such as:
 
@@ -49,6 +49,7 @@ Save a local JSON config such as:
 {
   "base_url": "http://127.0.0.1:8000",
   "runner_id": "desktop",
+  "capacity": 2,
   "repositories": {
     "registered-repo-id": {
       "checkout": "C:/enlistments/example",
@@ -60,21 +61,44 @@ Save a local JSON config such as:
 }
 ```
 
+Local capacity defaults to 1. Use numbered slots from 1 through the configured
+capacity. The server still applies dispatch pause, stage and item eligibility,
+and its per-runner capacity. A local capacity reduction applies to new
+reservations. Existing reservations in higher-numbered slots can still be
+inspected, renewed, and submitted, and count toward local capacity. When
+upgrading the bridge, finish any in-flight CLI commands and use the new
+version for all subsequent commands. The existing journal remains usable
+and its original reservation is slot 1.
+
+Set `PHALANX_GITHUB_TOKEN` in the runner environment to publish initial drafts
+for registered GitHub repositories. After development succeeds, run
+`python -m phalanx attended --config runner.json --state C:/phalanx-runner prepare --draft`
+to poll for draft publication. This command uses the runner's Git credentials
+for the push and its GitHub token for draft creation. It returns
+`draft_submitted` when the API accepts the verified PR. Keep the same state
+directory to retry an interrupted publication, and use `status` to inspect a
+blocked reservation. Draft assignments run directly on the runner.
+
 From an authorized Captain muster:
 
 1. Verify the project and host with Codex project discovery. Run
-   `python -m phalanx attended --config runner.json --state C:/phalanx-runner prepare`.
+   `python -m phalanx attended --config runner.json --state C:/phalanx-runner --slot 1 prepare`.
    On `launch_intent`, invoke the app's create-thread action **once** with the
    returned `create_thread` arguments. Save the marker for receipt and result
-   commands. The worker targets its assigned Git worktree explicitly.
-2. With the same command prefix, run
+   commands. Prepare each additional assignment in a free slot, such as
+   `--slot 2 prepare`. The worker targets its assigned Git worktree explicitly.
+2. With the same command prefix and slot number, run
    `receipt MARKER HOST --thread-id THREAD` for a native chat receipt, or
    `receipt MARKER HOST --client-thread-id CLIENT` for queued setup. Resolve a
    queued or lost receipt in the app and verify the exact launch marker and
    assignment before recording the native ID. Use `status` to inspect a
-   reservation. Keep ambiguous launches reserved and avoid another app launch.
-3. Run `renew` independently of app observation, comfortably before the current
-   lease expires. The CLI supports manual renewal. Use short observation waits.
+   reservation or `status --all` to list occupied slots. If the claim response
+   was lost, repeat `prepare` in the original slot to replay the claim. Keep an
+   ambiguous app launch reserved and reconcile it using the original marker.
+   Other free slots can continue preparing eligible assignments.
+3. Run `renew` for every known active claim in its slot independently of app
+   observation, comfortably before that lease expires. The CLI supports manual
+   renewal. Use short observation waits.
 4. Read the native chat and verify the exact marker, assignment, and that the
    worker and any writers it started have stopped. Then run
    `submit MARKER HOST THREAD --confirmed-stopped`. The runner verifies the
@@ -83,22 +107,43 @@ From an authorized Captain muster:
 
 Development success requires a new local candidate commit and a clean
 worktree. Report drafting sends the Markdown to the server as a draft.
-Both stages record local checkpoints for questions and failures. Questions
+Worker stages record local checkpoints for questions and failures. Questions
 wait for an owner reply. A technical failure from a confirmed-stopped worker
 enters the shared 5, 10, 20, and 40 second retry backoff. Exhausting the budget
 asks for owner intervention.
-Run `prepare` again for each report stage. Review launches a new chat with the
-server's exact draft revision. Review findings return to drafting with the
-previous draft and findings in the new packet. When `prepare` returns
-`report_storage_submitted`, the runner has handed the reviewed revision to the
-server for finalization. This step has no native chat. If the response is lost,
-repeat `prepare` with the same state directory. The server retries final storage
-independently and exposes the finished Markdown through the report endpoint.
-PR stages after development stay queued for a handler that supports them.
-Keep the state directory when
-restarting. Expired leases and unverified results require reconciliation.
+Run `prepare` again to launch an independent review with the exact stored draft
+revision. Review findings return to drafting with the previous draft in the new
+packet. Run `prepare --report-storage` in a free slot to submit a reviewed
+revision for server finalization. A `report_storage_submitted` result needs no
+native chat. If the response is lost, repeat the command in the same slot. The
+server retries final storage independently and exposes the finished Markdown
+through the report endpoint.
+
+Keep the state directory when restarting. Expired leases and unverified results
+require reconciliation.
 Automatic desktop recovery and independent heartbeat scheduling remain
 follow-up work.
+
+### Reconcile an attended reservation
+
+From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.
+
+```powershell
+python -m phalanx attended-recover --config runner.json --state C:/phalanx-runner --slot 1 --observation observation.json
+```
+
+The Captain supplies a fresh JSON snapshot from native Codex history and thread reads. Set `observed_at` to the time of the snapshot as ISO 8601 with an offset. Include `discovery_complete` and a `threads` array. Set `discovery_complete` only after inspecting all relevant history pages, including archived history where relevant. A thread already bound to a native receipt can be read directly.
+
+Each thread row includes the following fields.
+
+| Field | Source |
+| --- | --- |
+| `host_id`, `project_id`, `thread_id`, `started_at` | Native host, project, thread UUID and offset-aware original launch time. |
+| `marker`, `assignment` | The exact first-turn attempt marker and the original packet's `result_identity` object from the first prompt. |
+| `state` | Use `active`, `stopped`, or `unknown`. Attest `stopped` only after confirming the native turn ended and accounting for any worktree writer it started. A missing thread or ambiguous state is `unknown`. |
+| `client_thread_id` | The queued UUID when the native launch can be positively correlated with its saved queued receipt. Otherwise omit it. |
+
+A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. A verified result with an expired lease stays reserved with its result path, digest, and checkpoint for future adoption under a server-authorized recovery claim. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
 
 ### Operator work board
 
@@ -201,6 +246,21 @@ results under a recovery claim.
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers can open short-lived read connections with `phalanx.store.connect` and the path in `request.app.state.database_path`. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`.
+
+### Answer a waiting item
+
+With the owner token configured, poll the local question inbox and use the item's IDs and version from the result:
+
+```powershell
+python -m phalanx inbox
+python -m phalanx reply ITEM_ID EXECUTION_ID "Use the existing interface" --version 3 --key reply-001
+```
+
+Reuse the same key and body if retrying the reply after a lost response. For more inbox entries, pass the last entry's `waiting_since` to `--after-time` and its `execution_id` to `--after-id`.
+
+Runners submit a structured `question` with `prompt`, `handoff`, optional `options`, and optional `proposed_default` in a stage result that needs input. The next claim after a reply includes `input_reply` with the answer and question. The authenticated execution timeline retains both.
+
+Runners can post `/external-wait` under an execution with the live attempt lease, expected version, and an idempotency key. Include the attempt and stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Both operations use the runner token. A recheck queues the same stage for verification. Provider observation and recurring polling are runner integration work.
 
 ### File and inspect work
 

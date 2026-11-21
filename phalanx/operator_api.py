@@ -23,7 +23,8 @@ SUMMARY = """
     SELECT execution.id, execution.item_id, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
            item.repository_id, json_extract(item.request_json, '$.goal') AS title,
-           progress.last_advanced_at, progress.wait_since
+           progress.last_advanced_at, progress.wait_since,
+           coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -91,6 +92,10 @@ def summary(row, now):
             else {"kind": "pr", "url": output["url"]}
         )
     wait_since = row["wait_since"]
+    blocked_count = row["blocked_count"]
+    if blocked_count and not wait:
+        noun = "prerequisite" if blocked_count == 1 else "prerequisites"
+        wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
     return {
         "id": row["id"],
         "item_id": row["item_id"],
@@ -101,6 +106,7 @@ def summary(row, now):
         "last_advanced_at": row["last_advanced_at"],
         "last_progress_at": row["updated_at"],
         "wait_reason": wait.get("reason"),
+        "blocked_prerequisite_count": blocked_count,
         "resume_trigger": wait.get("trigger"),
         "retry_at_ms": row["retry_at"],
         "wait_since": wait_since,
@@ -180,6 +186,18 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             "SELECT id FROM attempts WHERE execution_id = ? AND ended_at IS NULL",
             (execution_id,),
         ).fetchone()
+        prerequisites = db.execute(
+            """SELECT json_extract(block.value, '$.upstream_id') AS item_id,
+                      json_extract(upstream.request_json, '$.goal') AS title,
+                      json_extract(block.value, '$.milestone') AS milestone,
+                      json_extract(block.value, '$.reason') AS reason
+               FROM executions AS execution
+               JOIN json_each(execution.dependency_wait_json) AS block
+               JOIN work_items AS upstream ON upstream.id = json_extract(block.value, '$.upstream_id')
+               WHERE execution.id = ?
+               ORDER BY block.key""",
+            (execution_id,),
+        ).fetchall()
         boundary, params = ("AND event.version < ?", after) if after else ("", ())
         rows = db.execute(
             f"""SELECT event.version, event.event, event.created_at, event.attempt_id,
@@ -200,6 +218,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
     return {
         "item": summary(execution, datetime.now(UTC)),
         "attempt": attempt["id"] if attempt else None,
+        "prerequisites": [dict(row) for row in prerequisites],
         "events": [dict(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"]]),
     }

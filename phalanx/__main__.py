@@ -4,10 +4,11 @@ import os
 from pathlib import Path
 import sqlite3
 from urllib.error import HTTPError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .attended import RunnerError, add_attended_command, run_attended
+from .attended_recovery_service import add_recovery_command, run_recovery_command
 from .config import database_path
 from .store import snapshot
 from .workspaces import WorkspaceError
@@ -52,7 +53,18 @@ def main() -> None:
     intake.add_argument("--key", help="reuse this key when retrying the same request")
     inspect = commands.add_parser("inspect", help="show a work item and its current execution")
     inspect.add_argument("item_id")
+    inbox = commands.add_parser("inbox", help="show work awaiting owner input")
+    inbox.add_argument("--limit", type=int, default=50)
+    inbox.add_argument("--after-time", default="")
+    inbox.add_argument("--after-id", default="")
+    reply = commands.add_parser("reply", help="answer an active question")
+    reply.add_argument("item_id")
+    reply.add_argument("execution_id")
+    reply.add_argument("answer")
+    reply.add_argument("--version", type=int, required=True)
+    reply.add_argument("--key", required=True, help="reuse this key when retrying the same reply")
     add_attended_command(commands)
+    add_recovery_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "backup":
@@ -61,6 +73,8 @@ def main() -> None:
             snapshot(args.source, database_path())
         elif args.command == "attended":
             run_attended(args)
+        elif args.command == "attended-recover":
+            run_recovery_command(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
@@ -69,6 +83,20 @@ def main() -> None:
             result = api_request(
                 args.api_url, "/v1/items", key=args.key,
                 body={"repository_id": args.repository, "goal": args.goal, "target": args.target},
+            )
+            print(json.dumps(result, indent=2))
+        elif args.command == "inbox":
+            query = {"limit": args.limit, "after_time": args.after_time}
+            if args.after_id:
+                query["after_id"] = args.after_id
+            result = api_request(args.api_url, "/v1/owner/inbox?" + urlencode(query))
+            print(json.dumps(result, indent=2))
+        elif args.command == "reply":
+            item = quote(args.item_id, safe="")
+            execution = quote(args.execution_id, safe="")
+            result = api_request(
+                args.api_url, f"/v1/items/{item}/executions/{execution}/reply", key=args.key,
+                body={"expected_version": args.version, "answer": args.answer},
             )
             print(json.dumps(result, indent=2))
         else:
