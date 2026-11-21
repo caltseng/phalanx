@@ -92,6 +92,15 @@ for the push and its GitHub token for draft creation. It returns
 directory to retry an interrupted publication, and use `status` to inspect a
 blocked reservation. Draft assignments run directly on the runner.
 
+PR validation also runs on the runner. Add `"validation_policy": "C:/phalanx-runner/validation.json"`
+(an absolute path outside every checkout) to the runner config and write that file as described
+in [the validation policy guide](docs/runner-validation-policy.md). After self-review,
+`prepare` with stage `pre_pr_validation` runs the configured local checks in the clean item
+worktree, `pr_promotion` verifies draft checks and marks the primary PR ready, and
+`pr_validation` records ready CI for the current head. Pending CI waits; the Captain loop
+requests due rechecks each poll. A missing or broken policy waits for an owner reply that
+names the problem, and startup preflight reports a malformed file before any claim.
+
 From an authorized Captain muster:
 
 1. Verify the project and host with the runtime's project discovery. Run
@@ -186,9 +195,11 @@ before admitting work. An unavailable recovery listing or unmatched attempt
 pauses admission with a visible recovery reason. Existing reservations,
 including slots above a reduced capacity, still run and renew. New claims
 route implemented worker stages (`development`, `report_drafting`,
-`report_review`) separately from runner-only `pr_creation` and `report_storage`. An optional
-config `stages` array restricts this set. Initial draft claims are excluded
-without `PHALANX_GITHUB_TOKEN`. The server's atomic eligible-stage claim still
+`report_review`, `self_review`) separately from runner-only `pr_creation`, `report_storage`
+and, when `validation_policy` is configured, `pre_pr_validation`, `pr_promotion` and
+`pr_validation`. An optional config `stages` array restricts this set. Initial draft,
+promotion and published-validation claims are excluded without `PHALANX_GITHUB_TOKEN`,
+and validation claims without `validation_policy`. The server's atomic eligible-stage claim still
 applies pause, capacity, priority, repository, dependency and affinity gates.
 Worker claims require verified runtime project mappings; runner-only claims retain all
 Git-verified mappings even when their runtime is unavailable. The loop alternates

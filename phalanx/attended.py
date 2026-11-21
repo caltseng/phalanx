@@ -66,7 +66,14 @@ STAGES = {
         "Put the complete Markdown in details.evidence."
     ),
     reports.REVIEW: reports.REVIEW_INSTRUCTIONS,
+    "self_review": (
+        "Review the exact candidate diff against the target branch and check the acceptance criteria. "
+        "Leave the checkout unchanged. Put a summary of what you reviewed in details.evidence, or report "
+        "actionable findings as changes_required in details.findings."
+    ),
 }
+# Runner-owned stages that need no worker session.
+RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation")
 
 
 class AttendedRunner:
@@ -151,7 +158,7 @@ class AttendedRunner:
     def _prepare_slot(self, *, draft, report_storage, stages=None):
         runner_stage = "pr_creation" if draft else reports.STORAGE if report_storage else None
         if stages is not None and (
-            runner_stage or not stages or set(stages) - (set(STAGES) | {"pr_creation", reports.STORAGE})
+            runner_stage or not stages or set(stages) - (set(STAGES) | set(RUNNER_STAGES))
         ):
             raise RunnerError("Continuous dispatch requires a nonempty supported stage list")
         github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
@@ -210,6 +217,10 @@ class AttendedRunner:
             return {**self._run_draft(snapshot, github_token), "slot": self.slot}
         if stage == reports.STORAGE:
             return self._store_report(snapshot)
+        if stage in RUNNER_STAGES:
+            from . import validation_stages
+
+            return {**validation_stages.run(self, snapshot), "slot": self.slot}
         launch = self._prepare_launch(snapshot)
 
         def commit_launch(record, db):
@@ -468,7 +479,14 @@ class AttendedRunner:
                     "expected_version": packet.state_version, "outcome": result.outcome}
             if packet.output_type == "report" and workspace.head != packet.expected_revision:
                 raise RunnerError("Report checkout HEAD changed during the assignment")
-            if packet.stage == reports.REVIEW and result.outcome in {"succeeded", "changes_required"}:
+            if packet.stage == "self_review":
+                from .candidate_local import CandidateLocal
+
+                body = CandidateLocal(self.api, manager, record["claim"], runner_id=record["runner_id"],
+                                      lease=record["lease"]).self_review(result)
+                if any(len(text) > 16000 for text in (body["review_notes"], body.get("failure_reason", ""))):
+                    raise RunnerError("Worker evidence exceeds the API limit")
+            elif packet.stage == reports.REVIEW and result.outcome in {"succeeded", "changes_required"}:
                 body.update(reports.review_evidence(packet, result))
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
@@ -527,7 +545,8 @@ class AttendedRunner:
 
     def _send_submission(self, snapshot, submission, key):
         claim = snapshot["claim"]
-        path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/result"
+        route = submission.get("route", "result")
+        path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/{route}"
         response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=key)
 
         def finish(record, db):

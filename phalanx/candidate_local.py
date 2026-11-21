@@ -106,7 +106,7 @@ class CandidateLocal:
     def self_review(self, result: WorkerResult) -> dict:
         body = self._body(Stage.SELF_REVIEW)
         packet = result.packet
-        if (packet.stage != body["stage"] or str(packet.attempt_id) != self.attempt
+        if (packet.stage != body["stage"] or packet.attempt_id != UUID(self.attempt)
                 or packet.state_version != body["expected_version"] or packet.item_id != self.item_id
                 or packet.repository != self.claim["request"]["repository_id"]
                 or packet.expected_revision != self.candidate):

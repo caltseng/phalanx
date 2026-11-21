@@ -66,6 +66,18 @@ class RunnerPreflightTests(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "HTTP 401 for /repositories; start the API server"):
             preflight({"base_url": self.url}, "wrong")
 
+    def test_broken_validation_policy_blocks_before_claims(self):
+        self.start_server(self.directory / "server.sqlite3")
+        policy = self.directory / "policy.json"
+        config = {"base_url": self.url, "validation_policy": str(policy),
+                  "repositories": {"repo": {}, "other": {}}}
+        policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
+            "local_checks": [], "draft_checks": [], "ready_checks": None}}}), encoding="utf-8")
+        preflight(config, RUNNER)
+        policy.write_text("{", encoding="utf-8")
+        with self.assertRaisesRegex(RunnerError, "Repair the trusted validation policy"):
+            preflight(config, RUNNER)
+
 
 if __name__ == "__main__":
     unittest.main()

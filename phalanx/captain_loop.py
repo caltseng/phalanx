@@ -13,7 +13,7 @@ from time import monotonic, time
 from urllib.parse import quote
 from uuid import UUID
 
-from .attended import AttendedRunner, RunnerAPI, RunnerError, STAGES
+from .attended import AttendedRunner, RunnerAPI, RunnerError, RUNNER_STAGES, STAGES
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery, unlaunched_proof
 from .captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch
@@ -23,6 +23,8 @@ from .workspaces import _file_lock, _item_branch
 
 
 _LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop", "recover_claim")
+_GITHUB_STAGES = {"pr_creation", "pr_promotion", "pr_validation"}
+_POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation"}
 
 
 class CaptainLoop:
@@ -62,6 +64,12 @@ class CaptainLoop:
         self.discovery_future = None
         self.discovery_due = 0
         self.reported_discovery, self.blocked_mappings = None, {}
+        self.recheck_future = None
+        self.recheck_due = 0
+        try:
+            self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
+        except RunnerError:
+            self.rechecks = False
         self.closed = False
         self._bind_identity()
 
@@ -204,14 +212,23 @@ class CaptainLoop:
         return {"status": "receipt_recorded", "slot": slot, **receipt,
                 **({"reason": warning} if warning else {})}
 
-    def _claim_new(self, slot, discovery=None):
-        capabilities = self.config.get("stages", sorted(set(STAGES) | {"pr_creation", "report_storage"}))
-        if not capabilities or set(capabilities) - (set(STAGES) | {"pr_creation", "report_storage"}):
+    def _capabilities(self):
+        default = sorted(set(STAGES) | {"pr_creation", "report_storage"})
+        if self.config.get("validation_policy"):
+            default = sorted(set(default) | set(RUNNER_STAGES))
+        capabilities = self.config.get("stages", default)
+        if not capabilities or set(capabilities) - (set(STAGES) | set(RUNNER_STAGES)):
             raise RunnerError("Runner stage capabilities contain an unsupported stage")
-        available = [stage for stage in capabilities
-                     if stage != "pr_creation" or os.environ.get("PHALANX_GITHUB_TOKEN")]
+        token = os.environ.get("PHALANX_GITHUB_TOKEN")
+        return [stage for stage in capabilities
+                if (stage not in _GITHUB_STAGES or token)
+                and (stage not in _POLICY_STAGES or self.config.get("validation_policy"))]
+
+    def _claim_new(self, slot, discovery=None):
+        available = self._capabilities()
         if not available:
-            raise RunnerError("No configured stages are available; set PHALANX_GITHUB_TOKEN for initial drafts")
+            raise RunnerError("No configured stages are available; set PHALANX_GITHUB_TOKEN for GitHub stages "
+                              "and validation_policy for validation stages")
         groups = {
             "runner": [stage for stage in available if stage not in STAGES],
             "worker": [stage for stage in available if stage in STAGES],
@@ -278,7 +295,7 @@ class CaptainLoop:
                                     and db.execute(f"SELECT 1 FROM {table} WHERE item_id=?",
                                                    (claim["item_id"],)).fetchone()):
                                 raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
-            elif stage not in {*STAGES, "report_storage"}:
+            elif stage not in {*STAGES, *RUNNER_STAGES}:
                 raise RunnerError("Unsupported runner-only stop needs effect reconciliation")
             request = snapshot.get("cancel_stop")
             launched = any(field in snapshot for field in ("relay", "receipt"))
@@ -520,6 +537,15 @@ class CaptainLoop:
             route = f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/recovery"
             self.recovery_future = self.control_pool.submit(self.api.call, route)
             self.recovery_due = now + self.poll_seconds
+        if self.recheck_future is not None and self.recheck_future.done():
+            future, self.recheck_future = self.recheck_future, None
+            try:
+                future.result()
+            except Exception as error:
+                self._status(0, "recheck_blocked", f"{type(error).__name__}: {error}; retrying next poll")
+        if self.rechecks and self.recheck_future is None and now >= self.recheck_due:
+            self.recheck_future = self.control_pool.submit(self._recheck_due)
+            self.recheck_due = now + self.poll_seconds
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
                     and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
@@ -552,6 +578,20 @@ class CaptainLoop:
                     self.work[slot] = self.slot_pool.submit(self._prepare, slot, self.discovery_future)
                     self.work_due[slot] = now + self.poll_seconds
                     room -= 1
+
+    def _recheck_due(self):
+        """Requeue published gates whose scheduled observation time has arrived."""
+        errors = []
+        for row in self.api.call("/runner/due-rechecks"):
+            route = (f"/items/{quote(row['item_id'], safe='')}/executions/"
+                     f"{quote(row['execution_id'], safe='')}/recheck")
+            try:
+                self.api.call(route, {"expected_version": row["version"]},
+                              key=f"recheck:{row['execution_id']}:{row['version']}")
+            except RunnerError as error:
+                errors.append(f"{row['item_id']}: {error}")
+        if errors:
+            raise RunnerError("; ".join(errors))
 
     def run(self, stop: Event):
         # Only one loop relays launches from this journal. Manual receipt and
