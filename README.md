@@ -136,7 +136,7 @@ through the report endpoint.
 Keep the state directory when restarting. Expired leases and unverified results
 require reconciliation.
 The continuous loop below supplies independent heartbeat scheduling and
-fixture-backed native observation. Real runtime acceptance remains pending.
+native observation through the Captain relay, accepted live in the PH-11b muster.
 
 ### Continuous attended Captain loop
 
@@ -154,6 +154,18 @@ reports every missing package, Git older than 2.36, missing
 `PHALANX_RUNNER_TOKEN` and unreachable or rejected API together, and stops
 before any claim. Optional settings such as `PHALANX_GITHUB_TOKEN` are not
 required; without it, initial draft claims are excluded as before.
+
+**One-time setup per repository.** Alongside the tokens, grant the Captain's
+runtime standing access to each mapped checkout before the first muster. A
+runtime that gates a repository on owner trust (the GitHub Copilot app asks
+once per repository) denies every worker tool until trust is granted, so an
+untrusted checkout would stop a worker mid-stage. For the GitHub Copilot app and
+CLI, the supported standing setup is to choose "trust for future sessions" once
+per checkout, or to add the checkout's path to the `trustedFolders` array in
+`~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)).
+Only the owner grants trust; a Captain or worker never edits it. The Captain
+checks trust while serving `resolve_project`, so every untrusted repository is
+reported together before any worker launches.
 
 By default the loop reaches the worker runtime through the **Captain chat relay**,
 because the Captain chat holds the runtime's session tools. The loop queues
@@ -284,7 +296,9 @@ directory. Repeat this cycle while the loop runs:
 2. Serve the request with the runtime's tools, following the contract table
    above and the [runtime mapping](#runtime-mapping):
    - `resolve_project`: discover the project; reply with the verified host,
-     project and root path.
+     project and root path. If the runtime gates the repository on owner
+     trust and it is not trusted, reply with `--error` naming the checkout and
+     the one-time setup action instead, and tell Caleb once.
    - `launch`: start the worker session **once**; reply with the host, marker
      and session UUID as `thread_id` (or a provisional ID as `client_thread_id`).
    - `observe`: read each receipt's session, or find the marker in session
@@ -293,9 +307,13 @@ directory. Repeat this cycle while the loop runs:
 3. Record the reply right away (observations go stale after 60 seconds):
    `python -m phalanx relay --state C:\phalanx-runner respond ID --file reply.json`,
    or `respond ID --error "what failed"` when the runtime action fails.
-4. Between requests, run `python -m phalanx inbox` with the owner token, surface
-   worker questions to Caleb in the Captain chat, and answer with
-   `python -m phalanx reply`. `attended status --all` shows slot reasons.
+4. Between requests, run `python -m phalanx inbox` with the owner token and
+   triage each worker question. When the answer follows from the repository,
+   the issue, its conventions or the question's proposed default, answer it
+   yourself with `python -m phalanx reply` and note that the Captain answered.
+   Escalate to Caleb in the Captain chat only when human judgment materially
+   changes the outcome or authority is missing. `attended status --all` shows
+   slot reasons.
 
 Identical requests waiting to be taken share one entry, and verified project resolutions
 are cached for ten minutes. The loop waits up to five minutes for a request to
@@ -310,21 +328,22 @@ whose outcome you did not record; answer it from discovery instead.
 #### Runtime mapping
 
 Each runtime serves the same three operations with its own tools. Set the
-config's `host_id` and `project_id` to the values the runtime reports. Only the
-Codex desktop mapping has field evidence so far, in
+config's `host_id` and `project_id` to the values the runtime reports. The
+Codex desktop and GitHub Copilot app mappings have field evidence in
 [the worker recovery report](docs/pilots/worker-recovery.md); verify the others
 in their first muster and record any correction here.
 
 | Runtime | `resolve_project` | `launch` | `observe` |
 | --- | --- | --- | --- |
 | Codex desktop app | `list_projects`; match the project ID, host and root path. | `create_thread` with `title`, `prompt` and target `{"type": "project", "projectId": project_id, "environment": {"type": "local"}}`. Return `threadId` as `thread_id` or `clientThreadId` as `client_thread_id`. | `read_thread` for receipts; `list_threads` history search for the marker. Use `codex app-server` only after verifying its threads appear in the app sidebar with the same identity as the app's tools. |
-| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, so read `assignment`, `started_at` and the marker from the session's first user turn in its transcript. An idle session whose turn ended is `stopped`; busy is `active`. |
+| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with the setup error. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so read `assignment`, `started_at` and the marker from the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. The stored prompt drops its trailing newline; compare after trimming trailing whitespace. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session's state under `~/.copilot/session-state/`, or find the marker in its history. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
-**Acceptance gap:** The relay and fixture pass one shared contract test, but
-native acceptance (two real visible workers, a worker question answered through
-the Captain chat, and Captain restart around a receipt) is still pending in
+**Acceptance gap:** The relay and fixture pass one shared contract test, and
+the PH-11b muster on the GitHub Copilot app accepted it natively: two real
+visible workers, a worker question answered through the Captain chat, and
+Captain restarts around a receipt, recorded in
 [the worker recovery report](docs/pilots/worker-recovery.md). Wider PR stages,
 owner notifications/due external rechecks and
 fresh-claim result adoption remain integration work; this is not full PH-11

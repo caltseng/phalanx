@@ -98,7 +98,7 @@ The authenticated runner submits GitHub observations through the versioned, leas
 
 For example, `self_review` plus `succeeded` with findings and revision evidence advances to `pre_pr_validation`. `self_review` plus `changes_required` returns to `development`. Required external checks can still keep an item waiting even after a successful worker result. Only the server marks the whole item completed when its completion target is satisfied.
 
-On `needs_input`, the runner records the question and handoff, releases the slot, and triggers the notification flow. A user reply requeues the item and becomes part of the next work packet. If a process stops before returning a valid result, the runner records the attempt failure. Before retrying, it checks for an existing branch, PR, or stored report so work completed just before the interruption can be recovered.
+On `needs_input`, the runner records the question and handoff, releases the slot, and triggers the notification flow. A user reply requeues the item and becomes part of the next work packet. The Captain triages each question first: it answers when the answer follows from the repository, the issue, its conventions or a proposed default, and escalates to the owner only when human judgment materially changes the outcome or authority is missing. The reply records who answered (planned in PH-11c). If a process stops before returning a valid result, the runner records the attempt failure. Before retrying, it checks for an existing branch, PR, or stored report so work completed just before the interruption can be recovered.
 
 ### Execution adapters
 
