@@ -19,7 +19,7 @@
 
 - Run a standalone HTTP API server locally first. Keep its API contract usable when hosted. The CLI and runner connect using a configurable base URL and credentials.
 - Keep queue state, claims, work history, and reports behind the API. Keep checkout mappings and Git credentials local to the runner. The runner talks to the backend and holds queue credentials and leases.
-- Prioritize visible Codex worker chats for v1. Keep the work packet and result contract independent of the execution runtime so Claude Code and GitHub Copilot CLI can be added in P2. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
+- Stay runtime-neutral. Phalanx must work with any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code. Don't encode a preferred runtime, or one runtime's tools, names or behavior, in the core, specs, plan, branch names or tests. Keep runtime specifics behind the bridge, work packet and result contracts, with one adapter per runtime. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
 - Allow independent work to run in parallel, including within one repo. Use atomic per-item claims and isolated worktrees for PR tasks. Check for previously created outputs before retrying publication.
 - Reuse the item’s worktree across stages on the same machine. Support interdependent work in v1, with explicit upstream milestones and parallel execution when dependencies allow. Campaign grouping, task decomposition, and automatic replanning can come later.
 - Make max concurrency and dispatch pause configurable. Rank eligible stages with priority aging so older work gets a turn during sustained intake. Keep the wait reason visible when an item cannot run.
@@ -30,6 +30,6 @@
 ## Working in repositories
 
 - Verify the checkout and its working-tree state before editing. Preserve existing changes. For work dispatched to another repo, follow that repo’s applicable instructions and keep the work scoped to the item.
-- Use `codex/` for new topic branches unless Caleb or the target repo specifies otherwise. Run checks appropriate to the change and report any gaps.
+- Use `phalanx/` for new topic branches unless Caleb or the target repo specifies otherwise. Run checks appropriate to the change and report any gaps.
 - For Phalanx work items, record the report or PR and its verification. Check in only when authorized by the work item or repository policy and after the current PR head satisfies the required checks and approvals.
 - End PR descriptions that Phalanx creates with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Preserve the footer across updates and retries.
