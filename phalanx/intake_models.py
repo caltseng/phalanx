@@ -108,6 +108,7 @@ class Result(AttemptEvent):
     candidate: Text | None = None
     report_markdown: Markdown | None = None
     report_revision: RevisionID | None = None
+    report_review_notes: Text | None = None
     reviewed_candidate: Text | None = None
     prevalidated_candidate: Text | None = None
     review_notes: Text | None = None

@@ -44,6 +44,7 @@ class WorkPacket:
     context: str = ""
     handoff: str = ""
     base_branch: str | None = None
+    report_checkpoint: dict[str, str] | None = None
     dependencies: tuple[dict, ...] = ()
 
     @property
@@ -51,7 +52,7 @@ class WorkPacket:
         return f"phalanx-attempt-{self.attempt_id}"
 
     def result_identity(self) -> dict[str, str | int]:
-        return {
+        identity = {
             "contract_version": CONTRACT_VERSION,
             "item_id": self.item_id,
             "attempt_id": str(self.attempt_id),
@@ -62,6 +63,10 @@ class WorkPacket:
             "branch": self.branch,
             "expected_revision": self.expected_revision,
         }
+
+        if self.report_checkpoint and self.stage == "report_review":
+            identity["report_revision"] = self.report_checkpoint["revision"]
+        return identity
 
 
 class LocalEnvironment(TypedDict):
@@ -131,6 +136,7 @@ class CodexHandoff:
             "evidence_requirements": packet.evidence_requirements,
             "context": packet.context,
             "handoff": packet.handoff,
+            **({"report_checkpoint": packet.report_checkpoint} if packet.report_checkpoint else {}),
             "dependencies": packet.dependencies,
         }, indent=2, ensure_ascii=False)
         outcomes = "\n".join(

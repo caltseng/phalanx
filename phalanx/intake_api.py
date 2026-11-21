@@ -132,6 +132,7 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     if isinstance(body, Result):
         for field in (
             "failure_reason", "question", "retry_after_seconds", "review_notes", "local_checks",
+            "report_review_notes",
         ):
             if payload[field] is None:
                 payload.pop(field)
