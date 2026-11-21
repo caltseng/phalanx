@@ -48,6 +48,11 @@ def _git(path: Path, *args: str, stdin: str | None = None) -> str:
     return stdout
 
 
+def _status(path: Path, *flags: str) -> str:
+    return _git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all",
+                "--ignore-submodules=none", *flags)
+
+
 def _remote_identity(remote: str, checkout: Path) -> tuple:
     if not remote or any(char in remote for char in "\r\n\0"):
         raise WorkspaceError("A single nonempty origin URL is required")
@@ -192,10 +197,8 @@ class WorkspaceManager:
         if (git_dir / backlink).resolve() != path / ".git":
             raise WorkspaceError(f"Workspace Git metadata points to a different checkout: {path}")
         head = _git(path, "rev-parse", "--verify", "HEAD^{commit}").strip()
-        dirty = bool(_git(
-            path, "status", "--porcelain=v1", "-z", "--untracked-files=all",
-            "--ignored=matching", "--ignore-submodules=none",
-        ))
+        # Ignored build output cannot change the candidate, so it is not dirty.
+        dirty = bool(_status(path))
         return Workspace(path, branch, head, dirty)
 
     def verify_checkout(self) -> None:
@@ -288,7 +291,8 @@ class WorkspaceManager:
             snapshot = self._snapshot(path, branch, common)
             if snapshot.head != expected_head:
                 raise WorkspaceError(f"Workspace HEAD differs from the recorded checkpoint: {path}")
-            if snapshot.dirty:
+            # Removal deletes ignored files too, so keep a checkout that has any.
+            if _status(path, "--ignored=matching"):
                 raise WorkspaceError(f"Workspace has local changes or untracked files: {path}")
             # Git status can deliberately hide paths marked skip-worktree or
             # assume-unchanged. Refuse cleanup when the index uses those flags.

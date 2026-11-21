@@ -108,6 +108,17 @@ class CandidateLocalTest(unittest.TestCase):
         self.assertIn("clean", body["question"]["prompt"])
         self.assertTrue(body["question"]["handoff"])
 
+    def test_ignored_build_output_does_not_block_checks(self):
+        exclude = Path(subprocess.run(
+            ["git", "rev-parse", "--git-path", "info/exclude"], cwd=self.workspace.path,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip())
+        (self.workspace.path / exclude).write_text("build/\n")
+        operation = self.operation("pre_pr_validation")
+        builds = self.command("builds", "from pathlib import Path; "
+                              "Path('build').mkdir(); Path('build/out').touch()")
+        self.assertEqual(operation.pre_validate((builds,))["outcome"], "succeeded")
+
     def test_timed_out_check_retains_reservation_for_process_reconciliation(self):
         operation = self.operation("pre_pr_validation")
         check = self.command("timeout", "pass")
