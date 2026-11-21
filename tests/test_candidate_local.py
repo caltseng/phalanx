@@ -5,11 +5,11 @@ import sys
 from tempfile import TemporaryDirectory
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from phalanx.attended import RunnerError
-from phalanx.candidate_local import CandidateLocal, LocalCheck
+from phalanx.candidate_local import CandidateLocal, LocalCheck, _kill_tree
 from phalanx.codex_handoff import Outcome, WorkerResult
 from phalanx.validation import PreCheck, PreOutcome
 from phalanx.workspaces import WorkspaceError, WorkspaceManager
@@ -137,6 +137,14 @@ class CandidateLocalTest(unittest.TestCase):
         self.assertTrue(started.exists())
         time.sleep(4)
         self.assertFalse(survived.exists())
+
+    @unittest.skipIf(sys.platform == "win32", "POSIX process groups")
+    def test_process_group_kill_tolerates_permission_error(self):
+        process = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"],
+                                   start_new_session=True)
+        with patch("phalanx.candidate_local.os.killpg", side_effect=PermissionError):
+            _kill_tree(process)
+        self.assertIsNotNone(process.returncode)
 
     def test_stopping_claim_blocks_commands(self):
         operation = self.operation("pre_pr_validation")
