@@ -745,8 +745,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.native = native
         loop = self.loop()
         self.spin(loop, lambda: self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"]
-                  == "completed" and any(event["status"] == "report_storage_submitted" for event in self.events),
-                  timeout=10)
+                  == "completed" and any(event["status"] == "report_storage_submitted" for event in self.events))
         stages = [json.loads(launch["session"]["prompt"].split("Work packet:\n")[1].split(
             "\n\nWrite one UTF-8")[0])["result_identity"]["stage"] for launch in original.__self__.launches]
         self.assertEqual(stages, ["report_drafting", "report_review"])
@@ -835,7 +834,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         loop = self.loop()
         with patch.object(WorkspaceManager, "prepare", prepare):
             self.spin(loop, lambda: self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"]
-                      == "cancelled" and not loop._records() and len(stop_posts) == 2, timeout=10)
+                      == "cancelled" and not loop._records() and len(stop_posts) == 2)
         for _ in range(10):
             loop.step()
             time.sleep(0.01)
