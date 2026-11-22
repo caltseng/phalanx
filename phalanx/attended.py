@@ -72,9 +72,17 @@ STAGES = {
         "Leave the checkout unchanged. Put a summary of what you reviewed in details.evidence, or report "
         "actionable findings as changes_required in details.findings."
     ),
+    "adversarial_review": (
+        "Independently review the exact PR diff between the assigned base and head revisions for "
+        "correctness, regressions, security and missing validation. Leave the checkout unchanged. "
+        "If nothing blocks the PR, put a summary of what you reviewed and any non-blocking notes in "
+        "details.evidence. Otherwise report changes_required with each blocking finding and its "
+        "severity in details.findings."
+    ),
 }
 # Runner-owned stages that need no worker session.
-RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation")
+RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
+                 "pr_reconciliation", "ready_for_check_in")
 
 
 class AttendedRunner:
@@ -234,8 +242,9 @@ class AttendedRunner:
                 raise RunnerError("Recovery owns this reservation; inspect attended-recover")
             for field in ("packet", "project_id", "host_id", "checkout", "started_at"):
                 record[field] = snapshot[field]
-            if "development_base" in snapshot:
-                record["development_base"] = snapshot["development_base"]
+            for field in ("development_base", "review_assignment"):
+                if field in snapshot:
+                    record[field] = snapshot[field]
             record["lease_expires_at"] = max(record["lease_expires_at"], snapshot["lease_expires_at"])
 
         self._transaction(commit_launch)
@@ -316,6 +325,7 @@ class AttendedRunner:
         candidate = state.get("candidate")
         if candidate and candidate != workspace.head:
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
+        review = self._review_assignment(claim, state) if stage == "adversarial_review" else None
         input_reply = claim.get("input_reply")
         report_checkpoint = None
         findings = state.get("report_review_findings")
@@ -331,6 +341,10 @@ class AttendedRunner:
             if state.get("primary_pr") and candidate:
                 PRNotes(self.root).record(state["primary_pr"], candidate, "Returned to development",
                                           state["development_findings"])
+        if review is not None:
+            context["review"] = {"pr_url": state["primary_pr"], "base_ref": review["expected"]["base_ref"],
+                                 "base_sha": review["expected"]["base_sha"],
+                                 "head_sha": review["pull"]["head_sha"]}
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
@@ -351,9 +365,24 @@ class AttendedRunner:
                               "worktree": str(packet.worktree)},
                       project_id=mapping["project_id"], host_id=mapping["host_id"],
                       checkout=mapping["checkout"], started_at=datetime.now(timezone.utc).isoformat())
+        if review is not None:
+            record["review_assignment"] = review
         return {"status": "launch_intent", "marker": packet.marker, "host_id": record["host_id"],
                 "unverified_mappings": record["blocked"],
                 "session": handoff.launch_arguments(record["project_id"])}
+
+    def _review_assignment(self, claim, state):
+        """Bind the review to the exact PR revision whose passing gates queued it."""
+        execution = claim["execution"]
+        rows = self.api.call(f"/items/{claim['item_id']}/executions/{execution['id']}/timeline")
+        assignment = next((row["details"] for row in reversed(rows)
+                           if row["state"]["stage"] == "adversarial_review"
+                           and row["state"]["status"] == "queued"
+                           and isinstance(row["details"].get("gate_result"), dict)), None)
+        if (assignment is None or assignment.get("pr_url") != state.get("primary_pr")
+                or assignment["pull"]["head_sha"] != state.get("candidate")):
+            raise RunnerError("No review assignment matches the current PR head; reconcile before launch")
+        return {"expected": assignment["expected"], "pull": assignment["pull"]}
 
     def _verify_launch_claim(self, record):
         claim = record["claim"]
@@ -487,6 +516,7 @@ class AttendedRunner:
                 raise RunnerError("Result worktree no longer matches the launch intent")
             body = {"attempt_id": record["claim"]["attempt_id"], "stage": packet.stage,
                     "expected_version": packet.state_version, "outcome": result.outcome}
+            route = "result"
             if packet.output_type == "report" and workspace.head != packet.expected_revision:
                 raise RunnerError("Report checkout HEAD changed during the assignment")
             if packet.stage == "self_review":
@@ -498,6 +528,20 @@ class AttendedRunner:
                     raise RunnerError("Worker evidence exceeds the API limit")
             elif packet.stage == reports.REVIEW and result.outcome in {"succeeded", "changes_required"}:
                 body.update(reports.review_evidence(packet, result))
+            elif packet.stage == "adversarial_review" and result.outcome in {"succeeded", "changes_required"}:
+                if workspace.head != packet.expected_revision or workspace.dirty:
+                    raise RunnerError("Independent review must leave the checkout unchanged")
+                text = result.details.get("evidence") or result.details["findings"]
+                if len(text.strip()) > 16000:
+                    raise RunnerError("Worker evidence exceeds the API limit")
+                blocking = result.outcome == "changes_required"
+                assignment = record["review_assignment"]
+                route = "pr-observation"
+                body.update(expected=assignment["expected"], pull=assignment["pull"], review={
+                    "reviewer": receipt["thread_id"],
+                    "summary": "Independent review found blocking issues" if blocking else text,
+                    "findings": [text] if blocking else [],
+                })
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
@@ -530,6 +574,7 @@ class AttendedRunner:
                 raise RunnerError("Outcome is unsupported for this attended stage")
             submission = {
                 "body": body,
+                "route": route,
                 "checkpoint": {**asdict(workspace), "path": str(workspace.path)},
                 "details": result.details,
                 "stop_confirmed_at": datetime.now(timezone.utc).isoformat(),

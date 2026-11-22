@@ -7,7 +7,7 @@ from pydantic import Field, StringConstraints, model_validator
 
 from . import validation
 from .intake_models import AttemptEvent, Identifier, Payload, Text
-from .transitions import Stage
+from .transitions import Outcome, Stage
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
 Name = Annotated[str, StringConstraints(min_length=1, max_length=255)]
@@ -124,6 +124,13 @@ class IndependentReview(AttemptEvent):
     expected: ExpectedRefs
     pull: GitHubPull
     review: ReviewRecord
+    outcome: Literal[Outcome.SUCCEEDED, Outcome.CHANGES_REQUIRED] = Outcome.SUCCEEDED
+
+    @model_validator(mode="after")
+    def blocking_findings(self):
+        if self.outcome == Outcome.CHANGES_REQUIRED and not self.review.findings:
+            raise ValueError("Changes required needs at least one finding")
+        return self
 
 
 class MergeIntent(Payload):
@@ -135,10 +142,21 @@ class Reconciliation(AttemptEvent):
     stage: Literal[Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN]
     expected: ExpectedRefs
     pull: GitHubPull
-    gates: GateObservation
-    actionable_feedback_cleared: Literal[True]
-    approvals_and_mergeability: Literal[True]
+    gates: GateObservation | None = None
+    actionable_feedback_cleared: Flag = False
+    approvals_and_mergeability: Flag = False
+    merge_conflict: Flag = False
     merge_intent: MergeIntent | None = None
+
+    @model_validator(mode="after")
+    def ready_or_conflicting(self):
+        if self.merge_conflict:
+            if (self.gates or self.actionable_feedback_cleared or self.approvals_and_mergeability
+                    or self.merge_intent):
+                raise ValueError("A merge conflict report carries only the observed PR")
+        elif not (self.gates and self.actionable_feedback_cleared and self.approvals_and_mergeability):
+            raise ValueError("Ready reconciliation needs ready gates and both attestations")
+        return self
 
 
 class VerifiedMerge(AttemptEvent):

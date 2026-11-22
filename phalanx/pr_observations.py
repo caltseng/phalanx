@@ -4,7 +4,7 @@ import json
 import re
 
 from . import intake, validation, waits
-from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Validation, VerifiedMerge
+from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Reconciliation, Validation, VerifiedMerge
 from .transitions import (
     Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, Wait, item_branch,
 )
@@ -23,7 +23,8 @@ def latest_observation(db, execution_id, stage):
 
 def reviewed_revision(db, execution_id, url, expected, revision):
     review = latest_observation(db, execution_id, Stage.ADVERSARIAL_REVIEW)
-    if (review and review["pr_url"] == url and review["expected"] == expected.model_dump()
+    if (review and review.get("outcome") == Outcome.SUCCEEDED
+            and review["pr_url"] == url and review["expected"] == expected.model_dump()
             and review["pull"]["head_sha"] == revision.head):
         return revision
     return None
@@ -170,7 +171,18 @@ def submit(db, item_id, execution_id, body, lease_digest):
         evidence = Evidence(pr=pr)
     elif isinstance(body, IndependentReview):
         check_review_assignment(db, execution_id, expected, pull)
-        evidence = Evidence(pr=pr, independent_review=revision)
+        if body.outcome == Outcome.CHANGES_REQUIRED:
+            outcome = Outcome.CHANGES_REQUIRED
+            findings = "\n".join(f"- {finding}" for finding in body.review.findings)
+            evidence = Evidence(pr=pr, development_findings=f"{body.review.summary}\n\n{findings}"[:16000])
+        else:
+            evidence = Evidence(pr=pr, independent_review=revision)
+    elif isinstance(body, Reconciliation) and body.merge_conflict:
+        # Routine conflicts go back to development; the runner escalates a repeat on the same base.
+        outcome = Outcome.CHANGES_REQUIRED
+        evidence = Evidence(pr=pr, development_findings=(
+            f"The PR conflicts with {expected.base_ref} at {expected.base_sha}. Fetch that commit, "
+            "rebase the candidate onto it, resolve the conflicts and rerun the checks."))
     else:
         if body.stage != Stage.PR_PROMOTION and pull.draft:
             raise intake.Conflict("Expected an open, ready primary PR")

@@ -336,7 +336,7 @@ CHANGES = {
     Stage.PRE_PR_VALIDATION: Stage.DEVELOPMENT,
     Stage.PR_PROMOTION: Stage.DEVELOPMENT,
     Stage.PR_VALIDATION: Stage.PR_RECONCILIATION,
-    Stage.ADVERSARIAL_REVIEW: Stage.PR_RECONCILIATION,
+    Stage.ADVERSARIAL_REVIEW: Stage.DEVELOPMENT,
     Stage.READY_FOR_CHECK_IN: Stage.PR_RECONCILIATION,
     Stage.CHECK_IN: Stage.PR_RECONCILIATION,
     Stage.REPORT_REVIEW: Stage.REPORT_DRAFTING,
@@ -372,7 +372,11 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
         if stage is Stage.PR_PROMOTION and (evidence.issue is Issue.PR_BLOCKER
                                            or pr.revision.head != state.candidate):
             return _queue(state, Stage.PR_RECONCILIATION)
-        if stage is Stage.PR_PROMOTION:
+        if stage is Stage.ADVERSARIAL_REVIEW:
+            _require(evidence.development_findings, "Review findings are required")
+        if stage is Stage.PR_PROMOTION or evidence.development_findings:
+            _require(stage is Stage.PR_PROMOTION or pr.revision.head == state.candidate,
+                     "Findings must match the candidate")
             return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
     _require(stage in CHANGES, "Changes-required outcome is unsupported at this stage")
     return _queue(state, CHANGES[stage])

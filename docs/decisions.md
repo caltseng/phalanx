@@ -13,7 +13,7 @@ These are best-guess calls the Captain made without asking Caleb. Caleb reviews 
 | 7 | Publication | A rebased candidate force-replaces the PR head only if that head is the one Phalanx last verified; otherwise it asks | Never overwrite someone else's push. Confirmed by Caleb. |
 | 8 | Review | Independent review "changes required" goes back to development with the findings | Same loop as self-review |
 | 9 | Check-in | Ready-only items complete automatically; merge targets wait on the owner until PH-15a part 3 | Automated merge isn't built yet |
-| 10 | Check-in | A PR with merge conflicts asks the owner for now; auto-resolution comes in a later row | Kept part 1 small |
+| 10 | Check-in | Merge conflicts are resolved automatically by a development attempt that rebases and revalidates; the owner is asked only when retries can't make progress. | Set by Caleb |
 | 11 | Architecture | The server needs the `[server]` extra (fastapi/uvicorn); backup/restore are server-host-only commands | Runners stay light and can't touch server storage |
 | 12 | Architecture | The dashboard is served from the API server's origin; a separate static origin is deferred | No CORS or extra config needed |
 | 13 | Language | Stay on Python for v1; port to TypeScript/Node after PH-V1 and before hosting (PH-25) | Don't delay v1; host once |
