@@ -11,6 +11,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from phalanx import store
 from phalanx.store import connect, migrate, read_transaction, write_transaction
 
 
@@ -219,3 +220,14 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 for writer in writers:
                     writer.result()
             self.assertLess(max(readers), 1.0)
+
+    def test_waiting_readers_cannot_keep_writes_out(self):
+        gate = store._Gate()
+        with ThreadPoolExecutor(max_workers=1) as pool, gate.read_start():
+            def write():
+                started = time.monotonic()
+                with gate.write():
+                    return time.monotonic() - started
+
+            waited = pool.submit(write).result(timeout=store.BUSY_TIMEOUT + 5)
+        self.assertGreaterEqual(waited, store.BUSY_TIMEOUT - 0.1)

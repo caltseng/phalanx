@@ -50,7 +50,9 @@ class _Gate:
     @contextmanager
     def write(self):
         with self.condition:
-            self.condition.wait_for(lambda: not self.writing and not self.readers)
+            # Bound the wait for readers so a steady stream of them can't starve writes.
+            self.condition.wait_for(lambda: not self.writing and not self.readers, BUSY_TIMEOUT)
+            self.condition.wait_for(lambda: not self.writing)
             self.writing = True
         try:
             yield
