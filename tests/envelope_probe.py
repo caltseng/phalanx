@@ -131,7 +131,7 @@ class Client:
         self.base = None
         with probe.lock:
             probe.clients.append(self)
-    def call(self, label, method, path, token=None, body=None, headers=None, retry=True):
+    def call(self, label, method, path, token=None, body=None, headers=None, retry=True, record=True):
         headers = dict(headers or {})
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -162,12 +162,14 @@ class Client:
                 if reused and not reconnected:
                     reconnected = True
                     continue
-                self.probe.metrics.error(label, error)
+                if record:
+                    self.probe.metrics.error(label, error)
                 if not retry:
                     return None, None
                 time.sleep(0.1 + random.random() * 0.1)
                 continue
-            self.probe.metrics.record(label, status, time.perf_counter() - started)
+            if record:
+                self.probe.metrics.record(label, status, time.perf_counter() - started)
             if status >= 500 and retry:
                 time.sleep(0.2 + random.random() * 0.1)
                 continue
@@ -331,7 +333,8 @@ class Probe:
         while time.monotonic() < deadline:
             if self.server.poll() is not None:
                 break
-            status, _ = client.call("health", "GET", "/health", retry=False)
+            # Refused connections are expected while the server boots, so readiness polls stay out of metrics.
+            status, _ = client.call("health", "GET", "/health", retry=False, record=False)
             if status == 200:
                 client.close()
                 self.pid = int(pid_file.read_text())
