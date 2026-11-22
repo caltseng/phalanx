@@ -7,6 +7,9 @@ import subprocess
 
 from .attended import RunnerAPI
 from .runner_errors import RunnerError
+from .validation import (
+    CHECK_RECHECK_RANGE, CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_RANGE, CHECK_WAIT_LIMIT_SECONDS,
+)
 
 
 # `git worktree list --porcelain -z` needs Git 2.36.
@@ -23,10 +26,14 @@ def preflight(config: dict, token: str | None) -> None:
     except ImportError as error:
         blockers.append(f"Missing package {error.name}; run `pip install -r requirements.lock` "
                         "and `pip install -e .` in the runner environment")
-    recheck = config.get("check_recheck_seconds", 30)
-    if type(recheck) is not int or not 5 <= recheck <= 86400:
-        blockers.append("Set check_recheck_seconds in the runner configuration to a whole number "
-                        f"of seconds from 5 to 86400; found {recheck!r}")
+    for key, default, (low, high) in (
+        ("check_recheck_seconds", CHECK_RECHECK_SECONDS, CHECK_RECHECK_RANGE),
+        ("check_wait_limit_seconds", CHECK_WAIT_LIMIT_SECONDS, CHECK_WAIT_LIMIT_RANGE),
+    ):
+        value = config.get(key, default)
+        if type(value) is not int or not low <= value <= high:
+            blockers.append(f"Set {key} in the runner configuration to a whole number "
+                            f"of seconds from {low} to {high}; found {value!r}")
     if config.get("validation_policy"):
         from pathlib import Path
         from .validation_policy import ValidationPolicyError, load_validation_policy

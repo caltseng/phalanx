@@ -984,7 +984,9 @@ class AttendedTest(ServerFixture, unittest.TestCase):
 
         github = SimpleNamespace(get_pull_request=lambda number: pull, convert_to_draft=convert)
         gates = GateResult(GateState.BLOCKED, ("lint needs a draft check recovery decision on the ready PR",))
-        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root)
+        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}},
+                                         "check_recheck_seconds": 7, "check_wait_limit_seconds": 600},
+                                 root=self.root)
         with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
                 patch.object(validation_stages, "_github", lambda _: github), \
                 patch.object(validation_stages, "_candidate", lambda *_: None), \
@@ -997,6 +999,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual((waiting["route"], waiting["body"]["gate"], converted),
                          ("external-wait", "draft_checks", ["PR_7"]))
         self.assertEqual(waiting["body"]["revision"], {"head": candidate, "base": "c" * 40})
+        self.assertEqual((waiting["body"]["retry_after_seconds"], waiting["body"]["wait_limit_seconds"]),
+                         (7, 600))
         self.assertEqual([note["note"] for note in PRNotes(self.root).flush(None)],
                          [f"converted-to-draft:{candidate}"])
         self.assertEqual(refused["outcome"], "needs_input")

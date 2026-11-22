@@ -135,10 +135,13 @@ Set `"validation_policy"` in the runner config to the absolute policy path.
 `CandidateLocal.pre_validate`), `pr_promotion` (draft checks, then marking the
 primary PR ready) and `pr_validation` (ready checks on the current head) on the
 runner, journaling each result before submission. Pending CI waits for an
-external recheck that the Captain loop requests when due. Pending draft checks
-are rechecked after the optional runner config `"check_recheck_seconds"`
-(a whole number from 5 to 86400, default 30); startup preflight rejects other
-values. A missing policy
+external recheck that the Captain loop requests when due. Pending draft and
+ready checks are rechecked after the optional runner config
+`"check_recheck_seconds"` (a whole number from 5 to 86400, default 30). Once
+checks have been pending on the same head and base for
+`"check_wait_limit_seconds"` (a whole number from 60 to 2592000, default 7200),
+the server asks the owner to resolve the stalled checks; a reply starts a fresh
+window. Startup preflight rejects other values for either key. A missing policy
 entry or `null` phase becomes an owner question naming the gap; startup
 preflight rejects a malformed file before any claim.
 
@@ -192,7 +195,9 @@ already-ready PR lacks required draft evidence, the existing validation gate
 demands a recovery decision. `pr_promotion` converts the PR back to draft
 through the runner's GitHub client, comments on the PR, waits for its draft-only
 checks and promotes it again. It asks Caleb only when GitHub refuses the
-conversion, for example for lack of permission. It never turns the draft
+conversion, for example for lack of permission, or when the draft-only checks
+never report within `"check_wait_limit_seconds"` because their workflows run
+only on push. The owner then re-runs them or removes them from the policy. It never turns the draft
 requirement into an empty list or waives published gates.
 
 When a stage returns the item to development with findings, or pre-validation

@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import Field, StringConstraints, model_validator
 
 from . import validation
-from .intake_models import AttemptEvent, Identifier, Payload, Text
+from .intake_models import AttemptEvent, Identifier, Payload, Text, WaitLimit
 from .transitions import Outcome, Stage
 
 SHA = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{40}$")]
@@ -111,6 +111,10 @@ class Validation(AttemptEvent):
     pull: GitHubPull
     gates: GateObservation
     schedule_recheck: Flag = False
+    # Pending ready checks recheck after this interval until they have waited the limit.
+    retry_after_seconds: Annotated[
+        int, Field(strict=True, ge=0, le=validation.CHECK_RECHECK_RANGE[1])] | None = None
+    wait_limit_seconds: WaitLimit | None = None
 
 
 class ReviewRecord(Payload):

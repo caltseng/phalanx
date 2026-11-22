@@ -6,7 +6,7 @@ import re
 from . import intake, validation, waits
 from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Reconciliation, Validation, VerifiedMerge
 from .transitions import (
-    Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, Wait, item_branch,
+    Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, item_branch,
 )
 
 
@@ -268,32 +268,12 @@ def evaluate_gates(body, url, revision):
 def _wait_for_published_gates(db, row, state, body, gates, details):
     if state.status != Status.RUNNING or state.stopping is not None:
         raise intake.Conflict("Scheduling a PR recheck requires a running attempt")
-    # An explicit owner reply grants a fresh bounded observation window.
-    since, = db.execute("""
-        SELECT coalesce(max(version), 0) FROM transition_history
-        WHERE execution_id=? AND (event='reply' OR
-            (event='result' AND json_extract(details_json, '$.stage')='pr_promotion'))
-    """, (row["id"],)).fetchone()
-    previous = db.execute("""
-        SELECT json_extract(details_json, '$.recheck_count') FROM transition_history
-        WHERE execution_id=? AND version>? AND event='external_wait'
-          AND json_extract(details_json, '$.gate')='pr_validation'
-          AND json_extract(details_json, '$.revision.head')=?
-          AND json_extract(details_json, '$.revision.base')=?
-        ORDER BY version DESC LIMIT 1
-    """, (row["id"], since, body.pull.head_sha, body.pull.base_sha)).fetchone()
-    count = (previous[0] or 0) if previous else 0
-    reason = "; ".join(gates.reasons)[:16000]
-    if count >= 5:
-        question = "Resolve the stalled ready-phase checks, then reply to resume validation."
-        details["question"] = {"prompt": question, "handoff": reason}
-        details["outcome"] = Outcome.NEEDS_INPUT
-        return intake.apply(
-            db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
-            outcome=Outcome.NEEDS_INPUT, wait=Wait(reason, "owner reply"),
-        )
-    details.update(
-        gate="pr_validation", revision={"head": body.pull.head_sha, "base": body.pull.base_sha},
-        recheck_count=count + 1,
+    details.update(gate="pr_validation", revision={"head": body.pull.head_sha, "base": body.pull.base_sha})
+    return waits.wait_or_ask(
+        db, row, state, body.attempt_id, "; ".join(gates.reasons)[:16000],
+        body.retry_after_seconds if body.retry_after_seconds is not None
+        else validation.CHECK_RECHECK_SECONDS,
+        body.wait_limit_seconds if body.wait_limit_seconds is not None
+        else validation.CHECK_WAIT_LIMIT_SECONDS,
+        details, "Resolve the stalled ready-phase checks, then reply to resume validation.",
     )
-    return waits.schedule(db, row, state, body.attempt_id, reason, 60 * 2**count, details)

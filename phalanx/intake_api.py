@@ -136,8 +136,14 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
         ):
             if payload[field] is None:
                 payload.pop(field)
-    if isinstance(body, pr_models.Validation) and not body.schedule_recheck:
-        payload.pop("schedule_recheck")
+    if isinstance(body, pr_models.Validation):
+        if not body.schedule_recheck:
+            payload.pop("schedule_recheck")
+        for field in ("retry_after_seconds", "wait_limit_seconds"):
+            if payload[field] is None:
+                payload.pop(field)
+    if isinstance(body, ExternalWait) and body.wait_limit_seconds is None:
+        payload.pop("wait_limit_seconds")
     return run(
         request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,

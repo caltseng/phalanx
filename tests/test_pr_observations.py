@@ -257,27 +257,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(current["promotion"], promotion["pull"])
 
-        for cycle in range(6):
-            body = self.observation(claim, gates=self.gates("ready", outcome="pending"),
-                                    schedule_recheck=True)
-            if cycle == 0:
-                changed_base = dict(
-                    body, pull=dict(body["pull"], base_sha=OTHER),
-                    expected=dict(body["expected"], base_sha=OTHER),
-                )
-                self.assertEqual(self.submit(changed_base)[0], 409)
-            key = {"Idempotency-Key": f"pending-ready-{cycle}"}
-            status, updated = self.submit(body, **key)
-            self.assertEqual(status, 200)
-            self.assertEqual(self.submit(body, **key), (status, updated))
-            if cycle == 5:
-                self.assertEqual(updated["state"]["status"], "waiting_for_input")
-                _, timeline = self.request(f"{self.execution}/timeline", OWNER)
-                self.assertIn("stalled", timeline[-1]["details"]["question"]["prompt"])
-                break
-            self.assertEqual(updated["state"]["status"], "waiting_for_external")
-            self.assertEqual(self.request(authority, RUNNER, dict(claim, runner_id="local"),
-                                          self.lease), (200, {"current": False}))
+        def recheck(updated, cycle):
             with write_transaction(self.path) as db:
                 due = db.execute("SELECT version FROM external_rechecks WHERE version=?",
                                  (updated["version"],)).fetchone()
@@ -293,13 +273,64 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
                 "expected_version": updated["version"],
             }, {"Idempotency-Key": f"recheck-ready-{cycle}"})
             self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
-            claim = self.claim("pr_validation")
+            return self.claim("pr_validation")
+
+        def wait_row(version):
+            with write_transaction(self.path) as db:
+                return db.execute("""SELECT due.due_at_ms, json_extract(h.details_json, '$.pending_since_ms')
+                    FROM transition_history AS h JOIN external_rechecks AS due
+                      ON due.execution_id=h.execution_id AND due.version=h.version
+                    WHERE h.execution_id=? AND h.version=?""",
+                                  (self.execution.rsplit("/", 1)[-1], version)).fetchone()
+
+        # The runner's interval schedules each recheck; only elapsed time on one revision escalates.
+        for cycle in range(3):
+            body = self.observation(claim, gates=self.gates("ready", outcome="pending"),
+                                    schedule_recheck=True, retry_after_seconds=7, wait_limit_seconds=60)
+            if cycle == 0:
+                changed_base = dict(
+                    body, pull=dict(body["pull"], base_sha=OTHER),
+                    expected=dict(body["expected"], base_sha=OTHER),
+                )
+                self.assertEqual(self.submit(changed_base)[0], 409)
+                self.assertEqual(self.submit(dict(body, wait_limit_seconds=59))[0], 422)
+            key = {"Idempotency-Key": f"pending-ready-{cycle}"}
+            before = int(time() * 1000)
+            status, updated = self.submit(body, **key)
+            self.assertEqual(status, 200)
+            self.assertEqual(self.submit(body, **key), (status, updated))
+            if cycle == 2:
+                self.assertEqual(updated["state"]["status"], "waiting_for_input")
+                _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+                self.assertIn("stalled", timeline[-1]["details"]["question"]["prompt"])
+                break
+            self.assertEqual(updated["state"]["status"], "waiting_for_external")
+            due_at, since = wait_row(updated["version"])
+            self.assertGreaterEqual(due_at, before + 7_000)
+            self.assertLess(due_at, before + 30_000)
+            if cycle == 0:
+                first = since
+            else:
+                self.assertEqual(since, first)
+                with write_transaction(self.path) as db:
+                    db.execute("""UPDATE transition_history SET details_json=json_set(
+                        details_json, '$.pending_since_ms', ?) WHERE execution_id=? AND version=?""",
+                               (first - 60_000, self.execution.rsplit("/", 1)[-1], updated["version"]))
+            self.assertEqual(self.request(authority, RUNNER, dict(claim, runner_id="local"),
+                                          self.lease), (200, {"current": False}))
+            claim = recheck(updated, cycle)
 
         status, queued = self.request(f"{self.execution}/reply", OWNER, {
             "expected_version": updated["version"], "answer": "The CI provider recovered",
         }, {"Idempotency-Key": "ready-policy-reply"})
         self.assertEqual((status, queued["state"]["status"]), (200, "queued"))
-        ready = self.observation(self.claim("pr_validation"), gates=self.gates("ready"),
+        # A reply grants a fresh window on the same revision.
+        claim = self.claim("pr_validation")
+        pending = self.observation(claim, gates=self.gates("ready", outcome="pending"),
+                                   schedule_recheck=True, wait_limit_seconds=60)
+        status, updated = self.submit(pending, **{"Idempotency-Key": "pending-after-reply"})
+        self.assertEqual((status, updated["state"]["status"]), (200, "waiting_for_external"))
+        ready = self.observation(recheck(updated, "after-reply"), gates=self.gates("ready"),
                                  schedule_recheck=True)
         status, updated = self.submit(ready, **{"Idempotency-Key": "ready-passed"})
         self.assertEqual((status, updated["state"]["stage"]), (200, "adversarial_review"))

@@ -372,6 +372,50 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="dupe")[0], 409)
         self.assertEqual(self.get(due_path, RUNNER), (200, []))
 
+    def test_external_wait_limit_asks_owner_after_elapsed_time_on_one_revision(self):
+        item, _, _, route = self.create("ready_for_check_in")
+        claim = self.claim(item, item["execution"])
+
+        def wait(claim, key):
+            body = {name: claim[name] for name in ("expected_version", "attempt_id", "stage")}
+            body.update(reason="Draft checks pending", gate="draft_checks", retry_after_seconds=5,
+                        revision={"head": "head-one", "base": "base-one"}, wait_limit_seconds=60)
+            status, updated = self.submit(route + "/external-wait", body, token=RUNNER, lease=LEASE, key=key)
+            self.assertEqual(status, 200, updated)
+            return updated
+
+        def recheck(waiting, key):
+            with write_transaction(self.path) as db:
+                db.execute("UPDATE external_rechecks SET due_at_ms=1")
+            status, queued = self.submit(route + "/recheck", {"expected_version": waiting["version"]},
+                                         token=RUNNER, key=key)
+            self.assertEqual(status, 200, queued)
+            return self.claim(item, queued)
+
+        def pending_since(waiting):
+            with write_transaction(self.path) as db:
+                return db.execute("""SELECT json_extract(details_json, '$.pending_since_ms')
+                    FROM transition_history WHERE execution_id=? AND version=?""",
+                                  (item["execution"]["id"], waiting["version"])).fetchone()[0]
+
+        first = wait(claim, "wait-1")
+        self.assertEqual(first["state"]["status"], "waiting_for_external")
+        second = wait(recheck(first, "poll-1"), "wait-2")
+        self.assertEqual(second["state"]["status"], "waiting_for_external")
+        since = pending_since(first)
+        self.assertEqual(pending_since(second), since)
+        with write_transaction(self.path) as db:
+            db.execute("""UPDATE transition_history SET details_json=json_set(details_json,
+                '$.pending_since_ms', ?) WHERE execution_id=? AND version=?""",
+                       (since - 60_000, item["execution"]["id"], second["version"]))
+        asked = wait(recheck(second, "poll-2"), "wait-3")
+        self.assertEqual(asked["state"]["status"], "waiting_for_input")
+        with write_transaction(self.path) as db:
+            question = db.execute("""SELECT json_extract(details_json, '$.question.prompt')
+                FROM transition_history WHERE execution_id=? AND version=?""",
+                                  (item["execution"]["id"], asked["version"])).fetchone()[0]
+        self.assertIn("Draft-only checks never reported", question)
+
     def test_trusted_success_can_open_a_human_wait_without_worker_question(self):
         item, _, _, route = self.create("ready_for_check_in")
         url = "https://github.com/example/project/pull/1"

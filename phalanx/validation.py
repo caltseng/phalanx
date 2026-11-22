@@ -6,6 +6,12 @@ from enum import StrEnum
 
 from phalanx.transitions import Revision
 
+# Pending CI rechecks: runner config defaults and the bounds the API and preflight accept.
+CHECK_RECHECK_SECONDS = 30
+CHECK_RECHECK_RANGE = (5, 86400)
+CHECK_WAIT_LIMIT_SECONDS = 2 * 60 * 60
+CHECK_WAIT_LIMIT_RANGE = (60, 30 * 86400)
+
 
 class GateState(StrEnum):
     SATISFIED = "satisfied"
