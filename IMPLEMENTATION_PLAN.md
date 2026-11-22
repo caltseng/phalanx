@@ -1,3 +1,4 @@
+| **PH-32 Tidy operator gaps from PH-V1** | None | Two non-gating findings from the [v1 acceptance muster](docs/pilots/v1-acceptance.md#findings): clear the Captain loop's slot status for unmatched attempts once none remain, so it stops reading as an active blocker, and add `phalanx cancel ITEM --reason` over the existing cancel route. Include a focused test for each. |
 # Phalanx implementation work items
 
 Each item produces a reviewable PR or a Markdown field report. Dependencies below are required milestones. A prerequisite PR must be checked in unless the dependent explicitly consumes a pinned reviewed revision. Independent items can proceed in parallel. Revisit queued items after an upstream check-in or new steering. [SPEC.md](SPEC.md) defines the product and [STATE_MACHINE.md](STATE_MACHINE.md) defines transitions.
