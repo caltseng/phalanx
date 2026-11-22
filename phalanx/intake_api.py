@@ -224,6 +224,13 @@ def pr_publication_blocker(request: Request, item_id: Identifier, execution_id: 
     return attempt_event(request, pr_observations.submit_blocker, item_id, execution_id, body, lease, key)
 
 
+@router.post("/items/{item_id}/executions/{execution_id}/pr-rework",
+             dependencies=[Depends(require_runner)])
+def pr_rework(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.Rework,
+              lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit_rework, item_id, execution_id, body, lease, key)
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
              dependencies=[Depends(require_runner)])
 def pr_validation_claim(request: Request, item_id: Identifier, execution_id: Identifier,

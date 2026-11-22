@@ -41,6 +41,7 @@ class FakeGitHub:
         self.runs = []
         self.comments = []
         self.refuse_convert = False
+        self.threads = []
 
     def __call__(self, request, _timeout):
         path = urlsplit(request.full_url).path
@@ -51,6 +52,11 @@ class FakeGitHub:
                 self.pull["draft"] = True
                 return response({"data": {"convertPullRequestToDraft": {
                     "pullRequest": {"id": self.pull["node_id"], "isDraft": True}}}})
+            if "reviewThreads" in json.loads(request.data)["query"]:
+                return response({"data": {"repository": {"pullRequest": {
+                    "latestOpinionatedReviews": {"nodes": []},
+                    "reviewThreads": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                                      "nodes": self.threads}}}}})
             self.pull["draft"] = False
             return response({"data": {"markPullRequestReadyForReview": {
                 "pullRequest": {"id": self.pull["node_id"], "isDraft": False}}}})
@@ -690,7 +696,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_merge_conflict_returns_to_development_over_http(self):
         self.live_review_path(blocking=False, conflict=True)
 
-    def live_review_path(self, *, blocking, conflict=False):
+    def test_github_feedback_returns_to_development_over_http(self):
+        self.live_review_path(blocking=False, feedback=True)
+
+    def live_review_path(self, *, blocking, conflict=False, feedback=False):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -830,11 +839,17 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 self.runner().prepare()
                 context = json.loads(self.runner().status()["packet"]["context"])
                 self.assertIn(f"conflicts with main at {base}", context["review_findings"])
-                snapshot = {"claim": {"item_id": item["id"],
-                                      "execution": {"id": routed["execution"]["id"]}}}
-                runner = SimpleNamespace(api=self.api)
-                self.assertTrue(validation_stages._conflicted_before(runner, snapshot, base))
-                self.assertFalse(validation_stages._conflicted_before(runner, snapshot, "f" * 40))
+                return
+            if feedback:
+                github.pull["mergeable"] = True
+                github.threads = [{"id": "PRRT_1", "isResolved": False, "isOutdated": False, "path": "app.py",
+                                   "comments": {"nodes": [{"body": "Handle the empty list",
+                                                           "author": {"login": "octo"}}]}}]
+                routed = self.runner().prepare(stages=["pr_reconciliation"])
+                self.assertEqual(routed["execution"]["state"]["stage"], "development", routed)
+                self.runner().prepare()
+                context = json.loads(self.runner().status()["packet"]["context"])
+                self.assertIn("@octo on app.py: Handle the empty list", context["review_findings"])
                 return
             retry = self.runner().prepare(stages=["pr_reconciliation"])
             self.assertIn("mergeability", retry["reason"], retry)
@@ -946,7 +961,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             github.runs = [{"id": 1, "name": "test", "head_sha": revised["candidate"], "status": "completed",
                             "conclusion": "failure", "app": {"id": 15368}, "pull_requests": []}]
             failed = self.runner().prepare(stages=["pr_validation"])
-        self.assertEqual(failed["execution"]["state"]["stage"], "pr_reconciliation", failed)
+        self.assertEqual(failed["execution"]["state"]["stage"], "development", failed)
+        self.assertIn("Required checks did not pass", failed["execution"]["state"]["development_findings"])
         self.assertEqual(len(github.comments), 2)
         self.assertIn("Local check platform skipped: Needs the other OS", github.comments[1])
         body = github.pull["body"]
@@ -974,7 +990,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "execution": {"version": 3, "state": {
                 "stage": "pr_promotion", "candidate": candidate,
                 "primary_pr": "https://github.com/o/r/pull/7"}}}}
-        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=False, node_id="PR_7")
+        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=False, node_id="PR_7", mergeable=True)
         converted = []
 
         def convert(node_id):
@@ -1006,11 +1022,12 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(refused["outcome"], "needs_input")
         self.assertIn("refused to convert the PR back to draft", refused["question"]["prompt"])
 
-    def test_reviewed_update_retries_transient_errors_and_asks_about_unverified_heads(self):
+    def test_reviewed_update_retries_transient_errors_and_reworks_unexpected_heads(self):
         from phalanx import validation_stages
         from phalanx.git_publication import PublicationError
 
         remote = []
+        pushes = []
 
         class Git:
             def __init__(self, *_):
@@ -1021,8 +1038,9 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                     raise PublicationError("git ls-remote failed: 502")
                 return remote[-1]
 
-            def publish(self, *_, **__):
-                raise AssertionError("an unverified head must not be replaced")
+            def publish(self, candidate, *, expected, rewrite, **_):
+                pushes.append(rewrite)
+                return PublicationResult("conflict", "The update would not fast-forward")
 
         item_id = "item-1"
         snapshot = {"repositories": {"repo": object()}, "claim": {
@@ -1030,17 +1048,18 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "execution": {"version": 3, "state": {"stage": "pr_promotion", "candidate": "b" * 40,
                                                   "primary_pr": "#7"}}}}
         local = SimpleNamespace(_inspect=lambda: SimpleNamespace(path="."), _authorize=lambda: None)
-        pr = SimpleNamespace(state="open", merged=False, head_ref=_item_branch(item_id), base_ref="main",
-                             head_sha="a" * 40)
+        pr = pull(head=_item_branch(item_id))
+        pr["head"]["sha"] = "a" * 40
+        pr = GitHubClient("owner", "repo", token="t", transport=lambda *_: response(pr)).get_pull_request(7)
         with patch("phalanx.validation_stages.GitPublication", Git):
             body = validation_stages._publish_update(snapshot, local, pr, "main", "a" * 40)["body"]
             self.assertEqual(body["outcome"], "failed")
             self.assertIn("502", body["failure_reason"])
             self.assertGreater(body["retry_after_seconds"], 0)
             remote.append("a" * 40)
-            body = validation_stages._publish_update(snapshot, local, pr, "main", "c" * 40)["body"]
-        self.assertEqual(body["outcome"], "needs_input")
-        self.assertIn("last verified", body["question"]["prompt"])
+            submission = validation_stages._publish_update(snapshot, local, pr, "main", "c" * 40)
+        self.assertEqual(pushes, [False])
+        self.assertEqual((submission["route"], submission["body"]["issue"]), ("pr-rework", "unexpected_head"))
 
     def test_validation_policy_gap_waits_for_owner_with_reason(self):
         self.api.stage, self.api.candidate = "pre_pr_validation", "a" * 40

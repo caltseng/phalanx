@@ -183,6 +183,23 @@ class GitHubClientTests(unittest.TestCase):
             self.client.mark_ready("PR_7")
         self.assertEqual(len(self.requests), 2)
 
+    def test_feedback_pages_past_resolved_threads(self):
+        def page(threads, cursor):
+            return response({"data": {"repository": {"pullRequest": {
+                "latestOpinionatedReviews": {"nodes": [
+                    {"id": "R1", "state": "CHANGES_REQUESTED", "body": "Fix it", "author": {"login": "ann"}}]},
+                "reviewThreads": {"pageInfo": {"hasNextPage": cursor is not None, "endCursor": cursor},
+                                  "nodes": threads}}}}})
+
+        def thread(node, resolved):
+            return {"id": node, "isResolved": resolved, "isOutdated": False, "path": "a.py",
+                    "comments": {"nodes": [{"body": "Rename", "author": {"login": "bob"}}]}}
+
+        self.responses.extend([page([thread("T1", True)], "c1"), page([thread("T2", False)], "c2")])
+        feedback = self.client.get_actionable_feedback(7, page_limit=2)
+        self.assertEqual([node for node, _ in feedback], ["R1", "T2"])
+        self.assertEqual([json.loads(r.data)["variables"]["after"] for r in self.requests], [None, "c1"])
+
     def test_checks_and_statuses_use_sha_and_paginate_independently(self):
         url = f"{API}/repos/owner/repo/commits/{HEAD}"
         self.responses.extend([

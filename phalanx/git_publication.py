@@ -134,7 +134,8 @@ class GitPublication:
         if expected is not None and expected != candidate and not rewrite:
             old = self._git("cat-file", "-t", expected)
             if old.returncode or old.stdout.strip() != "commit":
-                raise PublicationError("Fetch the recorded remote commit before checking ancestry")
+                # A candidate that descends from the remote head has it locally.
+                return PublicationResult("conflict", "The update would not fast-forward")
             ancestry = self._git("merge-base", "--is-ancestor", expected, candidate)
             if ancestry.returncode == 1:
                 return PublicationResult("conflict", "The update would not fast-forward")

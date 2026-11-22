@@ -21,6 +21,13 @@ from .transitions import (
 
 STATE = TypeAdapter(Execution)
 PRIORITY = {"low": 0, "normal": 1, "urgent": 2}
+# Published PR stages whose findings send the item back to development.
+REWORK_STAGES = {Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.ADVERSARIAL_REVIEW,
+                 Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN, Stage.CHECK_IN}
+# Development rounds from published PR stages allowed between owner replies.
+REWORK_LIMIT = 10
+# Development rounds allowed on identical findings before they count as no progress.
+REPEAT_LIMIT = 2
 
 
 class Missing(ValueError):
@@ -262,12 +269,42 @@ def rerun(db, item_id, execution_id, payload):
     return new_execution(db, item_id, payload.target, previous_id=execution_id)
 
 
+def _stalled_rework(db, execution_id, next_state):
+    """Return an owner question when published-PR rework stops making progress."""
+    stages = sorted(REWORK_STAGES)
+    rounds = [findings for findings, in db.execute(
+        f"""SELECT json_extract(state_json, '$.development_findings') FROM transition_history
+           WHERE execution_id=? AND event=? AND json_extract(state_json, '$.stage')=?
+             AND json_extract(details_json, '$.stage') IN ({','.join('?' * len(stages))})
+             AND version > COALESCE((SELECT MAX(version) FROM transition_history
+                                     WHERE execution_id=? AND event=?), 0)""",
+        (execution_id, Event.RESULT, Stage.DEVELOPMENT, *stages, execution_id, Event.REPLY),
+    )]
+    findings = next_state.development_findings
+    if rounds.count(findings) >= REPEAT_LIMIT:
+        reason = f"The same findings returned after {REPEAT_LIMIT} development attempts"
+    elif len(rounds) >= REWORK_LIMIT:
+        reason = f"The PR returned to development {REWORK_LIMIT} times without becoming ready"
+    else:
+        return None
+    return {"prompt": f"{reason}. Resolve the PR or give direction, then reply to retry.",
+            "handoff": f"{next_state.primary_pr}, candidate {next_state.candidate}\n\n"
+                       f"Latest findings:\n{findings}"[:16000]}
+
+
 def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **options):
     """Apply the verified event and append history in the caller's write transaction."""
     try:
         next_state = decide(state, event, **options)
     except ValueError as error:
         raise Conflict(str(error)) from error
+    if (event == Event.RESULT and state.stage in REWORK_STAGES and next_state.stage == Stage.DEVELOPMENT
+            and next_state.development_findings):
+        question = _stalled_rework(db, row["id"], next_state)
+        if question is not None:
+            details = {**details, "outcome": Outcome.NEEDS_INPUT, "question": question}
+            next_state = decide(state, event, outcome=Outcome.NEEDS_INPUT,
+                                wait=Wait(question["prompt"], "owner reply"))
     if event == Event.RESULT:
         has_question = details.get("question") is not None
         if next_state.status == Status.WAITING_FOR_INPUT:
