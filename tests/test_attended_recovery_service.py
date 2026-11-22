@@ -192,6 +192,22 @@ class RecoveryServiceTests(unittest.TestCase):
         self.assertEqual(len(self.api.claims), 1)
         self.assertEqual(self.api.requests, [])
 
+    def test_expired_development_keeping_the_recorded_candidate_is_adopted(self):
+        head = "a" * 40
+        self.packet = replace(self.packet, stage="development", output_type="pull_request", expected_revision=head)
+        self.native = replace(self.native, assignment=self.packet.result_identity())
+        self.record["packet"] = {**asdict(self.packet), "attempt_id": str(self.packet.attempt_id),
+                                 "worktree": str(self.packet.worktree)}
+        self.record["claim"]["execution"]["state"] |= {"stage": "development", "candidate": head}
+        self.expired["stage"] = "development"
+        self.api = RecoveryAPI(self)
+        self.seed()
+        self.workspace = replace(self.workspace, head=head)
+        result = self.packet.result_identity() | {"outcome": "succeeded", "details": {"evidence": head}}
+        (self.root / "results" / f"{self.packet.marker}.json").write_text(json.dumps(result), encoding="utf-8")
+        self.assertEqual(self.step()["status"], "adopted")
+        self.assertEqual(self.api.requests, [])
+
     def test_recover_command_reads_relay_observe_reply(self):
         assignment = self.packet.result_identity()
         prompt = (f"Phalanx attempt marker: {self.packet.marker}\n\nWork packet:\n"

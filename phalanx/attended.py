@@ -89,6 +89,17 @@ STAGES = {
         "severity in details.findings."
     ),
 }
+
+
+def development_candidate(record, packet, workspace, evidence: str) -> bool:
+    """Accept a clean worktree HEAD that is a new commit or, on a retry, the recorded
+    candidate kept unchanged (for example after a flaky check) so it is revalidated."""
+    return bool(re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
+                and evidence == workspace.head and not workspace.dirty
+                and (evidence != packet.expected_revision
+                     or evidence == record["claim"]["execution"]["state"].get("candidate")))
+
+
 # Runner-owned stages that need no worker session.
 RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
                  "pr_reconciliation", "check_in")
@@ -573,11 +584,7 @@ class AttendedRunner:
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
-                    # A retry may keep the recorded candidate (e.g. a flaky check) so it is revalidated.
-                    unchanged_ok = evidence == record["claim"]["execution"]["state"].get("candidate")
-                    if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
-                            or evidence != workspace.head or workspace.dirty
-                            or (evidence == packet.expected_revision and not unchanged_ok)):
+                    if not development_candidate(record, packet, workspace, evidence):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
                     if "development_base" in record:
                         manager.verify_base_ancestry(workspace, record["development_base"]["sha"])
