@@ -422,6 +422,35 @@ Each thread row includes the following fields.
 
 A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. An expired attempt with an active writer or a verified result is adopted under a recovery claim. Any stage other than development leaves the checkout unchanged, so its saved result is verified against the unchanged worktree. The claim request and its fresh secret are journaled before sending, so a lost reply replays the same key. Afterwards the Captain renews and submits under the new lease. If the server refuses adoption, the reservation backs off and then waits for the owner; nothing is released. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. A reservation with no relay, receipt or submission is released only after `--recheck` proves no launch happened: no result file and a clean worktree at the accounted revision, or no worktree or branch at all. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
 
+### Import a GitHub issue
+
+Register the expected repository remote first, then import an issue by its number
+and the **Phalanx repository ID** (not `owner/repo`):
+
+```powershell
+python -m phalanx register example https://github.com/example/project.git
+python -m phalanx ingest-issue example 42 --target ready_for_check_in
+```
+
+Set `PHALANX_OWNER_TOKEN` for the API and `PHALANX_GITHUB_TOKEN` in the local
+environment with read access to the issue and comments. The GitHub token stays
+local; only the snapshot is submitted to the API. The command verifies the
+registered `github.com` remote, rejects PR numbers, and copies the title, body,
+all comment pages and source link into a work item. It prints the stored item
+and execution, which appear on the work board and use the existing dispatch path.
+Closed issues can also be imported explicitly. Issue text remains task context,
+not authority to change credentials, checkout trust, runner policy or permissions.
+
+Repeating an unchanged import with the same target returns the original item,
+including after a server restart or a lost API response. An edited issue or
+changed target returns HTTP 409 under the same stable issue key: inspect the
+existing item before deciding whether to steer/rerun it or intentionally create
+a new import with `--key NEW-KEY`. Keep that key for its retries. Imports exceeding
+the 16,000-character goal limit fail without creating work or truncating context;
+file a scoped summary with `intake` instead. Provider/authentication failures are
+reported and never create partial work. This is explicit intake, not automatic
+polling, webhooks, or synchronization; it does not modify the GitHub issue.
+
 ### Operator work board
 
 Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
