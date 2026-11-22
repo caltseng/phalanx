@@ -1,4 +1,5 @@
 from dataclasses import asdict, replace
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import time
@@ -168,6 +169,36 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
                 self.assertIn("dependency_wait_json IS NULL", definition["sql"])
         completed = finalization.attempt(path, "execution")
         self.assertEqual(completed["state"]["final_output"]["draft_revision"], revision)
+
+    def test_revision_migration_folds_ready_for_check_in_into_reconciliation(self):
+        path = self.path.with_name("pre-revision.sqlite3")
+        legacy = {**asdict(start(Target.MERGED)), "stage": "ready_for_check_in",
+                  "development_findings": "Fix the build", "publication_conflict": False}
+        legacy.pop("findings")
+        with connect(path, mode="rwc") as db:
+            for migration in MIGRATIONS[:-1]:
+                for statement in migration:
+                    db.execute(statement)
+            db.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+            intake.register(db, "source", "https://example.com/source.git")
+            stamp = intake.timestamp()
+            db.execute("INSERT INTO work_items VALUES ('item','source','{}',?)", (stamp,))
+            data = intake.encode(legacy)
+            db.execute(
+                """INSERT INTO executions(id,item_id,version,state_json,created_at,updated_at)
+                   VALUES ('execution','item',1,?,?,?)""",
+                (data, stamp, stamp),
+            )
+            intake.record(db, "execution", 1, "result",
+                          {"stage": "ready_for_check_in", "merge_intent": {"operation_id": "merge-1"}}, data, stamp)
+        migrate(path)
+        with connect(path, mode="ro") as db:
+            state = json.loads(db.execute("SELECT state_json FROM executions").fetchone()[0])
+            history = db.execute("SELECT state_json, details_json FROM transition_history").fetchone()
+        self.assertEqual((state["stage"], state["findings"]), ("pr_reconciliation", "Fix the build"))
+        self.assertFalse({"development_findings", "publication_conflict"} & state.keys())
+        self.assertEqual(json.loads(history["state_json"]), state)
+        self.assertEqual(json.loads(history["details_json"])["stage"], "pr_reconciliation")
 
     def test_restart_rechecks_missed_durable_milestone(self):
         server = self.start_server(self.path)

@@ -87,22 +87,12 @@ class Publication(AttemptEvent):
 
 
 class PublicationBlocker(AttemptEvent):
-    """Verified external state that prevents recording the first draft.
-
-    Name either the moved base revision or one PR on the item branch.
-    """
+    """An existing PR on the item branch that prevents recording the first draft."""
 
     stage: Literal[Stage.PR_CREATION]
     expected: ExpectedRefs
     reason: Text
-    observed_base_sha: SHA | None = None
-    pull: GitHubPull | None = None
-
-    @model_validator(mode="after")
-    def one_blocker(self):
-        if (self.observed_base_sha is None) == (self.pull is None):
-            raise ValueError("Name exactly one of observed_base_sha or pull")
-        return self
+    pull: GitHubPull
 
 
 class Validation(AttemptEvent):
@@ -143,30 +133,38 @@ class MergeIntent(Payload):
 
 
 class Reconciliation(AttemptEvent):
-    stage: Literal[Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN]
+    """Ready gates observed on the candidate after mergeability and feedback were cleared.
+
+    A merge intent authorizes check-in once every gate is current.
+    """
+
+    stage: Literal[Stage.PR_RECONCILIATION]
     expected: ExpectedRefs
     pull: GitHubPull
-    gates: GateObservation | None = None
-    actionable_feedback_cleared: Flag = False
-    approvals_and_mergeability: Flag = False
+    gates: GateObservation
     merge_intent: MergeIntent | None = None
 
-    @model_validator(mode="after")
-    def attested(self):
-        if not (self.gates and self.actionable_feedback_cleared and self.approvals_and_mergeability):
-            raise ValueError("Ready reconciliation needs ready gates and both attestations")
-        return self
+
+class Revised(AttemptEvent):
+    """A pr_revision commit pushed to the ready PR, with the PR as observed after the push.
+
+    A pull whose head is not the candidate records a push that lost to a foreign one.
+    """
+
+    stage: Literal[Stage.PR_REVISION]
+    expected: ExpectedRefs
+    pull: GitHubPull
+    candidate: SHA
 
 
 class Rework(AttemptEvent):
-    """Routine PR state that a development attempt resolves before revalidation.
+    """Routine PR state that development (before promotion) or pr_revision resolves.
 
     ``merge_conflict`` and ``feedback`` observe the candidate on the PR;
     ``unexpected_head`` observes a head Phalanx did not publish.
     """
 
-    stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN,
-                   Stage.CHECK_IN]
+    stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.CHECK_IN]
     expected: ExpectedRefs
     pull: GitHubPull
     issue: Literal["merge_conflict", "unexpected_head", "feedback"]
@@ -191,7 +189,7 @@ class VerifiedMerge(AttemptEvent):
 
 
 Observation = Annotated[
-    Publication | Validation | IndependentReview | Reconciliation | VerifiedMerge,
+    Publication | Validation | IndependentReview | Reconciliation | Revised | VerifiedMerge,
     Field(discriminator="stage"),
 ]
 

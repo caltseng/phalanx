@@ -56,19 +56,19 @@ class PullObservationFixture(ServerFixture):
     def develop(self):
         self.assertEqual(self.result(self.claim("development"), candidate=HEAD)[0], 200)
 
-    def observation(self, claim, *, draft=False, **fields):
+    def observation(self, claim, *, draft=False, head=HEAD, **fields):
         expected = {"head_ref": self.head_ref, "base_ref": "main", "base_sha": BASE}
         return dict(claim, expected=expected, pull={
-            **expected, "number": 7, "head_sha": HEAD, "draft": draft,
+            **expected, "number": 7, "head_sha": head, "draft": draft,
             "head_repository": "Example/Repo", "base_repository": "example/repo",
             "state": "open", "merged": False,
         }, **fields)
 
-    def gates(self, phase, *, outcome="passed"):
+    def gates(self, phase, *, outcome="passed", head=HEAD):
         requirement = {"name": "build", "kind": "check_run", "app_id": 123}
-        return {"phase": phase, "number": 7, "head_sha": HEAD, "base_sha": BASE,
+        return {"phase": phase, "number": 7, "head_sha": head, "base_sha": BASE,
                 "required": [requirement],
-                "observations": [dict(requirement, tested_sha=HEAD, outcome=outcome)]}
+                "observations": [dict(requirement, tested_sha=head, outcome=outcome)]}
 
     def submit(self, body, **headers):
         return self.request(self.observe, RUNNER, body, {**self.lease, **headers})
@@ -87,6 +87,7 @@ class PullObservationFixture(ServerFixture):
         self.assertEqual(self.submit(self.observation(
             self.claim("pr_validation"), gates=self.gates("ready"),
         ))[0], 200)
+        self.assertEqual(self.submit(self.reconciliation(self.claim("pr_reconciliation")))[0], 200)
 
     def review(self, claim):
         return self.observation(claim, review={
@@ -94,10 +95,8 @@ class PullObservationFixture(ServerFixture):
             "findings": ["P2: Verify the edge case is covered by the integration test"],
         })
 
-    def reconciliation(self, claim, **fields):
-        return self.observation(claim, gates=self.gates("ready"),
-                                actionable_feedback_cleared=True,
-                                approvals_and_mergeability=True, **fields)
+    def reconciliation(self, claim, *, head=HEAD, outcome="passed", **fields):
+        return self.observation(claim, head=head, gates=self.gates("ready", head=head, outcome=outcome), **fields)
 
     def at_base(self, body, base):
         updated = dict(body, expected=dict(body["expected"], base_sha=base),
@@ -199,7 +198,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
                           {"name": "unit tests", "outcome": "failed", "reason": "Exited with status 1"}],
         ), self.lease)
         self.assertEqual(status, 200, updated)
-        self.assertEqual((updated["state"]["stage"], updated["state"]["development_findings"]),
+        self.assertEqual((updated["state"]["stage"], updated["state"]["findings"]),
                          ("development", "Local check unit tests failed: Exited with status 1"))
 
     def test_failed_draft_check_returns_to_development_with_findings(self):
@@ -209,7 +208,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         ))
         self.assertEqual(status, 200, updated)
         self.assertEqual(updated["state"]["stage"], "development")
-        self.assertIn("build", updated["state"]["development_findings"])
+        self.assertIn("build", updated["state"]["findings"])
 
     def test_ready_pr_records_missing_draft_checks_as_skipped(self):
         self.publish()
@@ -239,20 +238,22 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(self.submit(dict(body, gates=self.gates("ready", outcome="pending")))[0], 409)
         status, updated = self.submit(body)
         self.assertEqual(status, 200)
-        self.assertEqual(updated["state"]["stage"], "adversarial_review")
+        self.assertEqual(updated["state"]["stage"], "pr_reconciliation")
         self.assertIsNone(updated["state"]["final_output"])
-        self.assertEqual(self.result(self.claim("adversarial_review"))[0], 409)
+        self.assertEqual(self.result(self.claim("pr_reconciliation"))[0], 409)
 
-    def test_failed_ready_check_returns_to_development(self):
+    def test_failed_ready_check_is_revised_on_the_ready_pr(self):
         self.publish()
         no_draft_requirements = dict(self.gates("draft"), required=[], observations=[])
         body = self.observation(self.claim("pr_promotion"), gates=no_draft_requirements)
         self.assertEqual(self.submit(body)[0], 200)
         body = self.observation(self.claim("pr_validation"), gates=self.gates("ready", outcome="failed"))
         status, updated = self.submit(body)
+        self.assertEqual((status, updated["state"]["stage"]), (200, "pr_reconciliation"))
+        status, updated = self.submit(self.reconciliation(self.claim("pr_reconciliation"), outcome="failed"))
         self.assertEqual(status, 200)
-        self.assertEqual((updated["state"]["stage"], updated["state"]["status"]), ("development", "queued"))
-        self.assertIn("Required checks did not pass", updated["state"]["development_findings"])
+        self.assertEqual((updated["state"]["stage"], updated["state"]["status"]), ("pr_revision", "queued"))
+        self.assertIn("Required checks did not pass", updated["state"]["findings"])
         self.assertIsNone(updated["state"]["final_output"])
 
     def test_published_validation_wait_replays_and_reclaims_exact_revision(self):
@@ -345,7 +346,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         ready = self.observation(recheck(updated, "after-reply"), gates=self.gates("ready"),
                                  schedule_recheck=True)
         status, updated = self.submit(ready, **{"Idempotency-Key": "ready-passed"})
-        self.assertEqual((status, updated["state"]["stage"]), (200, "adversarial_review"))
+        self.assertEqual((status, updated["state"]["stage"]), (200, "pr_reconciliation"))
 
     def test_transient_validation_retry_honors_provider_delay(self):
         self.publish()
@@ -375,7 +376,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(updated["state"]["status"], "cancelled")
         self.assertIsNone(updated["state"]["primary_pr"])
 
-    def test_ready_only_requires_current_review_after_base_change(self):
+    def test_ready_only_reuses_the_review_after_a_base_only_change(self):
         self.start_review()
         claim = self.claim("adversarial_review")
         review = self.review(claim)
@@ -383,19 +384,8 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(self.submit(self.at_base(review, OTHER))[0], 409)
         self.assertEqual(self.submit(review)[0], 200)
 
-        reconciliation = self.reconciliation(self.claim("pr_reconciliation"))
-        status, execution = self.submit(self.at_base(reconciliation, OTHER))
-        self.assertEqual(status, 200)
-        self.assertEqual(execution["state"]["stage"], "adversarial_review")
-        review = self.review(self.claim("adversarial_review"))
-        self.assertEqual(self.submit(review)[0], 409)
-        self.assertEqual(self.submit(self.at_base(review, OTHER))[0], 200)
-
-        reconciliation = self.at_base(self.reconciliation(self.claim("pr_reconciliation")), OTHER)
-        self.assertEqual(self.submit(dict(reconciliation, actionable_feedback_cleared=False))[0], 422)
-        self.assertEqual(self.submit(dict(reconciliation, approvals_and_mergeability=False))[0], 422)
-        self.assertEqual(self.submit(reconciliation)[0], 200)
-        ready = self.at_base(self.reconciliation(self.claim("ready_for_check_in")), OTHER)
+        # The reviewed head is unchanged, so a new base needs current checks but no re-review.
+        ready = self.at_base(self.reconciliation(self.claim("pr_reconciliation")), OTHER)
         self.assertEqual(self.submit(dict(ready, merge_intent={
             "operation_id": "unexpected", "authorization": "unexpected",
         }))[0], 409)
@@ -409,7 +399,12 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertIsNone(output["merge_commit"])
         self.assertEqual(self.submit(ready, **headers), (status, execution))
 
-    def test_blocking_review_routes_findings_back_to_development(self):
+    def revise(self, head, **pull):
+        body = self.observation(self.claim("pr_revision"), head=head, candidate=head)
+        body["pull"].update(pull)
+        return self.submit(body)
+
+    def test_blocking_review_is_revised_and_a_lost_push_is_reconciled(self):
         self.start_review()
         review = self.review(self.claim("adversarial_review"))
         blocking = dict(review, outcome="changes_required")
@@ -417,17 +412,70 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         status, execution = self.submit(blocking)
         self.assertEqual(status, 200, execution)
         state = execution["state"]
-        self.assertEqual((state["stage"], state["status"]), ("development", "queued"))
-        self.assertIn("P2: Verify the edge case", state["development_findings"])
-        status, execution = self.result(self.claim("development"), candidate=OTHER)
-        self.assertEqual(status, 200)
-        self.assertIsNone(execution["state"]["development_findings"])
+        self.assertEqual((state["stage"], state["status"]), ("pr_revision", "queued"))
+        self.assertIn("P2: Verify the edge case", state["findings"])
+        claim = self.claim("pr_revision")
+        self.assertEqual(self.submit(self.observation(claim, candidate=HEAD))[0], 409)
+        self.assertEqual(self.submit(self.observation(claim, candidate=OTHER))[0], 409)
+        lost = self.observation(claim, head="d" * 40, candidate=OTHER)
+        status, execution = self.submit(lost)
+        self.assertEqual(status, 200, execution)
+        self.assertEqual((execution["state"]["stage"], execution["state"]["candidate"]),
+                         ("pr_reconciliation", OTHER))
+        self.assertIsNone(execution["state"]["findings"])
+
+    def test_revision_escalates_new_scope_to_development(self):
+        self.start_review()
+        blocking = dict(self.review(self.claim("adversarial_review")), outcome="changes_required")
+        self.assertEqual(self.submit(blocking)[0], 200)
+        status, execution = self.request(f"{self.execution}/result", RUNNER, dict(
+            self.claim("pr_revision"), outcome="changes_required", candidate=HEAD,
+            review_notes="This needs a new storage design",
+        ), self.lease)
+        self.assertEqual(status, 200, execution)
+        self.assertEqual((execution["state"]["stage"], execution["state"]["findings"]),
+                         ("development", "This needs a new storage design"))
+
+    def test_ready_pr_is_revised_through_conflict_failed_check_and_feedback(self):
+        """Acceptance: the ready PR is fixed in place, never returning to draft or development."""
+        self.start_review()
+        self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
+        head = HEAD
+        rounds = [
+            lambda claim: self.rework(claim, "merge_conflict", head=head),
+            lambda claim: self.submit(self.reconciliation(claim, head=head, outcome="failed")),
+            lambda claim: self.rework(claim, "feedback", head=head, feedback_ids=["PRRT_1"],
+                                      findings=["@octo on app.py: Handle the empty list"]),
+        ]
+        for number, send in enumerate(rounds):
+            status, execution = send(self.claim("pr_reconciliation"))
+            self.assertEqual((status, execution["state"]["stage"]), (200, "pr_revision"), execution)
+            head = f"{number + 1}" * 40
+            status, execution = self.revise(head)
+            self.assertEqual((status, execution["state"]["stage"]), (200, "pr_validation"), execution)
+            self.assertEqual(self.submit(self.observation(
+                self.claim("pr_validation"), head=head, gates=self.gates("ready", head=head)))[0], 200)
+            status, execution = self.submit(self.reconciliation(self.claim("pr_reconciliation"), head=head))
+            self.assertEqual(execution["state"]["stage"], "adversarial_review")
+            review = self.observation(self.claim("adversarial_review"), head=head,
+                                      review={"reviewer": "chat", "summary": "Reviewed the new diff", "findings": []})
+            self.assertEqual(self.submit(review)[0], 200)
+        status, execution = self.submit(self.reconciliation(self.claim("pr_reconciliation"), head=head))
+        self.assertEqual((status, execution["state"]["status"]), (200, "completed"))
+        self.assertEqual(execution["state"]["final_output"]["revision"]["head"], head)
+        _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+        promoted = next(index for index, row in enumerate(timeline)
+                        if row["details"].get("stage") == "pr_promotion")
+        later = timeline[promoted + 1:]
+        self.assertFalse({"development", "pr_promotion", "pr_creation"}
+                         & {row["state"]["stage"] for row in later})
+        self.assertFalse(any((row["details"].get("pull") or {}).get("draft") for row in later))
 
     def rework(self, claim, issue, **fields):
         return self.request(f"{self.execution}/pr-rework", RUNNER,
                             self.observation(claim, issue=issue, **fields), self.lease)
 
-    def test_merge_conflict_returns_to_development_to_rebase(self):
+    def test_merge_conflict_is_revised_on_the_ready_pr(self):
         self.start_review()
         self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
         claim = self.claim("pr_reconciliation")
@@ -436,18 +484,18 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         status, execution = self.rework(claim, "merge_conflict")
         self.assertEqual(status, 200, execution)
         state = execution["state"]
-        self.assertEqual((state["stage"], state["status"]), ("development", "queued"))
-        self.assertIn("rebase the candidate", state["development_findings"])
+        self.assertEqual((state["stage"], state["status"]), ("pr_revision", "queued"))
+        self.assertIn("integrate it into the candidate", state["findings"])
 
-    def test_github_feedback_returns_to_development(self):
+    def test_github_feedback_is_revised_on_the_ready_pr(self):
         self.start_review()
         self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
         status, execution = self.rework(self.claim("pr_reconciliation"), "feedback",
                                         findings=["@octo on app.py: Handle the empty list"],
                                         feedback_ids=["PRRT_1"])
         self.assertEqual(status, 200, execution)
-        self.assertEqual(execution["state"]["stage"], "development")
-        self.assertIn("Handle the empty list", execution["state"]["development_findings"])
+        self.assertEqual(execution["state"]["stage"], "pr_revision")
+        self.assertIn("Handle the empty list", execution["state"]["findings"])
 
     def test_repeated_rework_without_progress_asks_the_owner(self):
         self.publish()
@@ -471,8 +519,7 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
     def ready(self):
         self.start_review()
         self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
-        self.assertEqual(self.submit(self.reconciliation(self.claim("pr_reconciliation")))[0], 200)
-        return self.reconciliation(self.claim("ready_for_check_in"))
+        return self.reconciliation(self.claim("pr_reconciliation"))
 
     def test_without_merge_intent_the_ready_pr_is_delivered_for_the_owner_to_merge(self):
         status, execution = self.submit(self.ready())

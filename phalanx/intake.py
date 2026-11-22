@@ -22,8 +22,8 @@ from .transitions import (
 STATE = TypeAdapter(Execution)
 PRIORITY = {"low": 0, "normal": 1, "urgent": 2}
 # Published PR stages whose findings send the item back to development.
-REWORK_STAGES = {Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.ADVERSARIAL_REVIEW,
-                 Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN, Stage.CHECK_IN}
+REWORK_STAGES = {Stage.PR_PROMOTION, Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.CHECK_IN}
+REWORK_TARGETS = {Stage.DEVELOPMENT, Stage.PR_REVISION}
 # Development rounds from published PR stages allowed between owner replies.
 REWORK_LIMIT = 10
 # Development rounds allowed on identical findings before they count as no progress.
@@ -273,18 +273,18 @@ def _stalled_rework(db, execution_id, next_state):
     """Return an owner question when published-PR rework stops making progress."""
     stages = sorted(REWORK_STAGES)
     rounds = [findings for findings, in db.execute(
-        f"""SELECT json_extract(state_json, '$.development_findings') FROM transition_history
-           WHERE execution_id=? AND event=? AND json_extract(state_json, '$.stage')=?
+        f"""SELECT json_extract(state_json, '$.findings') FROM transition_history
+           WHERE execution_id=? AND event=? AND json_extract(state_json, '$.stage') IN (?, ?)
              AND json_extract(details_json, '$.stage') IN ({','.join('?' * len(stages))})
              AND version > COALESCE((SELECT MAX(version) FROM transition_history
                                      WHERE execution_id=? AND event=?), 0)""",
-        (execution_id, Event.RESULT, Stage.DEVELOPMENT, *stages, execution_id, Event.REPLY),
+        (execution_id, Event.RESULT, *sorted(REWORK_TARGETS), *stages, execution_id, Event.REPLY),
     )]
-    findings = next_state.development_findings
+    findings = next_state.findings
     if rounds.count(findings) >= REPEAT_LIMIT:
-        reason = f"The same findings returned after {REPEAT_LIMIT} development attempts"
+        reason = f"The same findings returned after {REPEAT_LIMIT} revision rounds"
     elif len(rounds) >= REWORK_LIMIT:
-        reason = f"The PR returned to development {REWORK_LIMIT} times without becoming ready"
+        reason = f"The PR needed {REWORK_LIMIT} revision rounds without becoming ready"
     else:
         return None
     return {"prompt": f"{reason}. Resolve the PR or give direction, then reply to retry.",
@@ -298,8 +298,8 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         next_state = decide(state, event, **options)
     except ValueError as error:
         raise Conflict(str(error)) from error
-    if (event == Event.RESULT and state.stage in REWORK_STAGES and next_state.stage == Stage.DEVELOPMENT
-            and next_state.development_findings):
+    if (event == Event.RESULT and state.stage in REWORK_STAGES and next_state.stage in REWORK_TARGETS
+            and next_state.findings):
         question = _stalled_rework(db, row["id"], next_state)
         if question is not None:
             details = {**details, "outcome": Outcome.NEEDS_INPUT, "question": question}
@@ -447,12 +447,12 @@ def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     check_attempt(db, execution_id, state, payload, lease_digest)
     if payload.review_notes is not None and (
-        state.stage != Stage.SELF_REVIEW
+        state.stage not in {Stage.SELF_REVIEW, Stage.PR_REVISION}
         or state.candidate is None
         or state.candidate != (payload.reviewed_candidate if payload.outcome == Outcome.SUCCEEDED
                                else payload.candidate)
     ):
-        raise Conflict("Review notes require self-review evidence for the current candidate")
+        raise Conflict("Review notes require self-review or revision evidence for the current candidate")
     if payload.local_checks is not None and (
         state.stage != Stage.PRE_PR_VALIDATION
         or state.candidate is None
@@ -523,7 +523,7 @@ def result(db, item_id, execution_id, payload, lease_digest):
             raise Conflict("Reviewed draft Markdown is unavailable")
 
     findings = bypass = None
-    if payload.outcome == Outcome.CHANGES_REQUIRED and state.stage == Stage.SELF_REVIEW:
+    if payload.outcome == Outcome.CHANGES_REQUIRED and state.stage in {Stage.SELF_REVIEW, Stage.PR_REVISION}:
         findings = payload.review_notes
     elif payload.outcome == Outcome.CHANGES_REQUIRED and payload.local_checks:
         findings = "\n".join(f"Local check {check.name} {check.outcome}: {check.reason or 'no detail'}"
@@ -542,7 +542,7 @@ def result(db, item_id, execution_id, payload, lease_digest):
                           prevalidated_candidate=payload.prevalidated_candidate, bypass=bypass,
                           report_draft=draft_revision, reviewed_report=draft_revision,
                           report_review_notes=payload.report_review_notes,
-                          development_findings=findings),
+                          findings=findings),
     )
 
 def draft(db, item_id, execution_id, revision):

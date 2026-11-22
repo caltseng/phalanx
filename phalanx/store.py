@@ -13,6 +13,22 @@ from .operator_schema import OPERATOR_SCHEMA, WORKER_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
 
+# PH-15b folds ready_for_check_in into pr_reconciliation and renames development_findings.
+REVISION_MIGRATION = tuple(
+    f"""UPDATE {table} SET state_json = json_remove(json_set(state_json,
+            '$.stage', CASE json_extract(state_json, '$.stage')
+                WHEN 'ready_for_check_in' THEN 'pr_reconciliation' ELSE json_extract(state_json, '$.stage') END,
+            '$.findings', json_extract(state_json, '$.development_findings')),
+        '$.development_findings', '$.publication_conflict')"""
+    for table in ("executions", "transition_history")
+) + (
+    "UPDATE attempts SET stage = 'pr_reconciliation' WHERE stage = 'ready_for_check_in'",
+    # check_in reads its merge intent from the latest reconciliation observation.
+    """UPDATE transition_history SET details_json = json_set(details_json, '$.stage', 'pr_reconciliation')
+       WHERE json_extract(details_json, '$.stage') = 'ready_for_check_in'""",
+)
+
+
 APPLICATION_ID = 0x50484C58  # PHLX
 _write_lock = Lock()
 
@@ -28,6 +44,7 @@ MIGRATIONS = (
     WAIT_SCHEMA,
     WORKER_SCHEMA,
     ADOPTION_SCHEMA,
+    REVISION_MIGRATION,
 )
 
 

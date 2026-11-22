@@ -2,7 +2,7 @@ import unittest
 from dataclasses import replace
 
 from phalanx.transitions import (
-    Bypass, Event, Evidence, Issue, Outcome, PullRequest, Revision, Stage,
+    Bypass, Event, Evidence, Outcome, PullRequest, Revision, Stage,
     Status, StoredReport, Target, Wait, decide, start,
 )
 
@@ -10,8 +10,7 @@ from phalanx.transitions import (
 REV = Revision("candidate", "base")
 DRAFT = PullRequest("https://example.com/pull/1", REV, draft=True)
 READY = replace(DRAFT, draft=False)
-GATES = Evidence(pr=READY, ci_and_previews=REV, independent_review=REV,
-                 actionable_feedback_cleared=REV, approvals_and_mergeability=REV)
+GATES = Evidence(pr=READY, ci_and_previews=REV, independent_review=REV)
 WAIT = Wait("Await verification", "scheduled recheck")
 
 
@@ -29,10 +28,11 @@ def promotion(target=Target.READY, bypass=None):
 
 
 def ready(target=Target.READY):
+    """A ready PR at reconciliation with a passing independent review."""
     state = result(promotion(target), Evidence(pr=READY, draft_checks=REV))
     state = result(state, Evidence(pr=READY, ci_and_previews=REV))
-    state = result(state, Evidence(pr=READY, independent_review=REV))
-    return result(state, GATES)
+    state = result(state, Evidence(pr=READY, ci_and_previews=REV))
+    return result(state, Evidence(pr=READY, independent_review=REV))
 
 
 class TransitionTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class TransitionTests(unittest.TestCase):
             result(state, Evidence(pr=READY))
         self.assertEqual(result(state, Evidence(pr=DRAFT)).primary_pr, DRAFT.url)
         state = ready()
-        self.assertEqual(state.stage, Stage.READY_FOR_CHECK_IN)
+        self.assertEqual(state.stage, Stage.PR_RECONCILIATION)
         state = result(state, GATES)
         self.assertEqual((state.status, state.final_output), (Status.COMPLETED, READY))
 
@@ -66,29 +66,60 @@ class TransitionTests(unittest.TestCase):
         state = result(promotion(), Evidence(pr=READY, draft_checks=REV))
         self.assertEqual(result(state, GATES).stage, Stage.PR_RECONCILIATION)
 
-    def test_new_blocker_and_conflict_fix_preserve_primary(self):
-        state = result(ready(), replace(GATES, issue=Issue.PR_BLOCKER))
-        self.assertEqual(state.stage, Stage.PR_RECONCILIATION)
-        state = result(state, Evidence(pr=READY, candidate="fixed"))
-        self.assertEqual((state.stage, state.candidate, state.primary_pr),
-                         (Stage.SELF_REVIEW, "fixed", READY.url))
-        with self.assertRaises(ValueError):
-            result(state, Evidence(reviewed_candidate=REV.head))
-        state = result(state, Evidence(candidate="fixed"), Outcome.CHANGES_REQUIRED)
-        state = result(state, Evidence(candidate="fixed-again"))
-        self.assertEqual(state.stage, Stage.SELF_REVIEW)
+    def test_ready_pr_is_revised_through_conflict_failed_check_and_feedback(self):
+        """Acceptance: post-promotion fixes never return the PR to draft or development."""
+        state = ready()
+        seen = {state.stage}
+        head = REV.head
+        for round_, findings in enumerate(["The PR conflicts with main", "Required checks did not pass",
+                                           "New actionable review feedback"]):
+            observed = replace(READY, revision=Revision(head, REV.base))
+            state = result(state, Evidence(pr=observed, findings=findings), Outcome.CHANGES_REQUIRED)
+            self.assertEqual((state.stage, state.findings, state.primary_pr),
+                             (Stage.PR_REVISION, findings, READY.url))
+            with self.assertRaises(ValueError):
+                result(state, Evidence(pr=observed, candidate=head))
+            head = f"revised-{round_}"
+            revised = replace(READY, revision=Revision(head, REV.base))
+            state = result(state, Evidence(pr=revised, candidate=head))
+            self.assertEqual((state.stage, state.candidate, state.findings),
+                             (Stage.PR_VALIDATION, head, None))
+            state = result(state, Evidence(pr=revised, ci_and_previews=revised.revision))
+            seen.add(state.stage)
+            state = result(state, Evidence(pr=revised, ci_and_previews=revised.revision))
+            self.assertEqual(state.stage, Stage.ADVERSARIAL_REVIEW)
+            state = result(state, Evidence(pr=revised, independent_review=revised.revision))
+            seen.update({Stage.PR_REVISION, state.stage})
+        self.assertFalse(seen & {Stage.DEVELOPMENT, Stage.PR_PROMOTION, Stage.PR_CREATION})
+        done = result(state, Evidence(pr=revised, ci_and_previews=revised.revision,
+                                      independent_review=revised.revision))
+        self.assertEqual((done.status, done.final_output), (Status.COMPLETED, revised))
 
-    def test_new_head_returns_to_reconciliation_and_new_base_invalidates_gates(self):
-        for revision, next_stage in [
-            (Revision("outside", REV.base), Stage.PR_RECONCILIATION),
-            (Revision(REV.head, "new-base"), Stage.PR_RECONCILIATION),
-        ]:
-            with self.subTest(revision=revision):
-                observation = replace(GATES, pr=replace(READY, revision=revision))
-                state = result(ready(), observation)
-                self.assertEqual(state.stage, next_stage)
-                if revision.head == REV.head:
-                    self.assertEqual(result(state, observation).stage, Stage.PR_VALIDATION)
+    def test_revision_escalates_new_scope_and_reconciles_a_lost_push(self):
+        state = result(ready(), Evidence(pr=READY, findings="fix"), Outcome.CHANGES_REQUIRED)
+        lost = replace(READY, revision=Revision("foreign", REV.base))
+        reconciling = result(state, Evidence(pr=lost, candidate="mine"))
+        self.assertEqual((reconciling.stage, reconciling.candidate), (Stage.PR_RECONCILIATION, "mine"))
+        escalated = result(state, Evidence(candidate=REV.head, findings="needs a redesign"),
+                           Outcome.CHANGES_REQUIRED)
+        self.assertEqual((escalated.stage, escalated.findings), (Stage.DEVELOPMENT, "needs a redesign"))
+        self.assertEqual(result(escalated, Evidence(candidate="new")).stage, Stage.SELF_REVIEW)
+
+    def test_promotion_failures_and_check_in_conflicts_route_to_their_fixers(self):
+        state = result(promotion(), Evidence(pr=READY, findings="draft check failed"), Outcome.CHANGES_REQUIRED)
+        self.assertEqual(state.stage, Stage.DEVELOPMENT)
+        state = result(ready(Target.MERGED), replace(GATES, merge_authorized=True))
+        state = result(state, Evidence(pr=READY, findings="conflict"), Outcome.CHANGES_REQUIRED)
+        self.assertEqual(state.stage, Stage.PR_REVISION)
+
+    def test_reconciliation_rejects_stale_gates_and_rereviews_a_new_head(self):
+        for revision in [Revision("outside", REV.base), Revision(REV.head, "new-base")]:
+            with self.subTest(revision=revision), self.assertRaises(ValueError):
+                result(ready(), replace(GATES, pr=replace(READY, revision=revision)))
+        moved = Revision(REV.head, "new-base")
+        state = result(ready(), Evidence(pr=replace(READY, revision=moved), ci_and_previews=moved,
+                                         independent_review=REV))
+        self.assertEqual(state.stage, Stage.ADVERSARIAL_REVIEW)
 
     def test_merge_left_to_owner_and_ambiguous_merge_recovery(self):
         state = result(ready(Target.MERGED), GATES)
@@ -128,49 +159,20 @@ class TransitionTests(unittest.TestCase):
             decide(state, Event.RESULT, outcome=Outcome.SUCCEEDED, evidence=Evidence(pr=DRAFT))
         self.assertEqual(result(state, Evidence(pr=DRAFT)).primary_pr, DRAFT.url)
 
-    def test_publication_conflict_preserves_discovered_matching_pr(self):
+    def test_publication_blocker_adopts_the_existing_pr(self):
         state = result(start(Target.READY), Evidence(candidate=REV.head))
-        for pr, reconciliation in [
-            (READY, Evidence(pr=READY)),
-            (replace(DRAFT, revision=Revision("outside", REV.base)),
-             Evidence(pr=replace(DRAFT, revision=Revision("outside", REV.base)),
-                      candidate="outside")),
-        ]:
+        foreign = replace(DRAFT, revision=Revision("outside", REV.base))
+        for pr, findings, stage in [(DRAFT, None, Stage.SELF_REVIEW),
+                                    (foreign, "integrate outside", Stage.DEVELOPMENT)]:
             with self.subTest(pr=pr):
-                conflict = Evidence(pr=pr, issue=Issue.PR_BLOCKER,
-                                    matching_publication_pr=pr.url)
-                discovered = result(state, conflict, Outcome.CHANGES_REQUIRED)
-                self.assertEqual((discovered.stage, discovered.primary_pr, discovered.candidate),
-                                 (Stage.PR_RECONCILIATION, pr.url, REV.head))
-                recovered = result(discovered, reconciliation)
-                self.assertEqual((recovered.stage, recovered.primary_pr),
-                                 (Stage.SELF_REVIEW, pr.url))
-
-    def test_publication_conflict_rejects_unrelated_or_unverified_pr(self):
-        state = result(start(Target.READY), Evidence(candidate=REV.head))
-        unrelated = replace(READY, url="https://example.com/pull/2")
-        for matched_url in [None, READY.url]:
-            with self.subTest(matched_url=matched_url), self.assertRaises(ValueError):
-                result(state, Evidence(pr=unrelated, issue=Issue.PR_BLOCKER,
-                                       matching_publication_pr=matched_url),
-                       Outcome.CHANGES_REQUIRED)
-
-    def test_feedback_must_be_cleared_for_current_revision(self):
-        ready_state = ready(Target.MERGED)
-        reconciliation = result(ready_state, replace(GATES, issue=Issue.PR_BLOCKER))
-        check_in = result(ready_state, replace(GATES, merge_authorized=True))
-        for clearance in [None, Revision(REV.head, "old-base"), Revision("old-head", REV.base)]:
-            with self.subTest(clearance=clearance):
-                evidence = replace(GATES, actionable_feedback_cleared=clearance,
-                                   merge_authorized=True)
-                blocked = result(reconciliation, evidence,
-                                 wait=Wait("Resolve actionable feedback", "owner reply"))
-                self.assertEqual((blocked.stage, blocked.status),
-                                 (Stage.PR_RECONCILIATION, Status.WAITING_FOR_INPUT))
-                for state in [ready_state, check_in]:
-                    deferred = result(state, evidence)
-                    self.assertEqual(deferred.stage, Stage.PR_RECONCILIATION)
-                    self.assertIsNone(deferred.final_output)
+                adopted = result(state, Evidence(pr=pr, findings=findings), Outcome.CHANGES_REQUIRED)
+                self.assertEqual((adopted.stage, adopted.primary_pr, adopted.candidate),
+                                 (stage, pr.url, REV.head))
+        closed = result(state, Evidence(pr=replace(DRAFT, closed=True)), Outcome.CHANGES_REQUIRED,
+                        wait=Wait("PR closed", "owner reply"))
+        self.assertEqual((closed.status, closed.primary_pr), (Status.WAITING_FOR_INPUT, DRAFT.url))
+        with self.assertRaises(ValueError):
+            result(state, Evidence(pr=foreign), Outcome.CHANGES_REQUIRED)
 
     def test_exhausted_retry_waits_for_a_reply_at_the_same_stage(self):
         state = decide(start(Target.REPORT), Event.CLAIM)

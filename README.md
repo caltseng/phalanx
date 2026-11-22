@@ -105,7 +105,8 @@ the owner is asked; a reply starts a fresh window. A missing or
 broken policy waits for an owner reply that
 names the problem, and startup preflight reports a malformed file before any claim.
 
-For a `checked_in` item, `ready_for_check_in` re-attests the ready PR and `check_in` merges
+For a `checked_in` item, `pr_reconciliation` records the merge intent once every gate is
+current, and `check_in` merges
 it with a merge commit once GitHub's required reviews and checks allow it; Phalanx adds no
 gate of its own. Set `"auto_merge": false` in the runner config to deliver the ready PR
 instead and leave the merge to the owner (default `true`).
@@ -203,11 +204,12 @@ The loop enumerates durable reservations and the server's expired attempts
 before admitting work. An unavailable recovery listing or unmatched attempt
 pauses admission with a visible recovery reason. Existing reservations,
 including slots above a reduced capacity, still run and renew. New claims
-route implemented worker stages (`development`, `report_drafting`,
-`report_review`, `self_review`) separately from runner-only `pr_creation`, `report_storage`
-and, when `validation_policy` is configured, `pre_pr_validation`, `pr_promotion` and
-`pr_validation`. An optional config `stages` array restricts this set. Initial draft,
-promotion and published-validation claims are excluded without `PHALANX_GITHUB_TOKEN`,
+route implemented worker stages (`development`, `self_review`, `adversarial_review`,
+`pr_revision`, `report_drafting`, `report_review`) separately from runner-only `pr_creation`,
+`report_storage` and, when `validation_policy` is configured, `pre_pr_validation`,
+`pr_promotion`, `pr_validation`, `pr_reconciliation` and `check_in`. An optional config
+`stages` array restricts this set. Draft, promotion, published-validation, revision and
+check-in claims are excluded without `PHALANX_GITHUB_TOKEN`,
 and validation claims without `validation_policy`. The server's atomic eligible-stage claim still
 applies pause, capacity, priority, repository, dependency and affinity gates.
 Worker claims require verified runtime project mappings; runner-only claims retain all

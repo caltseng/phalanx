@@ -123,7 +123,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(newest["output"]["url"], OWNER), (200, "Cancellation report"))
 
         pr = PullRequest("https://github.com/example/project/pull/123", Revision("head", "base"))
-        ready = Execution(Target.READY, Stage.READY_FOR_CHECK_IN, Status.COMPLETED, final_output=pr)
+        ready = Execution(Target.READY, Stage.PR_RECONCILIATION, Status.COMPLETED, final_output=pr)
         merged = Execution(Target.MERGED, Stage.CHECK_IN, Status.COMPLETED,
                            final_output=replace(pr, merge_commit="merge"))
         with write_transaction(self.path) as db:

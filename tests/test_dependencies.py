@@ -54,7 +54,7 @@ class DependencyTests(unittest.TestCase):
             report = replace(start(Target.REPORT), stage=Stage.REPORT_STORAGE, status=Status.COMPLETED,
                              final_output=StoredReport("/report", report_revision))
             report_execution = self.set_state(db, "report", report, "# Report")
-            ready = replace(start(Target.MERGED), stage=Stage.READY_FOR_CHECK_IN,
+            ready = replace(start(Target.MERGED), stage=Stage.CHECK_IN,
                             primary_pr=url, candidate=revision.head, ready_revision=revision)
             pr_execution = self.set_state(db, "pr", ready)
 

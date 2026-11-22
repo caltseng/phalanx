@@ -175,7 +175,7 @@ class PublishedValidationRunner:
 
 
 def _rework(event, expected, pull, issue):
-    """Send a routine conflict or foreign push back to development."""
+    """Report a routine conflict or foreign push; reconciliation sends it to pr_revision."""
     return "pr-rework", Rework(
         **event, issue=issue,
         expected=ExpectedRefs(head_ref=expected.head_ref, base_ref=expected.base_ref, base_sha=pull.base_sha),

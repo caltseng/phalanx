@@ -147,7 +147,7 @@ class DraftStageRunner:
         elif outcome.status == "conflict" and (blocking := [
             pr for pr in outcome.conflicts if pr.head_repository and pr.head_ref == intent.head
         ]):
-            # Reconciliation decides what to do with a PR this intent did not produce.
+            # The server adopts an existing PR on the item branch that this intent did not produce.
             saved = {"route": "pr-publication-blocker", "body": PublicationBlocker(
                 **event, expected=expected, reason=outcome.reason, pull=_pull(blocking[0]),
             ).model_dump(mode="json", exclude_none=True)}

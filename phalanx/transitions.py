@@ -19,7 +19,7 @@ class Stage(StrEnum):
     PR_VALIDATION = "pr_validation"
     ADVERSARIAL_REVIEW = "adversarial_review"
     PR_RECONCILIATION = "pr_reconciliation"
-    READY_FOR_CHECK_IN = "ready_for_check_in"
+    PR_REVISION = "pr_revision"
     CHECK_IN = "check_in"
     REPORT_DRAFTING = "report_drafting"
     REPORT_REVIEW = "report_review"
@@ -52,7 +52,6 @@ class Outcome(StrEnum):
 class Event(StrEnum):
     CLAIM = "claim"
     RESULT = "result"
-    INPUT_WAIT = "input_wait"
     EXTERNAL_WAIT = "external_wait"
     RECHECK = "recheck"
     REPLY = "reply"
@@ -62,11 +61,6 @@ class Event(StrEnum):
     STOP_CONFIRMED = "stop_confirmed"
     MERGE_VERIFIED = "merge_verified"
     FINALIZE = "finalize"
-
-
-class Issue(StrEnum):
-    BASE_CHANGED_BEFORE_PUBLICATION = "base_changed_before_publication"
-    PR_BLOCKER = "pr_blocker"
 
 
 @dataclass(frozen=True)
@@ -115,7 +109,6 @@ class Execution:
     status: Status = Status.QUEUED
     candidate: str | None = None
     primary_pr: str | None = None
-    publication_conflict: bool = False
     report_draft: str | None = None
     wait: Wait | None = None
     stopping: Status | None = None
@@ -123,7 +116,8 @@ class Execution:
     ready_revision: Revision | None = None
     final_output: FinalOutput | None = None
     report_review_findings: str | None = None
-    development_findings: str | None = None
+    # Findings carried into the next development or pr_revision attempt.
+    findings: str | None = None
 
     def __post_init__(self) -> None:
         if (self.status in TERMINAL) != (self.final_output is not None):
@@ -153,28 +147,22 @@ class Evidence:
 
     A missing gate revision means the gate is unverified. Adapters can attest
     a gate with no applicable checks after evaluating repository policy.
-    matching_publication_pr attests that the observed URL belongs to this
-    publication intent, independently of the observed head or draft status.
     """
 
     candidate: str | None = None
     pr: PullRequest | None = None
-    matching_publication_pr: str | None = None
     reviewed_candidate: str | None = None
     prevalidated_candidate: str | None = None
     bypass: Bypass | None = None
     draft_checks: Revision | None = None
     ci_and_previews: Revision | None = None
     independent_review: Revision | None = None
-    actionable_feedback_cleared: Revision | None = None
-    approvals_and_mergeability: Revision | None = None
     report_draft: str | None = None
     reviewed_report: str | None = None
     stored_report: StoredReport | None = None
     merge_authorized: bool = False
-    issue: Issue | None = None
     report_review_notes: str | None = None
-    development_findings: str | None = None
+    findings: str | None = None
 
 
 def _require(condition: object, message: str) -> None:
@@ -234,7 +222,7 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
     if stage is Stage.DEVELOPMENT:
         _require(evidence.candidate, "Development requires a recoverable candidate")
         next_stage = Stage.SELF_REVIEW if state.primary_pr else Stage.PR_CREATION
-        return _queue(state, next_stage, candidate=evidence.candidate, development_findings=None)
+        return _queue(state, next_stage, candidate=evidence.candidate, findings=None)
     if stage is Stage.PR_CREATION:
         pr = evidence.pr
         _require(pr and pr.url and pr.draft and not pr.closed and not pr.merge_commit
@@ -277,106 +265,68 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
     revision = pr.revision
     if pr.closed and not pr.merge_commit:
         return _wait(state, Status.WAITING_FOR_INPUT, wait)
-    if stage is Stage.PR_RECONCILIATION and evidence.candidate:
-        _require(evidence.candidate != candidate, "Candidate changes require a new revision")
-        return _queue(state, Stage.SELF_REVIEW, candidate=evidence.candidate,
-                      publication_conflict=False)
-    if candidate != revision.head or evidence.issue is Issue.PR_BLOCKER:
-        if stage is Stage.PR_RECONCILIATION:
-            return _wait(state, Status.WAITING_FOR_INPUT, wait)
-        return _queue(state, Stage.PR_RECONCILIATION)
-    if stage is Stage.PR_RECONCILIATION and state.publication_conflict and not pr.merge_commit:
-        return _queue(state, Stage.SELF_REVIEW, publication_conflict=False)
+    if stage is Stage.PR_REVISION:
+        _require(evidence.candidate and evidence.candidate != candidate,
+                 "A revision requires a new pushed candidate")
+        # A push that lost to a foreign push is reconciled before validation.
+        next_stage = Stage.PR_VALIDATION if revision.head == evidence.candidate else Stage.PR_RECONCILIATION
+        return _queue(state, next_stage, candidate=evidence.candidate, findings=None)
+    _require(candidate == revision.head and not pr.merge_commit,
+             "Stage evidence must observe the candidate on the open PR")
     if stage is Stage.PR_PROMOTION:
-        _require(not pr.draft and not pr.merge_commit and evidence.draft_checks == revision,
+        _require(not pr.draft and evidence.draft_checks == revision,
                  "Promotion requires a ready PR and current draft-only gates")
         return _queue(state, Stage.PR_VALIDATION)
-    if pr.merge_commit:
-        if stage is Stage.CHECK_IN and state.ready_revision == revision:
-            return _merge_verified(state, evidence)
-        return _wait(state, Status.WAITING_FOR_INPUT, wait)
-    _require(not pr.draft and not pr.merge_commit, "Expected an open, ready PR")
+    _require(not pr.draft, "Expected an open, ready PR")
     if stage is Stage.ADVERSARIAL_REVIEW:
         _require(evidence.independent_review == revision,
                  "Independent review must match the current revision")
         return _queue(state, Stage.PR_RECONCILIATION)
     if stage is Stage.PR_VALIDATION:
         _require(evidence.ci_and_previews == revision, "CI and previews must be current")
-        next_stage = (Stage.PR_RECONCILIATION if evidence.independent_review == revision
-                      else Stage.ADVERSARIAL_REVIEW)
-        return _queue(state, next_stage)
-    if stage is Stage.PR_RECONCILIATION:
-        if evidence.ci_and_previews != revision:
-            return _queue(state, Stage.PR_VALIDATION)
-        if evidence.independent_review != revision:
-            return _queue(state, Stage.ADVERSARIAL_REVIEW)
-        if evidence.actionable_feedback_cleared != revision:
-            return _wait(state, Status.WAITING_FOR_INPUT, wait)
-        if evidence.approvals_and_mergeability != revision:
-            return _wait(state, Status.WAITING_FOR_EXTERNAL, wait)
-        return _queue(state, Stage.READY_FOR_CHECK_IN, ready_revision=revision)
-
-    if (state.ready_revision != revision or evidence.ci_and_previews != revision
-            or evidence.independent_review != revision
-            or evidence.actionable_feedback_cleared != revision
-            or evidence.approvals_and_mergeability != revision):
         return _queue(state, Stage.PR_RECONCILIATION)
-    if stage is Stage.READY_FOR_CHECK_IN:
-        if state.target is Target.MERGED and evidence.merge_authorized:
-            return _queue(state, Stage.CHECK_IN)
-        # Without merge authorization the runner leaves the merge to the owner and delivers the ready PR.
-        return _close(replace(state, target=Target.READY), Status.COMPLETED, pr)
-    raise ValueError("Check-in completion requires GitHub's verified merge commit")
+    _require(stage is Stage.PR_RECONCILIATION and evidence.ci_and_previews == revision,
+             "Reconciliation requires current CI and previews")
+    if evidence.independent_review != revision:
+        return _queue(state, Stage.ADVERSARIAL_REVIEW)
+    if state.target is Target.MERGED and evidence.merge_authorized:
+        return _queue(state, Stage.CHECK_IN, ready_revision=revision)
+    # Without merge authorization the runner leaves the merge to the owner and delivers the ready PR.
+    return _close(replace(state, target=Target.READY, ready_revision=revision), Status.COMPLETED, pr)
 
 
-CHANGES = {
-    Stage.SELF_REVIEW: Stage.DEVELOPMENT,
-    Stage.PRE_PR_VALIDATION: Stage.DEVELOPMENT,
-    Stage.PR_PROMOTION: Stage.DEVELOPMENT,
-    Stage.PR_VALIDATION: Stage.PR_RECONCILIATION,
-    Stage.ADVERSARIAL_REVIEW: Stage.DEVELOPMENT,
-    Stage.READY_FOR_CHECK_IN: Stage.PR_RECONCILIATION,
-    Stage.CHECK_IN: Stage.PR_RECONCILIATION,
-    Stage.REPORT_REVIEW: Stage.REPORT_DRAFTING,
-}
-
-
-def _changes(state: Execution, evidence: Evidence) -> Execution:
+def _changes(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
     stage = state.stage
     if stage is Stage.PR_CREATION:
-        if evidence.issue is Issue.BASE_CHANGED_BEFORE_PUBLICATION and not state.primary_pr:
-            return _queue(state, Stage.DEVELOPMENT)
+        # An existing PR on the item branch blocked the first draft; adopt it.
         pr = evidence.pr
-        _require(evidence.issue is Issue.PR_BLOCKER and pr and pr.url
-                 and pr.revision.head and pr.revision.base,
+        _require(not state.primary_pr and pr and pr.url and pr.revision.head and pr.revision.base,
                  "Publication conflict requires a verified PR observation")
-        if state.primary_pr:
-            _primary(state, evidence)
-        else:
-            _require(evidence.matching_publication_pr == pr.url,
-                     "Discovered PR must match this publication intent")
-        return _queue(state, Stage.PR_RECONCILIATION, primary_pr=pr.url,
-                      publication_conflict=True)
+        state = replace(state, primary_pr=pr.url)
+        if pr.closed:
+            return _wait(state, Status.WAITING_FOR_INPUT, wait)
+        if pr.revision.head == state.candidate:
+            return _queue(state, Stage.SELF_REVIEW)
+        _require(evidence.findings, "Foreign commits require findings")
+        return _queue(state, Stage.DEVELOPMENT, findings=evidence.findings)
     if stage is Stage.REPORT_REVIEW:
         _require(state.report_draft and evidence.report_draft == state.report_draft,
                  "Findings must match the report draft")
         return _queue(state, Stage.REPORT_DRAFTING, report_review_findings=evidence.report_review_notes)
-    elif stage in {Stage.SELF_REVIEW, Stage.PRE_PR_VALIDATION}:
+    if stage in {Stage.SELF_REVIEW, Stage.PRE_PR_VALIDATION, Stage.PR_REVISION}:
+        # A revision that turns into new scope escalates to development.
         _require(state.candidate and evidence.candidate == state.candidate,
                  "Findings must match the candidate")
-        return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
-    else:
-        pr = _primary(state, evidence)
-        if evidence.development_findings:
-            # Failed checks, conflicts, foreign pushes and feedback all revalidate a new candidate.
-            return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
-        _require(stage is not Stage.ADVERSARIAL_REVIEW, "Review findings are required")
-        if stage is Stage.PR_PROMOTION:
-            if evidence.issue is Issue.PR_BLOCKER or pr.revision.head != state.candidate:
-                return _queue(state, Stage.PR_RECONCILIATION)
-            return _queue(state, Stage.DEVELOPMENT)
-    _require(stage in CHANGES, "Changes-required outcome is unsupported at this stage")
-    return _queue(state, CHANGES[stage])
+        return _queue(state, Stage.DEVELOPMENT, findings=evidence.findings)
+    _primary(state, evidence)
+    if stage is Stage.PR_VALIDATION:
+        # Reconciliation reobserves the PR and sends what failed to pr_revision.
+        return _queue(state, Stage.PR_RECONCILIATION)
+    _require(stage in {Stage.PR_PROMOTION, Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.CHECK_IN}
+             and evidence.findings, "Changes-required outcome needs findings at this stage")
+    # Before the first promotion fixes build a new candidate; afterwards the ready PR is revised.
+    next_stage = Stage.DEVELOPMENT if stage is Stage.PR_PROMOTION else Stage.PR_REVISION
+    return _queue(state, next_stage, findings=evidence.findings)
 
 
 def decide(
@@ -434,8 +384,6 @@ def decide(
         if retry_allowed:
             return _queue(state)
         return _wait(state, Status.WAITING_FOR_INPUT, wait)
-    if event is Event.INPUT_WAIT:
-        return _wait(state, Status.WAITING_FOR_INPUT, wait)
     if event is Event.EXTERNAL_WAIT:
         _require(state.status in {Status.RUNNING, Status.WAITING_FOR_EXTERNAL},
                  "External wait requires an active attempt or external wait")
@@ -446,7 +394,7 @@ def decide(
     if outcome is Outcome.SUCCEEDED:
         return _success(state, evidence, wait)
     if outcome is Outcome.CHANGES_REQUIRED:
-        return _changes(state, evidence)
+        return _changes(state, evidence, wait)
     if outcome is Outcome.FAILED and retry_allowed:
         return _queue(state)
     _require(outcome in {Outcome.NEEDS_INPUT, Outcome.FAILED}, "Missing stage outcome")
