@@ -1,10 +1,10 @@
 # Phalanx work item state machine
 
-The transition tables and rules in this Markdown document define Phalanxâ€™s behavior. The diagrams and [HTML visualization](state-machine.html) are visual references. If a diagram differs from the transition rules, correct the diagram against the rules.
+The transition tables and rules in this Markdown document define Phalanx’s behavior. The diagrams and [HTML visualization](state-machine.html) are visual references. If a diagram differs from the transition rules, correct the diagram against the rules.
 
 Each execution has a **stage**, which describes what must happen next, and a **status**, which describes whether it can happen now. For example, `pr_validation / waiting_for_external` can mean the current PR head is awaiting CI. The server owns both values. A worker attempts one stage and reports its outcome and evidence. The server determines the transition and releases or reassigns the slot.
 
-Phalanx tries to self-resolve within the work itemâ€™s scope and the repositoryâ€™s rules. Fix failing tests, reconcile routine conflicts, and address actionable review feedback independently when the expected result is clear. Ask for human judgment when competing choices would materially change the requested behavior, an approval is required, or continued attempts cannot make progress. Record material assumptions and how they were verified.
+Phalanx tries to self-resolve within the work item’s scope and the repository’s rules. Fix failing tests, reconcile routine conflicts, and address actionable review feedback independently when the expected result is clear. Ask for human judgment when competing choices would materially change the requested behavior, an approval is required, or continued attempts cannot make progress. Record material assumptions and how they were verified.
 
 ## Lifecycle stages
 
@@ -14,29 +14,24 @@ flowchart TD
     Kind -->|Pull request| Dev[Development]
     Kind -->|Field report| Draft[Report drafting]
     Dev -->|First candidate and no existing PR| Publish[Open draft PR]
-    Dev -->|Revised candidate already has a PR| Self[Self review]
-    Publish -->|Draft head verified| Self[Self review]
+    Dev -->|Candidate for an existing PR| Self[Self review]
+    Publish -->|Draft head verified| Self
+    Publish -->|Conflict on an existing PR| Dev
     Self -->|Changes required| Dev
     Self -->|Pass| Pre[Pre-PR validation]
     Pre -->|Validation fails| Dev
     Pre -->|Checks pass or permitted bypass recorded| Promote[PR promotion]
-    Promote -->|Current head and draft-only checks verified| Post[PR validation]
     Promote -->|Draft-only check fails, conflict or unexpected head| Dev
-    Post -->|CI and required preview checks pass| Review[Adversarial review]
-    Post -->|Checks pass and review is current| Reconcile[PR reconciliation]
-    Post -->|Check fails, conflict or unexpected head| Dev
-    Publish -->|Conflict on an existing PR| Reconcile[PR reconciliation]
-    Publish -->|Base changed before initial publication| Dev
-    Review -->|Approved, non-blocking findings recorded| Reconcile
-    Review -->|Blocking findings| Dev
-    Reconcile -->|Conflict, unexpected head, feedback or failed check| Dev
-    Reconcile -->|Current review is missing| Review
+    Promote -->|PR ready on the verified head| Post[PR validation]
+    Post -->|Current CI and preview results recorded| Reconcile[PR reconciliation]
     Reconcile -->|Current CI or preview evidence needed| Post
-    Reconcile -->|Gates satisfied on current revision| Ready[Ready for check-in]
-    Ready -->|Ready-only target| Done([Completed])
-    Ready -->|Merge-authorized target| Merge[Check-in]
-    Ready -->|Moved base or stale review| Reconcile
-    Ready -->|Conflict, unexpected head, feedback or failed check| Dev
+    Reconcile -->|Diff since the last review is unreviewed| Review[Adversarial review]
+    Review -->|Findings recorded| Reconcile
+    Reconcile -->|Conflict, failed check, feedback, blocking finding or unexpected head| Revise[PR revision]
+    Revise -->|Fix pushed and head verified| Post
+    Revise -->|New scope| Dev
+    Reconcile -->|Ready-only target or auto-merge off| Done([Completed])
+    Reconcile -->|Auto-merge on| Merge[Check-in]
     Merge -->|Stale revision or new blocker| Reconcile
     Merge -->|Merge verified| Done
     Draft --> ReportReview[Report review]
@@ -47,32 +42,34 @@ flowchart TD
 
 The arrows below apply only when their guards pass. A blocked guard keeps the stage and changes the execution status. Record evidence against the candidate revision. After PR publication, use the PR identity, head, and base revision where relevant. A changed head invalidates prior head-bound evidence. Recheck base-sensitive evidence when the base moves.
 
+Before the PR is first marked ready, every fix goes back to `development`, which builds the candidate. After that, the PR stays ready and fixes go through the revision loop: `pr_reconciliation`, `pr_revision`, `pr_validation`, and `adversarial_review` when the new diff needs it. Each pass validates and reviews only what changed. `ready_for_check_in` remains a dependency milestone, reached when reconciliation finds every gate current.
+
 | Stage | Event or evidence | Next stage or disposition |
 | --- | --- | --- |
 | `development` | Scoped changes have a recoverable candidate commit. | `pr_creation` for a new draft. If the item already has a PR, proceed to `self_review` on the new candidate. |
-| `pr_creation` | Publish the candidate as a draft, record the PR, and verify its head. | `self_review`. Return to `development` if a base change requires a new candidate or to `pr_reconciliation` if an existing PR conflicts. Reuse a matching PR after interruption. If a bounded search cannot confirm publication, retry creation rather than drop the deliverable. If duplicates appear, select a primary and surface the others for review. |
+| `pr_creation` | Publish the candidate as a draft against the current target branch, record the PR, and verify its head. | `self_review`. Return to `development` if an existing PR conflicts. Reuse a matching PR after interruption. If a bounded search cannot confirm publication, retry creation rather than drop the deliverable. If duplicates appear, select a primary and surface the others for review. |
 | `self_review` | Candidate diff has been checked against the work item and repo rules. | `pre_pr_validation` if it passes. `development` if fixes are needed, with the findings carried into the next development packet. |
 | `pre_pr_validation` | Before requesting review, run applicable local tests and available live checks. Record the revision and results, or the skipped checks and reason for a permitted bypass. | `pr_promotion` after passing or recording a permitted bypass. Actionable failures return to `development` with the failed checks as findings. |
-| `pr_promotion` | Update the existing PR to the validated candidate if needed, verify its head, and complete checks that must run in draft. Mark a draft ready for review once those gates pass. | `pr_validation`. Keep a previously promoted PR open for review when updating it. Wait for draft-only external checks without holding a slot. Failed checks, a merge conflict, or an unexpected head return to `development` with findings. A head Phalanx did not verify is only fast-forwarded, never overwritten; if that fails, development integrates its commits. |
-| `pr_validation` | Observe CI and perform required preview validation for the current PR revision. Wait for pending checks or previews with a scheduled recheck. | Advance to `adversarial_review` after required checks pass, or to `pr_reconciliation` if an independent review is already current. Failed checks, a conflict, or an unexpected head return to `development` with the failure as findings. |
-| `adversarial_review` | An independent reviewer records findings and severity against the current PR diff. | `pr_reconciliation` on approval, including when there are zero or only non-blocking findings. Blocking findings (`changes_required`) return to `development` with the findings in the next work packet. An interrupted review can retry on the current revision. |
-| `pr_reconciliation` | Resolve conflicts, address actionable review comments, and confirm CI, previews, review, approvals, and mergeability for the current revision. | A merge conflict, an unexpected head, new actionable GitHub feedback (requested changes or unresolved current review threads), or failed checks return to `development` as findings: the worker rebases onto the target, resolves or fixes, and the new candidate is revalidated, reviewed again, and republished to the existing PR. Each feedback item is handed off once. Missing or stale CI or preview evidence returns to `pr_validation` when a new check or result is expected. Missing or stale review returns to `adversarial_review`. Proceed to `ready_for_check_in` only when all required evidence is current. |
-| `ready_for_check_in` | Verify current PR identity, head, base, and gates against the completion target. | Complete a ready-only item. Advance to `check_in` when merge is authorized. A moved base or stale review returns to `pr_reconciliation`; a conflict, unexpected head, new feedback or failed check returns to `development`. Missing authorization waits for input. An explicit change to a ready-only target can complete the item. |
-| `check_in` | Recheck merge authorization, required approvals and checks, and the expected head before requesting merge. Verify the resulting merge through GitHub. | Complete with PR link and merge commit. A stale head, conflict, or failing check returns to `pr_reconciliation`. An unknown merge outcome waits for reconciliation before retry. |
+| `pr_promotion` | Update the existing PR to the validated candidate if needed and verify its head. While the PR is a draft, complete its draft-only checks, then mark it ready for review. | `pr_validation`. Wait for draft-only external checks without holding a slot. Failed draft-only checks, a merge conflict, or an unexpected head return to `development` with findings. A PR that is already ready skips draft-only checks and records them as skipped; Phalanx never converts a ready PR back to draft. If a human converted a promoted PR to draft, ask the owner before marking it ready again. A head Phalanx did not verify is only fast-forwarded, never overwritten; if that fails, development integrates its commits. |
+| `pr_validation` | Observe CI and perform required preview validation for the current PR head. Wait for pending checks or previews with a scheduled recheck. | `pr_reconciliation` with the results, including failures. |
+| `adversarial_review` | An independent reviewer records findings and severity against the diff since the last reviewed head, or the whole PR diff on the first review. | `pr_reconciliation` with the findings. An interrupted review can retry on the current revision. |
+| `pr_reconciliation` | Confirm CI, previews, review, approvals, and mergeability for the current PR head and base against the completion target. | Missing or stale CI or preview evidence returns to `pr_validation`. An unreviewed diff since the last reviewed head goes to `adversarial_review`. A merge conflict, failed checks, blocking review findings, new actionable GitHub feedback (requested changes or unresolved current review threads, each handed off once), or a foreign head that cannot be fast-forwarded go to `pr_revision` as findings. A pending required approval waits without holding a slot. When all evidence is current, complete a ready-only item, or one whose runner has auto-merge off, with the PR marked ready; otherwise advance to `check_in`. After 10 revision rounds, or a third round with identical findings, since the owner's last reply, ask the owner instead. |
+| `pr_revision` | Fix the findings on the open PR: integrate the target branch or foreign commits, resolve conflicts, fix failures, and address feedback and review findings. Self-review only the new diff, rerun the failed checks and the local checks covering the changed files, then push and verify the head. | `pr_validation`. Never convert the PR to draft. A fix that turns into new scope escalates to `development`. |
+| `check_in` | Recheck the auto-merge setting, required approvals and checks, and the expected head before requesting merge. Verify the resulting merge through GitHub. | Complete with PR link and merge commit. A stale head, conflict, or failing check returns to `pr_reconciliation`. An unknown merge outcome waits for reconciliation before retry. |
 | `report_drafting` | Produce a recoverable Markdown draft. | `report_review` |
 | `report_review` | Check the draft against the request and verify supporting evidence and links. | `report_storage` when it passes. Return to `report_drafting` for fixes. |
 | `report_storage` | Store the reviewed Markdown idempotently and record its reference. | Complete with the stored report. Retry storage failures without redrafting. |
 
-If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. An unexpected merge or a PR closed without merge requires a decision if the actionâ€™s intent cannot be established. Never open a replacement PR just because an existing one is closed.
+If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. An unexpected merge or a PR closed without merge requires a decision if the action’s intent cannot be established. Never open a replacement PR just because an existing one is closed.
 
 Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current check-in claim supplies the verified provider merge commit and its ordered parents, matching the authorized base and candidate head. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
 
 ## Repository validation policy
 
-- Each repo can define applicable pre-validation commands, when they may be skipped, draft-only checks, expected CI, and required previews. Start from repository instructions and GitHubâ€™s required checks. If no CI is expected or required, advance. If expected CI is absent, recheck and surface a blocker if it stays missing.
-- Run candidate-local pre-validation before uploading an update. Run checks that need a published candidate after the candidate reaches the PR. Check draft-only gates before promotion and post-promotion CI afterward. If a previously promoted PR needs a check that can only run in draft, follow the repo policy for rerunning it or ask for a decision when the policy leaves the path unclear.
+- Each repo can define applicable pre-validation commands, when they may be skipped, draft-only checks, expected CI, and required previews. Start from repository instructions and GitHub’s required checks. If no CI is expected or required, advance. If expected CI is absent, recheck and surface a blocker if it stays missing.
+- Run candidate-local pre-validation before uploading an update. Run checks that need a published candidate after the candidate reaches the PR. Check draft-only gates before the first promotion and post-promotion CI afterward. Draft-only gates apply only while the PR is a draft. Phalanx never converts a ready PR back to draft, so later revisions record those checks as skipped.
 - Pre-validation runs before promotion by default. A work item can request a bypass for urgency, or the runner can skip checks that repo policy marks inapplicable to the change. Record the candidate revision, affected checks, reason, and basis for authorization. Record a bypass as skipped, and retain any earlier failures. Draft-only gates, CI, required previews, and check-in rules still apply.
-- A changed PR head invalidates candidate-bound checks, CI and preview evidence, and independent review for the old head. A changed base invalidates mergeability and checks tied to the old merge candidate, and requires review of the new diff if it changes. Head-only evidence may carry forward when its inputs are unchanged and repo policy allows it. Recheck the providerâ€™s latest approval and merge gates before check-in.
+- A changed PR head invalidates candidate-bound checks and CI and preview evidence for the old head, and requires review of the diff since the last reviewed head. A changed base invalidates mergeability and checks tied to the old merge candidate, and requires review of the new diff if it changes. Head-only evidence may carry forward when its inputs are unchanged and repo policy allows it. Recheck the provider’s latest approval and merge gates before check-in.
 - If someone pushes outside Phalanx, reconcile the new head and revalidate it. Continue when the changes fit the work item. Ask for judgment if scope or intent is unclear. Preserve the external change rather than overwriting it.
 
 ## Execution status
@@ -123,6 +120,6 @@ Before yielding a slot, record the workspace, candidate revision or local checkp
 
 ## Transition tests
 
-Cover a report and a PR through completion, ready-only without merge, pre-PR checks passing or explicitly bypassed, a required CI failure after bypass, PR-only preview checks, new comments, conflicts, changed heads or bases, and a retry that discovers an existing PR or successful merge. Exercise duplicate submissions and events, a stale worker result, a lost external notification, a failed prerequisite, interruption during cancellation, and a review loop with no progress. Verify that failure and cancellation produce a report, including cancellation before the first claim, and that a storage outage leaves finalization retryable. For every active state, verify a next action, a persisted resume trigger, or an explicit way to close the execution.
+Cover a report and a PR through completion, ready-only without merge, auto-merge off, pre-PR checks passing or explicitly bypassed, a required CI failure after bypass, PR-only preview checks, a revision loop that fixes a conflict, a failed check and new comments without returning to draft or to development, changed heads or bases, and a retry that discovers an existing PR or successful merge. Exercise duplicate submissions and events, a stale worker result, a lost external notification, a failed prerequisite, interruption during cancellation, and a review loop with no progress. Verify that failure and cancellation produce a report, including cancellation before the first claim, and that a storage outage leaves finalization retryable. For every active state, verify a next action, a persisted resume trigger, or an explicit way to close the execution.
 
 For dependency coverage, test parallel prerequisites across repos, a downstream item waiting for the last prerequisite, ready-only evidence held until a required merge, a failed upstream item that produces a report, cycle rejection, and eligibility changes after steering.
