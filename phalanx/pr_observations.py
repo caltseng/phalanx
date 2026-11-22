@@ -185,6 +185,8 @@ def submit(db, item_id, execution_id, body, lease_digest):
             raise intake.Conflict("Scheduled ready checks require the published-validation stage")
         gates = evaluate_gates(body, url, revision)
         details["gate_result"] = {"state": gates.state, "reasons": gates.reasons}
+        if gates.skipped:
+            details["gate_result"].update(skipped=gates.skipped, skip_reason=validation.DRAFT_SKIP_REASON)
         if gates.state in {validation.GateState.SATISFIED, validation.GateState.NOT_CONFIGURED}:
             evidence = gate_evidence(db, execution_id, body, state, pr)
         elif gates.state is validation.GateState.FAILED:

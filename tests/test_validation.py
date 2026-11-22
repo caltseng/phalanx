@@ -5,6 +5,7 @@ from phalanx.transitions import Revision
 from phalanx.validation import (
     CheckKind,
     CheckOutcome,
+    GateResult,
     GateState,
     Phase,
     PreCheck,
@@ -140,6 +141,7 @@ class PublishedValidationTests(unittest.TestCase):
             evaluate_published_checks(self.current, Phase.DRAFT, requirement, (preview,)).state, GateState.SATISFIED,
         )
         self.assertEqual(
-            evaluate_published_checks(self.current, Phase.DRAFT, requirement, ()).state, GateState.BLOCKED,
+            evaluate_published_checks(self.current, Phase.DRAFT, requirement, ()),
+            GateResult(GateState.SATISFIED, skipped=("smoke (preview)",)),
         )
         self.assertEqual(self.evaluate((self.check,), preview).state, GateState.WAITING)

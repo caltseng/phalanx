@@ -13,7 +13,7 @@ from phalanx.intake_models import Result
 from phalanx.published_validation_stage import PublishedValidationPolicy
 from phalanx.transitions import Revision
 from phalanx.validation import (
-    CheckKind, GateState, Phase, PreOutcome, PublishedCandidate, RequiredCheck,
+    CheckKind, GateResult, GateState, Phase, PreOutcome, PublishedCandidate, RequiredCheck,
     evaluate_published_checks,
 )
 from phalanx.validation_policy import ValidationPolicyError, load_validation_policy
@@ -183,7 +183,7 @@ class ValidationPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValidationPolicyError, "1 MiB"):
             load_validation_policy(self.path, "repo")
 
-    def test_required_preview_without_adapter_and_missing_draft_evidence_block(self):
+    def test_required_preview_without_adapter_blocks_and_ready_pr_skips_missing_draft_evidence(self):
         self.repo.update(draft_checks=[{"name": "draft", "kind": "check_run"}],
                          ready_checks=[{"name": "smoke", "kind": "preview"}])
         policy = self.load()
@@ -200,8 +200,7 @@ class ValidationPolicyTests(unittest.TestCase):
         current = PublishedCandidate(pull.url, Revision(pull.head_sha, pull.base_sha),
                                      False, pull.head_sha)
         draft = evaluate_published_checks(current, Phase.DRAFT, policy.draft_checks, ())
-        self.assertEqual(draft.state, GateState.BLOCKED)
-        self.assertIn("recovery decision", draft.reasons[0])
+        self.assertEqual(draft, GateResult(GateState.SATISFIED, skipped=("draft (check_run)",)))
 
     def test_loaded_bypass_flows_through_existing_candidate_result_without_weakening_ci(self):
         self.repo.update(local_checks=[self.bypass()],

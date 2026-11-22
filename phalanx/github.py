@@ -348,34 +348,6 @@ class GitHubClient:
         except (AttributeError, KeyError, TypeError, ValueError):
             raise UncertainGitHubWrite(operation, "GitHub did not confirm promotion", 200) from None
 
-    def convert_to_draft(self, node_id: str) -> None:
-        """Return a ready PR to draft. A GraphQL error is a refusal; a missing answer is uncertain."""
-        if not node_id.strip():
-            raise ValueError("a PR node ID is required")
-        operation = "convert pull request to draft"
-        query = """
-            mutation ($id: ID!) {
-              convertPullRequestToDraft(input: {pullRequestId: $id}) {
-                pullRequest { id isDraft }
-              }
-            }
-        """
-        data, _ = self._request(operation, "POST", self._graphql_url,
-                                payload={"query": query, "variables": {"id": node_id}})
-        errors = data.get("errors") if isinstance(data, dict) else None
-        if errors:
-            rows = [error for error in errors if isinstance(error, dict)] if isinstance(errors, list) else []
-            message = "; ".join(str(error.get("message", "")) for error in rows)[:500]
-            limited = any(error.get("type") == "RATE_LIMITED" for error in rows)
-            raise GitHubError(operation, message or "GitHub refused the conversion",
-                              retry_after_seconds=60 if limited else None)
-        try:
-            pull = data["data"]["convertPullRequestToDraft"]["pullRequest"]
-            if pull["id"] != node_id or pull["isDraft"] is not True:
-                raise ValueError("conversion unconfirmed")
-        except (AttributeError, KeyError, TypeError, ValueError):
-            raise UncertainGitHubWrite(operation, "GitHub did not confirm the conversion", 200) from None
-
     def get_pull_request_body(self, number: int) -> str:
         data, _ = self._request("get pull request description", "GET", self._pull_url(number))
         body = data.get("body") if isinstance(data, dict) else None

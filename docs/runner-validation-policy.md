@@ -190,15 +190,21 @@ commands, environment selection and other preview adapter settings are not
 supported by this file and are rejected as unknown keys. Do not silently drop
 the requirement.
 
-Draft-only fallback configuration is also unsupported and rejected. When an
-already-ready PR lacks required draft evidence, the existing validation gate
-demands a recovery decision. `pr_promotion` converts the PR back to draft
-through the runner's GitHub client, comments on the PR, waits for its draft-only
-checks and promotes it again. It asks Caleb only when GitHub refuses the
-conversion, for example for lack of permission, or when the draft-only checks
-never report within `"check_wait_limit_seconds"` because their workflows run
-only on push. The owner then re-runs them or removes them from the policy. It never turns the draft
-requirement into an empty list or waives published gates.
+Draft-only fallback configuration is also unsupported and rejected. Phalanx
+never converts a PR back to draft once it is marked ready; only a human may.
+Draft-only checks gate only the first promotion, so when an already-ready PR
+lacks evidence for a draft-only check, `pr_promotion` records that check as
+skipped in the gate result (`skipped` and `skip_reason`), comments on the PR
+through the notes outbox and continues to `pr_validation` without asking the
+owner. A draft-only check that already reported still counts: a pending one is
+awaited and a failed one returns the item to development. Ready-phase checks
+are never waived. If a human converts a PR to draft after it was ready,
+`pr_promotion` leaves it draft and asks the owner once before marking it ready
+again; only an owner reply, not a Captain reply, lets Phalanx re-promote it. A
+PR that was never ready is promoted normally. When draft-only checks on a draft
+PR never report within `"check_wait_limit_seconds"`, for example because their
+workflows run only on push, the owner re-runs them or removes them from the
+policy.
 
 When a stage returns the item to development with findings, or pre-validation
 records a permitted bypass, the runner posts the findings as a PR comment for

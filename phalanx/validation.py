@@ -11,6 +11,8 @@ CHECK_RECHECK_SECONDS = 30
 CHECK_RECHECK_RANGE = (5, 86400)
 CHECK_WAIT_LIMIT_SECONDS = 2 * 60 * 60
 CHECK_WAIT_LIMIT_RANGE = (60, 30 * 86400)
+# Phalanx never returns a ready PR to draft, so it skips draft-only checks a ready PR lacks.
+DRAFT_SKIP_REASON = "PR already ready; draft-only checks gate only the first promotion"
 
 
 class GateState(StrEnum):
@@ -25,6 +27,7 @@ class GateState(StrEnum):
 class GateResult:
     state: GateState
     reasons: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
 
 
 class PreOutcome(StrEnum):
@@ -164,6 +167,7 @@ def evaluate_published_checks(
             matching.setdefault((result.name, result.kind, result.tested_sha), []).append(result)
 
     problems = []
+    skipped = []
     for check in required:
         label = f"{check.name} ({check.kind})"
         if check.app_id is not None:
@@ -176,7 +180,7 @@ def evaluate_published_checks(
         ]
         if not results or any(result.outcome == CheckOutcome.PENDING for result in results):
             if not results and phase == Phase.DRAFT and not current.draft:
-                problems.append((GateState.BLOCKED, f"{label} needs a draft check recovery decision on the ready PR"))
+                skipped.append(label)
             else:
                 reason = "is pending" if results else "has no result for the current revision"
                 if not sha:
@@ -186,7 +190,8 @@ def evaluate_published_checks(
                if result.outcome != CheckOutcome.PENDING):
             problems.append((GateState.FAILED, f"{label} did not pass"))
 
-    return _summarize(problems)
+    result = _summarize(problems)
+    return GateResult(result.state, result.reasons, tuple(skipped)) if skipped else result
 
 
 def _accepts(check: RequiredCheck, outcome: CheckOutcome) -> bool:

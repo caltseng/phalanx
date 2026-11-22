@@ -56,7 +56,7 @@ def external_wait(db, item_id, execution_id, payload, lease_digest):
                                             f"Resolve the stalled {payload.gate} gate, then reply to resume."))
 
 
-# Draft-only CI often triggers only on push, so a PR returned to draft may never re-run it.
+# Draft-only CI often triggers only on push, so a draft head may never get a run.
 _STALLED_PROMPTS = {
     "draft_checks": "Draft-only checks never reported on this head. Re-run them, or remove them "
                     "from the runner's validation policy, then reply to resume.",
