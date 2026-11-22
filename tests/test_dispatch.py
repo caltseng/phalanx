@@ -208,6 +208,14 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(timeline, OWNER)[1]["item"]["wait_reason"], blocker)
         self.assertEqual(self.request(renew_path, RUNNER, {"worker": worker}, headers)[0], 200)
         self.assertIsNone(self.get(timeline, OWNER)[1]["item"]["wait_reason"])
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE attempts SET lease_expires_at = 0 WHERE id = ?", (assigned["attempt_id"],))
+        expired = self.get(timeline, OWNER)[1]["item"]
+        self.assertEqual(expired["wait_reason"], "Lease expired at 1970-01-01T00:00:00+00:00; awaiting runner recovery")
+        self.assertIn("runner recovers", expired["resume_trigger"])
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE attempts SET lease_expires_at = ? WHERE id = ?",
+                       (assigned["lease_expires_at"], assigned["attempt_id"]))
         execution = assigned["execution"]
         result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
         result = {"expected_version": execution["version"], "attempt_id": assigned["attempt_id"],

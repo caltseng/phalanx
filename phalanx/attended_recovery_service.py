@@ -11,7 +11,7 @@ from time import time
 from urllib.parse import quote
 from uuid import UUID
 
-from .attended import AttendedRunner, RunnerAPI, RunnerError
+from .attended import AttendedRunner, RunnerAPI, RunnerError, development_candidate
 from .attended_recovery import (
     StoppedEvidence, acknowledge_claim, acknowledge_stop, native_observation,
     native_timestamp, reconcile, unmatched_leases,
@@ -93,8 +93,7 @@ def _verify_local(root, record, packet, thread_id):
             # Development alone commits to the checkout; every other worker stage leaves it unchanged.
             (unchanged and (packet.stage != "development" or result.outcome in {"needs_input", "failed"}))
             or (packet.stage == "development" and result.outcome == "succeeded"
-                and not workspace.dirty and workspace.head != packet.expected_revision
-                and result.details["evidence"].strip() == workspace.head)
+                and development_candidate(record, packet, workspace, result.details["evidence"].strip()))
         ):
             disposition = "verified_result"
             summary = "Verified attempt result and registered workspace checkpoint"
