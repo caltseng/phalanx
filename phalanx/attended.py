@@ -72,9 +72,18 @@ STAGES = {
         "Leave the checkout unchanged. Put a summary of what you reviewed in details.evidence, or report "
         "actionable findings as changes_required in details.findings."
     ),
+    "pr_revision": (
+        "The PR is open and ready for review; keep it ready. Fix review_findings in the context on top of "
+        "the current HEAD. To integrate the target branch or commits someone else pushed to the PR branch, "
+        "merge them, or rebase if every commit on the branch is your own. Self-review only the new diff, "
+        "rerun the failed checks and the local checks covering the files you changed, and commit. Put the "
+        "full commit hash alone in details.evidence. If a finding needs new scope rather than a fix, leave "
+        "the checkout unchanged and report changes_required with the reason in details.findings."
+    ),
     "adversarial_review": (
         "Independently review the exact PR diff between the assigned base and head revisions for "
-        "correctness, regressions, security and missing validation. Leave the checkout unchanged. "
+        "correctness, regressions, security and missing validation. If review.since_head is set, review "
+        "only the changes from since_head to head_sha. Leave the checkout unchanged. "
         "If nothing blocks the PR, put a summary of what you reviewed and any non-blocking notes in "
         "details.evidence. Otherwise report changes_required with each blocking finding and its "
         "severity in details.findings."
@@ -82,7 +91,7 @@ STAGES = {
 }
 # Runner-owned stages that need no worker session.
 RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
-                 "pr_reconciliation", "ready_for_check_in", "check_in")
+                 "pr_reconciliation", "check_in")
 
 
 class AttendedRunner:
@@ -335,16 +344,20 @@ class AttendedRunner:
                 report_checkpoint["findings"] = findings
         context = {field: request.get(field, []) for field in ("context_links", "acceptance_criteria")}
         requirements = STAGES[stage]
-        if stage == "development" and state.get("development_findings"):
-            context["review_findings"] = state["development_findings"]
-            requirements += " First address review_findings in the context on top of the current HEAD."
+        if stage in ("development", "pr_revision") and state.get("findings"):
+            context["review_findings"] = state["findings"]
+            if stage == "development":
+                requirements += " First address review_findings in the context on top of the current HEAD."
             if state.get("primary_pr") and candidate:
-                PRNotes(self.root).record(state["primary_pr"], candidate, "Returned to development",
-                                          state["development_findings"])
+                PRNotes(self.root).record(
+                    state["primary_pr"], candidate,
+                    "Returned to development" if stage == "development" else "Revision requested",
+                    state["findings"])
         if review is not None:
             context["review"] = {"pr_url": state["primary_pr"], "base_ref": review["expected"]["base_ref"],
                                  "base_sha": review["expected"]["base_sha"],
-                                 "head_sha": review["pull"]["head_sha"]}
+                                 "head_sha": review["pull"]["head_sha"],
+                                 **({"since_head": review["since_head"]} if review.get("since_head") else {})}
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,
@@ -382,7 +395,14 @@ class AttendedRunner:
         if (assignment is None or assignment.get("pr_url") != state.get("primary_pr")
                 or assignment["pull"]["head_sha"] != state.get("candidate")):
             raise RunnerError("No review assignment matches the current PR head; reconcile before launch")
-        return {"expected": assignment["expected"], "pull": assignment["pull"]}
+        # A re-review after a revision covers only the diff since the last passing review.
+        since = next((row["details"]["pull"]["head_sha"] for row in reversed(rows)
+                      if row["details"].get("stage") == "adversarial_review"
+                      and row["details"].get("pr_url") == state.get("primary_pr")
+                      and row["details"].get("outcome") == "succeeded"
+                      and isinstance(row["details"].get("pull"), dict)), None)
+        return {"expected": assignment["expected"], "pull": assignment["pull"],
+                **({"since_head": since} if since and since != assignment["pull"]["head_sha"] else {})}
 
     def _verify_launch_claim(self, record):
         claim = record["claim"]
@@ -542,6 +562,9 @@ class AttendedRunner:
                     "summary": "Independent review found blocking issues" if blocking else text,
                     "findings": [text] if blocking else [],
                 })
+            elif packet.stage == "pr_revision" and result.outcome in {"succeeded", "changes_required"}:
+                body = self._revision_body(record, packet, workspace, result, body)
+                route = "pr-observation" if result.outcome == "succeeded" else "result"
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
@@ -599,6 +622,23 @@ class AttendedRunner:
 
         submission = self._transaction(save_submission)
         return self._send_submission(snapshot, submission, marker)
+
+    def _revision_body(self, record, packet, workspace, result, body):
+        """Push a pr_revision commit and observe the PR, or escalate new scope to development."""
+        if result.outcome == "changes_required":
+            findings = result.details["findings"].strip()
+            if workspace.head != packet.expected_revision or workspace.dirty:
+                raise RunnerError("Escalating a revision to development must leave the checkout unchanged")
+            if not findings or len(findings) > 16000:
+                raise RunnerError("Escalation needs findings within the API limit")
+            return {**body, "candidate": packet.expected_revision, "review_notes": findings}
+        evidence = result.details["evidence"].strip()
+        if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence) or evidence != workspace.head
+                or workspace.dirty or evidence == packet.expected_revision):
+            raise RunnerError("A revision requires a new commit at the clean worktree HEAD")
+        from .validation_stages import publish_revision
+
+        return publish_revision(self, record, evidence)
 
     def _send_submission(self, snapshot, submission, key):
         claim = snapshot["claim"]

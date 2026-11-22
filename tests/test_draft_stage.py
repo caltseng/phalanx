@@ -267,17 +267,18 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         self.assertIn("target branch main", state["wait"]["reason"])
         self.assertFalse(self.posts or self.git.pushes)
 
-    def test_outside_pr_on_item_branch_routes_to_reconciliation(self):
+    def test_outside_pr_on_item_branch_is_adopted(self):
         self.pull = pull(head=self.branch, draft=False)
         self.pull["head"]["repo"]["full_name"] = "Owner/Repo"
         result = self.run_stage()
         self.assertEqual(result.publication.status, "conflict")
         state = result.execution["state"]
-        self.assertEqual((state["stage"], state["primary_pr"], state["publication_conflict"]),
-                         ("pr_reconciliation", "https://github.com/owner/repo/pull/7", True))
+        self.assertEqual((state["stage"], state["primary_pr"]),
+                         ("self_review", "https://github.com/owner/repo/pull/7"))
+        self.assertIsNone(state["findings"])
         self.assertFalse(self.posts or self.git.pushes)
 
-    def test_blocker_endpoint_rejects_matching_drafts_and_unmoved_bases(self):
+    def test_blocker_endpoint_requires_a_pull_and_rejects_matching_drafts(self):
         body = {
             "attempt_id": self.assignment.attempt_id, "expected_version": self.assignment.state_version,
             "stage": "pr_creation", "reason": "Blocked",
@@ -290,8 +291,7 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         }
         path = f"/v1{self.path}/pr-publication-blocker"
         headers = {"Phalanx-Lease": self.assignment.lease}
-        for extra, status in (({}, 422), ({"observed_base_sha": BASE, "pull": matching}, 422),
-                              ({"observed_base_sha": BASE}, 409), ({"pull": matching}, 409)):
+        for extra, status in (({}, 422), ({"pull": matching}, 409)):
             with self.subTest(extra=extra):
                 self.assertEqual(self.request(path, RUNNER, {**body, **extra}, headers)[0], status)
         self.assertEqual((self.state()["stage"], self.state()["status"]), ("pr_creation", "running"))

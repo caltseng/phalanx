@@ -4,9 +4,9 @@ import json
 import re
 
 from . import intake, validation, waits
-from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Validation, VerifiedMerge
+from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Revised, Validation, VerifiedMerge
 from .transitions import (
-    Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, item_branch,
+    Evidence, Event, Outcome, PullRequest, Revision, Stage, Status, Target, Wait, item_branch,
 )
 
 
@@ -21,12 +21,12 @@ def latest_observation(db, execution_id, stage):
     return json.loads(row["details_json"]) if row else None
 
 
-def reviewed_revision(db, execution_id, url, expected, revision):
+def reviewed_head(db, execution_id, url, base_ref):
+    """The latest head an independent review passed; review diffs depend on the head, not the base tip."""
     review = latest_observation(db, execution_id, Stage.ADVERSARIAL_REVIEW)
     if (review and review.get("outcome") == Outcome.SUCCEEDED
-            and review["pr_url"] == url and review["expected"] == expected.model_dump()
-            and review["pull"]["head_sha"] == revision.head):
-        return revision
+            and review["pr_url"] == url and review["expected"]["base_ref"] == base_ref):
+        return review["pull"]["head_sha"]
     return None
 
 
@@ -68,12 +68,15 @@ def check_published_validation_claim(db, item_id, execution_id, body, lease_dige
     if (attempt["runner_id"] != body.runner_id or state.status != Status.RUNNING
             or state.stopping is not None):
         return {"current": False}
-    promotion = latest_observation(db, execution_id, Stage.PR_PROMOTION)
+    # The candidate's head was verified by its promotion or by the revision that pushed it.
     pull = None
-    if (promotion and promotion["outcome"] == Outcome.SUCCEEDED
-            and promotion["pr_url"] == state.primary_pr
-            and promotion["pull"]["head_sha"] == state.candidate):
-        pull = promotion["pull"]
+    for stage in (Stage.PR_REVISION, Stage.PR_PROMOTION):
+        observed = latest_observation(db, execution_id, stage)
+        if (observed and observed["outcome"] == Outcome.SUCCEEDED
+                and observed["pr_url"] == state.primary_pr
+                and observed["pull"]["head_sha"] == state.candidate):
+            pull = observed["pull"]
+            break
     return {"current": True, "pr_url": state.primary_pr, "promotion": pull}
 
 
@@ -101,41 +104,62 @@ def _check_refs(db, item_id, execution_id, body, lease_digest):
     return row, state, repository
 
 
+def _closed_question(details, url, candidate):
+    """Ask the owner about a primary PR closed outside Phalanx; never open a replacement."""
+    prompt = (f"{url} was closed outside Phalanx. Reopen it, or decide how this item should continue, "
+              "then reply.")
+    details["question"] = {"prompt": prompt, "handoff": f"{url}, candidate {candidate}"}
+    return Wait(prompt, "owner reply")
+
+
 def submit_blocker(db, item_id, execution_id, body, lease_digest):
-    """Route verified external movement found before the first draft is recorded."""
+    """Adopt the existing PR on the item branch that blocked the first draft."""
     row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
     if state.primary_pr is not None:
         raise intake.Conflict("A primary PR is already recorded")
     expected, pull = body.expected, body.pull
+    if pull.head_ref != expected.head_ref:
+        raise intake.Conflict("Blocking PR must use the deterministic item branch")
+    if (pull.head_sha == state.candidate and pull.base_ref == expected.base_ref
+            and pull.base_sha == expected.base_sha and pull.state == "open"
+            and pull.draft and not pull.merged):
+        raise intake.Conflict("Record a matching draft as the published PR instead")
+    url = f"https://github.com/{repository}/pull/{pull.number}"
     details = body.model_dump(mode="json")
-    details["outcome"] = Outcome.CHANGES_REQUIRED
-    if pull is None:
-        if body.observed_base_sha == expected.base_sha:
-            raise intake.Conflict("Observed base must differ from the expected base revision")
-        evidence = Evidence(issue=Issue.BASE_CHANGED_BEFORE_PUBLICATION)
-    else:
-        if pull.head_ref != expected.head_ref:
-            raise intake.Conflict("Blocking PR must use the deterministic item branch")
-        if (pull.head_sha == state.candidate and pull.base_ref == expected.base_ref
-                and pull.base_sha == expected.base_sha and pull.state == "open"
-                and pull.draft and not pull.merged):
-            raise intake.Conflict("Record a matching draft as the published PR instead")
-        url = f"https://github.com/{repository}/pull/{pull.number}"
-        details["pr_url"] = url
-        evidence = Evidence(
-            issue=Issue.PR_BLOCKER, matching_publication_pr=url,
-            pr=PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
-                           closed=pull.state == "closed"),
-        )
+    details.update(pr_url=url, outcome=Outcome.CHANGES_REQUIRED)
+    closed = pull.state == "closed"
+    wait = _closed_question(details, url, state.candidate) if closed else None
+    findings = None
+    if pull.head_sha != state.candidate:
+        findings = (f"{url} already exists on {expected.head_ref} with commits Phalanx did not publish "
+                    f"(head {pull.head_sha}). Fetch the branch and integrate its commits so its head is an "
+                    "ancestor of the new candidate.")
+    pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft, closed=closed)
     return intake.apply(db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
-                        outcome=Outcome.CHANGES_REQUIRED, evidence=evidence)
+                        outcome=Outcome.CHANGES_REQUIRED, wait=wait, evidence=Evidence(pr=pr, findings=findings))
+
+
+def _submit_revision(db, row, state, body, url):
+    """Record a pr_revision push; the transition routes a lost push back through reconciliation."""
+    pull = body.pull
+    if body.candidate == state.candidate or pull.head_sha == state.candidate:
+        raise intake.Conflict("A revision must push a new candidate that GitHub shows on the PR")
+    details = body.model_dump(mode="json")
+    details.update(pr_url=url, outcome=Outcome.SUCCEEDED)
+    closed = pull.state == "closed"
+    wait = _closed_question(details, url, body.candidate) if closed else None
+    pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft, closed=closed)
+    return intake.apply(db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
+                        outcome=Outcome.SUCCEEDED, wait=wait,
+                        evidence=Evidence(pr=pr, candidate=body.candidate))
 
 
 def submit(db, item_id, execution_id, body, lease_digest):
     row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
     pull, expected = body.pull, body.expected
+    revised = isinstance(body, Revised)
     if (pull.head_ref != expected.head_ref or pull.base_ref != expected.base_ref
-            or pull.head_sha != state.candidate):
+            or (pull.head_sha != state.candidate and not revised)):
         raise intake.Conflict("Observed PR must match the expected refs and candidate head")
     url = f"https://github.com/{repository}/pull/{pull.number}"
     if state.primary_pr != url and (state.primary_pr or not isinstance(body, Publication)):
@@ -144,12 +168,14 @@ def submit(db, item_id, execution_id, body, lease_digest):
         publication = latest_observation(db, execution_id, Stage.PR_CREATION)
         if not publication or publication["expected"]["base_ref"] != expected.base_ref:
             raise intake.Conflict("Expected base branch must match the published primary PR")
+    if revised:
+        return _submit_revision(db, row, state, body, url)
 
     revision = Revision(pull.head_sha, expected.base_sha)
     details = body.model_dump(mode="json")
     details["pr_url"] = url
     if isinstance(body, VerifiedMerge):
-        ready = latest_observation(db, execution_id, Stage.READY_FOR_CHECK_IN)
+        ready = latest_observation(db, execution_id, Stage.PR_RECONCILIATION)
         intent = ready.get("merge_intent") if ready else None
         if (not intent or intent["operation_id"] != body.operation_id
                 or ready["pr_url"] != url or ready["expected"] != expected.model_dump()
@@ -175,7 +201,7 @@ def submit(db, item_id, execution_id, body, lease_digest):
         if body.outcome == Outcome.CHANGES_REQUIRED:
             outcome = Outcome.CHANGES_REQUIRED
             findings = "\n".join(f"- {finding}" for finding in body.review.findings)
-            evidence = Evidence(pr=pr, development_findings=f"{body.review.summary}\n\n{findings}"[:16000])
+            evidence = Evidence(pr=pr, findings=f"{body.review.summary}\n\n{findings}"[:16000])
         else:
             evidence = Evidence(pr=pr, independent_review=revision)
     else:
@@ -191,10 +217,10 @@ def submit(db, item_id, execution_id, body, lease_digest):
         if gates.state in {validation.GateState.SATISFIED, validation.GateState.NOT_CONFIGURED}:
             evidence = gate_evidence(db, execution_id, body, state, pr)
         elif gates.state is validation.GateState.FAILED:
-            # Failed checks go back to development, which fixes them and revalidates.
+            # Draft-check failures go to development; later failures go to pr_revision.
             phase = "Draft" if body.stage == Stage.PR_PROMOTION else "Required"
             findings = f"{phase} checks did not pass on {url}: " + "; ".join(gates.reasons)
-            evidence = Evidence(pr=pr, development_findings=findings[:16000])
+            evidence = Evidence(pr=pr, findings=findings[:16000])
             outcome = Outcome.CHANGES_REQUIRED
         elif gates.state is validation.GateState.WAITING and schedule_recheck:
             return _wait_for_published_gates(db, row, state, body, gates, details)
@@ -206,7 +232,7 @@ def submit(db, item_id, execution_id, body, lease_digest):
 
 
 def submit_rework(db, item_id, execution_id, body, lease_digest):
-    """Return routine PR conflicts and feedback to development for revalidation."""
+    """Send routine PR conflicts, foreign heads and feedback to the stage that fixes them."""
     row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
     pull, expected = body.pull, body.expected
     url = f"https://github.com/{repository}/pull/{pull.number}"
@@ -219,7 +245,7 @@ def submit_rework(db, item_id, execution_id, body, lease_digest):
         raise intake.Conflict("Only an unexpected head may differ from the candidate")
     if body.issue == "merge_conflict":
         findings = (f"The PR conflicts with {expected.base_ref} at {expected.base_sha}. Fetch that commit, "
-                    "rebase the candidate onto it, resolve the conflicts and rerun the checks.")
+                    "integrate it into the candidate, resolve the conflicts and rerun the checks.")
     elif body.issue == "unexpected_head":
         findings = (f"The PR branch {expected.head_ref} has commits Phalanx did not publish (head "
                     f"{pull.head_sha}). Fetch the branch, integrate its commits so its head is an ancestor "
@@ -232,7 +258,7 @@ def submit_rework(db, item_id, execution_id, body, lease_digest):
     pr = PullRequest(url, Revision(pull.head_sha, expected.base_sha), draft=pull.draft)
     return intake.apply(db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
                         outcome=Outcome.CHANGES_REQUIRED,
-                        evidence=Evidence(pr=pr, development_findings=findings[:16000]))
+                        evidence=Evidence(pr=pr, findings=findings[:16000]))
 
 
 def check_review_assignment(db, execution_id, expected, pull):
@@ -255,17 +281,13 @@ def gate_evidence(db, execution_id, body, state, pr):
     revision = pr.revision
     if body.stage == Stage.PR_PROMOTION:
         return Evidence(pr=pr, draft_checks=revision)
-    review = reviewed_revision(db, execution_id, pr.url, body.expected, revision)
     if body.stage == Stage.PR_VALIDATION:
-        return Evidence(pr=pr, ci_and_previews=revision, independent_review=review)
-
-    needs_intent = (body.stage == Stage.READY_FOR_CHECK_IN and state.target == Target.MERGED
-                    and state.ready_revision == revision and review == revision)
+        return Evidence(pr=pr, ci_and_previews=revision)
+    reviewed = reviewed_head(db, execution_id, pr.url, body.expected.base_ref) == revision.head
     # Without an intent the runner leaves the merge to the owner and the ready PR is delivered.
-    if body.merge_intent is not None and not needs_intent:
-        raise intake.Conflict("Merge intent requires a merge target and the current ready revision")
-    return Evidence(pr=pr, ci_and_previews=revision, independent_review=review,
-                    actionable_feedback_cleared=revision, approvals_and_mergeability=revision,
+    if body.merge_intent is not None and state.target != Target.MERGED:
+        raise intake.Conflict("Merge intent requires a merge target")
+    return Evidence(pr=pr, ci_and_previews=revision, independent_review=revision if reviewed else None,
                     merge_authorized=body.merge_intent is not None)
 
 

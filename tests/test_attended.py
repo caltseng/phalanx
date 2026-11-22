@@ -110,7 +110,8 @@ class StubAPI:
             return {"execution": {"id": "execution", "version": self.current_version,
                                   "state": {"status": "running"}}}
         if path == "/dispatch/claim":
-            expected = [self.stage] if self.stage in ("pr_creation", "pre_pr_validation") else ["adversarial_review", "development", "report_drafting", "report_review", "self_review"]
+            expected = [self.stage] if self.stage in ("pr_creation", "pre_pr_validation") else ["adversarial_review", "development", "pr_revision", "report_drafting", "report_review",
+                                                                                     "self_review"]
             assert body["stages"] == expected, body
             self.claim_leases.append(lease)
             if self.drop_claim:
@@ -692,13 +693,13 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_validation_stages_run_from_draft_to_ready_check_in_over_http(self):
         self.live_review_path(blocking=False)
 
-    def test_blocking_review_returns_findings_to_development_over_http(self):
+    def test_blocking_review_sends_findings_to_pr_revision_over_http(self):
         self.live_review_path(blocking=True)
 
-    def test_merge_conflict_returns_to_development_over_http(self):
+    def test_merge_conflict_is_revised_on_the_ready_pr_over_http(self):
         self.live_review_path(blocking=False, conflict=True)
 
-    def test_github_feedback_returns_to_development_over_http(self):
+    def test_github_feedback_is_revised_on_the_ready_pr_over_http(self):
         self.live_review_path(blocking=False, feedback=True)
 
     def test_check_in_merges_and_reconciles_a_lost_merge_response_over_http(self):
@@ -818,7 +819,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             ready = self.runner().prepare(stages=["pr_validation"])
             self.assertEqual(ready["status"], "published_validation_submitted", ready)
             state = ready["execution"]["state"]
-            self.assertEqual((state["stage"], state["status"]), ("adversarial_review", "queued"), state)
+            self.assertEqual((state["stage"], state["status"]), ("pr_reconciliation", "queued"), state)
+            retry = self.runner().prepare(stages=["pr_reconciliation"])
+            self.assertIn("mergeability", retry["reason"], retry)
+            with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
+            github.pull["mergeable"] = True
+            unreviewed = self.runner().prepare(stages=["pr_reconciliation"])
+            self.assertEqual(unreviewed["execution"]["state"]["stage"], "adversarial_review", unreviewed)
 
             launch = self.runner().prepare()
             review = json.loads(self.runner().status()["packet"]["context"])["review"]
@@ -830,7 +838,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 self.write_result(self.runner(), launch["marker"],
                                   {"findings": "P1: The new branch is untested"}, "changes_required")
                 routed = self.runner().submit(launch["marker"], "local", reviewer)
-                self.assertEqual(routed["state"]["stage"], "development", routed)
+                self.assertEqual(routed["state"]["stage"], "pr_revision", routed)
                 self.runner().prepare()
                 context = json.loads(self.runner().status()["packet"]["context"])
                 self.assertIn("P1: The new branch is untested", context["review_findings"])
@@ -841,30 +849,22 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             if conflict:
                 github.pull["mergeable"] = False
                 routed = self.runner().prepare(stages=["pr_reconciliation"])
-                self.assertEqual(routed["execution"]["state"]["stage"], "development", routed)
+                self.assertEqual(routed["execution"]["state"]["stage"], "pr_revision", routed)
                 self.runner().prepare()
                 context = json.loads(self.runner().status()["packet"]["context"])
                 self.assertIn(f"conflicts with main at {base}", context["review_findings"])
                 return
             if feedback:
-                github.pull["mergeable"] = True
                 github.threads = [{"id": "PRRT_1", "isResolved": False, "isOutdated": False, "path": "app.py",
                                    "comments": {"nodes": [{"body": "Handle the empty list",
                                                            "author": {"login": "octo"}}]}}]
                 routed = self.runner().prepare(stages=["pr_reconciliation"])
-                self.assertEqual(routed["execution"]["state"]["stage"], "development", routed)
+                self.assertEqual(routed["execution"]["state"]["stage"], "pr_revision", routed)
                 self.runner().prepare()
                 context = json.loads(self.runner().status()["packet"]["context"])
                 self.assertIn("@octo on app.py: Handle the empty list", context["review_findings"])
                 return
-            retry = self.runner().prepare(stages=["pr_reconciliation"])
-            self.assertIn("mergeability", retry["reason"], retry)
-            with write_transaction(self.root.parent / "queue.sqlite3") as db:
-                db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
-            github.pull["mergeable"] = True
-            reconciled = self.runner().prepare(stages=["pr_reconciliation"])
-            self.assertEqual(reconciled["execution"]["state"]["stage"], "ready_for_check_in", reconciled)
-            done = self.runner().prepare(stages=["ready_for_check_in"])
+            done = self.runner().prepare(stages=["pr_reconciliation"])
             if merge:
                 self.assertEqual(done["execution"]["state"]["stage"], "check_in", done)
                 github.lose_merge = True
@@ -879,7 +879,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(state["final_output"]["merge_commit"], "e" * 40 if merge else None)
         self.assertEqual(self.runner().status(), {"status": "idle"})
 
-    def test_review_findings_return_to_development_and_update_the_primary_pr(self):
+    def test_findings_are_fixed_in_development_then_revised_on_the_ready_pr(self):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -953,7 +953,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 patch("phalanx.validation_stages.GitHubClient", client):
             self.assertEqual(self.runner().prepare(draft=True)["execution"]["state"]["stage"], "self_review")
             state = work({"findings": "Rename the helper."}, "changes_required")[1]["state"]
-            self.assertEqual((state["stage"], state["development_findings"]),
+            self.assertEqual((state["stage"], state["findings"]),
                              ("development", "Rename the helper."))
             packet, revised = work(commit)
             self.assertEqual(json.loads(packet["context"])["review_findings"], "Rename the helper.")
@@ -964,7 +964,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.assertIn("### Known gaps", github.pull["body"])
             self.assertIn("Rename the helper.", github.pull["body"])
             revised = revised["state"]
-            self.assertEqual((revised["stage"], revised["development_findings"]), ("self_review", None))
+            self.assertEqual((revised["stage"], revised["findings"]), ("self_review", None))
             self.assertNotEqual(revised["candidate"], first["candidate"])
             work("Reviewed the revised diff.")
             self.assertEqual(self.runner().prepare(stages=["pre_pr_validation"])["execution"]["state"]["stage"],
@@ -975,13 +975,23 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.assertEqual((github.pull["head"]["sha"], github.pull["draft"]), (revised["candidate"], False))
             github.runs = [{"id": 1, "name": "test", "head_sha": revised["candidate"], "status": "completed",
                             "conclusion": "failure", "app": {"id": 15368}, "pull_requests": []}]
-            failed = self.runner().prepare(stages=["pr_validation"])
-        self.assertEqual(failed["execution"]["state"]["stage"], "development", failed)
-        self.assertIn("Required checks did not pass", failed["execution"]["state"]["development_findings"])
-        self.assertEqual(len(github.comments), 2)
+            validated = self.runner().prepare(stages=["pr_validation"])
+            self.assertEqual(validated["execution"]["state"]["stage"], "pr_reconciliation", validated)
+            github.pull["mergeable"] = True
+            failed = self.runner().prepare(stages=["pr_reconciliation"])
+            self.assertEqual(failed["execution"]["state"]["stage"], "pr_revision", failed)
+            self.assertIn("Required checks did not pass", failed["execution"]["state"]["findings"])
+            packet, fixed = work(commit)
+            self.assertIn("Required checks did not pass", json.loads(packet["context"])["review_findings"])
+            fixed = fixed["state"]
+            self.assertEqual(fixed["stage"], "pr_validation", fixed)
+            self.assertEqual(pushes[-1][:2], (revised["candidate"], fixed["candidate"]))
+            self.assertEqual((github.pull["head"]["sha"], github.pull["draft"]), (fixed["candidate"], False))
+        self.assertEqual(len(github.comments), 3)
         self.assertIn("Local check platform skipped: Needs the other OS", github.comments[1])
+        self.assertIn("Required checks did not pass", github.comments[2])
         body = github.pull["body"]
-        self.assertIn("platform skipped", body)
+        self.assertIn("Required checks did not pass", body)
         self.assertNotIn("Rename the helper.", body)
         self.assertTrue(body.endswith(ATTRIBUTION))
         self.assertEqual(body.count(ATTRIBUTION), 1)

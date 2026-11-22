@@ -12,7 +12,7 @@ from phalanx import dispatch, intake
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.store import connect, migrate, write_transaction
-from phalanx.transitions import Event, Wait
+from phalanx.transitions import Event, Outcome, Wait
 
 
 NOW = 1_800_000_000
@@ -33,9 +33,9 @@ class BacklogAdmissionTest(TestCase):
                 dispatch.set_dispatch(db, DispatchSettings(paused=False, aging_seconds=AGE_STEP))
                 for _ in range(PARKED):
                     item = self.enqueue(db, "urgent", NOW - 3 * AGE_STEP)
-                    row, state = self.current(db, item)
-                    intake.apply(db, row, state, Event.INPUT_WAIT, details={},
-                                 wait=Wait("Needs owner judgment", "Owner reply"))
+                    intake.apply(db, *self.current(db, item), Event.CLAIM, details={})
+                    claimed = dict(item, execution=dict(item["execution"], version=item["execution"]["version"] + 1))
+                    self.ask(db, *self.current(db, claimed))
                 aged = [self.enqueue(db, "low", NOW - 2 * AGE_STEP - offset)
                         for offset in reversed(range(CAPACITY + 2))]
                 for _ in range(4 * CAPACITY):
@@ -63,9 +63,7 @@ class BacklogAdmissionTest(TestCase):
                         row, state = intake.check_current(db, claim["item_id"],
                                                           claim["execution"]["id"],
                                                           claim["execution"]["version"])
-                        intake.apply(db, row, state, Event.INPUT_WAIT, details={},
-                                     attempt_id=claim["attempt_id"],
-                                     wait=Wait("Needs owner judgment", "Owner reply"))
+                        self.ask(db, row, state, attempt_id=claim["attempt_id"])
                         self.enqueue(db, "urgent", NOW)
                     self.assertEqual(self.claim()["item_id"], next_item["id"])
 
@@ -92,6 +90,12 @@ class BacklogAdmissionTest(TestCase):
     def current(db, item):
         execution = item["execution"]
         return intake.check_current(db, item["id"], execution["id"], execution["version"])
+
+    @staticmethod
+    def ask(db, row, state, attempt_id=None):
+        intake.apply(db, row, state, Event.RESULT, details={"question": {"prompt": "Needs owner judgment"}},
+                     attempt_id=attempt_id, outcome=Outcome.NEEDS_INPUT,
+                     wait=Wait("Needs owner judgment", "Owner reply"))
 
     def claim(self):
         with write_transaction(self.path) as db:

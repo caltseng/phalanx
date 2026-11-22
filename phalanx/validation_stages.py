@@ -15,8 +15,8 @@ from .check_in import MergeTarget, check_in
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError
 from .github_checks import collect_github_checks
-from .pr_models import (ExpectedRefs, GateObservation, GitHubPull, MergedPull, MergeIntent, Reconciliation, Rework,
-                        Validation, VerifiedMerge)
+from .pr_models import (ExpectedRefs, GateObservation, GitHubPull, MergedPull, MergeIntent, Reconciliation, Revised,
+                        Rework, Validation, VerifiedMerge)
 from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
@@ -270,11 +270,55 @@ def _verified_head(runner, snapshot, url):
     for entry in reversed(timeline):
         details = entry.get("details") or {}
         pull = details.get("pull")
+        # Skip foreign heads Phalanx observed but never verified as its own.
         if details.get("issue") == "unexpected_head":
+            continue
+        if details.get("candidate") and details["candidate"] != (pull or {}).get("head_sha"):
             continue
         if details.get("pr_url") == url and isinstance(pull, dict) and pull.get("head_sha"):
             return pull["head_sha"]
     return None
+
+
+def publish_revision(runner, snapshot, candidate):
+    """Push a pr_revision commit to the ready PR and return its Revised body.
+
+    Lag and lost leases raise RunnerError so the Captain retries the submit with
+    the reservation kept; a FAILED result would relaunch the worker. A push that
+    loses to a foreign one is recorded, and reconciliation sends it back.
+    """
+    claim = snapshot["claim"]
+    state = claim["execution"]["state"]
+    url = state.get("primary_pr") or ""
+    mapping = runner.config["repositories"][claim["request"]["repository_id"]]
+    base_ref = claim["request"].get("target_branch") or mapping["base_branch"]
+    local = _candidate(runner, snapshot)
+    github = _github(snapshot)
+    try:
+        pull = github.get_pull_request(int(url.rsplit("/", 1)[-1]))
+        if pull.state == "open" and pull.head_sha != candidate:
+            if pull.head_ref != _item_branch(claim["item_id"]) or pull.base_ref != base_ref:
+                raise RunnerError("The primary PR no longer targets the item branch and target branch")
+            git = GitPublication(local.workspace.inspect(claim["item_id"]).path,
+                                 snapshot["repositories"][claim["request"]["repository_id"]], claim["item_id"])
+            remote = git.read_head(authorize=local._authorize)
+            if remote != candidate:
+                if remote != pull.head_sha:
+                    raise RunnerError("GitHub has not shown the latest push to the PR branch yet; retry")
+                rewrite = pull.head_sha == _verified_head(runner, snapshot, url)
+                outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize,
+                                      rewrite=rewrite)
+                if outcome.status != "success" and (outcome.status != "conflict" or rewrite):
+                    raise RunnerError(f"Could not push the revision: {outcome.reason}; retry")
+                foreign = outcome.status == "conflict"
+            else:
+                foreign = False
+            pull = github.get_pull_request(pull.number)
+            if not foreign and pull.head_sha != candidate:
+                raise RunnerError("GitHub has not shown the pushed revision on the PR yet; retry")
+    except (GitHubError, PublicationError, WorkspaceError, ValueError) as error:
+        raise RunnerError(f"Could not publish the revision: {error}; retry") from None
+    return Revised(**_event(snapshot), **_refs(snapshot, pull, base_ref), candidate=candidate).model_dump(mode="json")
 
 
 def _publish_update(snapshot, local, pull, base_ref, verified_head):
@@ -316,7 +360,7 @@ def _publish_update(snapshot, local, pull, base_ref, verified_head):
 
 
 def _disposition(runner, snapshot):
-    """Attest current ready gates for reconciliation and the ready-only check-in."""
+    """Observe the ready PR's gates for reconciliation, with a merge intent when authorized."""
     claim = snapshot["claim"]
     state = claim["execution"]["state"]
     candidate, url = state["candidate"], state.get("primary_pr") or ""
@@ -367,28 +411,25 @@ def _disposition(runner, snapshot):
     if (checks.gate.state not in {GateState.SATISFIED, GateState.NOT_CONFIGURED} and not failed
             or checks.candidate is None):
         return _question(snapshot, reason, handoff)
-    # Failed checks are observed as-is; the server returns them to development as findings.
+    # Failed checks are observed as-is; the server sends them to pr_revision as findings.
     return {"route": "pr-observation", **({"reason": reason[:16000]} if failed else {}), "body": _observation(
         Reconciliation, snapshot, pull, base_ref, policy.required, checks.observations,
         checks.candidate.merge_sha, Phase.READY,
-        actionable_feedback_cleared=True, approvals_and_mergeability=True,
-        merge_intent=None if failed else _merge_intent(runner, snapshot, pull, base_ref),
+        merge_intent=None if failed else _merge_intent(runner, snapshot, base_ref),
     )}
 
 
-def _merge_intent(runner, snapshot, pull, base_ref):
-    """Authorize one merge of the unchanged ready revision for a checked_in target.
+def _merge_intent(runner, snapshot, base_ref):
+    """Authorize one merge of the observed ready revision for a checked_in target.
 
     The item's target is the authorization; GitHub's rules for the base branch
     (required reviews and checks) still gate the merge, and Phalanx adds none.
-    A moved revision carries no intent and returns to reconciliation. With
-    auto_merge off the runner sends no intent, so the ready PR is delivered and
-    the owner merges it.
+    The server uses the intent only once every gate is current for this
+    revision. With auto_merge off the runner sends no intent, so the ready PR is
+    delivered and the owner merges it.
     """
     state = snapshot["claim"]["execution"]["state"]
-    if (state["stage"] != Stage.READY_FOR_CHECK_IN or state["target"] != Target.MERGED
-            or not runner.config.get("auto_merge", True)
-            or state.get("ready_revision") != {"head": pull.head_sha, "base": pull.base_sha}):
+    if state["target"] != Target.MERGED or not runner.config.get("auto_merge", True):
         return None
     return MergeIntent(operation_id=f"merge-{snapshot['claim']['attempt_id']}",
                        authorization=f"The work item targets {Target.MERGED}; GitHub's rules for "
@@ -435,12 +476,12 @@ def _check_in(runner, snapshot):
 
 
 def _recorded_intent(runner, snapshot, url):
-    """Return the merge intent the server recorded with the latest ready observation."""
+    """Return the merge intent the server recorded with the latest reconciliation."""
     claim = snapshot["claim"]
     timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
     for entry in reversed(timeline):
         details = entry.get("details") or {}
-        if details.get("stage") == Stage.READY_FOR_CHECK_IN and details.get("pr_url") == url:
+        if details.get("stage") == Stage.PR_RECONCILIATION and details.get("pr_url") == url:
             return details.get("merge_intent")
     return None
 
@@ -459,7 +500,7 @@ def _refs(snapshot, pull, base_ref):
 
 
 def _handed_off_feedback(runner, snapshot):
-    """GitHub feedback IDs already sent to development for this execution."""
+    """GitHub feedback IDs already handed to a fixing stage for this execution."""
     claim = snapshot["claim"]
     timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
     return {node for entry in timeline for node in (entry.get("details") or {}).get("feedback_ids") or ()}
@@ -469,7 +510,9 @@ def _rework(snapshot, pull, base_ref, issue, feedback=()):
     reasons = {"merge_conflict": f"The PR conflicts with {base_ref}",
                "unexpected_head": f"The PR head {pull.head_sha} is not the candidate",
                "feedback": "The PR has new actionable GitHub feedback"}
-    return {"route": "pr-rework", "reason": f"{reasons[issue]}; returning it to development",
+    fixer = "returning it to development" if snapshot["claim"]["execution"]["state"]["stage"] == Stage.PR_PROMOTION \
+        else "sending it to pr_revision"
+    return {"route": "pr-rework", "reason": f"{reasons[issue]}; {fixer}",
             "body": Rework(
                 **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue,
                 findings=[text[:16000] for _, text in feedback], feedback_ids=[node for node, _ in feedback],
