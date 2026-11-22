@@ -41,6 +41,15 @@ app.mount("/operator/assets", operator_assets, name="operator-assets")
 
 @app.exception_handler(sqlite3.OperationalError)
 def store_unavailable(request: Request, error: sqlite3.OperationalError):
+    # Only contention is transient; other operational errors stay 500 so clients don't retry forever.
+    code = getattr(error, "sqlite_errorcode", None)
+    if code is not None:
+        busy = code & 0xFF in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    else:
+        message = str(error).lower()
+        busy = "locked" in message or "busy" in message
+    if not busy:
+        raise error
     return JSONResponse(
         {"detail": "SQLite store unavailable; retry the same request"},
         status_code=503,

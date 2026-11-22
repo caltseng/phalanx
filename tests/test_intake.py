@@ -78,6 +78,14 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             self.assertIn("retry", json.load(response)["detail"])
         with urlopen(request, timeout=30) as response:
             self.assertEqual((response.code, json.load(response)), (201, item))
+        # A permanent store error must stay a 500 rather than look retryable.
+        with connect(self.path) as db:
+            db.execute("ALTER TABLE work_items RENAME TO work_items_gone")
+        with self.assertRaises(HTTPError) as caught:
+            urlopen(Request(self.url + f"/v1/items/{item['id']}",
+                            headers={"Authorization": f"Bearer {OWNER}"}), timeout=30)
+        with caught.exception as response:
+            self.assertEqual(response.code, 500)
 
     def test_intake_restart_idempotency_auth_and_cli(self):
         self.assertEqual(self.submit("/v1/repositories", {"id": "example", "remote": REMOTE},
