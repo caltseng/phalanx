@@ -7,7 +7,7 @@ from fastapi.responses import PlainTextResponse
 
 from . import finalization, intake, pr_models, pr_observations, waits
 from .auth import authenticate, require_owner, require_runner
-from .store import write_transaction
+from .store import read_transaction, write_transaction
 from .intake_models import (
     AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
@@ -23,7 +23,7 @@ BatchLimit = Annotated[int, Query(ge=1, le=100)]
 
 def run(request, operation, *args, write=False, finish=False, scope=None, key=None, payload=None):
     try:
-        transaction = write_transaction if write else intake.read_transaction
+        transaction = write_transaction if write else read_transaction
         with transaction(request.app.state.database_path) as db:
             result = intake.replayable(db, scope, key, payload, lambda: operation(db, *args))
         if finish and result["state"]["pending_output"] is not None:

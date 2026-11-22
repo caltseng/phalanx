@@ -1,6 +1,5 @@
 """Transactions for durable intake and versioned lifecycle events."""
 
-from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -13,7 +12,6 @@ from pydantic import TypeAdapter
 
 from . import dependencies
 from .finalization_schema import enqueue
-from .store import connect
 from .transitions import (
     Bypass, Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
@@ -49,13 +47,6 @@ def digest(value: str) -> str:
 def timestamp():
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
-
-@contextmanager
-def read_transaction(path):
-    with connect(path, mode="ro") as db:
-        db.execute("BEGIN")
-        yield db
-        db.execute("COMMIT")
 
 
 def replayable(db, scope, key, payload, perform, *, should_record=None):
