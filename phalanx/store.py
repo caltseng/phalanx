@@ -34,45 +34,57 @@ BUSY_TIMEOUT = 2  # seconds
 
 
 class _Gate:
-    """Serialize in-process writers, and let waiting readers start before the next writer.
+    """Alternate serialized in-process writers with batches of waiting readers.
 
     In DELETE journal mode a writer blocks new readers while it commits, and SQLite's busy
     handler only polls. Writers queued here hand off to each other in microseconds, so a
-    polling reader can miss every gap and time out. Readers instead wait here for the
-    running writer and take their read lock before the next writer begins.
+    polling reader can miss every gap and time out. Readers instead wait here: those that
+    arrive during a write start right after it, before the next writer, and those that arrive
+    while a writer waits go after that writer. Each side waits at most one turn of the other,
+    however deep the write queue gets.
     """
 
     def __init__(self):
         self.condition = Condition()
         self.writing = False
-        self.readers = 0
+        self.writers = 0  # writers waiting for their turn
+        self.admitted = 0  # readers taking their read lock before the next writer
+        self.queued = 0  # readers waiting for the current or next write to finish
+        self.writes = 0  # finished writes
 
     @contextmanager
     def write(self):
         with self.condition:
-            # Bound the wait for readers so a steady stream of them can't starve writes.
-            self.condition.wait_for(lambda: not self.writing and not self.readers, BUSY_TIMEOUT)
-            self.condition.wait_for(lambda: not self.writing)
+            self.writers += 1
+            self.condition.wait_for(lambda: not self.writing and not self.admitted)
+            self.writers -= 1
             self.writing = True
         try:
             yield
         finally:
             with self.condition:
                 self.writing = False
+                self.writes += 1
+                self.admitted += self.queued
+                self.queued = 0
                 self.condition.notify_all()
 
     @contextmanager
     def read_start(self):
         with self.condition:
-            self.readers += 1
-        try:
-            with self.condition:
-                if not self.condition.wait_for(lambda: not self.writing, BUSY_TIMEOUT):
+            if self.writing or self.writers:
+                self.queued += 1
+                writes = self.writes
+                if not self.condition.wait_for(lambda: self.writes != writes, BUSY_TIMEOUT):
+                    self.queued -= 1
                     raise sqlite3.OperationalError("database is locked by a running write")
+            else:
+                self.admitted += 1
+        try:
             yield
         finally:
             with self.condition:
-                self.readers -= 1
+                self.admitted -= 1
                 self.condition.notify_all()
 
 
