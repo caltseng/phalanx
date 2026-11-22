@@ -94,6 +94,40 @@ Each gap has a fix row ahead of PH-12a in the [implementation plan](../../IMPLEM
 
 The gaps have a fix row (PH-11f) in the [implementation plan](../../IMPLEMENTATION_PLAN.md#remaining-v1-integration-work).
 
+## Live rerun 2 on November 21, 2026
+
+**Setup.** The same Captain, checkouts and capacity as above. The server and loop ran from `main` at `c7ba138` (#71, #74, #75, #79). `runner.json` gained a `validation_policy` file outside every checkout. It runs each repository's unit tests as a local check and requires both pilot CI check runs as ready checks (`test (ubuntu-latest)` and `test (windows-latest)`, GitHub Actions app ID 15368, confirmed with `gh api`). Items: a fresh PR item `23891c11` for [phalanx-pilot-py#1](https://github.com/caltseng/phalanx-pilot-py/issues/1), and a report item `46618208` for [phalanx-pilot-web#1](https://github.com/caltseng/phalanx-pilot-web/issues/1) whose goal asks one question. Old items `66a07152` ([phalanx-pilot-web#4](https://github.com/caltseng/phalanx-pilot-web/pull/4)) and `ef9fe2cf` ([phalanx-pilot-py#4](https://github.com/caltseng/phalanx-pilot-py/pull/4)) were queued at `self_review`. All times are UTC.
+
+| Gate | Evidence |
+| --- | --- |
+| (a) Untrusted checkout (PH-11d) | Phase 1 mapped pilot-py to a fresh, untrusted clone. The Captain answered `resolve_project` with the setup action. The loop's `mappings` status named that mapping, both pilot-py slots stayed blocked with the action, and nothing launched for pilot-py. pilot-web launched `aa176aa3` (web#4 `self_review`) and `30092045` (report) in the same passes. Phase 2 swapped in the trusted mapping and restarted the loop, and pilot-py dispatched normally. |
+| (b) Observe without manual steps (PH-11e) | The Captain's relay script served every `observe` through `phalanx relay observe --runtime copilot`, which read each transcript and matched marker and assignment. No observation was hand-written. One Captain-side bug: the script's busy check counted any recent `assistant.turn_end` as stopped, but an autopilot session starts its next turn right away. The loop got "No final result file" and blocked the slot. It kept the reservation and recovered on the next correct observation. The fixed check prefers the last turn event plus 30 seconds of quiet. |
+| (c) Encoding, default and history (PH-11f) | `relay next` printed ASCII-escaped JSON. Every first turn matched its prompt exactly, including U+201C, U+2013 and U+2026. The report question carried `proposed_default` ("A) Preserve whitespace…"). The adoption event is **not shown**. Adoption failed (see below), so there was no `recover-claim` to record. |
+| (d) Owner answer (PH-18a) | The question reached the owner inbox at 16:12:04 (item `46618208`, execution `b0b253cf`, version 3). The board showed the wait reason, question, proposed default and worker reference `30092045`, with resume trigger "owner reply". Caleb's answer was **pending** when this section was written. |
+| Validation path (PH-14a part 2) | web#4 (`66a07152`) ran `self_review` → `pre_pr_validation` → `pr_promotion` → `pr_validation` → `adversarial_review` (versions 6–13, 16:10–16:12). The PR is ready, head `b8c06d9`, with both checks green. py#4 and the fresh item took the same path. |
+| Fresh PR item | `23891c11`: development (worker `216815e3`) published draft [phalanx-pilot-py#5](https://github.com/caltseng/phalanx-pilot-py/pull/5) at 16:25:55, head `5dab552`. Its title is cut at 72 characters, and the footer is intact. After recovery, `self_review` (worker `44a7074b`, state version 8) ran through `adversarial_review` in 11 seconds (16:33:19–30). CI was already green, so no external recheck was scheduled. |
+| Adoption (PH-12a) | `self_review` worker `06e757ba` (attempt `acc910f8`) wrote a `succeeded` result at 16:27:01. The loop was stopped before submitting, and the restart came after the 90-second lease had expired. The loop observed `stopped`, then retried "Local checkpoint or output reconciliation is incomplete" four times and moved to an owner wait. The operator archived the result and ran `attended-recover --recheck`, which requeued `self_review` (a `retry` event at version 7). |
+
+**Where it stopped.** All three PR items reached `adversarial_review` (queued) as ready PRs with green checks. Nothing on `main` dispatches it yet (PH-15a part 1). The report item waits for Caleb's answer.
+
+### Findings
+
+**What worked live**
+- The trust check blocked only the untrusted repository and named the fix before any launch.
+- The validation path promoted three PRs from draft to ready on real check runs, with no Captain involvement beyond launches and observations.
+- Prompts, defaults and the owner question crossed the relay intact.
+
+**What broke**
+- **Review-stage results cannot be adopted.** `_verify_local` in `attended_recovery_service.py` verifies a saved result only for development and the report stages. A `self_review` result on an unchanged checkout falls to "unresolved", so recovery fails and the work redoes.
+- **`attended-recover --observation` rejects `relay observe` output.** It raised `TypeError: unexpected keyword 'writers_stopped'`. The operator had to edit the file.
+- **Options arrived as one string.** The worker put both choices into a single `options` element.
+
+**What surprised us**
+- `README.md` said a restarted loop expires all requests its predecessor left pending. It only expires those older than the timeout. A stale pilot-py `resolve` from the previous loop was served after the swap. The answer went unused, so nothing broke. This PR corrects the README.
+- Status noise: a two-second `slot_blocked` ("Native discovery has not established one exact writer") right after a receipt, and an `unmatched_attempts` entry while the operator's `attended-recover` ran.
+
+The gaps have a fix row (PH-11g) in the [implementation plan](../../IMPLEMENTATION_PLAN.md#remaining-v1-integration-work).
+
 ## Attended path for PH-11
 
 1. Start the runner independently of the Captain. On an authorized muster, claim a stage, reserve a slot, and prepare the item's worktree. Persist launch intent before calling the app. Include the item/stage/attempt IDs, one unique marker, host, project, worktree, expected revision and state version, and start time. Give one Captain launch ownership of the attempt. The runner retains queue credentials and leases.

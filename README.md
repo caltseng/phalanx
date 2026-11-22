@@ -351,7 +351,9 @@ and is retracted, so the same packet can launch again. A taken request is never
 handed out again, even after a Captain restart. An unanswered one is settled as
 lost: a later observation or resolution queues afresh, while an unanswered launch
 stays reserved until native discovery reconciles it by marker. A restarted loop
-expires requests left pending by its predecessor. Once a slot no longer
+expires requests its predecessor left pending for longer than the timeout. A
+younger one may still be served. Its waiter is gone, so the answer goes unused,
+and a launch is reconciled by marker as above. Once a slot no longer
 observes, the loop retracts its untaken `observe` requests, so the Captain never
 answers for a finished worker. Never rerun a request
 whose outcome you did not record; answer it from discovery instead.
