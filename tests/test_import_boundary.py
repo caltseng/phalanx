@@ -12,8 +12,8 @@ PACKAGE = Path(__file__).resolve().parents[1] / "phalanx"
 SERVER = {
     "api", "auth", "config", "dependencies", "dependency_schema", "dispatch", "dispatch_api",
     "dispatch_schema", "finalization", "finalization_schema", "intake", "intake_api", "intake_schema",
-    "operator_api", "operator_schema", "operator_web", "pr_observations", "server_admin", "store",
-    "wait_schema", "waits",
+    "operator_api", "operator_auth", "operator_schema", "operator_web", "pr_observations",
+    "server_admin", "store", "wait_schema", "waits",
 }
 # Wire contracts both sides import. They depend only on each other.
 SHARED = {"intake_models", "pr_models", "transitions", "validation"}

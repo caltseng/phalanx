@@ -21,5 +21,25 @@ class Credentials:
         return cls(owner, runner)
 
 
+@dataclass(frozen=True)
+class GoogleSignIn:
+    client_id: str
+    client_secret: str = field(repr=False)
+    owner_emails: frozenset[str]
+
+    @classmethod
+    def from_env(cls) -> "GoogleSignIn | None":
+        names = ("PHALANX_GOOGLE_CLIENT_ID", "PHALANX_GOOGLE_CLIENT_SECRET", "PHALANX_OWNER_EMAILS")
+        values = [os.environ.get(name, "").strip() for name in names]
+        if not any(values):
+            return None
+        if not all(values):
+            raise ValueError("Google sign-in requires " + ", ".join(names))
+        emails = frozenset(email.strip().lower() for email in values[2].split(",") if email.strip())
+        if not all(re.fullmatch(r"[^@\s,]+@[^@\s,]+", email) for email in emails):
+            raise ValueError("PHALANX_OWNER_EMAILS requires comma-separated email addresses")
+        return cls(values[0], values[1], emails)
+
+
 def database_path() -> Path:
     return Path(os.environ.get("PHALANX_DB", ".phalanx/phalanx.sqlite3")).resolve()

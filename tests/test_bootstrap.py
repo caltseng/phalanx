@@ -42,17 +42,17 @@ server.run()
 
 
 class ServerFixture:
-    def start_server(self, path):
+    def start_server(self, path, env=None, setup=""):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
         env = dict(os.environ, PHALANX_DB=str(path), PHALANX_OWNER_TOKEN=OWNER,
-                   PHALANX_RUNNER_TOKEN=RUNNER)
+                   PHALANX_RUNNER_TOKEN=RUNNER, **(env or {}))
         log = path.with_suffix(".log")
         with log.open("w") as output:
             server = subprocess.Popen(
-                [sys.executable, "-c", SERVER_PROCESS, str(port)],
+                [sys.executable, "-c", setup + SERVER_PROCESS, str(port)],
                 env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
             )
         self.addCleanup(self.stop_server, server)

@@ -71,3 +71,17 @@ WORKER_SCHEMA = (
         url TEXT
     )""",
 )
+
+# Browser sign-in sessions, keyed by the SHA-256 of the cookie. `subject` is the identity
+# provider's stable user ID (Google `sub`); emails can change. A later users table joins on it.
+SESSION_SCHEMA = (
+    """CREATE TABLE user_sessions (
+        id_hash TEXT PRIMARY KEY NOT NULL,
+        subject TEXT NOT NULL,
+        email TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role = 'owner'),
+        expires_at INTEGER NOT NULL
+    ) WITHOUT ROWID""",
+    "CREATE INDEX user_sessions_subject ON user_sessions (subject)",
+    "CREATE INDEX user_sessions_expiry ON user_sessions (expires_at)",
+)

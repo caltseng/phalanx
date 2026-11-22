@@ -424,9 +424,25 @@ A saved stop request can be replayed without another observation file. A `retry`
 
 ### Operator work board
 
-Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
+Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token, or sign in with Google when it is configured. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
 
 The board shows each item's prerequisite blockers, any scheduled retry or external recheck, its worker reference and chat link, its current PR and its final output. It is read-only. When an item is waiting for an answer, its detail shows the question and the `reply` command to answer it with. See [Answer a waiting item](#answer-a-waiting-item).
+
+#### Sign in with Google
+
+Google sign-in is optional and lets the owner open the board without pasting the token. Without these settings, the board keeps token entry only.
+
+1. In the Google Cloud console, open **APIs & Services > Credentials**, configure the OAuth consent screen if asked, and create an **OAuth client ID** of type **Web application**.
+2. Add the board's callback as an authorized redirect URI, such as `http://127.0.0.1:8000/operator/auth/callback` locally. Google allows plain HTTP only for loopback addresses. A hosted server needs its HTTPS origin, such as `https://phalanx.example.com/operator/auth/callback`. Open the board on the same host name as the URI: `localhost` and `127.0.0.1` don't match.
+3. Set all three settings on the server and restart it:
+
+   ```powershell
+   $env:PHALANX_GOOGLE_CLIENT_ID = "<client ID>"
+   $env:PHALANX_GOOGLE_CLIENT_SECRET = "<client secret>"
+   $env:PHALANX_OWNER_EMAILS = "you@example.com"  # comma-separated allowlist
+   ```
+
+The board then shows **Sign in with Google** above the token form. The server uses the authorization code flow with `state`, `nonce` and PKCE and exchanges the code itself. It checks the ID token's issuer, audience, expiry, nonce, verified email and the allowlist. A sign-in creates a 12-hour session stored as a hashed ID with the Google account ID (`sub`), email and `owner` role in the database, and sent as an `HttpOnly`, `SameSite=Lax` cookie, which is `Secure` over HTTPS. Behind a TLS-terminating proxy, run uvicorn with `--proxy-headers` so the server sees HTTPS. The cookie authorizes only the read-only `GET /v1/operator/*` routes. Owner writes, the CLI and runners keep bearer tokens. **Sign out** deletes the session. A failed sign-in shows its reason, such as an account missing from the allowlist. Removing an address from `PHALANX_OWNER_EMAILS` and restarting ends its sessions.
 
 ### Back up and restore SQLite
 
@@ -583,13 +599,14 @@ PH-06 owns candidate indexing, time eligible, aging, capacity, admission and lea
 
 ### Read the operator board data
 
-Both owner and runner bearer tokens can call these routes.
+Both owner and runner bearer tokens can call these routes. A Google sign-in session cookie can too; see [Sign in with Google](#sign-in-with-google).
 
 | Route | Response |
 | --- | --- |
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
 | `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
+| `GET /v1/operator/items/{item_id}/executions/{execution_id}/report` | The stored Markdown report of a closed execution as plain text, or 404. |
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the
 returned `next_cursor` as `cursor` on the same route and list kind until it is

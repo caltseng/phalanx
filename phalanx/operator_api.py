@@ -7,13 +7,16 @@ import re
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 
-from .auth import authenticate
+from . import intake
 from .intake_models import Identifier
+from .operator_auth import operator_reader
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
 
-router = APIRouter(prefix="/v1/operator", dependencies=[Depends(authenticate)])
+# Every route here must stay a read: a Google session cookie authorizes this router.
+router = APIRouter(prefix="/v1/operator", dependencies=[Depends(operator_reader)])
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=512)]
 STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00")
@@ -259,3 +262,12 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         "events": [dict(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
     }
+
+
+@router.get("/items/{item_id}/executions/{execution_id}/report", response_class=PlainTextResponse)
+def report(request: Request, item_id: Identifier, execution_id: Identifier):
+    with read_transaction(request.app.state.database_path) as db:
+        try:
+            return intake.report(db, item_id, execution_id)
+        except intake.Missing as error:
+            raise HTTPException(404, str(error)) from error

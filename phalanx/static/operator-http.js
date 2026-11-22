@@ -5,19 +5,25 @@
   const TOKEN = /^[A-Za-z0-9_-]{32,}$/;
   const CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
   const EXECUTIONS = "/v1/operator/executions";
+  const AUTH = "/operator/auth/";
 
   function client(token) {
+    // A null token reads with the same-origin Google session cookie instead.
+    const auth = token === null
+      ? { credentials: "same-origin", headers: {} }
+      : { credentials: "omit", headers: { Authorization: "Bearer " + token } };
+
     async function read(path, signal, accept = "application/json") {
       const response = await fetch(path, {
         signal,
         redirect: "error",
         cache: "no-store",
-        credentials: "omit",
-        headers: { Authorization: "Bearer " + token, Accept: accept }
+        credentials: auth.credentials,
+        headers: { ...auth.headers, Accept: accept }
       });
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
-          throw new Error("The server rejected the owner token.");
+          throw new Error("The server rejected the owner sign-in.");
         }
         if (response.status === 404) {
           throw new Error("This resource is unavailable on the server.");
@@ -133,7 +139,8 @@
         };
       },
       report({ itemId, id }, signal) {
-        const path = "/v1/items/" + identifier(itemId) + "/executions/" + identifier(id) + "/report";
+        const path = "/v1/operator/items/" + identifier(itemId) + "/executions/" + identifier(id) +
+          "/report";
         return read(path, signal, "text/plain");
       }
     };
@@ -143,6 +150,7 @@
   const input = document.querySelector("#operator-token");
   const connect = form.querySelector("button");
   const disconnect = document.querySelector("#operator-disconnect");
+  const google = document.querySelector("#operator-google");
   const status = document.querySelector("#operator-session-status");
   const board = document.querySelector("#operator-board");
   const dialog = document.querySelector("#operator-report");
@@ -150,6 +158,7 @@
   const reportContent = document.querySelector("#operator-report-content");
   let unmount;
   let reportRead;
+  let signedIn = false;
 
   dialog.querySelector("button").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
@@ -201,15 +210,7 @@
       const source = client(token);
       const access = await source.owner(AbortSignal.timeout(12000));
       if (access.role !== "owner") throw new Error("Owner access required.");
-      source.openReport = output => openReport(source, output);
-      unmount = window.PhalanxOperatorBoard.mount(board, source);
-      form.hidden = true;
-      board.hidden = false;
-      disconnect.hidden = false;
-      status.textContent = "";
-      const heading = board.querySelector("h1");
-      heading.tabIndex = -1;
-      heading.focus();
+      showBoard(source, false);
     } catch {
       status.textContent = "Could not verify owner access. Check the token and server, then try again.";
     } finally {
@@ -219,7 +220,21 @@
     }
   });
 
-  disconnect.addEventListener("click", () => {
+  function showBoard(source, cookie) {
+    source.openReport = output => openReport(source, output);
+    unmount = window.PhalanxOperatorBoard.mount(board, source);
+    signedIn = cookie;
+    form.hidden = true;
+    board.hidden = false;
+    disconnect.textContent = cookie ? "Sign out" : "Disconnect";
+    disconnect.hidden = false;
+    status.textContent = "";
+    const heading = board.querySelector("h1");
+    heading.tabIndex = -1;
+    heading.focus();
+  }
+
+  function hideBoard(message) {
     if (dialog.open) dialog.close();
     clearReport();
     unmount?.();
@@ -227,7 +242,43 @@
     board.hidden = true;
     disconnect.hidden = true;
     form.hidden = false;
-    status.textContent = "Disconnected.";
+    status.textContent = message;
     input.focus();
+  }
+
+  disconnect.addEventListener("click", async () => {
+    if (!signedIn) {
+      hideBoard("Disconnected.");
+      return;
+    }
+    disconnect.disabled = true;
+    try {
+      const response = await fetch(AUTH + "logout", {
+        method: "POST", redirect: "error", cache: "no-store", credentials: "same-origin",
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) throw new Error("Sign-out failed.");
+      signedIn = false;
+      hideBoard("Signed out.");
+    } catch {
+      status.textContent = "Could not sign out. Check the server, then try again.";
+    } finally {
+      disconnect.disabled = false;
+    }
   });
+
+  (async () => {
+    try {
+      const response = await fetch(AUTH + "session", {
+        redirect: "error", cache: "no-store", credentials: "same-origin",
+        signal: AbortSignal.timeout(12000)
+      });
+      if (!response.ok) return;
+      const session = await response.json();
+      google.hidden = session.google !== true;
+      if (typeof session.email === "string" && !unmount) showBoard(client(null), true);
+    } catch {
+      // Token entry still works without the sign-in status.
+    }
+  })();
 })();
