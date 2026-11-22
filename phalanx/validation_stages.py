@@ -13,7 +13,7 @@ from .attended_drafts import github_repository
 from .candidate_local import CandidateLocal
 from .check_in import MergeTarget, check_in
 from .git_publication import GitPublication, PublicationError
-from .github import GitHubClient, GitHubError, UncertainGitHubWrite
+from .github import GitHubClient, GitHubError
 from .github_checks import collect_github_checks
 from .pr_models import (ExpectedRefs, GateObservation, GitHubPull, MergedPull, MergeIntent, Reconciliation, Rework,
                         Validation, VerifiedMerge)
@@ -21,7 +21,7 @@ from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
 from .transitions import Outcome, Revision, Stage, Target
-from .validation import CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_SECONDS, GateState, Phase
+from .validation import CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_SECONDS, DRAFT_SKIP_REASON, GateState, Phase
 from .validation_policy import ValidationPolicyError, load_validation_policy
 from .workspaces import WorkspaceError, _item_branch
 
@@ -191,6 +191,8 @@ def _promotion(runner, snapshot):
             return _retry(snapshot, "GitHub has not shown the pushed candidate on the PR yet")
     if pull.head_sha == candidate and pull.mergeable is False:
         return _rework(snapshot, pull, base_ref, "merge_conflict")
+    if pull.draft and not _may_mark_ready(runner, snapshot, url):
+        return _question(snapshot, _REPROMOTE_PROMPT, handoff)
     result = promote(
         github, item_id=claim["item_id"], number=int(number), base_ref=base_ref,
         revision=Revision(candidate, pull.base_sha), collect=collect,
@@ -217,9 +219,13 @@ def _promotion(runner, snapshot):
             return _draft_wait(runner, snapshot, ("; ".join(gates.reasons) or "Draft checks are pending")[:16000],
                                observed.base_sha)
         reason = "; ".join(blocked or gates.reasons) or result.reason
-        if not blocked and not observed.draft and gates.state is GateState.BLOCKED:
-            return _convert_to_draft(runner, snapshot, github, observed, reason, handoff)
         return _question(snapshot, reason, handoff)
+    if result.status == "verified" and gates.skipped:
+        PRNotes(runner.root).comment(
+            url, f"draft-checks-skipped:{candidate}",
+            f"Phalanx skipped draft-only checks at `{candidate}` ({DRAFT_SKIP_REASON}): "
+            f"{', '.join(gates.skipped)}.",
+        )
     # Verified evidence advances; failed draft checks return the item to development.
     return {"route": "pr-observation", "body": _validation(
         snapshot, result.pull, base_ref, draft_checks, result.checks,
@@ -236,26 +242,25 @@ def _draft_wait(runner, snapshot, reason, base_sha):
     }}
 
 
-def _convert_to_draft(runner, snapshot, github, pull, reason, handoff):
-    """Return a ready PR to draft so its draft-only checks can run, then wait for them."""
-    try:
-        github.convert_to_draft(pull.node_id)
-    except UncertainGitHubWrite as error:
-        return _retry(snapshot, str(error))
-    except GitHubError as error:
-        if error.retry_after_seconds is not None or error.status in {408, 429}:
-            return _retry(snapshot, str(error), error.retry_after_seconds)
-        return _question(snapshot, f"{reason}. GitHub refused to convert the PR back to draft ({error}). "
-                         "Convert it to draft or remove its draft-only checks from the runner's "
-                         "validation policy, then reply.", handoff)
-    candidate = snapshot["claim"]["execution"]["state"]["candidate"]
-    PRNotes(runner.root).comment(
-        snapshot["claim"]["execution"]["state"]["primary_pr"], f"converted-to-draft:{candidate}",
-        f"Phalanx converted this PR back to draft at `{candidate}` so its draft-only checks can run: "
-        f"{reason}. It will mark the PR ready again once they pass.",
-    )
-    return _draft_wait(runner, snapshot, f"Converted the PR back to draft; waiting for draft checks: {reason}"[:16000],
-                       pull.base_sha)
+_REPROMOTE_PROMPT = ("This PR was converted back to draft after it was marked ready, and Phalanx never "
+                     "marks such a PR ready on its own. Mark it ready yourself, or reply as the owner to let "
+                     "Phalanx mark it ready once its draft-only checks pass.")
+
+
+def _may_mark_ready(runner, snapshot, url):
+    """Whether Phalanx may mark this draft ready: it was never ready, or the owner allowed it since."""
+    claim = snapshot["claim"]
+    timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
+    allowed = True
+    for entry in timeline:
+        details = entry.get("details") or {}
+        pull = details.get("pull")
+        if details.get("pr_url") == url and isinstance(pull, dict) and pull.get("draft") is False:
+            allowed = False
+        elif (entry.get("event") == "reply" and details.get("answered_by", "owner") == "owner"
+              and (details.get("question") or {}).get("prompt") == _REPROMOTE_PROMPT):
+            allowed = True
+    return allowed
 
 
 def _verified_head(runner, snapshot, url):

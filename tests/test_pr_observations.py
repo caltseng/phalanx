@@ -211,6 +211,16 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(updated["state"]["stage"], "development")
         self.assertIn("build", updated["state"]["development_findings"])
 
+    def test_ready_pr_records_missing_draft_checks_as_skipped(self):
+        self.publish()
+        body = self.observation(self.claim("pr_promotion"), gates=dict(self.gates("draft"), observations=[]))
+        status, updated = self.submit(body)
+        self.assertEqual((status, updated["state"]["stage"]), (200, "pr_validation"))
+        _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+        gate = timeline[-1]["details"]["gate_result"]
+        self.assertEqual((gate["state"], gate["skipped"]), ("satisfied", ["build (check_run) from app 123"]))
+        self.assertIn("first promotion", gate["skip_reason"])
+
     def test_promotion_and_validation_require_the_primary_pr_and_current_gates(self):
         self.publish()
         claim = self.claim("pr_promotion")
@@ -219,7 +229,8 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(self.submit(dict(body, pull=dict(body["pull"], number=8)))[0], 409)
         self.assertEqual(self.submit(dict(body, pull=dict(body["pull"], draft=True)))[0], 409)
         for field, value in (("number", 8), ("head_sha", OTHER), ("base_sha", OTHER), ("phase", "ready"),
-                             ("observations", []), ("required", None)):
+                             ("observations", self.gates("draft", outcome="pending")["observations"]),
+                             ("required", None)):
             with self.subTest(field=field):
                 response, _ = self.submit(dict(body, gates=dict(body["gates"], **{field: value})))
                 self.assertEqual(response, 422 if value is None else 409)

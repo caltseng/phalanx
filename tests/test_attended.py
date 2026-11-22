@@ -40,7 +40,6 @@ class FakeGitHub:
         self.pull = None
         self.runs = []
         self.comments = []
-        self.refuse_convert = False
         self.threads = []
         self.lose_merge = False
 
@@ -55,12 +54,6 @@ class FakeGitHub:
         if path.endswith("/git/commits/" + "e" * 40):
             return response({"sha": "e" * 40, "parents": [{"sha": self.base}, {"sha": self.head}]})
         if request.method == "POST" and path == "/graphql":
-            if "convertPullRequestToDraft" in json.loads(request.data)["query"]:
-                if self.refuse_convert:
-                    return response({"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible"}]})
-                self.pull["draft"] = True
-                return response({"data": {"convertPullRequestToDraft": {
-                    "pullRequest": {"id": self.pull["node_id"], "isDraft": True}}}})
             if "reviewThreads" in json.loads(request.data)["query"]:
                 return response({"data": {"repository": {"pullRequest": {
                     "latestOpinionatedReviews": {"nodes": []},
@@ -998,52 +991,65 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                         "authorization": "Policy 3"}],
                       [entry["details"].get("local_checks") for entry in timeline])
 
-    def test_ready_pr_without_draft_evidence_converts_back_to_draft(self):
+    def _promotion_fixture(self, draft, timeline, gates):
         from phalanx import validation_stages
-        from phalanx.github import GitHubError
-        from phalanx.pr_notes import PRNotes
         from phalanx.promotion import Promotion
-        from phalanx.validation import GateResult, GateState
 
         candidate = "b" * 40
         snapshot = {"claim": {
             "attempt_id": "a", "item_id": "item-1",
             "request": {"repository_id": "repo", "target_branch": "main"},
-            "execution": {"version": 3, "state": {
+            "execution": {"id": "e", "version": 3, "state": {
                 "stage": "pr_promotion", "candidate": candidate,
                 "primary_pr": "https://github.com/o/r/pull/7"}}}}
-        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=False, node_id="PR_7", mergeable=True)
-        converted = []
+        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=draft, node_id="PR_7", mergeable=True)
+        github = SimpleNamespace(get_pull_request=lambda number: pull)
+        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root,
+                                 api=SimpleNamespace(call=lambda path: timeline))
+        promoted = []
 
-        def convert(node_id):
-            if refusal:
-                raise GitHubError("convert pull request to draft", "Resource not accessible")
-            converted.append(node_id)
+        def promote(*_, **__):
+            promoted.append(True)
+            return Promotion("verified", "Verified the ready primary PR", pull, gates)
 
-        github = SimpleNamespace(get_pull_request=lambda number: pull, convert_to_draft=convert)
-        gates = GateResult(GateState.BLOCKED, ("lint needs a draft check recovery decision on the ready PR",))
-        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}},
-                                         "check_recheck_seconds": 7, "check_wait_limit_seconds": 600},
-                                 root=self.root)
-        with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
-                patch.object(validation_stages, "_github", lambda _: github), \
-                patch.object(validation_stages, "_candidate", lambda *_: None), \
-                patch.object(validation_stages, "promote", lambda *_, **__: Promotion(
-                    "gates_unresolved", "unresolved", pull, gates)):
-            refusal = False
-            waiting = validation_stages._promotion(runner, snapshot)
-            refusal = True
-            refused = validation_stages._promotion(runner, snapshot)["body"]
-        self.assertEqual((waiting["route"], waiting["body"]["gate"], converted),
-                         ("external-wait", "draft_checks", ["PR_7"]))
-        self.assertEqual(waiting["body"]["revision"], {"head": candidate, "base": "c" * 40})
-        self.assertEqual((waiting["body"]["retry_after_seconds"], waiting["body"]["wait_limit_seconds"]),
-                         (7, 600))
+        def run():
+            with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
+                    patch.object(validation_stages, "_github", lambda _: github), \
+                    patch.object(validation_stages, "_candidate", lambda *_: None), \
+                    patch.object(validation_stages, "_validation", lambda *_: {"draft": "evidence"}), \
+                    patch.object(validation_stages, "promote", promote):
+                return validation_stages._promotion(runner, snapshot)
+        return candidate, promoted, run
+
+    def test_ready_pr_without_draft_evidence_skips_draft_checks_and_advances(self):
+        from phalanx.pr_notes import PRNotes
+        from phalanx.validation import GateResult, GateState
+
+        candidate, promoted, run = self._promotion_fixture(
+            False, [], GateResult(GateState.SATISFIED, skipped=("lint (check_run)",)))
+        result = run()
+        self.assertEqual((result["route"], result["body"], promoted), ("pr-observation", {"draft": "evidence"}, [True]))
         self.assertEqual([note["note"] for note in PRNotes(self.root).flush(None)],
-                         [f"converted-to-draft:{candidate}"])
-        self.assertEqual(refused["outcome"], "needs_input")
-        self.assertIn("refused to convert the PR back to draft", refused["question"]["prompt"])
+                         [f"draft-checks-skipped:{candidate}"])
 
+    def test_draft_after_promotion_asks_the_owner_before_marking_ready(self):
+        from phalanx import validation_stages
+        from phalanx.validation import GateResult, GateState
+
+        timeline = []
+        _, promoted, run = self._promotion_fixture(True, timeline, GateResult(GateState.SATISFIED))
+        self.assertEqual(run()["route"], "pr-observation")
+        timeline.append({"event": "result", "details": {
+            "pr_url": "https://github.com/o/r/pull/7", "pull": {"draft": False}}})
+        asked = run()["body"]
+        self.assertEqual((asked["outcome"], asked["question"]["prompt"]),
+                         ("needs_input", validation_stages._REPROMOTE_PROMPT))
+        question = {"prompt": validation_stages._REPROMOTE_PROMPT}
+        timeline.append({"event": "reply", "details": {"answered_by": "captain", "question": question}})
+        self.assertEqual(run()["body"]["outcome"], "needs_input")
+        timeline.append({"event": "reply", "details": {"answered_by": "owner", "question": question}})
+        self.assertEqual(run()["route"], "pr-observation")
+        self.assertEqual(len(promoted), 2)
     def test_reviewed_update_retries_transient_errors_and_reworks_unexpected_heads(self):
         from phalanx import validation_stages
         from phalanx.git_publication import PublicationError

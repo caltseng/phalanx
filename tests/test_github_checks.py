@@ -158,11 +158,10 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual(self.collect((STATUS,), response([])).gate.state, GateState.WAITING)
         self.assertEqual(self.collect((PREVIEW,), after=False).gate.state, GateState.BLOCKED)
 
-    def test_ready_checks_are_ignored_while_draft_and_missing_draft_check_on_ready_blocks(self):
+    def test_ready_checks_are_ignored_while_draft_and_missing_draft_check_on_ready_is_skipped(self):
         self.assertEqual(self.collect((RUN,), phase=Phase.READY).gate.state, GateState.WAITING)
         result = self.collect((RUN,), response({"check_runs": []}), draft=False)
-        self.assertEqual(result.gate.state, GateState.BLOCKED)
-        self.assertIn("draft check recovery", result.gate.reasons[0])
+        self.assertEqual((result.gate.state, len(result.gate.skipped)), (GateState.SATISFIED, 1))
 
     def test_mid_collection_base_change_discards_passing_evidence(self):
         result = self.collect((RUN,), response({"check_runs": [run(10)]}), last_tip=tip(OTHER))
