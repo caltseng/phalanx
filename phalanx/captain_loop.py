@@ -118,6 +118,14 @@ class CaptainLoop:
             db.execute("INSERT OR REPLACE INTO captain VALUES (?, ?)", (key, json.dumps(event)))
         self.emit(event)
 
+    def _clear_status(self, slot, status):
+        with self.runner._journal() as db:
+            cleared = db.execute("DELETE FROM captain WHERE key=? AND json_extract(value, '$.status')=?",
+                                 (f"status-{slot}", status)).rowcount
+        if cleared:
+            self.emit({"slot": slot, "status": "cleared", "reason": f"{status} resolved",
+                       "at": datetime.now(timezone.utc).isoformat()})
+
     @staticmethod
     def _mapping_key(mapping):
         return tuple(mapping[field] for field in ("host_id", "project_id", "checkout"))
@@ -534,10 +542,14 @@ class CaptainLoop:
                 self.recovery_ready = True
         owned = {record["claim"]["attempt_id"] for record in records.values() if "claim" in record}
         self.unmatched = sorted(set(self.expired) - owned)
-        if self.unmatched and self.recovery_ready and self.unmatched != self.last_unmatched:
-            self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
-                         + ", ".join(self.unmatched))
-        self.last_unmatched = self.unmatched.copy()
+        # Compare only fresh listings; the first one also clears a status left by an earlier run.
+        if self.recovery_ready and self.unmatched != self.last_unmatched:
+            if self.unmatched:
+                self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their "
+                             "journals: " + ", ".join(self.unmatched))
+            else:
+                self._clear_status(0, "unmatched_attempts")
+            self.last_unmatched = self.unmatched.copy()
         self._report_mappings()
         # Each project check is a Captain request; run it only for a free slot or a pending launch.
         free = self.recovery_ready and len(records) + len(self.unmatched) < self.runner.capacity

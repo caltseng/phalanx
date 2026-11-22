@@ -111,6 +111,29 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             self.assertEqual(cli.returncode, 0, cli.stderr)
             self.assertEqual(json.loads(cli.stdout), item)
 
+    def test_cli_cancel_uses_current_execution_and_version(self):
+        item, _, base, execution = self.create()
+
+        def cancel():
+            return subprocess.run(
+                [sys.executable, "-m", "phalanx", "--api-url", self.url, "cancel", item["id"],
+                 "--reason", "Stale item"],
+                env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True, timeout=10,
+            )
+
+        cli = cancel()
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        cancelled = json.loads(cli.stdout)
+        self.assertEqual(cancelled["id"], item["execution"]["id"])
+        self.assertGreater(cancelled["version"], item["execution"]["version"])
+        events = self.get(execution + "/timeline", OWNER)[1]
+        self.assertEqual(sum(event["event"] == "cancel" for event in events), 1)
+        self.assertEqual(next(event for event in events if event["event"] == "cancel")["details"]["reason"],
+                         "Stale item")
+        again = cancel()
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("HTTP 409", again.stderr)
+
     def test_report_review_loop_and_verified_output_survive_restart(self):
         item, _, base, route = self.create()
         path = route + "/result"

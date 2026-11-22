@@ -550,7 +550,10 @@ Set `PHALANX_OWNER_TOKEN` to the same owner token used by the server. Set `PHALA
 python -m phalanx register example https://github.com/example/project.git
 python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
 python -m phalanx inspect <item_id>
+python -m phalanx cancel <item_id> --reason "Superseded by a newer item"
 ```
+
+`cancel` reads the item's current execution and version, then requests cancellation with an idempotency key bound to that version. Retrying it after a lost response is safe: if the first request committed, the retry fails with a visible version conflict instead of cancelling twice.
 
 Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
 

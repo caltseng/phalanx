@@ -68,6 +68,9 @@ def main() -> None:
     reply.add_argument("--key", required=True, help="reuse this key when retrying the same reply")
     reply.add_argument("--answered-by", choices=("owner", "captain"), default="owner",
                        help="who answered: the owner, or the Captain triaging a routine question")
+    cancel = commands.add_parser("cancel", help="cancel an item's current execution")
+    cancel.add_argument("item_id")
+    cancel.add_argument("--reason", required=True)
     add_attended_command(commands)
     add_recovery_command(commands)
     add_captain_command(commands)
@@ -109,6 +112,17 @@ def main() -> None:
                 args.api_url, f"/v1/items/{item}/executions/{execution}/reply", key=args.key,
                 body={"expected_version": args.version, "answer": args.answer,
                       "answered_by": args.answered_by},
+            )
+            print(json.dumps(result, indent=2))
+        elif args.command == "cancel":
+            item = quote(args.item_id, safe="")
+            execution = api_request(args.api_url, f"/v1/items/{item}")["execution"]
+            # The key is bound to the version read, so a retried request is idempotent and a
+            # retry after the state moved fails visibly on the stale version instead.
+            result = api_request(
+                args.api_url, f"/v1/items/{item}/executions/{quote(execution['id'], safe='')}/cancel",
+                key=f"cancel-{execution['id']}-{execution['version']}",
+                body={"expected_version": execution["version"], "reason": args.reason},
             )
             print(json.dumps(result, indent=2))
         else:

@@ -640,6 +640,25 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(loop._records()) + len(loop.unmatched), self.config["capacity"])
         self.assertTrue(any(event["status"] == "unmatched_attempts" for event in self.events))
 
+    def test_unmatched_attempts_status_clears_when_none_remain_and_after_restart(self):
+        def unmatched_status(loop):
+            return [row for row in loop.runner.status(all_slots=True)["loop_status"]
+                    if row["status"] == "unmatched_attempts"]
+
+        self.api.expired = [{"attempt_id": "unmatched", "item_id": "missing"}]
+        loop = self.loop()
+        self.spin(loop, lambda: bool(unmatched_status(loop)))
+        self.api.expired = []
+        self.spin(loop, lambda: not unmatched_status(loop))
+        self.assertTrue(any(event["status"] == "cleared" for event in self.events))
+        self.api.expired = [{"attempt_id": "unmatched", "item_id": "missing"}]
+        self.spin(loop, lambda: bool(unmatched_status(loop)))
+        loop.close()
+        # A status persisted by an earlier run is cleared by the first fresh recovery listing.
+        self.api.expired = []
+        restarted = self.loop()
+        self.spin(restarted, lambda: not unmatched_status(restarted))
+
     def test_expired_active_writer_is_adopted_after_observation_and_keeps_renewing(self):
         self.config["capacity"] = 1
         self.api.waiting = ["first"]
