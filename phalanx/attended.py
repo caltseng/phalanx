@@ -507,11 +507,12 @@ class AttendedRunner:
                     raise RunnerError("Worker evidence exceeds the API limit")
                 body["failure_reason"] = reason
             elif result.outcome == "needs_input":
-                if any(len(text.strip()) > 16000 for text in result.details.values()):
+                if any(len(text.strip()) > 16000 for value in result.details.values()
+                       for text in (value if isinstance(value, list) else [value])):
                     raise RunnerError("Worker question exceeds the API limit")
                 body["question"] = {
                     "prompt": result.details["question"],
-                    "options": [result.details["options"]],
+                    "options": result.details["options"],
                     "proposed_default": result.details.get("proposed_default"),
                     "handoff": result.details["handoff"],
                 }

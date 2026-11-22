@@ -5,7 +5,6 @@ import os
 import sqlite3
 from contextlib import closing, contextmanager
 from dataclasses import asdict
-from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
 from time import time
@@ -14,7 +13,8 @@ from uuid import UUID
 
 from .attended import AttendedRunner, RunnerAPI, RunnerError
 from .attended_recovery import (
-    NativeObservation, StoppedEvidence, acknowledge_claim, acknowledge_stop, reconcile, unmatched_leases,
+    StoppedEvidence, acknowledge_claim, acknowledge_stop, native_observation,
+    native_timestamp, reconcile, unmatched_leases,
 )
 from .handoff import WorkerHandoff, InvalidResult, WorkPacket
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock, _git
@@ -90,12 +90,11 @@ def _verify_local(root, record, packet, thread_id):
         elif result is None:
             summary = "Preserve and reconcile local changes before allowing a replacement"
         elif (
-            (packet.stage in {"report_drafting", "report_review"} and unchanged
-             and result.outcome in {"succeeded", "changes_required", "needs_input", "failed"})
+            # Development alone commits to the checkout; every other worker stage leaves it unchanged.
+            (unchanged and (packet.stage != "development" or result.outcome in {"needs_input", "failed"}))
             or (packet.stage == "development" and result.outcome == "succeeded"
                 and not workspace.dirty and workspace.head != packet.expected_revision
                 and result.details["evidence"].strip() == workspace.head)
-            or (packet.stage == "development" and result.outcome in {"needs_input", "failed"} and unchanged)
         ):
             disposition = "verified_result"
             summary = "Verified attempt result and registered workspace checkpoint"
@@ -291,18 +290,18 @@ def run_recovery_command(args):
     observations = []
     complete = False
     if native:
-        observed_at = datetime.fromisoformat(native["observed_at"])
-        if observed_at.utcoffset() is None or not 0 <= time() - observed_at.timestamp() <= 60:
-            raise RunnerError("Supply a fresh Captain observation with a UTC offset")
+        try:
+            observed_at = native_timestamp(native["observed_at"])
+            if not 0 <= time() - observed_at.timestamp() <= 60:
+                raise ValueError("stale")
+        except (KeyError, ValueError, TypeError) as error:
+            raise RunnerError("Supply a fresh Captain observation with a UTC offset") from error
         complete = native.get("discovery_complete") is True
         for row in native["threads"]:
-            started_at = datetime.fromisoformat(row["started_at"])
-            if started_at.utcoffset() is None or row["state"] not in {"active", "stopped", "unknown"}:
-                raise RunnerError("Native rows need an offset-aware start and a recognized state")
-            observations.append(NativeObservation(**{
-                **row, "started_at": started_at, "thread_id": UUID(row["thread_id"]),
-                "client_thread_id": UUID(row["client_thread_id"]) if row.get("client_thread_id") else None,
-            }))
+            try:
+                observations.append(native_observation(row, observed_at))
+            except (KeyError, ValueError, TypeError, AttributeError) as error:
+                raise RunnerError(f"Malformed native observation row: {error}") from error
     root = args.state.resolve(strict=True)
     api = RunnerAPI(config["base_url"], token)
     journal = RecoveryJournal(root, args.slot)

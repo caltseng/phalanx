@@ -31,6 +31,33 @@ class NativeObservation:
     client_thread_id: UUID | None = None
 
 
+def native_timestamp(value: str) -> datetime:
+    result = datetime.fromisoformat(value)
+    if result.tzinfo is None:
+        raise ValueError("An offset-aware native timestamp is required")
+    return result
+
+
+def native_observation(row: dict, observed: datetime) -> NativeObservation:
+    """Parse one observe-reply thread row; raise KeyError, ValueError or TypeError if it is invalid."""
+    state = row["state"]
+    started = native_timestamp(row["started_at"])
+    if (
+        state not in {"active", "stopped", "unknown"} or started > observed
+        or not isinstance(row["assignment"], dict)
+        or any(not isinstance(row[field], str) or not row[field]
+               for field in ("host_id", "project_id", "marker"))
+        or (state == "stopped" and row.get("writers_stopped") is not True)
+    ):
+        raise ValueError("Invalid native state or stopped-writer attestation")
+    return NativeObservation(
+        host_id=row["host_id"], project_id=row["project_id"],
+        thread_id=UUID(row["thread_id"]), started_at=started,
+        marker=row["marker"], assignment=row["assignment"], state=state,
+        client_thread_id=UUID(row["client_thread_id"]) if row.get("client_thread_id") else None,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class StoppedEvidence:
     """Local Git and output checks for the exact attempt after its writer stopped.

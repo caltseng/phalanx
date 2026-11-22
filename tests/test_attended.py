@@ -239,7 +239,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertIn(first, rewrite["session"]["prompt"])
         waiting = submit(rewrite, {
             "question": "Which command should the report use?",
-            "options": "Discovery or a named test",
+            "options": ["Discovery", "A named test"],
             "handoff": "Review findings still need a command.",
         }, "needs_input")
         self.assertEqual(waiting["state"]["status"], "waiting_for_input")
@@ -491,7 +491,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         outcomes = [
             ("failed", {"reason": "Build unavailable", "attempted": "Retried locally",
                         "retry_guidance": "Try from a new worker"}),
-            ("needs_input", {"question": "Which source?", "options": "Source A or B", "handoff": "No edits"}),
+            ("needs_input", {"question": "Which source?", "options": ["Source A", "Source B"], "handoff": "No edits"}),
         ]
         runner = self.runner()
         for outcome, details in outcomes:
@@ -506,7 +506,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertNotIn("wait", technical)
         self.assertNotIn("failure_reason", question)
         self.assertEqual(question["question"], {
-            "prompt": "Which source?", "options": ["Source A or B"], "proposed_default": None,
+            "prompt": "Which source?", "options": ["Source A", "Source B"], "proposed_default": None,
             "handoff": "No edits",
         })
 
@@ -533,7 +533,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                          (thread_id, "https://example.test/chat/1"))
         self.assertIsNone(running["question"])
         self.write_result(runner, marker, {
-            "question": "Which source?", "options": "Source A or B", "handoff": "Draft in notes.md",
+            "question": "Which source?", "options": ["Source A", "Source B"], "handoff": "Draft in notes.md",
             "proposed_default": "Source B",
         }, "needs_input")
         waiting = runner.submit(marker, "local", thread_id)
@@ -542,7 +542,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         status, inbox = self.get("/v1/owner/inbox", OWNER)
         self.assertEqual(status, 200, inbox)
         question = {
-            "prompt": "Which source?", "options": ["Source A or B"],
+            "prompt": "Which source?", "options": ["Source A", "Source B"],
             "handoff": "Draft in notes.md", "proposed_default": "Source B",
         }
         self.assertEqual(inbox[0]["question"], question)

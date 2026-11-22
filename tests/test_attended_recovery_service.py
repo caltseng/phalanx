@@ -6,13 +6,15 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.attended import AttendedRunner, RunnerError
 from phalanx.attended_recovery import NativeObservation
-from phalanx.attended_recovery_service import RecoveryJournal, run_recovery
+from phalanx.attended_recovery_service import RecoveryJournal, run_recovery, run_recovery_command
 from phalanx.handoff import WorkPacket
+from phalanx.observe import build_reply
 from phalanx.workspaces import Workspace
 
 
@@ -174,6 +176,52 @@ class RecoveryServiceTests(unittest.TestCase):
         self.assertEqual(self.api.claims, [self.api.claims[0]] * 3)
         self.assertEqual(self.journal.snapshot()[0]["lease"], self.api.claims[0][2])
         self.assertEqual(self.api.requests, [])
+
+    def test_saved_result_from_checkout_unchanged_stage_is_adopted(self):
+        self.packet = replace(self.packet, stage="self_review", output_type="pull_request")
+        self.native = replace(self.native, assignment=self.packet.result_identity())
+        self.record["packet"] = {**asdict(self.packet), "attempt_id": str(self.packet.attempt_id),
+                                 "worktree": str(self.packet.worktree)}
+        self.record["claim"]["execution"]["state"]["stage"] = "self_review"
+        self.expired["stage"] = "self_review"
+        self.api = RecoveryAPI(self)
+        self.seed()
+        result = self.packet.result_identity() | {"outcome": "succeeded", "details": {"evidence": "Reviewed"}}
+        (self.root / "results" / f"{self.packet.marker}.json").write_text(json.dumps(result), encoding="utf-8")
+        self.assertEqual(self.step()["status"], "adopted")
+        self.assertEqual(len(self.api.claims), 1)
+        self.assertEqual(self.api.requests, [])
+
+    def test_recover_command_reads_relay_observe_reply(self):
+        assignment = self.packet.result_identity()
+        prompt = (f"Phalanx attempt marker: {self.packet.marker}\n\nWork packet:\n"
+                  + json.dumps({"result_identity": assignment}))
+        reference = {"host_id": "local", "project_id": "project", "marker": self.packet.marker,
+                     "assignment": assignment}
+        reply = build_reply({"operation": "observe", "arguments": {"references": [reference]}},
+                            [{"thread_id": str(self.native.thread_id), "project_id": "project",
+                              "state": "stopped", "prompt": prompt,
+                              "started_at": self.native.started_at.isoformat()}],
+                            host_id="local", complete=True)
+        self.assertIs(reply["threads"][0]["writers_stopped"], True)
+        (self.root / "observation.json").write_text(json.dumps(reply), encoding="utf-8")
+        (self.root / "config.json").write_text(json.dumps({"base_url": "http://127.0.0.1:1", "runner_id": "desk"}),
+                                               encoding="utf-8")
+        (self.root / "fresh").mkdir()
+        args = SimpleNamespace(config=self.root / "config.json", state=self.root / "fresh", slot=1,
+                               observation=self.root / "observation.json", recheck=False)
+        with (patch.dict("os.environ", {"PHALANX_RUNNER_TOKEN": "t"}),
+              patch("phalanx.attended_recovery_service.run_recovery", return_value={}) as recover,
+              patch("builtins.print")):
+            run_recovery_command(args)
+        kwargs = recover.call_args.kwargs
+        self.assertTrue(kwargs["discovery_complete"])
+        self.assertEqual(kwargs["observations"], [self.native])
+        del reply["threads"][0]["writers_stopped"]
+        (self.root / "observation.json").write_text(json.dumps(reply), encoding="utf-8")
+        with (patch.dict("os.environ", {"PHALANX_RUNNER_TOKEN": "t"}),
+              self.assertRaisesRegex(RunnerError, "stopped-writer attestation")):
+            run_recovery_command(args)
 
     def test_incomplete_result_exhausts_bounded_rechecks(self):
         (self.root / "results" / f"{self.packet.marker}.json.tmp").touch()

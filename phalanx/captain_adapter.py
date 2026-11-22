@@ -17,7 +17,7 @@ from typing import Callable
 from uuid import UUID
 
 from .runner_errors import RunnerError
-from .attended_recovery import NativeObservation
+from .attended_recovery import NativeObservation, native_observation, native_timestamp
 from .handoff import _unique_object
 
 
@@ -104,13 +104,6 @@ class ObservationBatch:
     errors: dict[str, str] = field(default_factory=dict)
 
 
-def _timestamp(value: str) -> datetime:
-    result = datetime.fromisoformat(value)
-    if result.tzinfo is None:
-        raise ValueError("An offset-aware native timestamp is required")
-    return result
-
-
 class BridgeAdapter:
     def __init__(self, transport: Callable[[str, dict], dict]):
         self.transport = transport
@@ -162,7 +155,7 @@ class BridgeAdapter:
             "references": references, "cursors": cursors, "timeout_seconds": timeout,
         })
         try:
-            observed = _timestamp(response["observed_at"])
+            observed = native_timestamp(response["observed_at"])
             age = (datetime.now(timezone.utc) - observed).total_seconds()
             complete = response["discovery_complete"]
             next_cursors = response.get("cursors", {})
@@ -180,22 +173,7 @@ class BridgeAdapter:
         markers = {ref["marker"] for ref in references}
         for row in rows:
             try:
-                state = row["state"]
-                started = _timestamp(row["started_at"])
-                if (
-                    state not in {"active", "stopped", "unknown"} or started > observed
-                    or not isinstance(row["assignment"], dict)
-                    or any(not isinstance(row[field], str) or not row[field]
-                           for field in ("host_id", "project_id", "marker"))
-                    or (state == "stopped" and row.get("writers_stopped") is not True)
-                ):
-                    raise ValueError("Invalid native state or stopped-writer attestation")
-                threads.append(NativeObservation(
-                    host_id=row["host_id"], project_id=row["project_id"],
-                    thread_id=UUID(row["thread_id"]), started_at=started,
-                    marker=row["marker"], assignment=row["assignment"], state=state,
-                    client_thread_id=UUID(row["client_thread_id"]) if row.get("client_thread_id") else None,
-                ))
+                threads.append(native_observation(row, observed))
             except (KeyError, ValueError, TypeError, AttributeError) as error:
                 marker = row.get("marker") if isinstance(row, dict) else None
                 marker = marker if isinstance(marker, str) and marker in markers else ""
