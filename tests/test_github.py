@@ -66,6 +66,44 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(result.head_repository, "Owner/SourceFork")
         self.assertIsNone(result.mergeable)
 
+    def test_issue_snapshot_and_paginated_comments_preserve_sources(self):
+        issue_url = "https://github.example/Owner/Repo/issues/7"
+        self.responses.extend([
+            response({"number": 7, "html_url": issue_url, "title": "Fix this", "body": None}),
+            response([{"id": 1, "html_url": issue_url + "#issuecomment-1",
+                       "user": {"login": "reviewer"}, "body": "First comment"}],
+                     next_url=f"{API}/repos/owner/repo/issues/7/comments?page=2"),
+            response([{"id": 2, "html_url": issue_url + "#issuecomment-2",
+                       "user": None, "body": "Second comment"}]),
+        ])
+        issue = self.client.get_issue(7)
+        self.assertEqual((issue.number, issue.title, issue.body, issue.url),
+                         (7, "Fix this", "", issue_url))
+        comments = list(self.client.issue_comments(7))
+        self.assertEqual([(c.author, c.body) for c in comments],
+                         [("reviewer", "First comment"), ("deleted user", "Second comment")])
+        self.assertEqual(comments[-1].url, issue_url + "#issuecomment-2")
+        self.assertEqual([r.method for r in self.requests], ["GET"] * 3)
+        self.assertEqual(self.requests[0].full_url, f"{API}/repos/owner/repo/issues/7")
+
+    def test_issue_reads_reject_pr_wrong_identity_and_invalid_provider_fields(self):
+        issue = {"number": 7, "html_url": "https://github.example/owner/repo/issues/7",
+                 "title": "Fix this", "body": "Context"}
+        for edit in ({"pull_request": {}}, {"number": 8}, {"number": True},
+                     {"html_url": "https://github.example/other/repo/issues/7"},
+                     {"title": ""}, {"body": []}):
+            with self.subTest(edit=edit):
+                self.responses.append(response(issue | edit))
+                with self.assertRaises(GitHubError):
+                    self.client.get_issue(7)
+        for number in (0, -1, True):
+            with self.assertRaises(ValueError):
+                self.client.get_issue(number)
+        self.responses.append(response([{"id": 1, "html_url": issue["html_url"] + "#issuecomment-2",
+                                        "user": {"login": "reviewer"}, "body": "Comment"}]))
+        with self.assertRaisesRegex(GitHubError, "invalid issue comment"):
+            list(self.client.issue_comments(7))
+
     def test_matching_pulls_follow_link_and_include_closed_matches(self):
         next_url = f"{API}/repositories/123/pulls?page=2"
         self.responses.extend([
