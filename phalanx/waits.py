@@ -60,6 +60,8 @@ def external_wait(db, item_id, execution_id, payload, lease_digest):
 _STALLED_PROMPTS = {
     "draft_checks": "Draft-only checks never reported on this head. Re-run them, or remove them "
                     "from the runner's validation policy, then reply to resume.",
+    "merge": "GitHub has not allowed the merge of the ready PR. Satisfy its required reviews and checks, "
+             "or merge it yourself, then reply to resume.",
 }
 
 

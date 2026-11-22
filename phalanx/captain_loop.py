@@ -24,7 +24,8 @@ from .workspaces import _file_lock, _item_branch
 
 
 _LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop", "recover_claim")
-_GITHUB_STAGES = {"pr_creation", "pr_promotion", "pr_validation", "pr_reconciliation", "ready_for_check_in"}
+_GITHUB_STAGES = {"pr_creation", "pr_promotion", "pr_validation", "pr_reconciliation", "ready_for_check_in",
+                  "check_in"}
 _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reconciliation",
                   "ready_for_check_in"}
 

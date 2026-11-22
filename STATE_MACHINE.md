@@ -32,7 +32,7 @@ flowchart TD
     Revise -->|New scope| Dev
     Reconcile -->|Ready-only target or auto-merge off| Done([Completed])
     Reconcile -->|Auto-merge on| Merge[Check-in]
-    Merge -->|Stale revision or new blocker| Reconcile
+    Merge -->|Conflict or unexpected head| Revise
     Merge -->|Merge verified| Done
     Draft --> ReportReview[Report review]
     ReportReview -->|Changes required| Draft
@@ -55,14 +55,14 @@ Before the PR is first marked ready, every fix goes back to `development`, which
 | `adversarial_review` | An independent reviewer records findings and severity against the diff since the last reviewed head, or the whole PR diff on the first review. | `pr_reconciliation` with the findings. An interrupted review can retry on the current revision. |
 | `pr_reconciliation` | Confirm CI, previews, review, approvals, and mergeability for the current PR head and base against the completion target. | Missing or stale CI or preview evidence returns to `pr_validation`. An unreviewed diff since the last reviewed head goes to `adversarial_review`. A merge conflict, failed checks, blocking review findings, new actionable GitHub feedback (requested changes or unresolved current review threads, each handed off once), or a foreign head that cannot be fast-forwarded go to `pr_revision` as findings. A pending required approval waits without holding a slot. When all evidence is current, complete a ready-only item, or one whose runner has auto-merge off, with the PR marked ready; otherwise advance to `check_in`. After 10 revision rounds, or a third round with identical findings, since the owner's last reply, ask the owner instead. |
 | `pr_revision` | Fix the findings on the open PR: integrate the target branch or foreign commits, resolve conflicts, fix failures, and address feedback and review findings. Self-review only the new diff, rerun the failed checks and the local checks covering the changed files, then push and verify the head. | `pr_validation`. Never convert the PR to draft. A fix that turns into new scope escalates to `development`. |
-| `check_in` | Recheck the auto-merge setting, required approvals and checks, and the expected head before requesting merge. Verify the resulting merge through GitHub. | Complete with PR link and merge commit. A stale head, conflict, or failing check returns to `pr_reconciliation`. An unknown merge outcome waits for reconciliation before retry. |
+| `check_in` | Reconcile first: if GitHub reports the PR merged with the verified head as the merge commit's head parent, record it, even if the base advanced. Otherwise recheck the claim, PR identity, expected head and mergeability, then request a direct merge commit pinned to the head. GitHub's required reviews, checks and rulesets gate the merge; Phalanx adds no gate. | Complete with PR link and merge commit. A conflict or unexpected head goes to `pr_revision` as findings. An unknown merge outcome or pending mergeability retries with backoff and reconciles before any new write. A merge GitHub refuses (HTTP 405) waits on repository rules, then asks the owner. An unattributable merge asks the owner. |
 | `report_drafting` | Produce a recoverable Markdown draft. | `report_review` |
 | `report_review` | Check the draft against the request and verify supporting evidence and links. | `report_storage` when it passes. Return to `report_drafting` for fixes. |
 | `report_storage` | Store the reviewed Markdown idempotently and record its reference. | Complete with the stored report. Retry storage failures without redrafting. |
 
 If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. An unexpected merge or a PR closed without merge requires a decision if the action’s intent cannot be established. Never open a replacement PR just because an existing one is closed.
 
-Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current check-in claim supplies the verified provider merge commit and its ordered parents, matching the authorized base and candidate head. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
+Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current check-in claim supplies the verified provider merge commit and its ordered parents, with the candidate head as the head parent. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
 
 ## Repository validation policy
 
