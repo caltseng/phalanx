@@ -251,6 +251,27 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 future.result(timeout=10)
         self.assertEqual(order, ["read"] + ["write"] * 5)
 
+    def test_reader_waits_out_a_write_longer_than_the_busy_timeout(self):
+        gate, release = store._Gate(), threading.Event()
+
+        def hold():
+            with gate.write():
+                release.wait(10)
+
+        def read():
+            with gate.read_start():
+                return "read"
+
+        # A write turn may wait up to the busy timeout to begin and again to commit.
+        with patch.object(store, "BUSY_TIMEOUT", 0.2), ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(hold)
+            time.sleep(0.1)
+            reader = pool.submit(read)
+            time.sleep(0.5)
+            release.set()
+            running.result(timeout=10)
+            self.assertEqual(reader.result(timeout=10), "read")
+
     def test_readers_arriving_while_a_writer_waits_go_after_it(self):
         gate, order = store._Gate(), []
 

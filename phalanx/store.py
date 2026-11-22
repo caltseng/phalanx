@@ -41,7 +41,7 @@ class _Gate:
     polling reader can miss every gap and time out. Readers instead wait here: those that
     arrive during a write start right after it, before the next writer, and those that arrive
     while a writer waits go after that writer. Each side waits at most one turn of the other,
-    however deep the write queue gets.
+    however deep the write queue gets, and neither adds a timeout of its own.
     """
 
     def __init__(self):
@@ -75,9 +75,9 @@ class _Gate:
             if self.writing or self.writers:
                 self.queued += 1
                 writes = self.writes
-                if not self.condition.wait_for(lambda: self.writes != writes, BUSY_TIMEOUT):
-                    self.queued -= 1
-                    raise sqlite3.OperationalError("database is locked by a running write")
+                # One write turn is already bounded by SQLite's busy timeout on BEGIN and COMMIT
+                # but can outlast it in total, so a wall-clock bound here would fail healthy reads.
+                self.condition.wait_for(lambda: self.writes != writes)
             else:
                 self.admitted += 1
         try:
