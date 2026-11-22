@@ -19,10 +19,12 @@ from .transitions import (
 
 STATE = TypeAdapter(Execution)
 PRIORITY = {"low": 0, "normal": 1, "urgent": 2}
-# Published PR stages whose findings send the item back to development.
-REWORK_STAGES = {Stage.PR_PROMOTION, Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.CHECK_IN}
+# Stages whose findings send the item back to development or revision. Counting
+# pre-PR stages bounds reruns when development keeps the candidate unchanged.
+REWORK_STAGES = {Stage.SELF_REVIEW, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION,
+                 Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.CHECK_IN}
 REWORK_TARGETS = {Stage.DEVELOPMENT, Stage.PR_REVISION}
-# Development rounds from published PR stages allowed between owner replies.
+# Rework rounds allowed between owner replies.
 REWORK_LIMIT = 10
 # Development rounds allowed on identical findings before they count as no progress.
 REPEAT_LIMIT = 2
