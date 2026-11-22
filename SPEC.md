@@ -1,6 +1,6 @@
 # Phalanx design spec
 
-Phalanx lets Caleb dispatch work across registered repositories and have local agents carry it through to a Markdown report or pull request. The backend is the durable source of truth. Agents run locally on machines with access to the relevant checkouts and credentials. The initial design should favor a small API, recoverable execution, and a flexible work-item format.
+Phalanx lets its users dispatch work across registered repositories and have local agents carry it through to a Markdown report or pull request. Caleb is the first user, and the design must also serve other people and teams (see [Users and workspaces](#users-and-workspaces)). The backend is the durable source of truth. Agents run locally on machines with access to the relevant checkouts and credentials. The initial design should favor a small API, recoverable execution, and a flexible work-item format.
 
 ## Work items and repositories
 
@@ -159,14 +159,36 @@ Use one relational store and keep database operations behind the server, with mi
 
 Use the same API server in both environments. For a hosted deployment, configure HTTPS, authentication, persistent storage, and backups. Local runners initiate outbound API requests, so hosting the server does not require exposing the runner or its repositories to the internet. Phone intake will use the same authenticated work-item creation endpoint.
 
+## Users and workspaces
+
+Phalanx will be used by people other than Caleb, alone or in teams, on a shared hosted server. Build for that shape now and ship it in small steps. The v1 local release runs one implicit workspace with the existing owner and runner tokens.
+
+- **Workspace.** The tenancy boundary. A workspace owns its repositories, work items, executions, runners, dispatch settings, questions and reports. Every server record belongs to exactly one workspace. The server scopes every query and write by the caller's workspace. Cross-workspace access is a bug, and tests prove isolation. The v1 data belongs to one default workspace, and a migration adds the scope without changing behavior.
+- **Users and roles.** A user is a person with a stable identity from a sign-in provider: the provider and its subject ID, with a verified email for display and invitations. Start with Google ([PH-27](IMPLEMENTATION_PLAN.md)). A user can belong to several workspaces, with a role in each:
+  - `owner` manages members, repositories, runners and dispatch;
+  - `member` files work, replies and acts on items;
+  - `viewer` can only read.
+
+  Add finer permissions, such as per repository, only when a team needs them.
+- **Attribution.** Every work item records who requested it, and every question, reply, steering change and owner action records who acted. A question goes first to the item's requester and is visible to the workspace's owners. "Needs you" means needs this user.
+- **Credentials.**
+  - **People** sign in to the dashboard. For the CLI and API they use personal API tokens, which are hashed on the server, scoped to one workspace and revocable.
+  - **Runners** register with their workspace and get their own token, bound to their runner ID.
+  - **Bootstrap.** The static owner and runner tokens remain the setup path for a single-user local install.
+- **Runners and Git stay with their owner.** A runner claims only work for its own workspace's repositories. Checkouts and Git credentials stay on the machine of the user who runs it, and the server never holds them. That boundary is what makes a shared server safe for many users.
+- **Fair sharing.** Capacity comes from each workspace's own runners, so one workspace's backlog cannot take another's slots. A hosted server adds per-workspace rate limits and storage quotas when it serves more than one workspace.
+- **Captain.** Each workspace runs its own Captain loop with that workspace's credentials. Captain decisions are attributed to the Captain and reviewable by the workspace owners.
+- **Not planned yet:** billing, enterprise single sign-on, and cross-workspace sharing.
+
 ## Operator view
 
 Provide a read-only work board for the current state of Phalanx. Put work in progress first, with an explicit distinction between running, queued, waiting for input, and waiting for external checks. Show recently closed work below it, newest first, including failures and cancellations with their reports. Keep the full backlog and older history available through paginated views.
 
-- In progress shows the item and repo, current stage, status, when it last advanced, and the specific wait reason or blocker. Put items needing Caleb’s judgment where they are easy to find. Include links to the visible worker chat and draft PR when available.
+- In progress shows the item and repo, current stage, status, when it last advanced, and the specific wait reason or blocker. Put items needing the user’s judgment where they are easy to find. Include links to the visible worker chat and draft PR when available.
 - A selected item shows its recorded transition history, current attempt, next action or resume trigger, and prerequisites when relevant. Keep stage and execution status separate. Show the recorded lifecycle rather than percent complete, since an item may loop back after a review or revision change.
 - Recently closed shows the outcome, close time, and one link to the verified PR or stored field report. If a merge was authorized and completed, distinguish checked in from ready for check-in.
 - Read state from the API. Use bounded, paginated queries for open items and recent closures, and load the detailed timeline only when selected. Refresh periodically and show when the view is stale or disconnected. Terminal outputs and recorded history remain available while the runner is offline.
+- The hosted dashboard's goals, UI principles and phases are proposed in [DASHBOARD.md](DASHBOARD.md).
 
 ## First milestone
 
@@ -177,7 +199,7 @@ Build a small API, one durable store, and a runner with a concurrency limit and 
 | Decision | Options | Starting proposal |
 | --- | --- | --- |
 | How should the first hosted instance run? | One hosted service with a persistent disk, or a hosted service with a managed relational database. | Run the standalone server locally first. Choose the host and database once we know the durability, concurrency, and maintenance tradeoffs. |
-| How should input requests reach Caleb? | CLI inbox, email, or a chat/push integration. | Store the question and reply in the API first. Use one notification channel with a link to the item. Decide where replies should be submitted. |
-| Who can file work? | One owner, selected collaborators, or separate submitter and runner roles. | Start with one owner plus runner credentials. Keep repo and Git credentials local to the runner. |
+| How should input requests reach a user? | CLI inbox, email, or a chat/push integration. | Store the question and reply in the API first. Use one notification channel per user, with a link to the item. Decide where replies should be submitted. |
+| Who can file work? | One owner, selected collaborators, or separate submitter and runner roles. | **Decided:** many users in workspaces with owner, member and viewer roles (see [Users and workspaces](#users-and-workspaces)). v1 ships one implicit workspace with owner and runner tokens. Repo and Git credentials stay local to each runner. |
 | Where should Markdown reports live? | Local files, backend artifact storage, or a designated Git repo. | Store small reports with the work item so they remain available when the runner goes offline. Revisit storage if reports start carrying large artifacts. |
 | How strict should coordination be? | Claim only by work-item ID, warn about likely overlap, or serialize work by repo or declared resource. | Start with per-item claims, isolated worktrees, and explicit dependencies for known overlaps. Add narrower coordination when a real collision shows where it helps. |
