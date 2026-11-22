@@ -20,13 +20,13 @@ Record the head SHA first and review only that commit (`git fetch origin pull/<n
 
 ## Scope and tests
 
-- Match the PR to its IMPLEMENTATION_PLAN.md row. Flag extra scope and acceptance claimed without evidence. End-to-end validation belongs to the PH-V1 gate, not to each PR.
+- Match the PR to its IMPLEMENTATION_PLAN.md row, but expect no plan edits in feature PRs. Flag extra scope and acceptance claimed without evidence. End-to-end validation belongs to the PH-V1 gate, not to each PR.
 - Behavior changes need a few focused tests that would fail without the change. Tests must be deterministic and host-independent, and must not just restate the implementation. Run them with `python -m unittest discover -s tests [-p test_x.py]`.
 
 ## Decide
 
 Rank findings by impact as **blocking** or **follow-up**. Skip style nits. Say explicitly when nothing blocks.
 
-- **Merge** when CI is green on the exact head and nothing blocks: `gh pr merge <n> --merge --match-head-commit <sha>`.
+- **Merge** once the review passes at the exact head: `gh pr merge <n> --auto --merge --match-head-commit <sha>`, so GitHub merges when required CI passes on that same head.
 - **Fix round** otherwise: give file:line, the failure scenario, and the simplest fix direction. Prefer fixes that remove code or constraints over fixes that add them.
 - **Bound it.** After two rounds, merge the verified part and file a follow-up plan row.
