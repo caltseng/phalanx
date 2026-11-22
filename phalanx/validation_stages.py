@@ -4,7 +4,7 @@ Each handler journals its request before sending it, so an interrupted
 submission replays the same body and idempotency key.
 """
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import os
 from pathlib import Path
 
@@ -19,12 +19,18 @@ from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
 from .transitions import Outcome, Revision, Stage, Target
-from .validation import GateState, Phase
+from .validation import CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_SECONDS, GateState, Phase
 from .validation_policy import ValidationPolicyError, load_validation_policy
 from .workspaces import WorkspaceError, _item_branch
 
 # GitHub usually reflects a ready mutation or new base within seconds.
 _PROVIDER_RETRY_SECONDS = 30
+
+
+def _check_timing(runner):
+    """Return the pending-CI recheck interval and wait limit from the runner config."""
+    return (runner.config.get("check_recheck_seconds", CHECK_RECHECK_SECONDS),
+            runner.config.get("check_wait_limit_seconds", CHECK_WAIT_LIMIT_SECONDS))
 
 
 def run(runner, snapshot):
@@ -204,7 +210,7 @@ def _promotion(runner, snapshot):
     if blocked or (result.status == "gates_unresolved" and gates.state is not GateState.FAILED):
         observed = result.pull or pull
         if not blocked and gates.state is GateState.WAITING:
-            return _draft_wait(snapshot, ("; ".join(gates.reasons) or "Draft checks are pending")[:16000],
+            return _draft_wait(runner, snapshot, ("; ".join(gates.reasons) or "Draft checks are pending")[:16000],
                                observed.base_sha)
         reason = "; ".join(blocked or gates.reasons) or result.reason
         if not blocked and not observed.draft and gates.state is GateState.BLOCKED:
@@ -216,12 +222,13 @@ def _promotion(runner, snapshot):
     ), **({"reason": result.reason} if result.status != "verified" else {})}
 
 
-def _draft_wait(snapshot, reason, base_sha):
+def _draft_wait(runner, snapshot, reason, base_sha):
     candidate = snapshot["claim"]["execution"]["state"]["candidate"]
+    interval, limit = _check_timing(runner)
     return {"route": "external-wait", "reason": reason, "body": {
         **_event(snapshot), "reason": reason, "gate": "draft_checks",
         "revision": {"head": candidate, "base": base_sha},
-        "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
+        "retry_after_seconds": interval, "wait_limit_seconds": limit,
     }}
 
 
@@ -243,7 +250,7 @@ def _convert_to_draft(runner, snapshot, github, pull, reason, handoff):
         f"Phalanx converted this PR back to draft at `{candidate}` so its draft-only checks can run: "
         f"{reason}. It will mark the PR ready again once they pass.",
     )
-    return _draft_wait(snapshot, f"Converted the PR back to draft; waiting for draft checks: {reason}"[:16000],
+    return _draft_wait(runner, snapshot, f"Converted the PR back to draft; waiting for draft checks: {reason}"[:16000],
                        pull.base_sha)
 
 
@@ -338,10 +345,11 @@ def _disposition(runner, snapshot):
         return _retry(snapshot, "; ".join(checks.gate.reasons), checks.retry_after_seconds)
     reason = "; ".join(checks.gate.reasons) or "Ready checks are not satisfied"
     if checks.gate.state is GateState.WAITING:
+        interval, limit = _check_timing(runner)
         return {"route": "external-wait", "reason": reason[:16000], "body": {
             **_event(snapshot), "reason": reason[:16000], "gate": "ready_checks",
             "revision": {"head": candidate, "base": pull.base_sha},
-            "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
+            "retry_after_seconds": interval, "wait_limit_seconds": limit,
         }}
     if checks.gate.state not in {GateState.SATISFIED, GateState.NOT_CONFIGURED} or checks.candidate is None:
         return _question(snapshot, reason, handoff)
@@ -399,6 +407,8 @@ def _published_validation(runner, snapshot):
         _save(runner, snapshot, _question(
             snapshot, str(error), "Repair the runner's trusted validation policy, then reply."))
         return None
+    interval, limit = _check_timing(runner)
+    policy = replace(policy, recheck_seconds=interval, wait_limit_seconds=limit)
     execution = claim["execution"]
     assignment = PublishedValidationAssignment(
         claim["item_id"], execution["id"], snapshot["runner_id"], claim["attempt_id"],

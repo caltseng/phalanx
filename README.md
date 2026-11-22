@@ -98,7 +98,11 @@ in [the validation policy guide](docs/runner-validation-policy.md). After self-r
 `prepare` with stage `pre_pr_validation` runs the configured local checks in the clean item
 worktree, `pr_promotion` verifies draft checks and marks the primary PR ready, and
 `pr_validation` records ready CI for the current head. Pending CI waits; the Captain loop
-requests due rechecks each poll. A missing or broken policy waits for an owner reply that
+requests due rechecks each poll. Pending draft and ready checks are rechecked every
+`"check_recheck_seconds"` (optional runner config, 5 to 86400, default 30). After
+`"check_wait_limit_seconds"` (60 to 2592000, default 7200) pending on one head and base,
+the owner is asked; a reply starts a fresh window. A missing or
+broken policy waits for an owner reply that
 names the problem, and startup preflight reports a malformed file before any claim.
 
 From an authorized Captain muster:

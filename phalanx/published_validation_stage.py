@@ -37,6 +37,9 @@ class PublishedValidationPolicy:
 
     required: tuple[RequiredCheck, ...] | None
     read_preview: PreviewReader | None = None
+    # Pending ready checks; None leaves the server defaults.
+    recheck_seconds: int | None = None
+    wait_limit_seconds: int | None = None
 
 
 class PublishedValidationRunner:
@@ -115,6 +118,7 @@ class PublishedValidationRunner:
         try:
             body = Validation(
                 **event, schedule_recheck=True,
+                retry_after_seconds=policy.recheck_seconds, wait_limit_seconds=policy.wait_limit_seconds,
                 expected=ExpectedRefs(
                     head_ref=expected.head_ref, base_ref=expected.base_ref, base_sha=pull.base_sha,
                 ),

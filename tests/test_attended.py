@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 import subprocess
 import sys
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier, Event
@@ -708,6 +709,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "ready_checks": [{"name": "test", "kind": "check_run", "app_id": 15368}],
         }}}), encoding="utf-8")
         self.config["validation_policy"] = str(policy)
+        self.config["check_recheck_seconds"] = 7
 
         def work(details, outcome="succeeded"):
             launch = self.runner().prepare()
@@ -775,10 +777,16 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             draft_run = {"id": 2, "name": "draft", "head_sha": candidate, "status": "queued",
                          "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
             github.runs = [draft_run]
+            started = int(time.time() * 1000)
             waiting = self.runner().prepare(stages=["pr_promotion"])
             state = waiting["execution"]["state"]
             self.assertEqual((state["stage"], state["status"]), ("pr_promotion", "waiting_for_external"),
                              waiting)
+            with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                due_at = db.execute("SELECT due_at_ms FROM external_rechecks").fetchone()[0]
+            # The configured interval, not the default 30s, schedules the draft recheck.
+            self.assertGreaterEqual(due_at, started + 7_000)
+            self.assertLess(due_at, started + 30_000)
             self.assertTrue(github.pull["draft"])
             recheck()
             draft_run.update(status="completed", conclusion="success")
@@ -976,7 +984,9 @@ class AttendedTest(ServerFixture, unittest.TestCase):
 
         github = SimpleNamespace(get_pull_request=lambda number: pull, convert_to_draft=convert)
         gates = GateResult(GateState.BLOCKED, ("lint needs a draft check recovery decision on the ready PR",))
-        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root)
+        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}},
+                                         "check_recheck_seconds": 7, "check_wait_limit_seconds": 600},
+                                 root=self.root)
         with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
                 patch.object(validation_stages, "_github", lambda _: github), \
                 patch.object(validation_stages, "_candidate", lambda *_: None), \
@@ -989,6 +999,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual((waiting["route"], waiting["body"]["gate"], converted),
                          ("external-wait", "draft_checks", ["PR_7"]))
         self.assertEqual(waiting["body"]["revision"], {"head": candidate, "base": "c" * 40})
+        self.assertEqual((waiting["body"]["retry_after_seconds"], waiting["body"]["wait_limit_seconds"]),
+                         (7, 600))
         self.assertEqual([note["note"] for note in PRNotes(self.root).flush(None)],
                          [f"converted-to-draft:{candidate}"])
         self.assertEqual(refused["outcome"], "needs_input")
