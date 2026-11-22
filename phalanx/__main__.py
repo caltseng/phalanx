@@ -11,6 +11,8 @@ from .attended import RunnerError, add_attended_command, run_attended
 from .attended_recovery_service import add_recovery_command, run_recovery_command
 from .captain_loop import add_captain_command, run_captain
 from .captain_relay import add_relay_command, run_relay
+from .github import GitHubError
+from .issue_intake import ingest_issue
 from .workspaces import WorkspaceError
 
 
@@ -54,6 +56,11 @@ def main() -> None:
     intake.add_argument("goal")
     intake.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
     intake.add_argument("--key", help="reuse this key when retrying the same request")
+    issue = commands.add_parser("ingest-issue", help="file a registered repository's GitHub issue")
+    issue.add_argument("repository", help="registered Phalanx repository ID")
+    issue.add_argument("number", type=int, help="GitHub issue number in that repository")
+    issue.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
+    issue.add_argument("--key", help="override the stable issue key for an intentional new import")
     inspect = commands.add_parser("inspect", help="show a work item and its current execution")
     inspect.add_argument("item_id")
     inbox = commands.add_parser("inbox", help="show work awaiting owner input")
@@ -96,6 +103,10 @@ def main() -> None:
                 body={"repository_id": args.repository, "goal": args.goal, "target": args.target},
             )
             print(json.dumps(result, indent=2))
+        elif args.command == "ingest-issue":
+            result = ingest_issue(api_request, args.api_url, args.repository, args.number,
+                                  args.target, key=args.key)
+            print(json.dumps(result, indent=2))
         elif args.command == "inbox":
             query = {"limit": args.limit, "after_time": args.after_time}
             if args.after_id:
@@ -114,7 +125,7 @@ def main() -> None:
         else:
             result = api_request(args.api_url, f"/v1/items/{quote(args.item_id, safe='')}")
             print(json.dumps(result, indent=2))
-    except (OSError, ValueError, sqlite3.Error, RunnerError, WorkspaceError) as error:
+    except (OSError, ValueError, sqlite3.Error, RunnerError, WorkspaceError, GitHubError) as error:
         parser.exit(1, f"phalanx: {error}\n")
 
 

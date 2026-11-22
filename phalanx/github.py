@@ -76,6 +76,21 @@ def _send(request: Request, timeout: float) -> HTTPResponse:
 
 
 @dataclass(frozen=True)
+class Issue:
+    number: int
+    url: str
+    title: str
+    body: str
+
+
+@dataclass(frozen=True)
+class IssueComment:
+    url: str
+    author: str
+    body: str
+
+
+@dataclass(frozen=True)
 class CommitChecks:
     sha: str
     check_runs: tuple[dict[str, Any], ...]
@@ -253,6 +268,54 @@ class GitHubClient:
             target = urlsplit(url)
             if (target.scheme, target.netloc) != (origin.scheme, origin.netloc) or target.fragment:
                 raise GitHubError(operation, "untrusted pagination URL")
+
+    def get_issue(self, number: int) -> Issue:
+        if type(number) is not int or number < 1:
+            raise ValueError("a positive issue number is required")
+        operation = "get issue"
+        data, _ = self._request(operation, "GET", f"{self._repo_url}/issues/{number}")
+        try:
+            issue = Issue(data["number"], data["html_url"], data["title"], data["body"] or "")
+            if (
+                "pull_request" in data or type(issue.number) is not int or issue.number != number
+                or not isinstance(issue.url, str)
+                or issue.url.casefold() != self._issue_web_url(number).casefold()
+                or not isinstance(issue.title, str) or not issue.title.strip()
+                or data["body"] is not None and not isinstance(data["body"], str)
+            ):
+                raise ValueError("unexpected issue identity or fields")
+        except (KeyError, TypeError, ValueError):
+            raise GitHubError(operation, "invalid issue response (expected an issue, not a PR)") from None
+        return issue
+
+    def _issue_web_url(self, number: int) -> str:
+        endpoint = urlsplit(self._api_url)
+        host = "github.com" if endpoint.netloc == "api.github.com" else endpoint.netloc
+        return f"https://{host}/{self._repository}/issues/{number}"
+
+    def issue_comments(self, number: int) -> Iterator[IssueComment]:
+        if type(number) is not int or number < 1:
+            raise ValueError("a positive issue number is required")
+        operation = "list issue comments"
+        for data in self._pages(
+            operation, f"{self._repo_url}/issues/{number}/comments?per_page=100",
+        ):
+            try:
+                user = data["user"]
+                author = user["login"] if user is not None else "deleted user"
+                comment = IssueComment(data["html_url"], author, data["body"])
+                if (
+                    type(data["id"]) is not int or data["id"] < 1
+                    or not isinstance(comment.url, str)
+                    or comment.url.casefold()
+                    != f"{self._issue_web_url(number)}#issuecomment-{data['id']}".casefold()
+                    or not isinstance(author, str) or not author.strip()
+                    or not isinstance(comment.body, str)
+                ):
+                    raise ValueError("invalid comment fields")
+            except (KeyError, TypeError, ValueError):
+                raise GitHubError(operation, "invalid issue comment response") from None
+            yield comment
 
     def get_pull_request(self, number: int) -> PullRequest:
         operation = "get pull request"
