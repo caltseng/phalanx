@@ -1,10 +1,10 @@
 # Phalanx dashboard
 
-Status: **proposal for Caleb's review.** Until it's accepted, the [Operator view](SPEC.md#operator-view) in SPEC.md remains the v1 contract. This document sets the goals, the UI principles and the target experience for the hosted dashboard. Implementation rows go into [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) after review.
+Status: **accepted by Caleb** (#112). Implementation rows go into [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The [Operator view](SPEC.md#operator-view) in SPEC.md remains the v1 contract. This document sets the goals, the UI principles and the target experience for the hosted dashboard.
 
 ## Goal
 
-The dashboard is a website, reachable from the internet, where Caleb can see what Phalanx is doing across every repository, what needs him, and what it delivered. He can use it from a phone or a laptop, and later he can act on it there too. It must stay fast and readable with thousands of items, tens of workers running at once, and years of history.
+The dashboard is a website, reachable from the internet, where each Phalanx user can see what Phalanx is doing across their workspace's repositories, what needs them, and what it delivered. They can use it from a phone or a laptop, and later act on it there too. It serves many users across workspaces ([SPEC.md](SPEC.md#users-and-workspaces)), with Caleb as the first. It must stay fast and readable with thousands of items, tens of workers running at once, and years of history.
 
 ## Worked example: Phalanx built by Phalanx
 
@@ -68,13 +68,18 @@ DELIVERED (last 24h: 25)                                                        
 
 ## Who uses it
 
-- **v1 hosted:** the owner only. Caleb signs in with Google ([PH-27](IMPLEMENTATION_PLAN.md)) against an email allowlist. The owner token still works as a fallback, and for the CLI and API.
-- **Later:** read-only viewers, such as collaborators. This is a [design question](#design-questions).
+- **v1 hosted:** a single workspace, with Caleb as its owner. He signs in with Google ([PH-27](IMPLEMENTATION_PLAN.md)) against an email allowlist. The owner token still works as a fallback, and for the CLI and API.
+- **Multi-user:** people sign in and see the workspaces they belong to, with a workspace switcher, and each workspace's own repositories, runners and items. A user's role decides what they can do:
+  - viewers can only read;
+  - members file work, reply and act on items;
+  - owners also manage members, repositories, runners and dispatch.
+
+  **Needs you** shows the questions routed to the signed-in user, and every action shows who took it.
 - **Devices:** phone and laptop are equally important. The phone matters most for **Needs you** and replies, and the laptop for **Now** and **History**.
 
 ## Goals
 
-1. **Attention first.** Within five seconds of opening the dashboard, Caleb knows whether anything needs him and what it is.
+1. **Attention first.** Within five seconds of opening the dashboard, the user knows whether anything needs them and what it is.
 2. **Is it moving?** Every open item shows its stage, its status, how long since it last advanced, and either its next action or its wait reason.
 3. **A trustworthy record.** Every closed execution shows exactly one outcome and one link, to the verified PR or the stored report.
 4. **Scale.** Targets:
@@ -89,13 +94,13 @@ DELIVERED (last 24h: 25)                                                        
 
 - Replacing GitHub's PR review or the worker chat. Link to them instead.
 - Editing code or requests in place, beyond the documented steering routes.
-- Multi-tenancy, or more than one owner per server.
+- Multi-tenant billing, enterprise single sign-on, and sharing items across workspaces.
 - An analytics warehouse. Phase D3 computes a few metrics from work history.
 - Real-time streaming in D1. Polling is enough.
 
 ## UI principles
 
-1. **Attention, then motion, then history.** Order every page this way: what needs Caleb, then what is moving, then what is done.
+1. **Attention, then motion, then history.** Order every page this way: what needs you, then what is moving, then what is done.
 2. **No row without a reason.** Every open row answers "what happens next, and why". A blank wait reason is a bug. This applies the "never fail silently" rule in [AGENTS.md](AGENTS.md).
 3. **Recorded lifecycle, not percent complete.** Show the stages Phalanx actually recorded and the loops it went through, such as `pr_revision ×2`, as [SPEC.md](SPEC.md#operator-view) requires.
 4. **Calm by default.** Keep color for states that need action: needs you, failed, stale and disconnected. Everything else stays neutral. Never use color alone; pair it with an icon and text.
@@ -192,6 +197,7 @@ Computed on the server from work history and shown on History and group pages:
 
 - **Origin:** the hosted API origin serves the dashboard ([PH-20](IMPLEMENTATION_PLAN.md)), so it needs no CORS and no separate API base URL.
 - **Sign-in:** Google sign-in from PH-27. The session cookie is HttpOnly, Secure and SameSite=Lax. Sessions expire, and sign-out deletes the session on the server.
+- **Workspace scope:** every dashboard request is scoped to the signed-in user's selected workspace and checked against their role on the server. The browser only hides controls for convenience; it never enforces access.
 - **Write actions (D2):** the cookie authorizes owner write routes only with CSRF protection, using an Origin check plus a required custom header. Destructive actions ask for confirmation. Each action records the signed-in email in the item timeline, the same way reply authors are recorded today. Runner routes never accept the cookie.
 - **Caching:** static assets have hashed names and cache for a long time. API responses are `no-store`.
 - **Rate limits:** sign-in and write routes are rate-limited.
@@ -242,7 +248,7 @@ Each phase row specifies these in detail. All are read-only except the D2 action
 | --- | --- | --- |
 | Should the dashboard take write actions? | Read-only forever, or owner actions with CSRF protection. | Add owner actions in D2, after hosting and sign-in are proven. |
 | Where is it hosted, and on what domain? | Decided together with PH-20. | Same origin as the hosted API. |
-| Who else can see it? | Only the owner, or allowlisted read-only viewers. | Only the owner, until a collaborator needs it. |
-| How do notifications reach Caleb? | Email, push or chat (see [SPEC.md](SPEC.md#design-questions)). | One channel, whose messages deep-link to the item page. |
+| Who else can see it? | Only the owner, or other users. | **Decided:** many users in workspaces with owner, member and viewer roles ([SPEC.md](SPEC.md#users-and-workspaces)). |
+| How do notifications reach a user? | Email, push or chat (see [SPEC.md](SPEC.md#design-questions)). | One channel per user, whose messages deep-link to the item page. |
 | Should Captain decisions become data? | Keep them in `docs/decisions.md`, or record them as reviewable records through the API. | Keep them in the doc for now, and revisit in D3. |
 | How does the dashboard know default-branch CI health? | The runner observes it during polls it already makes, or the server calls GitHub. | The runner observes it, which keeps GitHub access on the runner. |

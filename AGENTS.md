@@ -24,6 +24,12 @@
 - Keep queue state, claims, work history, and reports behind the API. Keep checkout mappings and Git credentials local to the runner. The runner talks to the backend and holds queue credentials and leases.
 - Stay runtime-neutral. Phalanx must work with any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code. Don't encode a preferred runtime, or one runtime's tools, names or behavior, in the core, specs, plan, branch names or tests. Keep runtime specifics behind the bridge, work packet and result contracts, with one adapter per runtime. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
 - Stay platform-neutral on the client side. The CLI, runner, Captain loop, bridge, and local checks must work on Windows, macOS, and Linux. Use portable paths, processes, signals, file locking and shells, and keep OS-specific behavior behind small, tested branches. CI must cover each supported OS. The server only needs to run where it is hosted.
+- Build for many users. Phalanx will serve people other than Caleb, in workspaces on a shared server ([SPEC.md](SPEC.md#users-and-workspaces)). Don't assume a single owner in the API, data model, dashboard or copy:
+  - Scope new server state to a workspace.
+  - Attribute requests and actions to a user or runner identity.
+  - Keep each user's Git credentials on their own runner.
+
+  Ship the single-workspace path first, and add multi-user features in their own plan rows.
 - Allow independent work to run in parallel, including within one repo. Use atomic per-item claims and isolated worktrees for PR tasks. Check for previously created outputs before retrying publication.
 - Reuse the item’s worktree across stages on the same machine. Support interdependent work in v1, with explicit upstream milestones and parallel execution when dependencies allow. Campaign grouping, task decomposition, and automatic replanning can come later.
 - Make max concurrency and dispatch pause configurable. Rank eligible stages with priority aging so older work gets a turn during sustained intake. Keep the wait reason visible when an item cannot run.
