@@ -167,6 +167,7 @@ Provide a read-only work board for the current state of Phalanx. Put work in pro
 - A selected item shows its recorded transition history, current attempt, next action or resume trigger, and prerequisites when relevant. Keep stage and execution status separate. Show the recorded lifecycle rather than percent complete, since an item may loop back after a review or revision change.
 - Recently closed shows the outcome, close time, and one link to the verified PR or stored field report. If a merge was authorized and completed, distinguish checked in from ready for check-in.
 - Read state from the API. Use bounded, paginated queries for open items and recent closures, and load the detailed timeline only when selected. Refresh periodically and show when the view is stale or disconnected. Terminal outputs and recorded history remain available while the runner is offline.
+- The hosted dashboard's goals, UI principles and phases are proposed in [DASHBOARD.md](DASHBOARD.md).
 
 ## First milestone
 
