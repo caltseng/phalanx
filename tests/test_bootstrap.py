@@ -6,8 +6,10 @@ import socket
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -221,13 +223,79 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                     writer.result()
             self.assertLess(max(readers), 1.0)
 
-    def test_waiting_readers_cannot_keep_writes_out(self):
-        gate = store._Gate()
-        with ThreadPoolExecutor(max_workers=1) as pool, gate.read_start():
-            def write():
-                started = time.monotonic()
-                with gate.write():
-                    return time.monotonic() - started
+    def test_reader_starts_before_writers_queued_past_the_timeout(self):
+        gate, order, release = store._Gate(), [], threading.Event()
 
-            waited = pool.submit(write).result(timeout=store.BUSY_TIMEOUT + 5)
-        self.assertGreaterEqual(waited, store.BUSY_TIMEOUT - 0.1)
+        def hold():
+            with gate.write():
+                release.wait(10)
+
+        def write():
+            with gate.write():
+                order.append("write")
+
+        def read():
+            with gate.read_start():
+                order.append("read")
+
+        with patch.object(store, "BUSY_TIMEOUT", 1.0), ThreadPoolExecutor(max_workers=8) as pool:
+            running = pool.submit(hold)
+            time.sleep(0.1)
+            writers = [pool.submit(write) for _ in range(5)]
+            # Under a deep write backlog, queued writers have already waited longer than the bound.
+            time.sleep(1.2)
+            reader = pool.submit(read)
+            time.sleep(0.1)
+            release.set()
+            for future in (running, reader, *writers):
+                future.result(timeout=10)
+        self.assertEqual(order, ["read"] + ["write"] * 5)
+
+    def test_reader_waits_out_a_write_longer_than_the_busy_timeout(self):
+        gate, release = store._Gate(), threading.Event()
+
+        def hold():
+            with gate.write():
+                release.wait(10)
+
+        def read():
+            with gate.read_start():
+                return "read"
+
+        # A write turn may wait up to the busy timeout to begin and again to commit.
+        with patch.object(store, "BUSY_TIMEOUT", 0.2), ThreadPoolExecutor(max_workers=2) as pool:
+            running = pool.submit(hold)
+            time.sleep(0.1)
+            reader = pool.submit(read)
+            time.sleep(0.5)
+            release.set()
+            running.result(timeout=10)
+            self.assertEqual(reader.result(timeout=10), "read")
+
+    def test_readers_arriving_while_a_writer_waits_go_after_it(self):
+        gate, order = store._Gate(), []
+
+        def write():
+            with gate.write():
+                order.append("write")
+
+        def read():
+            with gate.read_start():
+                order.append("read")
+
+        def until(predicate):
+            deadline = time.monotonic() + 10
+            while not predicate():
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.01)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            with gate.read_start():
+                writer = pool.submit(write)
+                until(lambda: gate.writers == 1)
+                reader = pool.submit(read)
+                until(lambda: gate.queued == 1)
+                self.assertEqual(order, [])
+            writer.result(timeout=10)
+            reader.result(timeout=10)
+        self.assertEqual(order, ["write", "read"])
