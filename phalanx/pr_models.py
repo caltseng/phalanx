@@ -142,10 +142,21 @@ class Reconciliation(AttemptEvent):
     stage: Literal[Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN]
     expected: ExpectedRefs
     pull: GitHubPull
-    gates: GateObservation
-    actionable_feedback_cleared: Literal[True]
-    approvals_and_mergeability: Literal[True]
+    gates: GateObservation | None = None
+    actionable_feedback_cleared: Flag = False
+    approvals_and_mergeability: Flag = False
+    merge_conflict: Flag = False
     merge_intent: MergeIntent | None = None
+
+    @model_validator(mode="after")
+    def ready_or_conflicting(self):
+        if self.merge_conflict:
+            if (self.gates or self.actionable_feedback_cleared or self.approvals_and_mergeability
+                    or self.merge_intent):
+                raise ValueError("A merge conflict report carries only the observed PR")
+        elif not (self.gates and self.actionable_feedback_cleared and self.approvals_and_mergeability):
+            raise ValueError("Ready reconciliation needs ready gates and both attestations")
+        return self
 
 
 class VerifiedMerge(AttemptEvent):

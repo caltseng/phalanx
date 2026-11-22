@@ -326,7 +326,13 @@ def _disposition(runner, snapshot):
     if pull.mergeable is None:
         return _retry(snapshot, "GitHub is still computing mergeability")
     if not pull.mergeable:
-        return _question(snapshot, "Resolve the merge conflict on the primary PR, then reply.", handoff)
+        if _conflicted_before(runner, snapshot, pull.base_sha):
+            return _question(snapshot, f"A development attempt could not resolve the merge conflict with "
+                             f"{base_ref} at {pull.base_sha}. Resolve it on the primary PR, then reply.", handoff)
+        return {"route": "pr-observation", "reason": f"The PR conflicts with {base_ref}; returning it to "
+                "development to rebase and revalidate", "body": Reconciliation(
+                    **_event(snapshot), **_refs(snapshot, pull, base_ref), merge_conflict=True
+                ).model_dump(mode="json")}
     checks = collect_github_checks(github, pull, Phase.READY, policy.required, read_preview=policy.read_preview)
     if checks.retry_after_seconds is not None:
         return _retry(snapshot, "; ".join(checks.gate.reasons), checks.retry_after_seconds)
@@ -351,14 +357,26 @@ def _validation(snapshot, pull, base_ref, required, checks):
                         checks.merge_sha, Phase.DRAFT)
 
 
-def _observation(model, snapshot, pull, base_ref, required, observations, merge_sha, phase, **fields):
+def _refs(snapshot, pull, base_ref):
+    return {
+        "expected": ExpectedRefs(head_ref=_item_branch(snapshot["claim"]["item_id"]), base_ref=base_ref,
+                                 base_sha=pull.base_sha),
+        "pull": GitHubPull.model_validate({field: getattr(pull, field) for field in GitHubPull.model_fields}),
+    }
+
+
+def _conflicted_before(runner, snapshot, base_sha):
+    """Whether a development attempt already tried to resolve a conflict with this base."""
     claim = snapshot["claim"]
+    timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
+    return any((entry.get("details") or {}).get("merge_conflict") is True
+               and entry["details"]["expected"]["base_sha"] == base_sha for entry in timeline)
+
+
+def _observation(model, snapshot, pull, base_ref, required, observations, merge_sha, phase, **fields):
     required = required or ()
     return model(
-        **_event(snapshot), **fields,
-        expected=ExpectedRefs(head_ref=_item_branch(claim["item_id"]), base_ref=base_ref,
-                              base_sha=pull.base_sha),
-        pull=GitHubPull.model_validate({field: getattr(pull, field) for field in GitHubPull.model_fields}),
+        **_event(snapshot), **fields, **_refs(snapshot, pull, base_ref),
         gates=GateObservation(
             phase=phase, number=pull.number, head_sha=pull.head_sha, base_sha=pull.base_sha,
             test_merge_sha=merge_sha, required=[asdict(check) for check in required],

@@ -14,6 +14,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from phalanx import validation_stages
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
 from phalanx.attended_drafts import draft_title
 from phalanx.attended_recovery_service import RecoveryJournal, run_recovery
@@ -685,7 +686,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_blocking_review_returns_findings_to_development_over_http(self):
         self.live_review_path(blocking=True)
 
-    def live_review_path(self, *, blocking):
+    def test_merge_conflict_returns_to_development_over_http(self):
+        self.live_review_path(blocking=False, conflict=True)
+
+    def live_review_path(self, *, blocking, conflict=False):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -811,6 +815,19 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.write_result(self.runner(), launch["marker"], "No blocking findings on this head.")
             routed = self.runner().submit(launch["marker"], "local", reviewer)
             self.assertEqual(routed["state"]["stage"], "pr_reconciliation", routed)
+            if conflict:
+                github.pull["mergeable"] = False
+                routed = self.runner().prepare(stages=["pr_reconciliation"])
+                self.assertEqual(routed["execution"]["state"]["stage"], "development", routed)
+                self.runner().prepare()
+                context = json.loads(self.runner().status()["packet"]["context"])
+                self.assertIn(f"conflicts with main at {base}", context["review_findings"])
+                snapshot = {"claim": {"item_id": item["id"],
+                                      "execution": {"id": routed["execution"]["id"]}}}
+                runner = SimpleNamespace(api=self.api)
+                self.assertTrue(validation_stages._conflicted_before(runner, snapshot, base))
+                self.assertFalse(validation_stages._conflicted_before(runner, snapshot, "f" * 40))
+                return
             retry = self.runner().prepare(stages=["pr_reconciliation"])
             self.assertIn("mergeability", retry["reason"], retry)
             with write_transaction(self.root.parent / "queue.sqlite3") as db:

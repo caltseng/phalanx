@@ -4,7 +4,7 @@ import json
 import re
 
 from . import intake, validation, waits
-from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Validation, VerifiedMerge
+from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Reconciliation, Validation, VerifiedMerge
 from .transitions import (
     Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, Wait, item_branch,
 )
@@ -177,6 +177,12 @@ def submit(db, item_id, execution_id, body, lease_digest):
             evidence = Evidence(pr=pr, development_findings=f"{body.review.summary}\n\n{findings}"[:16000])
         else:
             evidence = Evidence(pr=pr, independent_review=revision)
+    elif isinstance(body, Reconciliation) and body.merge_conflict:
+        # Routine conflicts go back to development; the runner escalates a repeat on the same base.
+        outcome = Outcome.CHANGES_REQUIRED
+        evidence = Evidence(pr=pr, development_findings=(
+            f"The PR conflicts with {expected.base_ref} at {expected.base_sha}. Fetch that commit, "
+            "rebase the candidate onto it, resolve the conflicts and rerun the checks."))
     else:
         if body.stage != Stage.PR_PROMOTION and pull.draft:
             raise intake.Conflict("Expected an open, ready primary PR")

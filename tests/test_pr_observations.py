@@ -380,6 +380,19 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(execution["state"]["development_findings"])
 
+    def test_merge_conflict_returns_to_development_to_rebase(self):
+        self.start_review()
+        self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
+        reconciliation = self.reconciliation(self.claim("pr_reconciliation"))
+        self.assertEqual(self.submit(dict(reconciliation, merge_conflict=True))[0], 422)
+        conflict = {key: value for key, value in reconciliation.items() if key not in {
+            "gates", "actionable_feedback_cleared", "approvals_and_mergeability"}}
+        status, execution = self.submit(dict(conflict, merge_conflict=True))
+        self.assertEqual(status, 200, execution)
+        state = execution["state"]
+        self.assertEqual((state["stage"], state["status"]), ("development", "queued"))
+        self.assertIn("rebase the candidate", state["development_findings"])
+
 
 class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
     target = "checked_in"
