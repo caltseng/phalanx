@@ -481,24 +481,27 @@ class AttendedRunner:
 
         return self._transaction(save)
 
-    def _renew(self, record):
+    def _renew(self, record, blocker=None):
         claim = record.get("claim")
         if not claim:
             raise RunnerError("There is no known claim to renew")
         endpoint = f"/dispatch/runners/{record['runner_id']}/attempts/{claim['attempt_id']}/renew"
-        # Each renewal republishes the bridge's opaque worker reference for the operator board.
+        # Each renewal republishes the bridge's opaque worker reference and any
+        # current runner-side blocker for the operator board.
         receipt = record.get("receipt", {})
         reference = receipt.get("thread_id") or receipt.get("client_thread_id")
         body = {"worker": {"reference": reference, **(
             {"url": receipt["worker_url"]} if receipt.get("worker_url") else {}
         )}} if reference else {}
+        if blocker:
+            body["blocker"] = blocker
         result = self.api.call(endpoint, body, lease=record["lease"])
         record["lease_expires_at"] = result["lease_expires_at"]
         return result
 
-    def renew(self):
+    def renew(self, blocker=None):
         snapshot = self._snapshot()
-        result = self._renew(snapshot)
+        result = self._renew(snapshot, blocker)
 
         def save_renewal(record, db):
             self._ensure_reservation(record, snapshot["lease"])
@@ -685,7 +688,7 @@ def add_attended_command(commands):
 
 
 def run_attended(args):
-    config = json.loads(args.config.read_text(encoding="utf-8"))
+    config = json.loads(args.config.read_text(encoding="utf-8-sig"))
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
     if args.action == "prepare":
         from .runner_preflight import preflight

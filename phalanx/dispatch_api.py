@@ -44,6 +44,7 @@ class WorkerReference(Payload):
 
 class Renewal(Payload):
     worker: WorkerReference | None = None
+    blocker: Text | None = None
 
 
 @router.put("/dispatch/settings", dependencies=[Depends(require_owner)])
@@ -66,7 +67,9 @@ def claim(request: Request, body: Claim, lease: Lease):
 def renew(request: Request, runner_id: Identifier, attempt_id: Identifier, lease: Lease,
           body: Renewal | None = None):
     worker = body.worker if body else None
-    return run(request, dispatch.renew, runner_id, attempt_id, intake.digest(lease), worker, write=True)
+    blocker = body.blocker if body else None
+    return run(request, dispatch.renew, runner_id, attempt_id, intake.digest(lease), worker, blocker,
+               write=True)
 
 
 @router.get("/dispatch/runners/{runner_id}/recovery", dependencies=[Depends(require_runner)])

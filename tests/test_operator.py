@@ -146,7 +146,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         first = self.page(route + "?limit=2")
         self.assertEqual([row["version"] for row in first["events"]], [5000, 4999])
         with write_transaction(self.path) as db:
-            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
                        ("attempt", identifier(10), QUEUED.stage, "runner-secret", "lease-digest", 9999, LATEST))
             transition(db, 10, 5001, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
             db.execute("INSERT INTO external_rechecks VALUES (?, 5001, 1700000000000)", (identifier(10),))
