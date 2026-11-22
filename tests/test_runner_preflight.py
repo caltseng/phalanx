@@ -51,6 +51,12 @@ class RunnerPreflightTests(ServerFixture, unittest.TestCase):
                 self.assertIn("Set PHALANX_RUNNER_TOKEN", message)
                 self.assertEqual(calls, [])
 
+    def test_windows_powershell_bom_config_reaches_preflight(self):
+        self.config.write_text(self.config.read_text(encoding="utf-8"), encoding="utf-8-sig")
+        for command in (["captain"], ["attended", "prepare"]):
+            with self.subTest(command=command):
+                self.assertIn("Runner preflight failed", self.run_cli(*command)[0])
+
     def test_unreachable_api_and_old_git_are_actionable(self):
         message, calls = self.run_cli("captain", token="token")
         self.assertIn("start the API server, check base_url http://127.0.0.1:9", message)

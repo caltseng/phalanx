@@ -71,3 +71,6 @@ WORKER_SCHEMA = (
         url TEXT
     )""",
 )
+
+# The latest blocker a runner reported for its open attempt, shown as the item's wait reason.
+BLOCKER_SCHEMA = ("ALTER TABLE attempts ADD COLUMN blocker TEXT",)

@@ -25,7 +25,9 @@ SUMMARY = """
            item.repository_id, json_extract(item.request_json, '$.goal') AS title,
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
-           recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url
+           recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
+           (SELECT attempt.blocker FROM attempts AS attempt
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -103,6 +105,8 @@ def summary(row, now):
     if blocked_count and not wait:
         noun = "prerequisite" if blocked_count == 1 else "prerequisites"
         wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
+    if row["runner_blocker"] and not wait:
+        wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     return {
         "id": row["id"],
         "item_id": row["item_id"],

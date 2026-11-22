@@ -285,7 +285,7 @@ def run_recovery_command(args):
         raise RunnerError("Set PHALANX_RUNNER_TOKEN in the runner environment")
     if not 1 <= args.slot <= 256:
         raise RunnerError("Slot must be an integer from 1 to 256")
-    config = json.loads(args.config.read_text(encoding="utf-8"))
+    config = json.loads(args.config.read_text(encoding="utf-8-sig"))
     native = json.loads(args.observation.read_text(encoding="utf-8")) if args.observation else {}
     observations = []
     complete = False

@@ -185,7 +185,8 @@ per checkout, or to add the checkout's path to the `trustedFolders` array in
 Only the owner grants trust; a Captain or worker never edits it. The Captain
 checks trust while serving `resolve_project` and answers an untrusted checkout
 with an error naming it and the setup action. The loop records every
-unverified mapping and its error together in one `mappings` loop status
+unverified mapping, with its project ID, checkout path and error, together in
+one `mappings` loop status
 (`attended status --all`) and launches no worker for them, while unrelated
 mappings keep claiming and launching. Once trust is granted, the next check
 verifies the mapping and admission resumes.
@@ -380,7 +381,7 @@ in their first muster and record any correction here.
 | Runtime | `resolve_project` | `launch` | `observe` |
 | --- | --- | --- | --- |
 | Codex desktop app | `list_projects`; match the project ID, host and root path. | `create_thread` with `title`, `prompt` and target `{"type": "project", "projectId": project_id, "environment": {"type": "local"}}`. Return `threadId` as `thread_id` or `clientThreadId` as `client_thread_id`. | `read_thread` for receipts; `list_threads` history search for the marker. Use `codex app-server` only after verifying its threads appear in the app sidebar with the same identity as the app's tools. |
-| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with the setup error. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so pass each worker session with its state to the observe helper with `--runtime copilot`; it reads the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
+| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with an error that names the project ID and checkout path (two projects can share a name) and tells the owner to open a session in that project to get the app's trust prompt. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so pass each worker session with its state to the observe helper with `--runtime copilot`; it reads the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Pass each session with its state to the observe helper with `--runtime copilot`, which reads `~/.copilot/session-state/<id>/events.jsonl`. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
@@ -488,7 +489,7 @@ capacity and recovery within that trusted role.
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
 | `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
 | `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. The adoption appears in both timelines as a `recover_claim` event at the same version. |
@@ -633,7 +634,10 @@ trigger, and age of the current recorded wait. A scheduled retry is available
 as `retry_at_ms` and a due external gate recheck as `recheck_at_ms`, both in Unix
 milliseconds. `primary_pr_url` represents the recorded primary PR. `worker_reference`
 is the latest attempt's opaque worker ID, which the runner republishes on each lease
-renewal. `worker_url` is the bridge's optional HTTPS chat link. `version` is the
+renewal. `worker_url` is the bridge's optional HTTPS chat link. When the runner is
+blocked on an item it would otherwise show as plainly running, such as an
+unreachable runtime or an ambiguous worker, it sends the reason as `blocker` with
+each renewal and the item's `wait_reason` shows it until a renewal omits it. `version` is the
 execution version that a reply must name. The timeline lists blocking `prerequisites`
 and, while the item is waiting for input, the current `question`. The draft state has
 no current read mapping. Report output URLs use the authenticated report route.
