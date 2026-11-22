@@ -257,9 +257,12 @@ class DraftPublisher:
         return DraftOutcome("pending", "Draft creation is unconfirmed. Reconcile the same intent on retry")
 
     def _check_base(self, intent, authorize) -> DraftOutcome | None:
+        # A moved target tip is not a barrier: the draft opens on the candidate
+        # and later stages validate it against the current base. Only a missing
+        # target branch stops publication.
         observed = self.git.read_branch(intent.base, authorize=authorize)
-        if observed != intent.expected_base:
-            return DraftOutcome("base_changed", "The remote base differs from the recorded revision",
+        if observed is None:
+            return DraftOutcome("base_changed", "The target branch no longer exists",
                                 observed_base=observed)
         return None
 
@@ -287,7 +290,6 @@ class DraftPublisher:
                 or pull.head_ref != intent.head
                 or pull.base_ref != intent.base
                 or pull.head_sha.lower() != intent.candidate
-                or pull.base_sha.lower() != intent.expected_base
                 or pull.state != "open" or not pull.draft or pull.merged is not False
             ):
                 conflicts.append(pull)

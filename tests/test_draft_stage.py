@@ -182,9 +182,19 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
             result = self.run_stage(checkpoint=replace(self.checkpoint, **changes))
             self.assertEqual(result.publication.status, "conflict")
         self.assertFalse(self.remote_calls)
+
+    def test_moved_base_still_opens_the_draft_against_the_observed_base(self):
         self.git.base = OTHER
-        self.assertEqual(self.run_stage().publication.status, "base_changed")
-        self.assertFalse(self.posts or self.git.pushes)
+
+        def moved_pull():
+            self.pull["base"]["sha"] = OTHER
+
+        self.on_create = moved_pull
+        result = self.run_stage()
+        self.assertEqual(result.publication.status, "verified")
+        self.assertEqual(result.execution["state"]["stage"], "self_review")
+        self.assertEqual(self.calls[-1][1]["expected"]["base_sha"], OTHER)
+        self.assertEqual((len(self.posts), self.git.pushes), (1, [(CANDIDATE, None)]))
 
     def test_restarts_after_lost_submission_response_with_identical_payload_and_key(self):
         self.drop_response = True
@@ -255,22 +265,6 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         state = self.state()
         self.assertEqual((state["stage"], state["status"]), ("pr_creation", "waiting_for_input"))
         self.assertIn("target branch main", state["wait"]["reason"])
-        self.assertFalse(self.posts or self.git.pushes)
-
-    def test_base_drift_routes_to_development_and_replays_lost_response(self):
-        self.git.base = OTHER
-        self.drop_response = True
-        with self.assertRaises(TimeoutError):
-            self.run_stage()
-        path, payload, key = self.calls[-1]
-        self.assertTrue(path.endswith("/pr-publication-blocker"))
-        self.assertEqual(payload["observed_base_sha"], OTHER)
-        remote = len(self.remote_calls)
-        result = self.run_stage()
-        self.assertEqual(self.calls[-1], (path, payload, key))
-        self.assertEqual(len(self.remote_calls), remote)
-        self.assertEqual((result.execution["state"]["stage"], result.execution["state"]["status"]),
-                         ("development", "queued"))
         self.assertFalse(self.posts or self.git.pushes)
 
     def test_outside_pr_on_item_branch_routes_to_reconciliation(self):

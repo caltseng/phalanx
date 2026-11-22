@@ -196,53 +196,53 @@ class DraftPublicationTests(unittest.TestCase):
         self.assertFalse(self.git.pushes or self.posts)
 
     def test_rebased_candidate_replaces_journaled_tip_under_derived_lease(self):
-        self.git.on_push = lambda: setattr(self.git, "base", OTHER)
-        moved = self.publish()
-        self.assertEqual((moved.status, moved.observed_base), ("base_changed", OTHER))
+        self.git.on_push = lambda: setattr(self, "active", None)
+        self.assertEqual(self.publish().status, "claim_lost")
         self.assertEqual(self.journal()[0], "pushed")
         self.git.on_push = lambda: None
-        # Development rebuilt the candidate on the moved base. The runner does not
-        # know the remote tip; the journal supplies it as the only lease.
+        self.successor()
+        # Development rebuilt the candidate before any draft existed. The runner
+        # does not know the remote tip; the journal supplies it as the only lease.
         revised = replace(self.intent, candidate=OTHER, expected_base=OTHER)
         self.git.drop_push = True
         self.assertEqual(self.publish(revised).status, "pending")
         self.assertEqual(self.journal()[0], "push")
         original = self.pull
-        def revised_pull(number):
-            data = original(number, head=OTHER)
-            data["base"]["sha"] = OTHER
-            return data
-        self.pull = revised_pull
+        self.pull = lambda number: original(number, head=OTHER)
         # The retry reuses the journaled superseding intent and its lease.
         self.assertEqual(self.publish(revised).status, "verified")
         self.assertEqual(self.git.pushes, [(CANDIDATE, None), (OTHER, CANDIDATE), (OTHER, CANDIDATE)])
         self.assertEqual(len(self.posts), 1)
 
     def test_superseding_candidate_refuses_an_outside_item_ref(self):
-        self.git.on_push = lambda: setattr(self.git, "base", OTHER)
-        self.assertEqual(self.publish().status, "base_changed")
+        self.git.on_push = lambda: setattr(self, "active", None)
+        self.assertEqual(self.publish().status, "claim_lost")
         self.git.on_push = lambda: None
+        self.successor()
         self.git.head = "d" * 40
         revised = replace(self.intent, candidate=OTHER, expected_base=OTHER)
         self.assertEqual(self.publish(revised).status, "conflict")
         self.assertEqual(len(self.git.pushes), 1)
 
-    def test_base_move_during_unresolved_push_routes_back_to_development(self):
+    def test_base_move_during_unresolved_push_still_opens_the_draft(self):
         self.git.drop_push = True
         self.git.on_push = lambda: setattr(self.git, "base", OTHER)
         self.assertEqual(self.publish().status, "pending")
         self.assertEqual(self.journal()[0], "push")
         self.git.on_push = lambda: None
-        self.assertEqual(self.publish().status, "base_changed")
-        self.assertEqual((len(self.git.pushes), self.posts), (1, []))
+        self.assertEqual(self.publish().status, "verified")
+        self.assertEqual((len(self.git.pushes), len(self.posts)), (2, 1))
 
-    def test_base_or_outside_push_conflict_before_any_write(self):
-        self.git.base = OTHER
+    def test_moved_base_opens_the_draft_but_deleted_base_or_outside_push_blocks(self):
+        self.git.base = None
         self.assertEqual(self.publish().status, "base_changed")
         self.git.base = BASE
         self.git.head = OTHER
         self.assertEqual(self.publish().status, "conflict")
         self.assertFalse(self.git.pushes or self.posts)
+        self.git.head, self.git.base = None, OTHER
+        self.assertEqual(self.publish().status, "verified")
+        self.assertEqual(len(self.posts), 1)
 
     def test_lost_claim_after_post_preserves_known_pr_for_successor(self):
         self.post_effects.append("expire")

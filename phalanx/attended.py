@@ -17,6 +17,7 @@ from uuid import UUID
 from .attended_drafts import development_checkpoint, github_repository, publish_draft
 from . import report_execution as reports
 from .handoff import WorkerHandoff, WorkPacket
+from .pr_notes import PRNotes
 from .runner_errors import RunnerError
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
@@ -153,7 +154,9 @@ class AttendedRunner:
         # Only competing preparations of this slot wait here. Heartbeats and
         # other slots can still use the journal during HTTP and Git operations.
         with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
-            return self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages)
+            result = self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages)
+        notes = PRNotes(self.root).flush(os.environ.get("PHALANX_GITHUB_TOKEN"))
+        return {**result, "pr_notes": notes} if notes else result
 
     def _prepare_slot(self, *, draft, report_storage, stages=None):
         runner_stage = "pr_creation" if draft else reports.STORAGE if report_storage else None
@@ -325,6 +328,9 @@ class AttendedRunner:
         if stage == "development" and state.get("development_findings"):
             context["review_findings"] = state["development_findings"]
             requirements += " First address review_findings in the context on top of the current HEAD."
+            if state.get("primary_pr") and candidate:
+                PRNotes(self.root).record(state["primary_pr"], candidate, "Returned to development",
+                                          state["development_findings"])
         packet = WorkPacket(
             item_id=claim["item_id"], attempt_id=UUID(claim["attempt_id"]),
             state_version=execution["version"], stage=stage, repository=repo,

@@ -56,6 +56,25 @@ class GitHubClientTests(unittest.TestCase):
             raise result
         return result
 
+    def test_convert_to_draft_separates_refusal_rate_limit_and_unconfirmed(self):
+        self.responses.extend([
+            response({"data": {"convertPullRequestToDraft": {"pullRequest": {"id": "PR_7", "isDraft": True}}}}),
+            response({"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible"}]}),
+            response({"errors": [{"type": "RATE_LIMITED", "message": "slow down"}]}),
+            response({"data": None}),
+        ])
+        self.client.convert_to_draft("PR_7")
+        self.assertIn("convertPullRequestToDraft", json.loads(self.requests[0].data)["query"])
+        with self.assertRaises(GitHubError) as refused:
+            self.client.convert_to_draft("PR_7")
+        self.assertNotIsInstance(refused.exception, UncertainGitHubWrite)
+        self.assertIsNone(refused.exception.retry_after_seconds)
+        with self.assertRaises(GitHubError) as limited:
+            self.client.convert_to_draft("PR_7")
+        self.assertEqual(limited.exception.retry_after_seconds, 60)
+        with self.assertRaises(UncertainGitHubWrite):
+            self.client.convert_to_draft("PR_7")
+
     def test_exact_pull_includes_current_head_and_merge_evidence(self):
         self.responses.append(response(pull(draft=False, merged=True)))
         result = self.client.get_pull_request(7)

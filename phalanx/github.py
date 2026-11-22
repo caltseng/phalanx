@@ -343,6 +343,54 @@ class GitHubClient:
         except (AttributeError, KeyError, TypeError, ValueError):
             raise UncertainGitHubWrite(operation, "GitHub did not confirm promotion", 200) from None
 
+    def convert_to_draft(self, node_id: str) -> None:
+        """Return a ready PR to draft. A GraphQL error is a refusal; a missing answer is uncertain."""
+        if not node_id.strip():
+            raise ValueError("a PR node ID is required")
+        operation = "convert pull request to draft"
+        query = """
+            mutation ($id: ID!) {
+              convertPullRequestToDraft(input: {pullRequestId: $id}) {
+                pullRequest { id isDraft }
+              }
+            }
+        """
+        data, _ = self._request(operation, "POST", self._graphql_url,
+                                payload={"query": query, "variables": {"id": node_id}})
+        errors = data.get("errors") if isinstance(data, dict) else None
+        if errors:
+            rows = [error for error in errors if isinstance(error, dict)] if isinstance(errors, list) else []
+            message = "; ".join(str(error.get("message", "")) for error in rows)[:500]
+            limited = any(error.get("type") == "RATE_LIMITED" for error in rows)
+            raise GitHubError(operation, message or "GitHub refused the conversion",
+                              retry_after_seconds=60 if limited else None)
+        try:
+            pull = data["data"]["convertPullRequestToDraft"]["pullRequest"]
+            if pull["id"] != node_id or pull["isDraft"] is not True:
+                raise ValueError("conversion unconfirmed")
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise UncertainGitHubWrite(operation, "GitHub did not confirm the conversion", 200) from None
+
+    def get_pull_request_body(self, number: int) -> str:
+        data, _ = self._request("get pull request description", "GET", self._pull_url(number))
+        body = data.get("body") if isinstance(data, dict) else None
+        return body if isinstance(body, str) else ""
+
+    def update_pull_request_body(self, number: int, body: str) -> None:
+        self._request("update pull request description", "PATCH", self._pull_url(number),
+                      payload={"body": body})
+
+    def list_pull_request_comments(self, number: int, *, page_limit: int = 10) -> tuple[str, ...]:
+        """Return the bodies of the PR's conversation comments."""
+        url = self._pull_url(number).replace("/pulls/", "/issues/") + "/comments?per_page=100"
+        return tuple(str(row.get("body") or "") for row in self._pages(
+            "list pull request comments", url, page_limit=page_limit,
+        ))
+
+    def comment_on_pull_request(self, number: int, body: str) -> None:
+        url = self._pull_url(number).replace("/pulls/", "/issues/") + "/comments"
+        self._request("comment on pull request", "POST", url, payload={"body": body}, expected=201)
+
     def get_commit_checks(
         self, sha: str, *, page_limit: int = 10,
         include_runs: bool = True, include_statuses: bool = True,
