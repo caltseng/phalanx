@@ -9,9 +9,9 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .auth import authenticate
-from .intake import read_transaction
 from .intake_models import Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
+from .store import read_transaction
 
 router = APIRouter(prefix="/v1/operator", dependencies=[Depends(authenticate)])
 Limit = Annotated[int, Query(ge=1, le=100)]

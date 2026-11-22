@@ -11,7 +11,7 @@ import unittest
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from phalanx.store import connect, migrate, write_transaction
+from phalanx.store import connect, migrate, read_transaction, write_transaction
 
 
 OWNER = "o" * 32
@@ -188,3 +188,34 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 list(pool.map(increment, range(32)))
             with connect(path, mode="ro") as db:
                 self.assertEqual(db.execute("SELECT value FROM counter").fetchone()[0], 32)
+
+    def test_reads_start_between_back_to_back_writes(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "reads.sqlite3"
+            migrate(path)
+            stop = time.monotonic() + 3
+
+            def write(_):
+                while time.monotonic() < stop:
+                    with write_transaction(path) as db:
+                        # Hold the exclusive lock like a slow commit flush, then hand straight off.
+                        db.execute("COMMIT")
+                        db.execute("BEGIN EXCLUSIVE")
+                        time.sleep(0.08)
+
+            def read(_):
+                slowest = 0.0
+                while time.monotonic() < stop:
+                    started = time.monotonic()
+                    with read_transaction(path) as db:
+                        db.execute("PRAGMA user_version").fetchone()
+                    slowest = max(slowest, time.monotonic() - started)
+                    time.sleep(0.02)
+                return slowest
+
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                writers = [pool.submit(write, index) for index in range(6)]
+                readers = list(pool.map(read, range(2)))
+                for writer in writers:
+                    writer.result()
+            self.assertLess(max(readers), 1.0)
