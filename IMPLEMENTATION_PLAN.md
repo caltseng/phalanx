@@ -188,7 +188,7 @@ The merged components can be tested in isolation. The release still needs an att
 Execute the rows in table order. PH-04a, PH-11a to PH-11g, PH-12a, PH-13a, PH-14a and PH-16a are done, as is the board part of PH-18a. Next, merge PH-15a part 1, then parts 2 and 3. Then simplify the state machine in PH-15b before PH-18a's native evidence, PH-19a and PH-V1, so the release gate runs on the smallest correct machine. Rows with numbered parts ship one part per PR.
 
 - Merge a PR only when required CI passes on its exact head and an exact-head review has no open actionable findings. Live runtime and GitHub pilots add their evidence to the PR.
-- A feature PR updates only its own row in this plan. Only plan and muster PRs change the ordering paragraph above and other rows' statuses, so parallel feature PRs don't conflict here. Drop any other plan edits when rebasing.
+- Feature PRs don't edit this plan. The Captain or plan session records statuses and ordering after merges, in one batched plan PR.
 - Give each PR one acceptance focus. If review is still finding defects after two rounds, merge the verified part and turn the remaining findings into a follow-up row.
 - The [acceptance repositories](#acceptance-repositories) were registered with the server and runner for the PH-11b muster. Their validation policy is recorded in [the pilot validation policy](docs/pilots/validation-policies.md).
 
