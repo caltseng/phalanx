@@ -185,7 +185,7 @@ Integrate the restart core from [PR #27](https://github.com/caltseng/phalanx/pul
 
 The merged components can be tested in isolation. The release still needs an attended muster that connects them through the same API and verifies delivery across two repositories. The acceptance criteria below refine the work items above and use the transitions in [STATE_MACHINE.md](STATE_MACHINE.md).
 
-Execute the rows in table order. PH-04a, PH-11a to PH-11g, PH-12a, PH-13a, PH-14a, PH-14b, PH-15a, PH-15b, PH-16a, PH-18a, PH-19a, PH-19b and PH-19c are done, and PH-V1 passed, so **v1 is done**. Next, PH-V1a, PH-V1b, PH-V1c and PH-26 part 1 polish it before any stage 3 work in [ROADMAP.md](ROADMAP.md). Rows with numbered parts ship one part per PR.
+Execute the rows in table order. PH-04a, PH-11a to PH-11g, PH-12a, PH-13a, PH-14a, PH-14b, PH-15a, PH-15b, PH-16a, PH-18a, PH-19a, PH-19b and PH-19c are done, and PH-V1 passed, so **v1 is done**. Next, PH-V1a, PH-V1b, PH-V1c and the PH-26 report polish it before any stage 3 work in [ROADMAP.md](ROADMAP.md). Rows with numbered parts ship one part per PR.
 
 - Merge a PR only when required CI passes on its exact head and an exact-head review has no open actionable findings. Live runtime and GitHub pilots add their evidence to the PR.
 - Feature PRs don't edit this plan. The Captain or plan session records statuses and ordering after merges, in one batched plan PR.
@@ -229,7 +229,7 @@ PH-11b, PH-14a and PH-V1 run against these two public scratch repositories. Each
 
 ## After the local release
 
-[ROADMAP.md](ROADMAP.md) sets the order of these rows by stage. None of them starts before v1 is polished, except PH-26 part 1, a report that picks the throughput fix. PH-26's code changes moved to stage 5 (decision 53).
+[ROADMAP.md](ROADMAP.md) sets the order of these rows by stage. None of them starts before v1 is polished, except PH-26. Its measurement report is part of stage 2. Its code fix may land in stage 2 if it stays simple, but v1 doesn't wait for it (decision 53).
 
 | Item | Depends on | Deliverable and acceptance |
 | --- | --- | --- |
