@@ -20,7 +20,7 @@ Mark a row Caleb only for his explicit decision. To override, edit the row, set 
 | 8 | Review | Independent review "changes required" goes back to development with the findings | Same loop as self-review | Captain |
 | 9 | Check-in | Ready-only items complete automatically; merge targets wait on the owner until PH-15a part 3 | Automated merge isn't built yet | Captain |
 | 10 | Check-in | Merge conflicts are resolved automatically by a development attempt that rebases and revalidates; the owner is asked only when retries can't make progress. | Caleb asked for automatic conflict resolution | Caleb |
-| 11 | Architecture | The server needs the `[server]` extra (fastapi/uvicorn); backup/restore are server-host-only commands | Runners stay light and can't touch server storage | Captain |
+| 11 | Architecture | The server needs the `[server]` extra (fastapi/uvicorn); backup/restore are server-host-only commands. Runners, the CLI and the Captain reach queue state only through the API, even when the server runs locally; their own SQLite files are runner-local journals | Runners stay light and can't touch server storage; the API is the only path once storage is hosted | Captain; confirmed by Caleb |
 | 12 | Architecture | The dashboard is served from the API server's origin; a separate static origin is deferred | No CORS or extra config needed | Captain |
 | 13 | Language | Stay on Python for v1; port to TypeScript/Node after PH-V1 and before hosting (PH-25) | Don't delay v1; host once | Captain; approved by Caleb |
 | 14 | Process | Feature PRs edit only their own plan row; plan and muster PRs own ordering and statuses | Stops rebase churn. Superseded by 19 | Captain |
