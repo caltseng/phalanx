@@ -51,7 +51,7 @@ def store_unavailable(request: Request, error: sqlite3.OperationalError):
     if not busy:
         raise error
     return JSONResponse(
-        {"detail": "SQLite store unavailable; retry the same request"},
+        {"detail": f"SQLite store unavailable ({error}); retry the same request"},
         status_code=503,
         headers={"Retry-After": "1"},
     )

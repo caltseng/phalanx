@@ -106,12 +106,16 @@ class Metrics:
         self.lock = threading.Lock()
         self.samples = defaultdict(list)  # label -> [(monotonic end, seconds, status)]
         self.errors = []  # (monotonic, label, error)
+        self.failures = []  # (monotonic, label, status, method and path, detail) for every 5xx
         self.claims = []  # monotonic times of general-worker claims
         self.counts = Counter()
 
-    def record(self, label, status, elapsed):
+    def record(self, label, status, elapsed, request=None, raw=b""):
         with self.lock:
-            self.samples[label].append((time.monotonic(), elapsed, status))
+            stamp = time.monotonic()
+            self.samples[label].append((stamp, elapsed, status))
+            if status >= 500:
+                self.failures.append((stamp, label, status, request, raw[:160].decode("utf-8", "replace")))
 
     def error(self, label, error):
         with self.lock:
@@ -169,7 +173,7 @@ class Client:
                 time.sleep(0.1 + random.random() * 0.1)
                 continue
             if record:
-                self.probe.metrics.record(label, status, time.perf_counter() - started)
+                self.probe.metrics.record(label, status, time.perf_counter() - started, f"{method} {path}", raw)
             if status >= 500 and retry:
                 time.sleep(0.2 + random.random() * 0.1)
                 continue
@@ -837,6 +841,9 @@ class Probe:
     def faulted(self, stamp):
         return any(start <= stamp <= end for _, start, end in self.windows)
 
+    def window_offsets(self):
+        return [(label, round(start - self.t0, 2), round(end - self.t0, 2)) for label, start, end in self.windows]
+
     def summarize(self):
         seconds = self.ended - self.t0
         routes = {}
@@ -863,7 +870,13 @@ class Probe:
         resets = [entry for entry in self.metrics.errors if not self.faulted(entry[0])]
         for label, count in unexpected.items():
             if count:
-                self.violation(f"{count} {label} responses failed with 5xx outside fault windows")
+                failures = [(round(stamp - self.t0, 2), status, request, detail)
+                            for stamp, name, status, request, detail in self.metrics.failures
+                            if name == label and not self.faulted(stamp)]
+                statuses = dict(Counter(status for _, status, _, _ in failures))
+                self.violation(f"{count} {label} responses failed with 5xx outside fault windows: "
+                               f"statuses {statuses}, first (seconds, status, request, detail) {failures[:3]}, "
+                               f"fault windows {self.window_offsets()}")
         if resets:
             self.violation(f"{len(resets)} connection failures outside fault windows: {resets[:3]}")
         outage = self.results.get("outage")
