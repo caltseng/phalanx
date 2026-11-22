@@ -4,6 +4,9 @@
 
 - Read [README.md](README.md) for the project goal and [SPEC.md](SPEC.md) for the current design. Treat options in the design questions as proposals. Record decisions in the spec as they are made.
 - Implement against the current Markdown spec in small, independently reviewable PRs. Track completed slices and remaining integration in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+- Feature PRs don't edit IMPLEMENTATION_PLAN.md. The Captain or plan session batches status and ordering updates after merges.
+- Branch new work from `main`. Stack only when the code truly depends on an unmerged PR.
+- The Captain answers owner and design questions on Phalanx development with a best guess and logs each in [docs/decisions.md](docs/decisions.md) for Caleb's review. Ask Caleb only for missing authority or credentials.
 
 ## Design priorities
 
