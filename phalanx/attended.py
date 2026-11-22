@@ -347,7 +347,9 @@ class AttendedRunner:
         if stage in ("development", "pr_revision") and state.get("findings"):
             context["review_findings"] = state["findings"]
             if stage == "development":
-                requirements += " First address review_findings in the context on top of the current HEAD."
+                requirements += (" First address review_findings in the context on top of the current HEAD."
+                                 " If they need no change, such as a check that passes when rerun, "
+                                 "leave the checkout unchanged and return the current HEAD to rerun validation.")
             if state.get("primary_pr") and candidate:
                 PRNotes(self.root).record(
                     state["primary_pr"], candidate,
@@ -568,9 +570,11 @@ class AttendedRunner:
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
+                    # A retry may keep the recorded candidate (e.g. a flaky check) so it is revalidated.
+                    unchanged_ok = evidence == record["claim"]["execution"]["state"].get("candidate")
                     if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
                             or evidence != workspace.head or workspace.dirty
-                            or evidence == packet.expected_revision):
+                            or (evidence == packet.expected_revision and not unchanged_ok)):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
                     if "development_base" in record:
                         manager.verify_base_ancestry(workspace, record["development_base"]["sha"])

@@ -618,6 +618,23 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.api.posts[0][0]["candidate"], head)
         self.assertEqual(self.git(self.checkout, "rev-parse", "HEAD"), packet["expected_revision"])
 
+    def test_development_retry_may_keep_the_recorded_candidate(self):
+        self.api.drop_claim = self.api.drop_result = False
+        self.api.stage = "development"
+        self.api.candidate = self.git(self.checkout, "rev-parse", "HEAD")
+        runner = self.runner()
+        marker = runner.prepare()["marker"]
+        packet = runner.status()["packet"]
+        thread_id = str(uuid4())
+        runner.receipt(marker, "local", thread_id=thread_id)
+        (Path(packet["worktree"]) / "scratch.md").write_text("Uncommitted")
+        self.write_result(runner, marker, self.api.candidate)
+        with self.assertRaisesRegex(RunnerError, "new candidate"):
+            runner.submit(marker, "local", thread_id)
+        (Path(packet["worktree"]) / "scratch.md").unlink()
+        runner.submit(marker, "local", thread_id)
+        self.assertEqual(self.api.posts[0][0]["candidate"], self.api.candidate)
+
     def start_development(self):
         self.api.remote = "git@github.com:example/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", self.api.remote)
