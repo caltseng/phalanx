@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import stat
 from dataclasses import dataclass
 from enum import StrEnum
@@ -27,6 +28,37 @@ OUTCOME_FIELDS = {
     Outcome.FAILED: ("reason", "attempted", "retry_guidance"),
 }
 OPTIONAL_FIELDS = {Outcome.NEEDS_INPUT: ("proposed_default",)}
+# A label such as "A)", "(b)", "1." or "2)" that starts one choice inside a string.
+_CHOICE_LABEL = re.compile(r"(?:^|(?<=\s))\(?([A-Za-z]|\d{1,2})[).:](?=\s)")
+_BULLET = re.compile(r"^\s*(?:[-*\u2022]\s+)")
+
+
+def split_options(value: object) -> list[str]:
+    """Return one string per choice, splitting a string only when its choices are unambiguous.
+
+    Raise ValueError for a single choice or a string whose choices cannot be told apart.
+    """
+    if isinstance(value, list):
+        options = value
+    elif isinstance(value, str):
+        options = [_BULLET.sub("", line) for line in value.splitlines() if line.strip()]
+        if len(options) == 1:
+            labels = list(_CHOICE_LABEL.finditer(options[0]))
+            names = [label.group(1).lower() for label in labels]
+            first = names[0] if names else ""
+            sequence = "abcdefghijklmnopqrstuvwxyz" if first == "a" else [str(n) for n in range(1, 100)]
+            if (len(labels) >= 2 and labels[0].start() == len(options[0]) - len(options[0].lstrip())
+                    and names == list(sequence[:len(names)])):
+                ends = [label.start() for label in labels[1:]] + [len(options[0])]
+                options = [options[0][label.start():end] for label, end in zip(labels, ends)]
+    else:
+        raise ValueError("Options must be a list of strings")
+    options = [option.strip() if isinstance(option, str) else option for option in options]
+    if any(not isinstance(option, str) or not option for option in options):
+        raise ValueError("Each option must be a nonempty string")
+    if len(options) < 2:
+        raise ValueError("List each choice as its own options element")
+    return options
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +190,9 @@ Work packet:
 Write one UTF-8 JSON object of at most {MAX_RESULT_BYTES} bytes. Copy every
 result_identity field verbatim to the top level, including expected_revision
 even if the stage creates a new commit. Add only "outcome" and "details".
-Choose one outcome and provide its exact details fields as nonempty strings:
+Choose one outcome and provide its exact details fields as nonempty strings,
+except needs_input options: a JSON array with each choice as its own string
+element, never several choices in one string:
 {outcomes}
 Describe stage-specific evidence and any new candidate revision or checkpoint
 in the details. Include references as text when useful.
@@ -204,13 +238,19 @@ Final path: {self.result_path}
         details = result.get("details")
         fields = OUTCOME_FIELDS[outcome]
         if not isinstance(details, dict) or any(
-            not isinstance(details.get(field), str) or not details[field].strip() for field in fields
+            not isinstance(details.get(field), str) or not details[field].strip()
+            for field in fields if field != "options"
         ):
             raise InvalidResult(f"Details for {outcome} need nonempty strings: {', '.join(fields)}")
         optional = [field for field in OPTIONAL_FIELDS.get(outcome, ())
                     if isinstance(details.get(field), str) and details[field].strip()]
-        return WorkerResult(self.packet, outcome,
-                            {field: details[field] for field in (*fields, *optional)})
+        kept = {field: details[field] for field in (*fields, *optional)}
+        if "options" in kept:
+            try:
+                kept["options"] = split_options(kept["options"])
+            except ValueError as exc:
+                raise InvalidResult(f"needs_input options: {exc}") from exc
+        return WorkerResult(self.packet, outcome, kept)
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
