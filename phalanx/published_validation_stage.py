@@ -13,7 +13,7 @@ from .github import GitHubClient, GitHubError
 from .github_checks import PreviewReader, collect_github_checks
 from .intake_models import Identifier
 from .pr_models import (
-    ExpectedRefs, GateObservation, GitHubPull, PublishedValidationClaimCheck, Validation,
+    ExpectedRefs, GateObservation, GitHubPull, PublishedValidationClaimCheck, Rework, Validation,
 )
 from .transitions import Outcome, Stage
 from .validation import GateState, Phase, RequiredCheck
@@ -99,10 +99,13 @@ class PublishedValidationRunner:
             pull.url.casefold() != url.casefold() or pull.state != "open"
             or pull.merged is not False or pull.draft
             or (pull.head_repository or "").casefold() != expected.head_repository.casefold()
-            or (pull.head_ref, pull.base_ref, pull.head_sha)
-            != (expected.head_ref, expected.base_ref, expected.head_sha)
+            or (pull.head_ref, pull.base_ref) != (expected.head_ref, expected.base_ref)
         ):
             return _block(event, "Reconcile the primary PR with the recorded branch and candidate.", handoff)
+        if pull.head_sha != expected.head_sha:
+            return _rework(event, expected, pull, "unexpected_head")
+        if pull.mergeable is False:
+            return _rework(event, expected, pull, "merge_conflict")
 
         checks = collect_github_checks(
             self.github, pull, Phase.READY, policy.required, read_preview=policy.read_preview,
@@ -169,6 +172,15 @@ class PublishedValidationRunner:
                 WHERE item_id=? AND execution_id=? AND runner_id=? AND attempt_id=? AND version=?
             """, identity).fetchone()
             return json.loads(row[0]) if row else None
+
+
+def _rework(event, expected, pull, issue):
+    """Send a routine conflict or foreign push back to development."""
+    return "pr-rework", Rework(
+        **event, issue=issue,
+        expected=ExpectedRefs(head_ref=expected.head_ref, base_ref=expected.base_ref, base_sha=pull.base_sha),
+        pull=GitHubPull.model_validate({field: getattr(pull, field) for field in GitHubPull.model_fields}),
+    ).model_dump(mode="json")
 
 
 def _block(event, reason, handoff):

@@ -369,15 +369,14 @@ def _changes(state: Execution, evidence: Evidence) -> Execution:
         return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
     else:
         pr = _primary(state, evidence)
-        if stage is Stage.PR_PROMOTION and (evidence.issue is Issue.PR_BLOCKER
-                                           or pr.revision.head != state.candidate):
-            return _queue(state, Stage.PR_RECONCILIATION)
-        if stage is Stage.ADVERSARIAL_REVIEW:
-            _require(evidence.development_findings, "Review findings are required")
-        if stage is Stage.PR_PROMOTION or evidence.development_findings:
-            _require(stage is Stage.PR_PROMOTION or pr.revision.head == state.candidate,
-                     "Findings must match the candidate")
+        if evidence.development_findings:
+            # Failed checks, conflicts, foreign pushes and feedback all revalidate a new candidate.
             return _queue(state, Stage.DEVELOPMENT, development_findings=evidence.development_findings)
+        _require(stage is not Stage.ADVERSARIAL_REVIEW, "Review findings are required")
+        if stage is Stage.PR_PROMOTION:
+            if evidence.issue is Issue.PR_BLOCKER or pr.revision.head != state.candidate:
+                return _queue(state, Stage.PR_RECONCILIATION)
+            return _queue(state, Stage.DEVELOPMENT)
     _require(stage in CHANGES, "Changes-required outcome is unsupported at this stage")
     return _queue(state, CHANGES[stage])
 

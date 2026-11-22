@@ -14,7 +14,7 @@ from .candidate_local import CandidateLocal
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError, UncertainGitHubWrite
 from .github_checks import collect_github_checks
-from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Reconciliation, Validation
+from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Reconciliation, Rework, Validation
 from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
@@ -187,6 +187,8 @@ def _promotion(runner, snapshot):
             return _retry(snapshot, str(error), error.retry_after_seconds)
         if pull.head_sha != candidate:
             return _retry(snapshot, "GitHub has not shown the pushed candidate on the PR yet")
+    if pull.head_sha == candidate and pull.mergeable is False:
+        return _rework(snapshot, pull, base_ref, "merge_conflict")
     result = promote(
         github, item_id=claim["item_id"], number=int(number), base_ref=base_ref,
         revision=Revision(candidate, pull.base_sha), collect=collect,
@@ -198,12 +200,12 @@ def _promotion(runner, snapshot):
         return _retry(snapshot, result.reason)
     if result.status == "revision_changed":
         observed = result.pull
-        if (observed is None or observed.head_sha != candidate or observed.state != "open"
+        if (observed is None or observed.state != "open"
                 or observed.merged or observed.head_ref != _item_branch(claim["item_id"])
                 or observed.base_ref != base_ref):
             return _question(snapshot, result.reason, handoff)
-        # Only the target moved. A later attempt observes the new base revision.
-        return _retry(snapshot, "The target branch moved during promotion; observing the new base")
+        # A moved head or target is reobserved; a foreign push is integrated by development.
+        return _retry(snapshot, "The primary PR changed during promotion; reobserving it")
     gates = result.gates
     if changed:
         return _retry(snapshot, "; ".join(changed[-1].gate.reasons), changed[-1].retry_after_seconds)
@@ -261,6 +263,8 @@ def _verified_head(runner, snapshot, url):
     for entry in reversed(timeline):
         details = entry.get("details") or {}
         pull = details.get("pull")
+        if details.get("issue") == "unexpected_head":
+            continue
         if details.get("pr_url") == url and isinstance(pull, dict) and pull.get("head_sha"):
             return pull["head_sha"]
     return None
@@ -271,8 +275,9 @@ def _publish_update(snapshot, local, pull, base_ref, verified_head):
 
     Only a head the server last verified for this PR is replaced, leased on that
     head so a concurrent push is never overwritten. A rebased candidate therefore
-    publishes like a fast-forward. Returns None once the remote branch holds the
-    candidate.
+    publishes like a fast-forward. Any other head is only fast-forwarded; when
+    that fails, development integrates the foreign commits and revalidates.
+    Returns None once the remote branch holds the candidate.
     """
     claim = snapshot["claim"]
     candidate = claim["execution"]["state"]["candidate"]
@@ -286,18 +291,20 @@ def _publish_update(snapshot, local, pull, base_ref, verified_head):
         workspace = local._inspect()
         git = GitPublication(workspace.path, snapshot["repositories"][claim["request"]["repository_id"]],
                              claim["item_id"])
-        if git.read_head(authorize=local._authorize) == candidate:
+        remote = git.read_head(authorize=local._authorize)
+        if remote == candidate:
             return None
-        if pull.head_sha != verified_head:
-            return _question(snapshot, f"The primary PR head {pull.head_sha} is not the head Phalanx last "
-                             "verified; reconcile it before publishing the reviewed candidate.", handoff)
-        outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize, rewrite=True)
+        if remote != pull.head_sha:
+            return _retry(snapshot, "GitHub has not shown the latest push to the PR branch yet")
+        rewrite = pull.head_sha == verified_head
+        outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize, rewrite=rewrite)
     except (PublicationError, WorkspaceError) as error:
         return _retry(snapshot, f"Could not publish the reviewed candidate: {error}")
-    if outcome.status == "uncertain":
+    if outcome.status == "conflict" and not rewrite:
+        return _rework(snapshot, pull, base_ref, "unexpected_head")
+    if outcome.status != "success":
+        # A lost lease means the branch moved again; the retry reobserves it.
         return _retry(snapshot, outcome.reason)
-    if outcome.status == "conflict":
-        return _question(snapshot, f"Could not publish the reviewed candidate: {outcome.reason}", handoff)
     return None
 
 
@@ -326,20 +333,21 @@ def _disposition(runner, snapshot):
     except GitHubError as error:
         return _retry(snapshot, str(error), error.retry_after_seconds)
     if (pull.url.casefold() != url.casefold() or pull.state != "open" or pull.merged or pull.draft
-            or (pull.head_ref, pull.base_ref, pull.head_sha)
-            != (_item_branch(claim["item_id"]), base_ref, candidate)):
-        return _question(snapshot, "Reconcile the primary PR with the recorded branch, target and candidate.",
-                         handoff)
+            or (pull.head_ref, pull.base_ref) != (_item_branch(claim["item_id"]), base_ref)):
+        return _question(snapshot, "Reconcile the primary PR with the recorded branch and target.", handoff)
+    if pull.head_sha != candidate:
+        return _rework(snapshot, pull, base_ref, "unexpected_head")
     if pull.mergeable is None:
         return _retry(snapshot, "GitHub is still computing mergeability")
     if not pull.mergeable:
-        if _conflicted_before(runner, snapshot, pull.base_sha):
-            return _question(snapshot, f"A development attempt could not resolve the merge conflict with "
-                             f"{base_ref} at {pull.base_sha}. Resolve it on the primary PR, then reply.", handoff)
-        return {"route": "pr-observation", "reason": f"The PR conflicts with {base_ref}; returning it to "
-                "development to rebase and revalidate", "body": Reconciliation(
-                    **_event(snapshot), **_refs(snapshot, pull, base_ref), merge_conflict=True
-                ).model_dump(mode="json")}
+        return _rework(snapshot, pull, base_ref, "merge_conflict")
+    try:
+        feedback = github.get_actionable_feedback(pull.number)
+    except GitHubError as error:
+        return _retry(snapshot, str(error), error.retry_after_seconds)
+    handed_off = _handed_off_feedback(runner, snapshot)
+    if feedback := [(node, text) for node, text in feedback if node not in handed_off][:100]:
+        return _rework(snapshot, pull, base_ref, "feedback", feedback)
     checks = collect_github_checks(github, pull, Phase.READY, policy.required, read_preview=policy.read_preview)
     if checks.retry_after_seconds is not None:
         return _retry(snapshot, "; ".join(checks.gate.reasons), checks.retry_after_seconds)
@@ -351,9 +359,12 @@ def _disposition(runner, snapshot):
             "revision": {"head": candidate, "base": pull.base_sha},
             "retry_after_seconds": interval, "wait_limit_seconds": limit,
         }}
-    if checks.gate.state not in {GateState.SATISFIED, GateState.NOT_CONFIGURED} or checks.candidate is None:
+    failed = checks.gate.state is GateState.FAILED
+    if (checks.gate.state not in {GateState.SATISFIED, GateState.NOT_CONFIGURED} and not failed
+            or checks.candidate is None):
         return _question(snapshot, reason, handoff)
-    return {"route": "pr-observation", "body": _observation(
+    # Failed checks are observed as-is; the server returns them to development as findings.
+    return {"route": "pr-observation", **({"reason": reason[:16000]} if failed else {}), "body": _observation(
         Reconciliation, snapshot, pull, base_ref, policy.required, checks.observations,
         checks.candidate.merge_sha, Phase.READY,
         actionable_feedback_cleared=True, approvals_and_mergeability=True,
@@ -373,12 +384,22 @@ def _refs(snapshot, pull, base_ref):
     }
 
 
-def _conflicted_before(runner, snapshot, base_sha):
-    """Whether a development attempt already tried to resolve a conflict with this base."""
+def _handed_off_feedback(runner, snapshot):
+    """GitHub feedback IDs already sent to development for this execution."""
     claim = snapshot["claim"]
     timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
-    return any((entry.get("details") or {}).get("merge_conflict") is True
-               and entry["details"]["expected"]["base_sha"] == base_sha for entry in timeline)
+    return {node for entry in timeline for node in (entry.get("details") or {}).get("feedback_ids") or ()}
+
+
+def _rework(snapshot, pull, base_ref, issue, feedback=()):
+    reasons = {"merge_conflict": f"The PR conflicts with {base_ref}",
+               "unexpected_head": f"The PR head {pull.head_sha} is not the candidate",
+               "feedback": "The PR has new actionable GitHub feedback"}
+    return {"route": "pr-rework", "reason": f"{reasons[issue]}; returning it to development",
+            "body": Rework(
+                **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue,
+                findings=[text[:16000] for _, text in feedback], feedback_ids=[node for node, _ in feedback],
+            ).model_dump(mode="json")}
 
 
 def _observation(model, snapshot, pull, base_ref, required, observations, merge_sha, phase, **fields):

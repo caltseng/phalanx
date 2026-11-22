@@ -232,7 +232,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertIsNone(updated["state"]["final_output"])
         self.assertEqual(self.result(self.claim("adversarial_review"))[0], 409)
 
-    def test_failed_ready_check_queues_reconciliation(self):
+    def test_failed_ready_check_returns_to_development(self):
         self.publish()
         no_draft_requirements = dict(self.gates("draft"), required=[], observations=[])
         body = self.observation(self.claim("pr_promotion"), gates=no_draft_requirements)
@@ -240,7 +240,8 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         body = self.observation(self.claim("pr_validation"), gates=self.gates("ready", outcome="failed"))
         status, updated = self.submit(body)
         self.assertEqual(status, 200)
-        self.assertEqual(updated["state"]["stage"], "pr_reconciliation")
+        self.assertEqual((updated["state"]["stage"], updated["state"]["status"]), ("development", "queued"))
+        self.assertIn("Required checks did not pass", updated["state"]["development_findings"])
         self.assertIsNone(updated["state"]["final_output"])
 
     def test_published_validation_wait_replays_and_reclaims_exact_revision(self):
@@ -411,18 +412,46 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIsNone(execution["state"]["development_findings"])
 
+    def rework(self, claim, issue, **fields):
+        return self.request(f"{self.execution}/pr-rework", RUNNER,
+                            self.observation(claim, issue=issue, **fields), self.lease)
+
     def test_merge_conflict_returns_to_development_to_rebase(self):
         self.start_review()
         self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
-        reconciliation = self.reconciliation(self.claim("pr_reconciliation"))
-        self.assertEqual(self.submit(dict(reconciliation, merge_conflict=True))[0], 422)
-        conflict = {key: value for key, value in reconciliation.items() if key not in {
-            "gates", "actionable_feedback_cleared", "approvals_and_mergeability"}}
-        status, execution = self.submit(dict(conflict, merge_conflict=True))
+        claim = self.claim("pr_reconciliation")
+        self.assertEqual(self.rework(claim, "unexpected_head")[0], 409)
+        self.assertEqual(self.rework(claim, "feedback")[0], 422)
+        status, execution = self.rework(claim, "merge_conflict")
         self.assertEqual(status, 200, execution)
         state = execution["state"]
         self.assertEqual((state["stage"], state["status"]), ("development", "queued"))
         self.assertIn("rebase the candidate", state["development_findings"])
+
+    def test_github_feedback_returns_to_development(self):
+        self.start_review()
+        self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
+        status, execution = self.rework(self.claim("pr_reconciliation"), "feedback",
+                                        findings=["@octo on app.py: Handle the empty list"],
+                                        feedback_ids=["PRRT_1"])
+        self.assertEqual(status, 200, execution)
+        self.assertEqual(execution["state"]["stage"], "development")
+        self.assertIn("Handle the empty list", execution["state"]["development_findings"])
+
+    def test_repeated_rework_without_progress_asks_the_owner(self):
+        self.publish()
+        for attempt in range(3):
+            status, execution = self.rework(self.claim("pr_promotion"), "merge_conflict")
+            self.assertEqual(status, 200, execution)
+            if attempt == 2:
+                break
+            self.assertEqual(execution["state"]["stage"], "development")
+            self.develop()
+            self.assertEqual(self.result(self.claim("self_review"), reviewed_candidate=HEAD)[0], 200)
+            self.assertEqual(self.result(self.claim("pre_pr_validation"), prevalidated_candidate=HEAD)[0], 200)
+        state = execution["state"]
+        self.assertEqual((state["stage"], state["status"]), ("pr_promotion", "waiting_for_input"))
+        self.assertIn("same findings", state["wait"]["reason"])
 
 
 class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):

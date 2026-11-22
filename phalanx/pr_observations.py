@@ -4,7 +4,7 @@ import json
 import re
 
 from . import intake, validation, waits
-from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Reconciliation, Validation, VerifiedMerge
+from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Validation, VerifiedMerge
 from .transitions import (
     Evidence, Event, Issue, Outcome, PullRequest, Revision, Stage, Status, Target, item_branch,
 )
@@ -177,12 +177,6 @@ def submit(db, item_id, execution_id, body, lease_digest):
             evidence = Evidence(pr=pr, development_findings=f"{body.review.summary}\n\n{findings}"[:16000])
         else:
             evidence = Evidence(pr=pr, independent_review=revision)
-    elif isinstance(body, Reconciliation) and body.merge_conflict:
-        # Routine conflicts go back to development; the runner escalates a repeat on the same base.
-        outcome = Outcome.CHANGES_REQUIRED
-        evidence = Evidence(pr=pr, development_findings=(
-            f"The PR conflicts with {expected.base_ref} at {expected.base_sha}. Fetch that commit, "
-            "rebase the candidate onto it, resolve the conflicts and rerun the checks."))
     else:
         if body.stage != Stage.PR_PROMOTION and pull.draft:
             raise intake.Conflict("Expected an open, ready primary PR")
@@ -193,12 +187,11 @@ def submit(db, item_id, execution_id, body, lease_digest):
         details["gate_result"] = {"state": gates.state, "reasons": gates.reasons}
         if gates.state in {validation.GateState.SATISFIED, validation.GateState.NOT_CONFIGURED}:
             evidence = gate_evidence(db, execution_id, body, state, pr)
-        elif (gates.state is validation.GateState.FAILED
-              and body.stage != Stage.PR_RECONCILIATION):
-            findings = None
-            if body.stage == Stage.PR_PROMOTION:
-                findings = ("Draft checks did not pass: " + "; ".join(gates.reasons))[:16000]
-            evidence = Evidence(pr=pr, development_findings=findings)
+        elif gates.state is validation.GateState.FAILED:
+            # Failed checks go back to development, which fixes them and revalidates.
+            phase = "Draft" if body.stage == Stage.PR_PROMOTION else "Required"
+            findings = f"{phase} checks did not pass on {url}: " + "; ".join(gates.reasons)
+            evidence = Evidence(pr=pr, development_findings=findings[:16000])
             outcome = Outcome.CHANGES_REQUIRED
         elif gates.state is validation.GateState.WAITING and schedule_recheck:
             return _wait_for_published_gates(db, row, state, body, gates, details)
@@ -207,6 +200,36 @@ def submit(db, item_id, execution_id, body, lease_digest):
     details["outcome"] = outcome
     return intake.apply(db, row, state, Event.RESULT, details=details,
                         attempt_id=body.attempt_id, outcome=outcome, evidence=evidence)
+
+
+def submit_rework(db, item_id, execution_id, body, lease_digest):
+    """Return routine PR conflicts and feedback to development for revalidation."""
+    row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
+    pull, expected = body.pull, body.expected
+    url = f"https://github.com/{repository}/pull/{pull.number}"
+    if state.primary_pr != url:
+        raise intake.Conflict("Rework must observe the recorded primary PR")
+    if ((pull.head_ref, pull.base_ref, pull.base_sha) != (expected.head_ref, expected.base_ref, expected.base_sha)
+            or pull.state != "open" or pull.merged):
+        raise intake.Conflict("Rework requires an open, unmerged PR at the expected refs")
+    if (pull.head_sha == state.candidate) == (body.issue == "unexpected_head"):
+        raise intake.Conflict("Only an unexpected head may differ from the candidate")
+    if body.issue == "merge_conflict":
+        findings = (f"The PR conflicts with {expected.base_ref} at {expected.base_sha}. Fetch that commit, "
+                    "rebase the candidate onto it, resolve the conflicts and rerun the checks.")
+    elif body.issue == "unexpected_head":
+        findings = (f"The PR branch {expected.head_ref} has commits Phalanx did not publish (head "
+                    f"{pull.head_sha}). Fetch the branch, integrate its commits so its head is an ancestor "
+                    "of the new candidate, and rerun the checks.")
+    else:
+        findings = ("Address this GitHub feedback on the PR:\n\n"
+                    + "\n\n".join(f"- {text}" for text in body.findings))
+    details = body.model_dump(mode="json")
+    details.update(pr_url=url, outcome=Outcome.CHANGES_REQUIRED)
+    pr = PullRequest(url, Revision(pull.head_sha, expected.base_sha), draft=pull.draft)
+    return intake.apply(db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
+                        outcome=Outcome.CHANGES_REQUIRED,
+                        evidence=Evidence(pr=pr, development_findings=findings[:16000]))
 
 
 def check_review_assignment(db, execution_id, expected, pull):

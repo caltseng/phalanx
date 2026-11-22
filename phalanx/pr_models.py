@@ -149,17 +149,35 @@ class Reconciliation(AttemptEvent):
     gates: GateObservation | None = None
     actionable_feedback_cleared: Flag = False
     approvals_and_mergeability: Flag = False
-    merge_conflict: Flag = False
     merge_intent: MergeIntent | None = None
 
     @model_validator(mode="after")
-    def ready_or_conflicting(self):
-        if self.merge_conflict:
-            if (self.gates or self.actionable_feedback_cleared or self.approvals_and_mergeability
-                    or self.merge_intent):
-                raise ValueError("A merge conflict report carries only the observed PR")
-        elif not (self.gates and self.actionable_feedback_cleared and self.approvals_and_mergeability):
+    def attested(self):
+        if not (self.gates and self.actionable_feedback_cleared and self.approvals_and_mergeability):
             raise ValueError("Ready reconciliation needs ready gates and both attestations")
+        return self
+
+
+class Rework(AttemptEvent):
+    """Routine PR state that a development attempt resolves before revalidation.
+
+    ``merge_conflict`` and ``feedback`` observe the candidate on the PR;
+    ``unexpected_head`` observes a head Phalanx did not publish.
+    """
+
+    stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN]
+    expected: ExpectedRefs
+    pull: GitHubPull
+    issue: Literal["merge_conflict", "unexpected_head", "feedback"]
+    findings: list[Text] = Field(default_factory=list, max_length=100)
+    feedback_ids: list[Annotated[str, StringConstraints(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def described(self):
+        if ((self.issue == "feedback") != bool(self.findings and self.feedback_ids)
+                or len(self.findings) != len(self.feedback_ids)):
+            raise ValueError("Feedback rework names the feedback and its IDs; other issues carry neither")
         return self
 
 

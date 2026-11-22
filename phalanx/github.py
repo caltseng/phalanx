@@ -148,6 +148,11 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
     return result
 
 
+def _author(node: dict) -> str:
+    author = node.get("author")
+    return f"@{author['login']}" if author else "A deleted user"
+
+
 class GitHubClient:
     def __init__(
         self,
@@ -390,6 +395,64 @@ class GitHubClient:
     def comment_on_pull_request(self, number: int, body: str) -> None:
         url = self._pull_url(number).replace("/pulls/", "/issues/") + "/comments"
         self._request("comment on pull request", "POST", url, payload={"body": body}, expected=201)
+
+    def get_actionable_feedback(self, number: int, *, page_limit: int = 10) -> tuple[tuple[str, str], ...]:
+        """Return (node ID, text) for requested changes and unresolved current review threads.
+
+        Review threads are paged so newer threads are seen even when older ones stay resolved.
+        Past the page limit the feedback read so far is returned rather than stalling the item.
+        """
+        operation = "read pull request feedback"
+        query = """
+            query ($owner: String!, $name: String!, $number: Int!, $after: String) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  latestOpinionatedReviews(first: 100) {
+                    nodes { id state body author { login } }
+                  }
+                  reviewThreads(first: 100, after: $after) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      id isResolved isOutdated path
+                      comments(first: 1) { nodes { body author { login } } }
+                    }
+                  }
+                }
+              }
+            }
+        """
+        owner, name = self._repository.split("/")
+        feedback, after = [], None
+        for page in range(page_limit):
+            data, _ = self._request(operation, "POST", self._graphql_url, payload={
+                "query": query, "variables": {"owner": owner, "name": name, "number": number, "after": after}})
+            try:
+                if data.get("errors"):
+                    raise ValueError("query errors")
+                pull = data["data"]["repository"]["pullRequest"]
+                threads = pull["reviewThreads"]
+                if page == 0:
+                    feedback += [
+                        (review["id"], f"{_author(review)} requested changes: {review['body'] or 'no summary'}")
+                        for review in pull["latestOpinionatedReviews"]["nodes"]
+                        if review["state"] == "CHANGES_REQUESTED"
+                    ]
+                for thread in threads["nodes"]:
+                    if thread["isResolved"] or thread["isOutdated"] or not thread["comments"]["nodes"]:
+                        continue
+                    comment = thread["comments"]["nodes"][0]
+                    feedback.append((thread["id"], f"{_author(comment)} on {thread['path']}: {comment['body']}"))
+                if any(not isinstance(node, str) or not node or not isinstance(text, str)
+                       for node, text in feedback):
+                    raise ValueError("invalid feedback")
+                after = threads["pageInfo"]["endCursor"] if threads["pageInfo"]["hasNextPage"] else None
+                if after is not None and not isinstance(after, str):
+                    raise ValueError("invalid cursor")
+            except (AttributeError, KeyError, TypeError, ValueError) as error:
+                raise GitHubError(operation, f"invalid feedback response ({error})") from None
+            if after is None:
+                break
+        return tuple(feedback)
 
     def get_commit_checks(
         self, sha: str, *, page_limit: int = 10,
