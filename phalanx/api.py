@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from . import dependencies, finalization
 from .auth import require_owner, require_runner
@@ -36,6 +37,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Phalanx", lifespan=lifespan)
 app.include_router(operator_web_router)
 app.mount("/operator/assets", operator_assets, name="operator-assets")
+
+
+@app.exception_handler(sqlite3.OperationalError)
+def store_unavailable(request: Request, error: sqlite3.OperationalError):
+    return JSONResponse(
+        {"detail": "SQLite store unavailable; retry the same request"},
+        status_code=503,
+        headers={"Retry-After": "1"},
+    )
 
 
 @app.get("/health")

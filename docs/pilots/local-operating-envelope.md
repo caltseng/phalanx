@@ -76,3 +76,79 @@ A short local Windows probe used CPython 3.14.10, SQLite 3.53.1, the production 
 | 1,000,000 | 32 | Burst | 119.1 | 405.7 / 412.5 | 393.9 / 410.3 |
 
 At both sizes, SQLite used a range search of the partial queue index for each repository, affinity and priority bucket. It used the partial open-attempt index for capacity and recovery, and the attempt primary key for renewal. Each run checked for duplicate stage claims and oversubscription and ended with zero open attempts. Deterministic tests covered stale lease writes and aging separately. The paced 32-client case exceeded the 100 ms p95 claim target at both sizes. These measurements leave HTTP latency, eligibility-to-claim delay, sustained throughput, and heartbeat admission under pressure open for the pilot.
+
+## PH-19a integrated envelope probe
+
+[`tests/envelope_probe.py`](../../tests/envelope_probe.py) runs the PH-19 fault cases against the real HTTP server under mixed authenticated traffic. It seeds a production-schema store in-process, starts Uvicorn in a separate process and drives everything else through the API with owner and runner tokens. Random choices use a fixed seed, so reruns offer the same work. Wall-clock timings vary with the host. The probe exits nonzero and lists violations when an invariant or fault expectation fails. `tests/test_envelope_probe.py` runs a small configuration in about 25 s on every CI platform.
+
+```powershell
+.\.venv\Scripts\python.exe -B tests\envelope_probe.py --json-out envelope.json
+```
+
+On macOS or Linux, use `.venv/bin/python` and `tests/envelope_probe.py`. Add `--keep <dir>` to keep the store and server logs. `--help` lists the scale, pacing and fault-timing options.
+
+### Load and faults
+
+- **Seed.** 100,000 report executions across 8 repositories, with the PH-03 proportions: 1% ready with ready times spread over the previous 5 min, 29% waiting for input and 70% completed. A further 10,000 external waits are already due, plus 2,000 dependents of one report prerequisite. Seeding took 101 s and produced a 213 MiB database.
+- **Workers.** Four runners with 6 slots each. Every runner has 7 synthetic workers, so one always polls at capacity. Each worker claims, renews halfway through a 0.5–1.5 s hold, then posts the stage result. It polls every 2 s ±20% when idle. The workers drive report drafting, review and storage stages.
+- **Other traffic.** Owner intake arrives at 2 items/s, weighted 50% urgent, 30% normal and 20% low. An urgent item lands in a dedicated free-slot lane every 3 s. Two readers page the open board three pages deep, read the closed board and the owner inbox every second. One client sends missing, invalid and wrong-role credentials. Priority aging runs at 60 s per tier, so aging shows up within the run.
+- **Throttle.** Eight items fail their stage with a 429 failure reason and `retry_after_seconds=20`.
+- **Interrupt and blocked prerequisite.** An urgent item depends on a prerequisite waiting for owner input. While it waits, another item's review lease expires. The probe moves the lease expiry back in SQLite to simulate a clock jump. Recovery then lists the item and the runner requeues and reclaims it. Replying to the prerequisite and driving it to completion releases the dependent.
+- **Storage outage.** An external connection holds `BEGIN EXCLUSIVE` for 5 s while load continues.
+- **Restart.** The fan-out prerequisite completes, and the server process is hard-killed with `SIGKILL`, or `TerminateProcess` on Windows, while dependent wakeups are in progress. A fresh server starts on the same store. Four runner threads then admit every due external recheck through `GET /v1/runner/due-rechecks` and `POST .../recheck` while all other load continues.
+
+Load ran for 373 s. The restart at 75 s started the due-recheck drain, and load continued until the drain finished.
+
+### Measured results
+
+Windows 11 build 26300 on the PH-03 host: AMD Ryzen 9 5900HS, 16 logical processors. CPython 3.14.10 and SQLite 3.53.1, on local NTFS with `synchronous=EXTRA` and rollback journaling. One sample, with other local activity.
+
+The clients offered and completed 83.2 requests/s. About 72 of those per second were durable writes: 26,833 claims, renewals, results, rechecks and intakes. Every write goes through the service's single write lock and its own commit. Latency below excludes the outage and restart windows. "Before drain" covers the first 75 s, which had claims, renewals, results, intake, board reads and the interrupt and throttle cases. "During drain" adds 10,000 rechecks at about 34/s.
+
+| Route | Before drain p50 / p95 / p99 ms | During drain p50 / p95 / p99 ms | Count |
+| --- | ---: | ---: | ---: |
+| Claim, general runners | 34.6 / 193.1 / 339.6 | 138.8 / 482.2 / 677.9 | 6,122 |
+| Claim, dedicated lanes | 34.7 / 143.8 / 418.8 | 132.4 / 480.8 / 596.3 | 510 |
+| Renewal | 27.8 / 148.3 / 336.3 | 152.9 / 504.7 / 729.8 | 4,606 |
+| Stage result | 31.1 / 197.5 / 392.0 | 253.5 / 812.1 / 1,023.6 | 4,955 |
+| Owner intake | 33.9 / 216.9 / 432.8 | 130.0 / 485.3 / 702.9 | 642 |
+| Due recheck | — | 76.0 / 336.3 / 520.8 | 10,000 |
+| Open board page | 11.9 / 30.8 / 128.2 | 13.6 / 62.2 / 163.8 | 2,000 |
+| Closed board page | 12.1 / 24.2 / 49.3 | 14.8 / 54.5 / 129.3 | 666 |
+| Owner inbox | 9.0 / 34.7 / 199.9 | 9.9 / 53.3 / 102.0 | 666 |
+| Rejected credentials | 1.3 / 3.0 / 18.7 | 1.4 / 2.7 / 4.5 | 740 |
+
+Fairness and dispatch were measured from claim history, separately from latency:
+
+- **Free slot.** Eligibility to claim on the free-slot urgent lane took p50 0.2 s, p95 1.8 s and max 2.4 s over 315 arrivals. That meets the 3 s target. The poll interval sets this delay.
+- **Priority order under saturation.** General runners stayed full. 442 polls found no free slot and 1,075 found no eligible work. Median eligibility-to-claim was 43 s for urgent, 61 s for normal and 120 s for low base priority. Those waits include up to 5 min of seeded backlog age. Aging promoted 1,176 normal and 1,068 low items before their claim. At the end, 4 items remained eligible and the oldest had waited 1.5 s, so no band starved.
+
+Fault recovery:
+
+| Case | Result |
+| --- | --- |
+| Throttle | All 8 items showed `retry_at` about 20 s out. None was claimed early. All 8 resumed the throttled drafting stage 0.1 s (p50) to 1.1 s (max) after the retry time. |
+| Interrupt with blocked prerequisite | The dependent showed `Waiting for prerequisite milestone report` and was not claimable. The interrupted item resumed `report_review` with its draft intact, 7.2 s after lease expiry. Runners claimed 141 unrelated stages in the meantime. The dependent was claimed 0.06 s after the prerequisite completed. |
+| Storage outage, 5 s | `/health` returned 503 `SQLite store unavailable`. Writes queued behind the lock for up to 5.0 s, with p95 4.8 s. Requests that hit the two-second busy timeout got a reasoned 503, five in total: 2 board pages, 1 renewal, 1 result and the health check. Retrying each identical request succeeded. The first claim came 0.32 s after the lock released. |
+| Restart during wakeup | 1,968 of 2,000 dependents were still blocked at the kill. The server was healthy 1.65 s after the kill. It made the first unrelated claim at 1.95 s and released all dependents from the durable refresh cursor by 59.4 s. All 10,000 due rechecks were admitted 295.7 s after restart. |
+
+Every run ended with `PRAGMA quick_check` ok. The probe checked these invariants on every run:
+
+- No runner exceeded 6 open attempts.
+- No execution had two open attempts.
+- No due recheck or blocked dependent remained.
+- Every wait had a reason.
+- Every queued item had a next action.
+- No route returned a 500.
+- No connection failed outside a fault window.
+
+### Findings
+
+- **Fixed in this change.** A write that hit the two-second busy timeout returned an opaque 500. Only `/health` mapped store errors to 503. Every route now returns 503 with `Retry-After: 1` and a retry instruction.
+- **Missed: claim and renewal latency.** Claim and renewal p95 miss the 100 ms target even before the drain. Under drain load, p95 is about 0.5 s and result p99 exceeds 1 s. Every durable write is serialized and commits on its own, so the host caps out near 70–75 writes/s. Latency grows with queueing rather than queue size. Renewal priority under pressure remains untested. No renewal lease came close to expiring, but leases are 90 s and renewals took up to 1.1 s.
+- **Missed: due-recheck drain.** Draining 10,000 due rechecks took 296 s against the 2 min target, at about 34 admissions/s next to worker traffic. Each recheck is its own HTTP request and transaction. Admitting a due batch of up to 100 in one transaction, or moving the store to WAL after the WAL-reset check above, are the likely levers. Rerun this probe before changing either.
+- **Met: restart and outage recovery.** Restart health took under 2 s against the 10 s target, and dispatch resumed within 2 s against 30 s. Outage recovery met its targets. Dependent fan-out release ran at about 34 dependents/s. It competed with the drain and has no target yet.
+
+### Not measured here
+
+Synthetic workers only hold a lease for a short sleep, so these numbers describe server latency, fairness and recovery. They don't describe live worker capacity. Real-session launch time, memory per visible worker, build CPU and disk use, and the 2/4/8 visible-worker sweep remain open, as listed under the load and recovery gates.

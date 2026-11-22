@@ -8,6 +8,8 @@ import sys
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep, time
 import unittest
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest
@@ -59,6 +61,23 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         updated = claim["execution"]
         return {"expected_version": updated["version"], "attempt_id": claim["attempt_id"],
                 "stage": updated["state"]["stage"], "outcome": "succeeded"}
+
+    def test_busy_store_returns_retryable_503(self):
+        item, body, _, _ = self.create()
+        request = Request(self.url + "/v1/items", data=json.dumps(body).encode("utf-8"), method="POST",
+                          headers={"Authorization": f"Bearer {OWNER}", "Content-Type": "application/json",
+                                   "Idempotency-Key": "first"})
+        with connect(self.path) as db:
+            db.execute("BEGIN EXCLUSIVE")
+            with self.assertRaises(HTTPError) as caught:
+                urlopen(request, timeout=30)
+            db.execute("ROLLBACK")
+        with caught.exception as response:
+            self.assertEqual(response.code, 503)
+            self.assertEqual(response.headers["Retry-After"], "1")
+            self.assertIn("retry", json.load(response)["detail"])
+        with urlopen(request, timeout=30) as response:
+            self.assertEqual((response.code, json.load(response)), (201, item))
 
     def test_intake_restart_idempotency_auth_and_cli(self):
         self.assertEqual(self.submit("/v1/repositories", {"id": "example", "remote": REMOTE},
