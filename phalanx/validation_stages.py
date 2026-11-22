@@ -12,9 +12,10 @@ from .attended import RunnerError
 from .attended_drafts import github_repository
 from .candidate_local import CandidateLocal
 from .git_publication import GitPublication, PublicationError
-from .github import GitHubClient, GitHubError
+from .github import GitHubClient, GitHubError, UncertainGitHubWrite
 from .github_checks import collect_github_checks
 from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Validation
+from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
 from .transitions import Outcome, Revision, Stage
@@ -41,9 +42,26 @@ def run(runner, snapshot):
     key = f"{stage}:{claim['attempt_id']}:{claim['execution']['version']}"
     if stage == Stage.PRE_PR_VALIDATION and submission["body"]["outcome"] == Outcome.SUCCEEDED:
         _candidate(runner, snapshot)._inspect()
+        _note_bypass(runner, snapshot, submission["body"])
     execution = runner._send_submission(snapshot, submission, key)
     return {"status": f"{stage}_submitted", "execution": execution,
             **({"reason": submission["reason"]} if "reason" in submission else {})}
+
+
+def _note_bypass(runner, snapshot, body):
+    """List bypassed local checks as Known gaps on the PR, or clear gaps the candidate fixed."""
+    url = snapshot["claim"]["execution"]["state"].get("primary_pr")
+    if not url:
+        return
+    skipped = [check for check in body.get("local_checks", ()) if check["outcome"] != "passed"]
+    notes = PRNotes(runner.root)
+    if not skipped:
+        notes.clear_gaps(url)
+        return
+    notes.record(url, body["prevalidated_candidate"], "Pre-validation bypassed", "\n".join(
+        f"- Local check {check['name']} {check['outcome']}: {check.get('reason') or 'no reason'} "
+        f"(authorized by {check.get('authorization') or 'policy'})" for check in skipped
+    ))
 
 
 def _save(runner, snapshot, submission):
@@ -183,25 +201,49 @@ def _promotion(runner, snapshot):
     if changed:
         return _retry(snapshot, "; ".join(changed[-1].gate.reasons), changed[-1].retry_after_seconds)
     if blocked or (result.status == "gates_unresolved" and gates.state is not GateState.FAILED):
-        if not blocked and gates.state is GateState.WAITING:
-            reason = ("; ".join(gates.reasons) or "Draft checks are pending")[:16000]
-            observed = result.pull or pull
-            return {"route": "external-wait", "reason": reason, "body": {
-                **_event(snapshot), "reason": reason, "gate": "draft_checks",
-                "revision": {"head": candidate, "base": observed.base_sha},
-                "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
-            }}
-        reason = "; ".join(blocked or gates.reasons) or result.reason
         observed = result.pull or pull
+        if not blocked and gates.state is GateState.WAITING:
+            return _draft_wait(snapshot, ("; ".join(gates.reasons) or "Draft checks are pending")[:16000],
+                               observed.base_sha)
+        reason = "; ".join(blocked or gates.reasons) or result.reason
         if not blocked and not observed.draft and gates.state is GateState.BLOCKED:
-            # Policy has no automatic draft-only recovery, so the owner decides.
-            reason += (". Convert the PR back to draft so its draft-only checks can run, or remove "
-                       "them from the runner's validation policy, then reply.")
+            return _convert_to_draft(runner, snapshot, github, observed, reason, handoff)
         return _question(snapshot, reason, handoff)
     # Verified evidence advances; failed draft checks return the item to development.
     return {"route": "pr-observation", "body": _validation(
         snapshot, result.pull, base_ref, draft_checks, result.checks,
     ), **({"reason": result.reason} if result.status != "verified" else {})}
+
+
+def _draft_wait(snapshot, reason, base_sha):
+    candidate = snapshot["claim"]["execution"]["state"]["candidate"]
+    return {"route": "external-wait", "reason": reason, "body": {
+        **_event(snapshot), "reason": reason, "gate": "draft_checks",
+        "revision": {"head": candidate, "base": base_sha},
+        "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
+    }}
+
+
+def _convert_to_draft(runner, snapshot, github, pull, reason, handoff):
+    """Return a ready PR to draft so its draft-only checks can run, then wait for them."""
+    try:
+        github.convert_to_draft(pull.node_id)
+    except UncertainGitHubWrite as error:
+        return _retry(snapshot, str(error))
+    except GitHubError as error:
+        if error.retry_after_seconds is not None or error.status in {408, 429}:
+            return _retry(snapshot, str(error), error.retry_after_seconds)
+        return _question(snapshot, f"{reason}. GitHub refused to convert the PR back to draft ({error}). "
+                         "Convert it to draft or remove its draft-only checks from the runner's "
+                         "validation policy, then reply.", handoff)
+    candidate = snapshot["claim"]["execution"]["state"]["candidate"]
+    PRNotes(runner.root).comment(
+        snapshot["claim"]["execution"]["state"]["primary_pr"], f"converted-to-draft:{candidate}",
+        f"Phalanx converted this PR back to draft at `{candidate}` so its draft-only checks can run: "
+        f"{reason}. It will mark the PR ready again once they pass.",
+    )
+    return _draft_wait(snapshot, f"Converted the PR back to draft; waiting for draft checks: {reason}"[:16000],
+                       pull.base_sha)
 
 
 def _verified_head(runner, snapshot, url):

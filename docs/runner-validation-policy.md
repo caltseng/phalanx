@@ -186,7 +186,17 @@ the requirement.
 
 Draft-only fallback configuration is also unsupported and rejected. When an
 already-ready PR lacks required draft evidence, the existing validation gate
-demands a recovery decision. `pr_promotion` exposes it as an owner question
-that asks Caleb to convert the PR back to draft so its draft-only checks can
-run, or to remove them from this policy; it never turns the draft requirement
-into an empty list or waives published gates.
+demands a recovery decision. `pr_promotion` converts the PR back to draft
+through the runner's GitHub client, comments on the PR, waits for its draft-only
+checks and promotes it again. It asks Caleb only when GitHub refuses the
+conversion, for example for lack of permission. It never turns the draft
+requirement into an empty list or waives published gates.
+
+When a stage returns the item to development with findings, or pre-validation
+records a permitted bypass, the runner posts the findings as a PR comment for
+that revision and lists them under "Known gaps" in the PR description. A clean
+pre-validation removes the section. These notes go through a runner-local outbox
+(`publication/pr-notes.sqlite3`) that each `prepare` flushes. A hidden marker
+keyed on the revision and findings keeps retries from posting twice, and a
+failed write retries up to five times without blocking the item. Pending notes
+appear as `pr_notes` in the `prepare` output.

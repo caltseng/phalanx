@@ -138,16 +138,12 @@ class DraftStageRunner:
         expected = ExpectedRefs(head_ref=intent.head, base_ref=intent.base, base_sha=intent.expected_base)
         if outcome.status == "verified":
             assert outcome.primary is not None
+            # The target may have moved since development; later stages validate the current base.
+            expected = expected.model_copy(update={"base_sha": outcome.primary.base_sha})
             saved = {"route": "pr-observation", "body": Publication(
                 **event, expected=expected, pull=_pull(outcome.primary),
                 duplicate_numbers=sorted(pr.number for pr in outcome.duplicates),
             ).model_dump(mode="json")}
-        elif outcome.status == "base_changed" and outcome.observed_base is not None:
-            # Development rebuilds the candidate on the moved base.
-            saved = {"route": "pr-publication-blocker", "body": PublicationBlocker(
-                **event, expected=expected, reason=outcome.reason,
-                observed_base_sha=outcome.observed_base,
-            ).model_dump(mode="json", exclude_none=True)}
         elif outcome.status == "conflict" and (blocking := [
             pr for pr in outcome.conflicts if pr.head_repository and pr.head_ref == intent.head
         ]):

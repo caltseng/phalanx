@@ -22,7 +22,7 @@ from phalanx.draft_publication import DraftOutcome
 from phalanx.draft_stage import DraftStageResult
 from phalanx.finalization import attempt
 from phalanx.git_publication import PublicationResult
-from phalanx.github import GitHubClient
+from phalanx.github import ATTRIBUTION, GitHubClient
 from phalanx.store import connect, write_transaction
 from phalanx.workspaces import WorkspaceManager, _item_branch
 
@@ -37,17 +37,34 @@ class FakeGitHub:
         self.head, self.base, self.branch = head, base, _item_branch(item_id)
         self.pull = None
         self.runs = []
+        self.comments = []
+        self.refuse_convert = False
 
     def __call__(self, request, _timeout):
         path = urlsplit(request.full_url).path
         if request.method == "POST" and path == "/graphql":
+            if "convertPullRequestToDraft" in json.loads(request.data)["query"]:
+                if self.refuse_convert:
+                    return response({"errors": [{"type": "FORBIDDEN", "message": "Resource not accessible"}]})
+                self.pull["draft"] = True
+                return response({"data": {"convertPullRequestToDraft": {
+                    "pullRequest": {"id": self.pull["node_id"], "isDraft": True}}}})
             self.pull["draft"] = False
             return response({"data": {"markPullRequestReadyForReview": {
                 "pullRequest": {"id": self.pull["node_id"], "isDraft": False}}}})
+        if path.endswith("/issues/7/comments"):
+            if request.method == "POST":
+                self.comments.append(json.loads(request.data)["body"])
+                return response({}, status=201)
+            return response([{"body": body} for body in self.comments])
+        if request.method == "PATCH":
+            self.pull["body"] = json.loads(request.data)["body"]
+            return response(self.pull)
         if request.method == "POST":
             self.pull = pull(head=self.branch)
             self.pull["head"].update(sha=self.head, repo={"full_name": "Owner/Repo"})
-            self.pull.update(html_url="https://github.com/owner/repo/pull/7")
+            self.pull.update(html_url="https://github.com/owner/repo/pull/7",
+                             body=json.loads(request.data)["body"])
             self.pull["base"]["sha"] = self.base
             return response(self.pull, status=201)
         if path.endswith("/pulls"):
@@ -731,6 +748,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), \
                 patch("phalanx.draft_stage.GitPublication", Git), \
                 patch("phalanx.attended_drafts.GitHubClient", client), \
+                patch("phalanx.pr_notes.GitHubClient", client), \
                 patch("phalanx.validation_stages.GitHubClient", client):
             draft = self.runner().prepare(draft=True)
             self.assertEqual(draft["execution"]["state"]["stage"], "self_review", draft)
@@ -840,6 +858,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 patch("phalanx.draft_stage.GitPublication", Git), \
                 patch("phalanx.validation_stages.GitPublication", Git), \
                 patch("phalanx.attended_drafts.GitHubClient", client), \
+                patch("phalanx.pr_notes.GitHubClient", client), \
                 patch("phalanx.validation_stages.GitHubClient", client):
             self.assertEqual(self.runner().prepare(draft=True)["execution"]["state"]["stage"], "self_review")
             state = work({"findings": "Rename the helper."}, "changes_required")[1]["state"]
@@ -848,6 +867,11 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             packet, revised = work(commit)
             self.assertEqual(json.loads(packet["context"])["review_findings"], "Rename the helper.")
             self.assertIn("review_findings", packet["evidence_requirements"])
+            self.assertEqual(len(github.comments), 1)
+            self.assertIn(f"`{first['candidate']}`", github.comments[0])
+            self.assertIn("Rename the helper.", github.comments[0])
+            self.assertIn("### Known gaps", github.pull["body"])
+            self.assertIn("Rename the helper.", github.pull["body"])
             revised = revised["state"]
             self.assertEqual((revised["stage"], revised["development_findings"]), ("self_review", None))
             self.assertNotEqual(revised["candidate"], first["candidate"])
@@ -862,14 +886,23 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                             "conclusion": "failure", "app": {"id": 15368}, "pull_requests": []}]
             failed = self.runner().prepare(stages=["pr_validation"])
         self.assertEqual(failed["execution"]["state"]["stage"], "pr_reconciliation", failed)
+        self.assertEqual(len(github.comments), 2)
+        self.assertIn("Local check platform skipped: Needs the other OS", github.comments[1])
+        body = github.pull["body"]
+        self.assertIn("platform skipped", body)
+        self.assertNotIn("Rename the helper.", body)
+        self.assertTrue(body.endswith(ATTRIBUTION))
+        self.assertEqual(body.count(ATTRIBUTION), 1)
         _, timeline = self.request(f"/v1/items/{item['id']}/executions/{failed['execution']['id']}/timeline",
                                    OWNER)
         self.assertIn([{"name": "platform", "outcome": "skipped", "reason": "Needs the other OS",
                         "authorization": "Policy 3"}],
                       [entry["details"].get("local_checks") for entry in timeline])
 
-    def test_ready_pr_without_draft_evidence_asks_owner_for_recovery(self):
+    def test_ready_pr_without_draft_evidence_converts_back_to_draft(self):
         from phalanx import validation_stages
+        from phalanx.github import GitHubError
+        from phalanx.pr_notes import PRNotes
         from phalanx.promotion import Promotion
         from phalanx.validation import GateResult, GateState
 
@@ -880,18 +913,33 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "execution": {"version": 3, "state": {
                 "stage": "pr_promotion", "candidate": candidate,
                 "primary_pr": "https://github.com/o/r/pull/7"}}}}
-        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=False)
-        github = SimpleNamespace(get_pull_request=lambda number: pull)
+        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=False, node_id="PR_7")
+        converted = []
+
+        def convert(node_id):
+            if refusal:
+                raise GitHubError("convert pull request to draft", "Resource not accessible")
+            converted.append(node_id)
+
+        github = SimpleNamespace(get_pull_request=lambda number: pull, convert_to_draft=convert)
         gates = GateResult(GateState.BLOCKED, ("lint needs a draft check recovery decision on the ready PR",))
-        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}})
+        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root)
         with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
                 patch.object(validation_stages, "_github", lambda _: github), \
                 patch.object(validation_stages, "_candidate", lambda *_: None), \
                 patch.object(validation_stages, "promote", lambda *_, **__: Promotion(
                     "gates_unresolved", "unresolved", pull, gates)):
-            body = validation_stages._promotion(runner, snapshot)["body"]
-        self.assertEqual(body["outcome"], "needs_input")
-        self.assertIn("Convert the PR back to draft", body["question"]["prompt"])
+            refusal = False
+            waiting = validation_stages._promotion(runner, snapshot)
+            refusal = True
+            refused = validation_stages._promotion(runner, snapshot)["body"]
+        self.assertEqual((waiting["route"], waiting["body"]["gate"], converted),
+                         ("external-wait", "draft_checks", ["PR_7"]))
+        self.assertEqual(waiting["body"]["revision"], {"head": candidate, "base": "c" * 40})
+        self.assertEqual([note["note"] for note in PRNotes(self.root).flush(None)],
+                         [f"converted-to-draft:{candidate}"])
+        self.assertEqual(refused["outcome"], "needs_input")
+        self.assertIn("refused to convert the PR back to draft", refused["question"]["prompt"])
 
     def test_reviewed_update_retries_transient_errors_and_asks_about_unverified_heads(self):
         from phalanx import validation_stages
