@@ -11,6 +11,7 @@ from pathlib import Path
 from .attended import RunnerError
 from .attended_drafts import github_repository
 from .candidate_local import CandidateLocal
+from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError
 from .github_checks import collect_github_checks
 from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Validation
@@ -19,7 +20,7 @@ from .published_validation_stage import PublishedValidationAssignment, Published
 from .transitions import Outcome, Revision, Stage
 from .validation import GateState, Phase
 from .validation_policy import ValidationPolicyError, load_validation_policy
-from .workspaces import _item_branch
+from .workspaces import WorkspaceError, _item_branch
 
 # GitHub usually reflects a ready mutation or new base within seconds.
 _PROVIDER_RETRY_SECONDS = 30
@@ -148,6 +149,16 @@ def _promotion(runner, snapshot):
         pull = github.get_pull_request(int(number))
     except GitHubError as error:
         return _retry(snapshot, str(error), error.retry_after_seconds)
+    if pull.head_sha != candidate:
+        update = _publish_update(snapshot, local, pull, base_ref)
+        if update is not None:
+            return update
+        try:
+            pull = github.get_pull_request(int(number))
+        except GitHubError as error:
+            return _retry(snapshot, str(error), error.retry_after_seconds)
+        if pull.head_sha != candidate:
+            return _retry(snapshot, "GitHub has not shown the pushed candidate on the PR yet")
     result = promote(
         github, item_id=claim["item_id"], number=int(number), base_ref=base_ref,
         revision=Revision(candidate, pull.base_sha), collect=collect,
@@ -180,6 +191,36 @@ def _promotion(runner, snapshot):
     return {"route": "pr-observation", "body": _validation(
         snapshot, result.pull, base_ref, draft_checks, result.checks,
     ), **({"reason": result.reason} if result.status != "verified" else {})}
+
+
+def _publish_update(snapshot, local, pull, base_ref):
+    """Fast-forward the primary PR's branch to the reviewed candidate, or explain why not.
+
+    The lease is the observed PR head, so a concurrent push is never overwritten.
+    Returns None once the remote branch holds the candidate.
+    """
+    claim = snapshot["claim"]
+    candidate = claim["execution"]["state"]["candidate"]
+    handoff = f"{claim['execution']['state'].get('primary_pr')}, candidate {candidate}"
+    if (pull.state != "open" or pull.merged or pull.head_ref != _item_branch(claim["item_id"])
+            or pull.base_ref != base_ref):
+        return _question(snapshot, "The primary PR is no longer an open PR from the item branch "
+                         "to the target branch; reconcile it before publishing the reviewed candidate.",
+                         handoff)
+    try:
+        workspace = local._inspect()
+        git = GitPublication(workspace.path, snapshot["repositories"][claim["request"]["repository_id"]],
+                             claim["item_id"])
+        if git.read_head(authorize=local._authorize) == candidate:
+            return None
+        outcome = git.publish(candidate, expected=pull.head_sha, authorize=local._authorize)
+    except (PublicationError, WorkspaceError) as error:
+        return _retry(snapshot, f"Could not publish the reviewed candidate: {error}")
+    if outcome.status == "uncertain":
+        return _retry(snapshot, outcome.reason)
+    if outcome.status == "conflict":
+        return _question(snapshot, f"Could not publish the reviewed candidate: {outcome.reason}", handoff)
+    return None
 
 
 def _validation(snapshot, pull, base_ref, required, checks):
