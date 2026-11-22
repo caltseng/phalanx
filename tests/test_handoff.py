@@ -117,11 +117,12 @@ class WorkerHandoffTests(unittest.TestCase):
             ("A) Keep it B) Drop it", ["A) Keep it", "B) Drop it"]),
             ("- Keep it\n- Drop it", ["Keep it", "Drop it"]),
             ("1. Keep it 2. Drop it", ["1. Keep it", "2. Drop it"]),
+            ("Keep it or drop it", ["Keep it or drop it"]),
         ):
             with self.subTest(options=options):
                 self.write_result(outcome="needs_input", details=base | {"options": options})
                 self.assertEqual(self.handoff.read_result().details["options"], expected)
-        for options in ("Keep it or drop it", ["Keep it or drop it"], ["Keep it", " "], "B) Keep C) Drop"):
+        for options in ([], ["Keep it", " "], ["Keep it", 2]):
             with self.subTest(options=options):
                 self.write_result(outcome="needs_input", details=base | {"options": options})
                 with self.assertRaisesRegex(InvalidResult, "options"):

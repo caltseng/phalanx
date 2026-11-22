@@ -36,7 +36,8 @@ _BULLET = re.compile(r"^\s*(?:[-*\u2022]\s+)")
 def split_options(value: object) -> list[str]:
     """Return one string per choice, splitting a string only when its choices are unambiguous.
 
-    Raise ValueError for a single choice or a string whose choices cannot be told apart.
+    A string that cannot be split stays one option, so the question still reaches the owner.
+    Raise ValueError only for a missing, empty or non-string option.
     """
     if isinstance(value, list):
         options = value
@@ -54,10 +55,8 @@ def split_options(value: object) -> list[str]:
     else:
         raise ValueError("Options must be a list of strings")
     options = [option.strip() if isinstance(option, str) else option for option in options]
-    if any(not isinstance(option, str) or not option for option in options):
+    if not options or any(not isinstance(option, str) or not option for option in options):
         raise ValueError("Each option must be a nonempty string")
-    if len(options) < 2:
-        raise ValueError("List each choice as its own options element")
     return options
 
 

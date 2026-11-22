@@ -19,3 +19,4 @@ These are best-guess calls the Captain made without asking Caleb. Caleb reviews 
 | 13 | Language | Stay on Python for v1; port to TypeScript/Node after PH-V1 and before hosting (PH-25) | Don't delay v1; host once |
 | 14 | Process | Feature PRs edit only their own plan row; plan and muster PRs own ordering and statuses | Stops rebase churn |
 | 15 | Worker questions | Options must be separate list items; an unambiguous combined string is split rather than rejected (PH-11g) | Lenient over strict |
+| 16 | Worker questions | An options string that can't be split unambiguously is kept as one option instead of rejected; a single option is allowed (PH-11g follow-up) | A malformed option list shouldn't stall the item |
