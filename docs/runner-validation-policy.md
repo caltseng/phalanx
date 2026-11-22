@@ -135,7 +135,10 @@ Set `"validation_policy"` in the runner config to the absolute policy path.
 `CandidateLocal.pre_validate`), `pr_promotion` (draft checks, then marking the
 primary PR ready) and `pr_validation` (ready checks on the current head) on the
 runner, journaling each result before submission. Pending CI waits for an
-external recheck that the Captain loop requests when due. A missing policy
+external recheck that the Captain loop requests when due. Pending draft checks
+are rechecked after the optional runner config `"check_recheck_seconds"`
+(a whole number from 5 to 86400, default 30); startup preflight rejects other
+values. A missing policy
 entry or `null` phase becomes an owner question naming the gap; startup
 preflight rejects a malformed file before any claim.
 

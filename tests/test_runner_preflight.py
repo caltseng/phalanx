@@ -78,6 +78,13 @@ class RunnerPreflightTests(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "Repair the trusted validation policy"):
             preflight(config, RUNNER)
 
+    def test_check_recheck_seconds_must_be_a_bounded_whole_number(self):
+        self.start_server(self.directory / "server.sqlite3")
+        preflight({"base_url": self.url, "check_recheck_seconds": 5}, RUNNER)
+        for value in (4, 86401, 10.5, True, "30"):
+            with self.subTest(value=value), self.assertRaisesRegex(RunnerError, "check_recheck_seconds"):
+                preflight({"base_url": self.url, "check_recheck_seconds": value}, RUNNER)
+
 
 if __name__ == "__main__":
     unittest.main()

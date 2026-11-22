@@ -5,6 +5,7 @@ import sqlite3
 from contextlib import closing
 import subprocess
 import sys
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Barrier, Event
@@ -708,6 +709,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "ready_checks": [{"name": "test", "kind": "check_run", "app_id": 15368}],
         }}}), encoding="utf-8")
         self.config["validation_policy"] = str(policy)
+        self.config["check_recheck_seconds"] = 7
 
         def work(details, outcome="succeeded"):
             launch = self.runner().prepare()
@@ -775,10 +777,16 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             draft_run = {"id": 2, "name": "draft", "head_sha": candidate, "status": "queued",
                          "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
             github.runs = [draft_run]
+            started = int(time.time() * 1000)
             waiting = self.runner().prepare(stages=["pr_promotion"])
             state = waiting["execution"]["state"]
             self.assertEqual((state["stage"], state["status"]), ("pr_promotion", "waiting_for_external"),
                              waiting)
+            with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                due_at = db.execute("SELECT due_at_ms FROM external_rechecks").fetchone()[0]
+            # The configured interval, not the default 30s, schedules the draft recheck.
+            self.assertGreaterEqual(due_at, started + 7_000)
+            self.assertLess(due_at, started + 30_000)
             self.assertTrue(github.pull["draft"])
             recheck()
             draft_run.update(status="completed", conclusion="success")

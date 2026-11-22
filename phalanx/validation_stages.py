@@ -25,6 +25,7 @@ from .workspaces import WorkspaceError, _item_branch
 
 # GitHub usually reflects a ready mutation or new base within seconds.
 _PROVIDER_RETRY_SECONDS = 30
+DEFAULT_CHECK_RECHECK_SECONDS = 30
 
 
 def run(runner, snapshot):
@@ -204,7 +205,7 @@ def _promotion(runner, snapshot):
     if blocked or (result.status == "gates_unresolved" and gates.state is not GateState.FAILED):
         observed = result.pull or pull
         if not blocked and gates.state is GateState.WAITING:
-            return _draft_wait(snapshot, ("; ".join(gates.reasons) or "Draft checks are pending")[:16000],
+            return _draft_wait(runner, snapshot, ("; ".join(gates.reasons) or "Draft checks are pending")[:16000],
                                observed.base_sha)
         reason = "; ".join(blocked or gates.reasons) or result.reason
         if not blocked and not observed.draft and gates.state is GateState.BLOCKED:
@@ -216,12 +217,12 @@ def _promotion(runner, snapshot):
     ), **({"reason": result.reason} if result.status != "verified" else {})}
 
 
-def _draft_wait(snapshot, reason, base_sha):
+def _draft_wait(runner, snapshot, reason, base_sha):
     candidate = snapshot["claim"]["execution"]["state"]["candidate"]
     return {"route": "external-wait", "reason": reason, "body": {
         **_event(snapshot), "reason": reason, "gate": "draft_checks",
         "revision": {"head": candidate, "base": base_sha},
-        "retry_after_seconds": _PROVIDER_RETRY_SECONDS,
+        "retry_after_seconds": runner.config.get("check_recheck_seconds", DEFAULT_CHECK_RECHECK_SECONDS),
     }}
 
 
@@ -243,7 +244,7 @@ def _convert_to_draft(runner, snapshot, github, pull, reason, handoff):
         f"Phalanx converted this PR back to draft at `{candidate}` so its draft-only checks can run: "
         f"{reason}. It will mark the PR ready again once they pass.",
     )
-    return _draft_wait(snapshot, f"Converted the PR back to draft; waiting for draft checks: {reason}"[:16000],
+    return _draft_wait(runner, snapshot, f"Converted the PR back to draft; waiting for draft checks: {reason}"[:16000],
                        pull.base_sha)
 
 

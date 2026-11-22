@@ -51,7 +51,8 @@ def external_wait(db, item_id, execution_id, payload, lease_digest):
 
 def schedule(db, row, state, attempt_id, reason, retry_after_seconds, details):
     """Record a verified stage's wait and its recheck in the same transaction."""
-    delay = max(30, retry_after_seconds)
+    # A small floor stops a misconfigured runner from hammering the provider.
+    delay = max(5, retry_after_seconds)
     due_at = int(time() * 1000) + delay * 1000 + randint(0, 5000)
     updated = intake.apply(
         db, row, state, Event.EXTERNAL_WAIT, details={**details, "due_at_ms": due_at},
