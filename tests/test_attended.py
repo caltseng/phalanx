@@ -856,7 +856,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                              "pr_promotion")
             promoted = self.runner().prepare(stages=["pr_promotion"])
             self.assertEqual(promoted["execution"]["state"]["stage"], "pr_validation", promoted)
-            self.assertEqual(pushes[-1], (first["candidate"], revised["candidate"], False))
+            self.assertEqual(pushes[-1], (first["candidate"], revised["candidate"], True))
             self.assertEqual((github.pull["head"]["sha"], github.pull["draft"]), (revised["candidate"], False))
             github.runs = [{"id": 1, "name": "test", "head_sha": revised["candidate"], "status": "completed",
                             "conclusion": "failure", "app": {"id": 15368}, "pull_requests": []}]
@@ -868,16 +868,48 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                         "authorization": "Policy 3"}],
                       [entry["details"].get("local_checks") for entry in timeline])
 
-    def test_transient_reviewed_update_error_retries_instead_of_asking_owner(self):
+    def test_ready_pr_without_draft_evidence_asks_owner_for_recovery(self):
+        from phalanx import validation_stages
+        from phalanx.promotion import Promotion
+        from phalanx.validation import GateResult, GateState
+
+        candidate = "b" * 40
+        snapshot = {"claim": {
+            "attempt_id": "a", "item_id": "item-1",
+            "request": {"repository_id": "repo", "target_branch": "main"},
+            "execution": {"version": 3, "state": {
+                "stage": "pr_promotion", "candidate": candidate,
+                "primary_pr": "https://github.com/o/r/pull/7"}}}}
+        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=False)
+        github = SimpleNamespace(get_pull_request=lambda number: pull)
+        gates = GateResult(GateState.BLOCKED, ("lint needs a draft check recovery decision on the ready PR",))
+        runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}})
+        with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
+                patch.object(validation_stages, "_github", lambda _: github), \
+                patch.object(validation_stages, "_candidate", lambda *_: None), \
+                patch.object(validation_stages, "promote", lambda *_, **__: Promotion(
+                    "gates_unresolved", "unresolved", pull, gates)):
+            body = validation_stages._promotion(runner, snapshot)["body"]
+        self.assertEqual(body["outcome"], "needs_input")
+        self.assertIn("Convert the PR back to draft", body["question"]["prompt"])
+
+    def test_reviewed_update_retries_transient_errors_and_asks_about_unverified_heads(self):
         from phalanx import validation_stages
         from phalanx.git_publication import PublicationError
+
+        remote = []
 
         class Git:
             def __init__(self, *_):
                 pass
 
             def read_head(self, **_):
-                raise PublicationError("git ls-remote failed: 502")
+                if not remote:
+                    raise PublicationError("git ls-remote failed: 502")
+                return remote[-1]
+
+            def publish(self, *_, **__):
+                raise AssertionError("an unverified head must not be replaced")
 
         item_id = "item-1"
         snapshot = {"repositories": {"repo": object()}, "claim": {
@@ -888,10 +920,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         pr = SimpleNamespace(state="open", merged=False, head_ref=_item_branch(item_id), base_ref="main",
                              head_sha="a" * 40)
         with patch("phalanx.validation_stages.GitPublication", Git):
-            body = validation_stages._publish_update(snapshot, local, pr, "main")["body"]
-        self.assertEqual(body["outcome"], "failed")
-        self.assertIn("502", body["failure_reason"])
-        self.assertGreater(body["retry_after_seconds"], 0)
+            body = validation_stages._publish_update(snapshot, local, pr, "main", "a" * 40)["body"]
+            self.assertEqual(body["outcome"], "failed")
+            self.assertIn("502", body["failure_reason"])
+            self.assertGreater(body["retry_after_seconds"], 0)
+            remote.append("a" * 40)
+            body = validation_stages._publish_update(snapshot, local, pr, "main", "c" * 40)["body"]
+        self.assertEqual(body["outcome"], "needs_input")
+        self.assertIn("last verified", body["question"]["prompt"])
 
     def test_validation_policy_gap_waits_for_owner_with_reason(self):
         self.api.stage, self.api.candidate = "pre_pr_validation", "a" * 40

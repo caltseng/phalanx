@@ -144,8 +144,12 @@ with the findings in the server state. The next development packet carries
 them as `review_findings` in its context. When the reviewed candidate differs
 from the primary PR's head, `pr_promotion` first fast-forwards the item branch
 to it, leased on the observed PR head, then collects draft checks on the new
-head. A push that would not fast-forward, or a PR that has left its item branch
-or target, becomes an owner question. A configured local bypass is recorded as
+head. A rebased candidate replaces the PR head under the same lease, but only
+when the observed head is the last head Phalanx verified for that PR; an
+unverified head, or a PR that has left its item branch or target, becomes an
+owner question. Failed draft checks return the item to `development` with the
+failing reasons as findings. A target tip or PR head that moves during check
+collection is retried on the new revision rather than escalated. A configured local bypass is recorded as
 the check's disposition and as the pre-validation bypass evidence; draft and
 ready checks still apply.
 
@@ -168,10 +172,7 @@ Example for a Python pilot repository (verify check names and app ID with
 
 ## Remaining integration
 
-Still pending (part 4): draft-only recovery when a ready PR lacks draft
-evidence, a moved base tip during ready collection (currently an owner
-question), and a rebased reviewed candidate, which needs a non-fast-forward
-update. Adversarial review is a later stage.
+Adversarial review is a later stage.
 
 Preview requirements load as ordinary `RequiredCheck` entries, but the loader
 never creates a provider reader: `policy.ready.read_preview` is `None`.
@@ -185,6 +186,7 @@ the requirement.
 
 Draft-only fallback configuration is also unsupported and rejected. When an
 already-ready PR lacks required draft evidence, the existing validation gate
-demands a recovery decision. Wiring must expose that blocker or implement an
-explicit authorized recovery under the authoritative state-machine rules,
-not turn the draft requirement into an empty list or waive published gates.
+demands a recovery decision. `pr_promotion` exposes it as an owner question
+that asks Caleb to convert the PR back to draft so its draft-only checks can
+run, or to remove them from this policy; it never turns the draft requirement
+into an empty list or waives published gates.
