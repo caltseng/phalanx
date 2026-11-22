@@ -457,12 +457,21 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
 class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
     target = "checked_in"
 
-    def test_merge_closes_once_with_the_verified_pre_merge_revision(self):
+    def ready(self):
         self.start_review()
         self.assertEqual(self.submit(self.review(self.claim("adversarial_review")))[0], 200)
         self.assertEqual(self.submit(self.reconciliation(self.claim("pr_reconciliation")))[0], 200)
-        ready = self.reconciliation(self.claim("ready_for_check_in"))
-        self.assertEqual(self.submit(ready)[0], 409)
+        return self.reconciliation(self.claim("ready_for_check_in"))
+
+    def test_without_merge_intent_the_ready_pr_is_delivered_for_the_owner_to_merge(self):
+        status, execution = self.submit(self.ready())
+        self.assertEqual(status, 200, execution)
+        state = execution["state"]
+        self.assertEqual((state["status"], state["target"]), ("completed", "ready_for_check_in"))
+        self.assertIsNone(state["final_output"]["merge_commit"])
+
+    def test_merge_closes_once_with_the_verified_pre_merge_revision(self):
+        ready = self.ready()
         intent = {"operation_id": "merge-7", "authorization": "Owner requested check-in and repo policy permits it"}
         status, execution = self.submit(dict(ready, merge_intent=intent))
         self.assertEqual(status, 200)
@@ -470,13 +479,13 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         self.assertIsNone(execution["state"]["final_output"])
 
         claim = self.claim("check_in")
+        # The base advanced before the merge, so only the head parent is the candidate.
         merged = self.observation(claim, operation_id="merge-7",
-                                  merge_parent_shas=[BASE, HEAD])
+                                  merge_parent_shas=[OTHER, HEAD])
         merged["pull"].update(state="closed", merged=True, merge_commit=OTHER, base_sha=OTHER)
         self.assertEqual(self.result(claim)[0], 409)
         self.assertEqual(self.submit(dict(merged, operation_id="other-write"))[0], 409)
-        for parents, expected_status in (([OTHER, HEAD], 409), ([BASE, OTHER], 409),
-                                         ([HEAD, BASE], 409), ([HEAD], 422)):
+        for parents, expected_status in (([BASE, OTHER], 409), ([HEAD, BASE], 409), ([HEAD], 422)):
             with self.subTest(parents=parents):
                 self.assertEqual(self.submit(dict(merged, merge_parent_shas=parents))[0],
                                  expected_status)
@@ -505,4 +514,4 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         _, timeline = self.request(f"{self.execution}/timeline", OWNER)
         verified = [event for event in timeline if event["event"] == "merge_verified"]
         self.assertEqual(len(verified), 1)
-        self.assertEqual(verified[0]["details"]["merge_parent_shas"], [BASE, HEAD])
+        self.assertEqual(verified[0]["details"]["merge_parent_shas"], [OTHER, HEAD])

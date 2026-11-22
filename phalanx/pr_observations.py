@@ -155,8 +155,9 @@ def submit(db, item_id, execution_id, body, lease_digest):
                 or ready["pr_url"] != url or ready["expected"] != expected.model_dump()
                 or ready["pull"]["head_sha"] != revision.head):
             raise intake.Conflict("Verified merge must match the recorded authorized merge intent")
-        if body.merge_parent_shas != (revision.base, revision.head):
-            raise intake.Conflict("Merge commit parents must match the authorized base and candidate head")
+        # The base may have advanced before the merge; the candidate must be the merged head parent.
+        if body.merge_parent_shas[1] != revision.head:
+            raise intake.Conflict("The merge commit's head parent must be the authorized candidate head")
         pr = PullRequest(url, revision, merge_commit=pull.merge_commit, closed=True)
         return intake.apply(db, row, state, Event.MERGE_VERIFIED, details=details,
                             attempt_id=body.attempt_id, evidence=Evidence(pr=pr))
@@ -258,11 +259,12 @@ def gate_evidence(db, execution_id, body, state, pr):
 
     needs_intent = (body.stage == Stage.READY_FOR_CHECK_IN and state.target == Target.MERGED
                     and state.ready_revision == revision and review == revision)
-    if needs_intent != (body.merge_intent is not None):
+    # Without an intent the runner leaves the merge to the owner and the ready PR is delivered.
+    if body.merge_intent is not None and not needs_intent:
         raise intake.Conflict("Merge intent requires a merge target and the current ready revision")
     return Evidence(pr=pr, ci_and_previews=revision, independent_review=review,
                     actionable_feedback_cleared=revision, approvals_and_mergeability=revision,
-                    merge_authorized=needs_intent)
+                    merge_authorized=body.merge_intent is not None)
 
 
 def evaluate_gates(body, url, revision):

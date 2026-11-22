@@ -82,7 +82,7 @@ STAGES = {
 }
 # Runner-owned stages that need no worker session.
 RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
-                 "pr_reconciliation", "ready_for_check_in")
+                 "pr_reconciliation", "ready_for_check_in", "check_in")
 
 
 class AttendedRunner:

@@ -105,6 +105,11 @@ the owner is asked; a reply starts a fresh window. A missing or
 broken policy waits for an owner reply that
 names the problem, and startup preflight reports a malformed file before any claim.
 
+For a `checked_in` item, `ready_for_check_in` re-attests the ready PR and `check_in` merges
+it with a merge commit once GitHub's required reviews and checks allow it; Phalanx adds no
+gate of its own. Set `"auto_merge": false` in the runner config to deliver the ready PR
+instead and leave the merge to the owner (default `true`).
+
 From an authorized Captain muster:
 
 1. Verify the project and host with the runtime's project discovery. Run

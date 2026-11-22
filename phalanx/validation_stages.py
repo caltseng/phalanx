@@ -11,10 +11,12 @@ from pathlib import Path
 from .attended import RunnerError
 from .attended_drafts import github_repository
 from .candidate_local import CandidateLocal
+from .check_in import MergeTarget, check_in
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError, UncertainGitHubWrite
 from .github_checks import collect_github_checks
-from .pr_models import ExpectedRefs, GateObservation, GitHubPull, Reconciliation, Rework, Validation
+from .pr_models import (ExpectedRefs, GateObservation, GitHubPull, MergedPull, MergeIntent, Reconciliation, Rework,
+                        Validation, VerifiedMerge)
 from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
@@ -42,8 +44,8 @@ def run(runner, snapshot):
             return {"status": "published_validation_submitted", "execution": execution}
         submission = snapshot["submission"]
     if submission is None:
-        handler = {Stage.PRE_PR_VALIDATION: _pre_validation, Stage.PR_PROMOTION: _promotion}.get(
-            stage, _disposition)
+        handler = {Stage.PRE_PR_VALIDATION: _pre_validation, Stage.PR_PROMOTION: _promotion,
+                   Stage.CHECK_IN: _check_in}.get(stage, _disposition)
         submission = _save(runner, snapshot, handler(runner, snapshot))
     claim = snapshot["claim"]
     key = f"{stage}:{claim['attempt_id']}:{claim['execution']['version']}"
@@ -314,9 +316,6 @@ def _disposition(runner, snapshot):
     state = claim["execution"]["state"]
     candidate, url = state["candidate"], state.get("primary_pr") or ""
     handoff = f"{url}, candidate {candidate}"
-    if state["stage"] == Stage.READY_FOR_CHECK_IN and state["target"] != Target.READY:
-        return _question(snapshot, "Merge check-in is not automated yet. Merge the ready PR or change "
-                         "the target to ready_for_check_in, then reply.", handoff)
     try:
         policy = _policy(runner, snapshot).ready
     except ValidationPolicyError as error:
@@ -368,7 +367,77 @@ def _disposition(runner, snapshot):
         Reconciliation, snapshot, pull, base_ref, policy.required, checks.observations,
         checks.candidate.merge_sha, Phase.READY,
         actionable_feedback_cleared=True, approvals_and_mergeability=True,
+        merge_intent=None if failed else _merge_intent(runner, snapshot, pull, base_ref),
     )}
+
+
+def _merge_intent(runner, snapshot, pull, base_ref):
+    """Authorize one merge of the unchanged ready revision for a checked_in target.
+
+    The item's target is the authorization; GitHub's rules for the base branch
+    (required reviews and checks) still gate the merge, and Phalanx adds none.
+    A moved revision carries no intent and returns to reconciliation. With
+    auto_merge off the runner sends no intent, so the ready PR is delivered and
+    the owner merges it.
+    """
+    state = snapshot["claim"]["execution"]["state"]
+    if (state["stage"] != Stage.READY_FOR_CHECK_IN or state["target"] != Target.MERGED
+            or not runner.config.get("auto_merge", True)
+            or state.get("ready_revision") != {"head": pull.head_sha, "base": pull.base_sha}):
+        return None
+    return MergeIntent(operation_id=f"merge-{snapshot['claim']['attempt_id']}",
+                       authorization=f"The work item targets {Target.MERGED}; GitHub's rules for "
+                                     f"{base_ref} gate the merge")
+
+
+def _check_in(runner, snapshot):
+    """Merge the ready PR under the claim, or verify a merge an earlier attempt sent."""
+    claim = snapshot["claim"]
+    state = claim["execution"]["state"]
+    candidate, url, ready = state["candidate"], state.get("primary_pr") or "", state.get("ready_revision")
+    handoff = f"{url}, candidate {candidate}"
+    intent = _recorded_intent(runner, snapshot, url)
+    number = url.rsplit("/", 1)[-1]
+    if intent is None or not number.isdigit() or not ready or ready["head"] != candidate:
+        return _question(snapshot, "Check-in needs the recorded merge intent for the ready revision. "
+                         "Return the item to reconciliation, then reply.", handoff)
+    mapping = runner.config["repositories"][claim["request"]["repository_id"]]
+    base_ref = claim["request"].get("target_branch") or mapping["base_branch"]
+    target = MergeTarget(int(number), url, _item_branch(claim["item_id"]), base_ref,
+                         Revision(ready["head"], ready["base"]))
+    result = check_in(_github(snapshot), target, assert_claim=_candidate(runner, snapshot)._authorize)
+    pull = result.pull
+    if result.status == "merged":
+        return {"route": "pr-observation", "body": VerifiedMerge(
+            **_event(snapshot), operation_id=intent["operation_id"],
+            expected=ExpectedRefs(head_ref=target.head_ref, base_ref=base_ref, base_sha=ready["base"]),
+            pull=MergedPull.model_validate({**{field: getattr(pull, field) for field in GitHubPull.model_fields},
+                                            "merge_commit": pull.merge_commit_sha}),
+            merge_parent_shas=result.parents,
+        ).model_dump(mode="json")}
+    if result.status == "pending":
+        return _retry(snapshot, result.reason, result.retry_after_seconds)
+    if result.status in ("moved", "conflict"):
+        return _rework(snapshot, pull, base_ref, "unexpected_head" if result.status == "moved" else "merge_conflict")
+    if result.status == "refused":
+        interval, limit = _check_timing(runner)
+        return {"route": "external-wait", "reason": result.reason[:16000], "body": {
+            **_event(snapshot), "reason": result.reason[:16000], "gate": "merge",
+            "revision": {"head": candidate, "base": pull.base_sha},
+            "retry_after_seconds": interval, "wait_limit_seconds": limit,
+        }}
+    return _question(snapshot, result.reason, handoff)
+
+
+def _recorded_intent(runner, snapshot, url):
+    """Return the merge intent the server recorded with the latest ready observation."""
+    claim = snapshot["claim"]
+    timeline = runner.api.call(f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/timeline")
+    for entry in reversed(timeline):
+        details = entry.get("details") or {}
+        if details.get("stage") == Stage.READY_FOR_CHECK_IN and details.get("pr_url") == url:
+            return details.get("merge_intent")
+    return None
 
 
 def _validation(snapshot, pull, base_ref, required, checks):

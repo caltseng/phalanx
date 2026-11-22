@@ -42,9 +42,18 @@ class FakeGitHub:
         self.comments = []
         self.refuse_convert = False
         self.threads = []
+        self.lose_merge = False
 
     def __call__(self, request, _timeout):
         path = urlsplit(request.full_url).path
+        if request.method == "PUT" and path.endswith("/pulls/7/merge"):
+            self.pull.update(state="closed", merged=True, merge_commit_sha="e" * 40)
+            if self.lose_merge:
+                self.lose_merge = False
+                raise TimeoutError
+            return response({"merged": True, "sha": "e" * 40})
+        if path.endswith("/git/commits/" + "e" * 40):
+            return response({"sha": "e" * 40, "parents": [{"sha": self.base}, {"sha": self.head}]})
         if request.method == "POST" and path == "/graphql":
             if "convertPullRequestToDraft" in json.loads(request.data)["query"]:
                 if self.refuse_convert:
@@ -699,14 +708,18 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_github_feedback_returns_to_development_over_http(self):
         self.live_review_path(blocking=False, feedback=True)
 
-    def live_review_path(self, *, blocking, conflict=False, feedback=False):
+    def test_check_in_merges_and_reconciles_a_lost_merge_response_over_http(self):
+        self.live_review_path(blocking=False, merge=True)
+
+    def live_review_path(self, *, blocking, conflict=False, feedback=False, merge=False):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
         self.start_server(self.root.parent / "queue.sqlite3")
         self.assertEqual(self.request("/v1/repositories", OWNER, {"id": "repo", "remote": remote})[0], 200)
         status, item = self.request("/v1/items", OWNER, {
-            "repository_id": "repo", "goal": "Fix tests", "target": "ready_for_check_in",
+            "repository_id": "repo", "goal": "Fix tests",
+            "target": "checked_in" if merge else "ready_for_check_in",
             "target_branch": "main",
         })
         self.assertEqual(status, 201, item)
@@ -859,9 +872,18 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             reconciled = self.runner().prepare(stages=["pr_reconciliation"])
             self.assertEqual(reconciled["execution"]["state"]["stage"], "ready_for_check_in", reconciled)
             done = self.runner().prepare(stages=["ready_for_check_in"])
+            if merge:
+                self.assertEqual(done["execution"]["state"]["stage"], "check_in", done)
+                github.lose_merge = True
+                pending = self.runner().prepare(stages=["check_in"])
+                self.assertIn("reconciles the merge", pending["reason"], pending)
+                with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                    db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
+                done = self.runner().prepare(stages=["check_in"])
         state = done["execution"]["state"]
         self.assertEqual(state["status"], "completed", state)
         self.assertEqual(state["final_output"]["revision"]["head"], candidate)
+        self.assertEqual(state["final_output"]["merge_commit"], "e" * 40 if merge else None)
         self.assertEqual(self.runner().status(), {"status": "idle"})
 
     def test_review_findings_return_to_development_and_update_the_primary_pr(self):

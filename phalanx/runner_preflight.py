@@ -34,6 +34,9 @@ def preflight(config: dict, token: str | None) -> None:
         if type(value) is not int or not low <= value <= high:
             blockers.append(f"Set {key} in the runner configuration to a whole number "
                             f"of seconds from {low} to {high}; found {value!r}")
+    if type(config.get("auto_merge", True)) is not bool:
+        blockers.append(f"Set auto_merge in the runner configuration to true or false; "
+                        f"found {config['auto_merge']!r}")
     if config.get("validation_policy"):
         from pathlib import Path
         from .validation_policy import ValidationPolicyError, load_validation_policy

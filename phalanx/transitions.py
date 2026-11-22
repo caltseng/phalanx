@@ -56,7 +56,6 @@ class Event(StrEnum):
     EXTERNAL_WAIT = "external_wait"
     RECHECK = "recheck"
     REPLY = "reply"
-    ACCEPT_READY_ONLY = "accept_ready_only"
     RETRY = "retry"
     CANCEL = "cancel"
     CLOSE_FAILURE = "close_failure"
@@ -322,12 +321,11 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
             or evidence.actionable_feedback_cleared != revision
             or evidence.approvals_and_mergeability != revision):
         return _queue(state, Stage.PR_RECONCILIATION)
-    if stage is Stage.READY_FOR_CHECK_IN and state.target is Target.READY:
-        return _close(state, Status.COMPLETED, pr)
-    if not evidence.merge_authorized:
-        return _wait(state, Status.WAITING_FOR_INPUT, wait)
     if stage is Stage.READY_FOR_CHECK_IN:
-        return _queue(state, Stage.CHECK_IN)
+        if state.target is Target.MERGED and evidence.merge_authorized:
+            return _queue(state, Stage.CHECK_IN)
+        # Without merge authorization the runner leaves the merge to the owner and delivers the ready PR.
+        return _close(replace(state, target=Target.READY), Status.COMPLETED, pr)
     raise ValueError("Check-in completion requires GitHub's verified merge commit")
 
 
@@ -424,12 +422,6 @@ def decide(
     if event is Event.CLAIM:
         _require(state.status is Status.QUEUED, "Only queued work can be claimed")
         return replace(state, status=Status.RUNNING)
-    if event is Event.ACCEPT_READY_ONLY:
-        _require(state.stage is Stage.READY_FOR_CHECK_IN
-                 and state.status is Status.WAITING_FOR_INPUT
-                 and state.target is Target.MERGED,
-                 "Ready-only disposition requires a waiting merge target at the ready stage")
-        return _queue(state, target=Target.READY)
     if event is Event.REPLY:
         _require(state.status is Status.WAITING_FOR_INPUT, "No input wait is active")
         return _queue(state)

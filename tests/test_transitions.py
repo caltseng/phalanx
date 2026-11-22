@@ -90,11 +90,11 @@ class TransitionTests(unittest.TestCase):
                 if revision.head == REV.head:
                     self.assertEqual(result(state, observation).stage, Stage.PR_VALIDATION)
 
-    def test_authorization_wait_and_ambiguous_merge_recovery(self):
-        state = result(ready(Target.MERGED), GATES, wait=Wait("Authorize check-in", "reply"))
-        self.assertEqual(state.status, Status.WAITING_FOR_INPUT)
-        state = decide(state, Event.REPLY)
-        state = result(state, replace(GATES, merge_authorized=True))
+    def test_merge_left_to_owner_and_ambiguous_merge_recovery(self):
+        state = result(ready(Target.MERGED), GATES)
+        self.assertEqual((state.status, state.target, state.final_output),
+                         (Status.COMPLETED, Target.READY, READY))
+        state = result(ready(Target.MERGED), replace(GATES, merge_authorized=True))
         self.assertEqual(state.stage, Stage.CHECK_IN)
         state = decide(decide(state, Event.CLAIM), Event.EXTERNAL_WAIT, wait=WAIT)
         merged = replace(READY, merge_commit="merged", closed=True)
@@ -103,13 +103,6 @@ class TransitionTests(unittest.TestCase):
                    evidence=Evidence(pr=replace(merged, revision=Revision(REV.head, "other"))))
         state = decide(state, Event.MERGE_VERIFIED, evidence=Evidence(pr=merged))
         self.assertEqual((state.status, state.final_output), (Status.COMPLETED, merged))
-
-    def test_explicit_ready_only_disposition_rechecks_gates(self):
-        state = result(ready(Target.MERGED), GATES, wait=Wait("Authorize check-in", "reply"))
-        state = decide(state, Event.ACCEPT_READY_ONLY)
-        self.assertEqual(state.target, Target.READY)
-        self.assertEqual(result(state, Evidence(pr=READY)).stage, Stage.PR_RECONCILIATION)
-        self.assertEqual(result(state, GATES).final_output, READY)
 
     def test_closed_pr_requires_a_decision(self):
         state = result(ready(), Evidence(pr=replace(READY, closed=True)),

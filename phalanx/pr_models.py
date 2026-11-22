@@ -165,7 +165,8 @@ class Rework(AttemptEvent):
     ``unexpected_head`` observes a head Phalanx did not publish.
     """
 
-    stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN]
+    stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.READY_FOR_CHECK_IN,
+                   Stage.CHECK_IN]
     expected: ExpectedRefs
     pull: GitHubPull
     issue: Literal["merge_conflict", "unexpected_head", "feedback"]
