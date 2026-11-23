@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -270,6 +271,33 @@ class RelayQueueTests(unittest.TestCase):
         self.assertIsNone(transport.stall(60))
         take_next(self.root, wait=0)
         self.assertIsNone(transport.stall(0))
+
+    def test_polls_never_wait_for_the_write_lock(self):
+        transport = RelayTransport(self.root, timeout=30, poll=0.01)
+        results, polls = [], []
+        def poll(seconds):
+            polls.append(seconds)
+            sleep(0.001)
+        def connect(path, timeout):
+            # Any wait on the lock fails at once instead of after the 30 s busy timeout.
+            return real_connect(path, timeout=0)
+        real_connect = sqlite3.connect
+        waiter = Thread(target=self.call, args=(transport, results, "observe", {"references": []}))
+        with patch("phalanx.captain_relay.sleep", poll):
+            waiter.start()
+            while not polls:
+                sleep(0.001)
+            taken = take_next(self.root, wait=0)
+            # A held write lock, as from another server taking or answering a request.
+            with _queue(self.root), patch("phalanx.captain_relay.sqlite3.connect", connect):
+                seen = len(polls)
+                while len(polls) < seen + 3 and waiter.is_alive():
+                    sleep(0.001)
+                self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
+                self.assertIsNone(transport.stall(0))
+            respond(self.root, taken["id"], response={"threads": []})
+            waiter.join(10)
+        self.assertEqual(results, [{"threads": []}])
 
     def test_overlapping_servers_take_each_request_exactly_once(self):
         transport = RelayTransport(self.root, timeout=30, poll=0.01)

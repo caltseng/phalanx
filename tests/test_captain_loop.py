@@ -294,9 +294,15 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                     thread.join(30)
             self.addCleanup(halt)
             return halt
+        def emit(event):
+            self.events.append(event)
+            if event["status"] == "relay_serving":
+                # Only the first stall and recovery are under test. A loaded host can leave 0.3 s between takes,
+                # so stop the served relay from re-stalling before the next stall check is scheduled.
+                loop.relay_stall_seconds = WAIT_SECONDS
         loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(RelayTransport(relay, timeout=30, poll=0.01)),
                            poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=0.3,
-                           emit=self.events.append, notify=notes.append)
+                           emit=emit, notify=notes.append)
         self.addCleanup(loop.close)
         def first_slot():
             # Either slot may claim "first"; slots claim concurrently.

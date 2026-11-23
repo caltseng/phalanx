@@ -29,9 +29,16 @@ RETAIN_SECONDS = 86400
 
 
 @contextmanager
-def _queue(root: Path):
+def _queue(root: Path, *, write: bool = True):
     root.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(root / "captain-relay.sqlite3", timeout=30)) as db, db:
+        # Polls only read, so they share the database and never queue for its one write lock;
+        # frequent writers starve each other on SQLite's busy wait.
+        if not write and db.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' "
+                                    "AND name IN ('request', 'server')").fetchone()[0] == 2:
+            db.execute("BEGIN")
+            yield db
+            return
         db.execute("BEGIN IMMEDIATE")
         db.execute("""CREATE TABLE IF NOT EXISTS request (
             id TEXT PRIMARY KEY, key TEXT NOT NULL, operation TEXT NOT NULL, body TEXT NOT NULL,
@@ -76,15 +83,18 @@ class RelayTransport:
             if not row:
                 db.execute("INSERT INTO request VALUES (?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)",
                            (request_id, key, operation, body, now, now))
+        query = "SELECT status, response, error, updated_at FROM request WHERE id=?"
         while True:
-            with _queue(self.root) as db:
-                status, response, error, updated = db.execute(
-                    "SELECT status, response, error, updated_at FROM request WHERE id=?", (request_id,),
-                ).fetchone()
-                if status in {"pending", "taken"} and time() >= updated + self.timeout:
-                    # Settle it so an identical retry queues afresh for a live Captain.
-                    status = "expired" if status == "pending" else "lost"
-                    db.execute("UPDATE request SET status=?, updated_at=? WHERE id=?", (status, time(), request_id))
+            with _queue(self.root, write=False) as db:
+                status, response, error, updated = db.execute(query, (request_id,)).fetchone()
+            if status in {"pending", "taken"} and time() >= updated + self.timeout:
+                with _queue(self.root) as db:
+                    status, response, error, updated = db.execute(query, (request_id,)).fetchone()
+                    if status in {"pending", "taken"} and time() >= updated + self.timeout:
+                        # Settle it so an identical retry queues afresh for a live Captain.
+                        status = "expired" if status == "pending" else "lost"
+                        db.execute("UPDATE request SET status=?, updated_at=? WHERE id=?",
+                                   (status, time(), request_id))
             if status == "answered":
                 if error is not None:
                     message = f"Captain relay {operation} failed: {error}"
@@ -107,7 +117,7 @@ class RelayTransport:
 
     def stall(self, threshold: float) -> str | None:
         """Name a stall when no relay server has polled since a request arrived more than threshold ago."""
-        with _queue(self.root) as db:
+        with _queue(self.root, write=False) as db:
             row = db.execute("SELECT value FROM server WHERE key='seen'").fetchone()
             # Requeued and retracted requests count too, so expiry never resets the stall clock.
             since = db.execute("SELECT MIN(created_at) FROM request WHERE created_at > ?",
@@ -130,7 +140,7 @@ class RelayTransport:
 
 def read_request(root: Path, request_id: str) -> dict:
     """Return a request taken with `relay next`, so a helper can build its reply."""
-    with _queue(Path(root).resolve()) as db:
+    with _queue(Path(root).resolve(), write=False) as db:
         row = db.execute("SELECT status, body FROM request WHERE id=?", (request_id,)).fetchone()
     if row is None or row[0] != "taken":
         raise RunnerError("Read only a request taken with `relay next`; it is unknown or settled")
@@ -140,14 +150,21 @@ def read_request(root: Path, request_id: str) -> dict:
 def take_next(root: Path, wait: float = 30, poll: float = 0.2) -> dict:
     """Hand out the oldest pending request exactly once, even across Captain restarts."""
     deadline = time() + wait
+    root = Path(root).resolve()
     while True:
-        with _queue(Path(root).resolve()) as db:
-            _seen(db)
-            row = db.execute("SELECT id, body FROM request WHERE status='pending' "
-                             "ORDER BY created_at LIMIT 1").fetchone()
-            if row:
-                db.execute("UPDATE request SET status='taken', updated_at=? WHERE id=?", (time(), row[0]))
-                return {"id": row[0], **json.loads(row[1])}
+        # Write only to take a request or vouch for one queued since the last poll; an older
+        # liveness time names the same stall, since stall() looks only at newer requests.
+        with _queue(root, write=False) as db:
+            due = db.execute("SELECT EXISTS (SELECT 1 FROM request WHERE status='pending' OR created_at > "
+                             "COALESCE((SELECT value FROM server WHERE key='seen'), 0))").fetchone()[0]
+        if due:
+            with _queue(root) as db:
+                _seen(db)
+                row = db.execute("SELECT id, body FROM request WHERE status='pending' "
+                                 "ORDER BY created_at LIMIT 1").fetchone()
+                if row:
+                    db.execute("UPDATE request SET status='taken', updated_at=? WHERE id=?", (time(), row[0]))
+                    return {"id": row[0], **json.loads(row[1])}
         if time() >= deadline:
             return {"status": "idle"}
         sleep(poll)
