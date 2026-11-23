@@ -1,13 +1,15 @@
 """Authenticated HTTP routes for the durable work-item lifecycle."""
 
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import finalization, intake, pr_models, pr_observations, waits
+from . import dispatch, finalization, intake, pr_models, pr_observations, waits
 from .auth import authenticate, require_owner, require_runner
 from .store import read_transaction, write_transaction
+from .transitions import Stage
 from .intake_models import (
     AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
@@ -139,11 +141,33 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
                 payload.pop(field)
     if isinstance(body, ExternalWait) and body.wait_limit_seconds is None:
         payload.pop("wait_limit_seconds")
+    receipt = {"body": payload, "lease_digest": lease_digest}
+    continuation = next_stage_offer(request)
+    if continuation is not None:
+        receipt["continuation"] = {"lease_digest": intake.digest(continuation["lease"]),
+                                   "stages": continuation["stages"]}
+
+    def perform(db, *args):
+        view = operation(db, *args)
+        return dispatch.hand_off(db, item_id, body.attempt_id, view, continuation)
+
     return run(
-        request, operation, item_id, execution_id, body, lease_digest, write=True, finish=True,
-        scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key,
-        payload={"body": payload, "lease_digest": lease_digest},
+        request, perform, item_id, execution_id, body, lease_digest, write=True, finish=True,
+        scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key, payload=receipt,
     )
+
+
+def next_stage_offer(request):
+    """The runner's optional offer to keep its slot for the next stage under a fresh lease."""
+    lease = request.headers.get("Phalanx-Next-Lease")
+    stages = request.headers.get("Phalanx-Next-Stages")
+    if lease is None and stages is None:
+        return None
+    names = sorted({name.strip() for name in (stages or "").split(",") if name.strip()})
+    if (lease is None or not re.fullmatch(r"[A-Za-z0-9_-]{32,200}", lease)
+            or not names or any(name not in set(Stage) for name in names)):
+        raise HTTPException(422, "A continuation needs a valid next lease and runnable stages")
+    return {"lease": lease, "stages": names}
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/result",
