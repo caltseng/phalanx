@@ -29,7 +29,7 @@ NO_EXPIRY = 253402300799
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Nonce = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{16,100}$")]
 TokenDigest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
-Url = Annotated[str, StringConstraints(pattern=r"^https?://\S{1,2000}$")]
+Url = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9+.-]{0,31}://\S{1,2000}$")]
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 
