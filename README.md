@@ -633,7 +633,7 @@ Both owner and runner bearer tokens can call these routes.
 | --- | --- |
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
-| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. Events also carry `worker_reference`, `pr_url` and `candidate`. |
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the
 returned `next_cursor` as `cursor` on the same route and list kind until it is
@@ -655,3 +655,43 @@ each renewal and the item's `wait_reason` shows it until a renewal omits it. `ve
 execution version that a reply must name. The timeline lists blocking `prerequisites`
 and, while the item is waiting for input, the current `question`. The draft state has
 no current read mapping. Report output URLs use the authenticated report route.
+
+A queued execution with no other wait reason explains why it is not running. While
+dispatch is paused, `wait_reason` is `Dispatch is paused`. A scheduled retry shows
+`Retry scheduled at <time>`. Otherwise it shows its dispatch rank among all eligible
+queued executions, using the same aged priority order as claims, for example
+`Waiting for runner capacity: rank 3 of 12 eligible, 2 higher-ranked ahead`, and
+`wait_since` is when it became eligible. The rank ignores per-runner repository and
+stage filters, so it is a lower bound on the work ahead of the item.
+
+#### Read one item's correlated timeline
+
+Read `GET /v1/items/{item_id}` for the current execution ID (or
+`GET /v1/items/{item_id}/executions` for earlier ones), then page
+`GET /v1/operator/executions/{execution_id}/timeline` until `next_cursor` is null.
+Each event correlates the execution `version`, the `event`, `from_stage` (set when
+the stage changed) and `stage`, `status`, the `attempt_id` and its
+`worker_reference`, `reason`, `pr_url` when the event recorded one, and `candidate`,
+the commit SHA the result applied to. A `result` event without a recorded wait or
+reason gets one derived from its persisted evidence: the outcome, any PR `issue`,
+each failed local check with its reason, the `failure_reason`, and the short SHA.
+Each part and the whole reason are length-bounded, token-like text is redacted, and
+review notes and findings are left out. For example, the fixture in
+`tests/test_operator.py` (`test_result_events_explain_backward_transitions`) returns
+these events (abridged; `created_at` and `answered_by` omitted) for two returns to development:
+
+```json
+[
+  {"version": 5, "event": "result", "from_stage": "pr_promotion", "stage": "development",
+   "status": "queued", "attempt_id": null, "worker_reference": null,
+   "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",
+   "pr_url": "https://github.com/example/project/pull/119", "candidate": "bbbb…bbbb"},
+  {"version": 3, "event": "result", "from_stage": "pre_pr_validation", "stage": "development",
+   "status": "queued", "attempt_id": "attempt-9", "worker_reference": "worker-9",
+   "reason": "changes_required; local check unit failed: Timed out after 1800 seconds; at aaaaaaaaaaaa",
+   "pr_url": null, "candidate": "aaaa…aaaa"}
+]
+```
+
+Use the unpaged `GET /v1/items/{item_id}/executions/{execution_id}/timeline` only
+when you need the full recorded `details` of each transition.

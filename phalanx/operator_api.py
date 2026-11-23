@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from .auth import authenticate_board_read
+from .dispatch import rank
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import Identifier
@@ -25,6 +26,7 @@ ID = re.compile(r"[0-9a-f]{32}")
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
+           execution.ready_since,
            item.repository_id, json_extract(item.request_json, '$.goal') AS title,
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
@@ -89,7 +91,90 @@ def page_cursor(rows, limit, scope, key):
     return encode_cursor(scope, key(rows[limit - 1])) if len(rows) > limit else None
 
 
-def summary(row, now):
+REASON_LIMIT = 400
+SHA = re.compile(r"[0-9a-f]{7,64}")
+SECRET = re.compile(
+    r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}"
+    r"|(?i:\bbearer\s+)\S+"
+    r"|(?i:\b(?:token|secret|password|lease)\b\s*[:=]\s*)\S+"
+)
+ELIGIBLE = """
+    SELECT id, item_id, ready_since, queue_priority FROM executions
+    WHERE status = 'queued' AND ready_since IS NOT NULL AND ready_since <= ?
+      AND dependency_wait_json IS NULL
+"""
+
+
+def clip(text, limit):
+    text = SECRET.sub("[redacted]", " ".join(str(text).split()))
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def applied_sha(details):
+    for value in (details.get("candidate"), details.get("prevalidated_candidate"),
+                  details.get("reviewed_candidate"), (details.get("pull") or {}).get("head_sha")):
+        if isinstance(value, str) and SHA.fullmatch(value):
+            return value
+    return None
+
+
+def result_reason(details):
+    """Summarize why a stage result moved the execution, from fields it already persisted."""
+    parts = [clip(details[field], 40) for field in ("outcome", "issue") if details.get(field)]
+    for check in details.get("local_checks") or ():
+        if check.get("outcome") == "failed":
+            cause = f": {clip(check['reason'], 160)}" if check.get("reason") else ""
+            parts.append(f"local check {clip(check.get('name', ''), 80)} failed{cause}")
+    if details.get("failure_reason"):
+        parts.append(clip(details["failure_reason"], 200))
+    sha = applied_sha(details)
+    if sha:
+        parts.append(f"at {sha[:12]}")
+    return clip("; ".join(parts), REASON_LIMIT) if parts else None
+
+
+def timeline_event(row):
+    event = dict(row)
+    details = json.loads(event.pop("details") or "{}")
+    event["candidate"] = applied_sha(details)
+    event["pr_url"] = details.get("pr_url") if isinstance(details.get("pr_url"), str) else None
+    if event["event"] == "result" and event["reason"] is None:
+        event["reason"] = result_reason(details)
+    return event
+
+
+def queue_ranks(db, rows, now):
+    """Rank eligible queued executions the way dispatch does, once per read."""
+    if not any(row["status"] == "queued" for row in rows):
+        return None
+    settings = db.execute("SELECT paused, aging_seconds FROM dispatch_settings WHERE id=1").fetchone()
+    now_ms = int(now.timestamp() * 1000)
+    aging_ms = settings["aging_seconds"] * 1000
+    eligible = sorted(db.execute(ELIGIBLE, (now_ms,)), key=lambda row: rank(row, now_ms, aging_ms))
+    return {"paused": bool(settings["paused"]), "now_ms": now_ms, "count": len(eligible),
+            "positions": {row["id"]: index for index, row in enumerate(eligible)}}
+
+
+def queue_wait(row, queue):
+    ready = row["ready_since"]
+    if queue is None or ready is None:
+        return {}
+    since = datetime.fromtimestamp(ready / 1000, UTC).isoformat(timespec="microseconds")
+    if queue["paused"]:
+        return {"reason": "Dispatch is paused", "trigger": "The owner resumes dispatch"}
+    if ready > queue["now_ms"]:
+        return {"reason": f"Retry scheduled at {since}",
+                "trigger": "The retry time passes, then a runner claims it in rank order"}
+    position = queue["positions"].get(row["id"])
+    if position is None:
+        return {}
+    return {"reason": f"Waiting for runner capacity: rank {position + 1} of {queue['count']} "
+                      f"eligible, {position} higher-ranked ahead",
+            "trigger": "A runner with a free slot claims eligible work in rank order",
+            "since": since}
+
+
+def summary(row, now, queue=None):
     state = json.loads(row["state_json"])
     wait = state.get("wait") or {}
     output = state["final_output"]
@@ -118,6 +203,9 @@ def summary(row, now):
         at = datetime.fromtimestamp(expires, UTC).isoformat()
         wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
                 "trigger": "The runner recovers the expired attempt on its next pass"}
+    if row["status"] == "queued" and not wait:
+        wait = queue_wait(row, queue)
+        wait_since = wait.get("since", wait_since)
     return {
         "id": row["id"],
         "item_id": row["item_id"],
@@ -182,6 +270,7 @@ def closed_page(db, after, size):
 @router.get("/operator/executions")
 def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
                     limit: Limit = 25, cursor: Cursor = None):
+    now = datetime.now(UTC)
     with read_transaction(request.app.state.database_path) as db:
         if kind == "open":
             after = decode_cursor(cursor, kind, (is_rank, is_stamp, is_id))
@@ -191,9 +280,9 @@ def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
             after = decode_cursor(cursor, kind, (is_stamp, is_id))
             rows = closed_page(db, after, limit + 1)
             key = lambda row: [row["updated_at"], row["id"]]
-    now = datetime.now(UTC)
+        queue = queue_ranks(db, rows[:limit], now)
     return {
-        "items": [summary(row, now) for row in rows[:limit]],
+        "items": [summary(row, now, queue) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, kind, key),
     }
 
@@ -229,7 +318,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                ORDER BY block.key""",
             (execution_id,),
         ).fetchall()
-        boundary, params = ("WHERE (version, created_at) < (?, ?)", after) if after else ("", ())
+        boundary, params = ("WHERE (events.version, events.created_at) < (?, ?)", after) if after else ("", ())
         question = None
         if execution["status"] == "waiting_for_input":
             asked = db.execute(
@@ -252,7 +341,8 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                                 json_extract(event.state_json, '$.wait.reason')) AS reason,
                        CASE WHEN event.event = 'reply' THEN coalesce(
                            json_extract(event.details_json, '$.answered_by'), 'owner') END
-                           AS answered_by
+                                  AS answered_by,
+                              event.details_json AS details
                 FROM transition_history AS event
                 LEFT JOIN transition_history AS prior
                     ON prior.execution_id = event.execution_id AND prior.version = event.version - 1
@@ -261,21 +351,25 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 SELECT adoption.version, 'recover_claim', adoption.created_at, adoption.attempt_id,
                        json_extract(adopted.state_json, '$.stage'),
                        json_extract(adopted.state_json, '$.status'),
-                       NULL, 'Adopted the attempt: ' || adoption.reconciliation, NULL
+                       NULL, 'Adopted the attempt: ' || adoption.reconciliation, NULL, NULL
                 FROM attempt_adoptions AS adoption
                 JOIN transition_history AS adopted
                     ON adopted.execution_id = adoption.execution_id AND adopted.version = adoption.version
                 WHERE adoption.execution_id = ?
             )
-            SELECT * FROM events {boundary}
-            ORDER BY version DESC, created_at DESC LIMIT ?""",
+            SELECT events.*, worker.reference AS worker_reference FROM events
+            LEFT JOIN attempt_workers AS worker ON worker.attempt_id = events.attempt_id
+            {boundary}
+            ORDER BY events.version DESC, events.created_at DESC LIMIT ?""",
             (execution_id, execution_id, *params, limit + 1),
         ).fetchall()
+        now = datetime.now(UTC)
+        item = summary(execution, now, queue_ranks(db, [execution], now))
     return {
-        "item": summary(execution, datetime.now(UTC)),
+        "item": item,
         "attempt": attempt["id"] if attempt else None,
         "prerequisites": [dict(row) for row in prerequisites],
         "question": question,
-        "events": [dict(row) for row in rows[:limit]],
+        "events": [timeline_event(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
     }

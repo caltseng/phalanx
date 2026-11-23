@@ -14,7 +14,7 @@ LEASE_SECONDS = DEFAULT_LEASE_SECONDS
 DEFAULT_CAPACITY = 4
 PRIORITIES = range(3)
 QUEUE_BUCKET = """
-    SELECT id, item_id, ready_since FROM executions {index}
+    SELECT id, item_id, ready_since, queue_priority FROM executions {index}
     WHERE status = 'queued' AND ready_since IS NOT NULL AND ready_since <= ?
       AND dependency_wait_json IS NULL
       AND queue_repository = ? AND queue_affinity = ? AND queue_priority = ?
@@ -48,6 +48,12 @@ def set_capacity(db, runner_id, capacity):
     return {"runner_id": runner_id, "capacity": capacity}
 
 
+def rank(row, now_ms, aging_ms):
+    """Sort key for eligible queued executions: aged priority first, then oldest."""
+    effective = min(2, row["queue_priority"] + (now_ms - row["ready_since"]) // aging_ms)
+    return (-effective, row["ready_since"], row["item_id"], row["id"])
+
+
 def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
     # Within each bucket an older item can only gain as much or more priority.
     best_rank = None
@@ -61,11 +67,9 @@ def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
                     row = db.execute(query, (now_ms, repository_id, affinity, priority, *stage)).fetchone()
                     if row is None:
                         continue
-                    ready_since = row["ready_since"]
-                    effective = min(2, priority + (now_ms - ready_since) // aging_ms)
-                    rank = (-effective, ready_since, row["item_id"], row["id"])
-                    if best_rank is None or rank < best_rank:
-                        best_rank, best = rank, row
+                    key = rank(row, now_ms, aging_ms)
+                    if best_rank is None or key < best_rank:
+                        best_rank, best = key, row
     return best
 
 

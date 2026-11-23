@@ -97,7 +97,9 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(waiting["last_advanced_at"], EARLY)
         self.assertEqual(waiting["last_progress_at"], LATEST)
         self.assertGreater(waiting["wait_age_seconds"], 0)
-        self.assertIsNone(queued["wait_age_seconds"])
+        self.assertEqual(queued["wait_reason"],
+                         "Waiting for runner capacity: rank 1 of 4999 eligible, 0 higher-ranked ahead")
+        self.assertGreater(queued["wait_age_seconds"], 0)
 
         closed_first = self.page(BOARD + "?kind=closed&limit=2")
         self.assertEqual([row["id"] for row in closed_first["items"]], list(map(identifier, [7999, 7998])))
@@ -192,5 +194,70 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                   Steering(expected_version=execution["version"], dependencies=[]))
         ready = self.page(route)
         self.assertEqual(ready["item"]["blocked_prerequisite_count"], 0)
-        self.assertIsNone(ready["item"]["wait_reason"])
+        self.assertTrue(ready["item"]["wait_reason"].startswith("Waiting for runner capacity: rank "))
         self.assertEqual(ready["prerequisites"], [])
+
+    def test_queued_work_explains_its_capacity_wait(self):
+        _, first, second = self.page(BOARD + "?limit=3")["items"]
+        self.assertEqual(first["resume_trigger"], "A runner with a free slot claims eligible work in rank order")
+        self.assertEqual(second["wait_reason"],
+                         "Waiting for runner capacity: rank 2 of 4999 eligible, 1 higher-ranked ahead")
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE executions SET ready_since=? WHERE id=?", (32503680000000, identifier(1)))
+        _, retrying, second = self.page(BOARD + "?limit=3")["items"]
+        self.assertEqual(retrying["wait_reason"], "Retry scheduled at 3000-01-01T00:00:00.000000+00:00")
+        self.assertEqual(second["wait_reason"],
+                         "Waiting for runner capacity: rank 1 of 4998 eligible, 0 higher-ranked ahead")
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE dispatch_settings SET paused=1")
+        self.assertEqual(self.page(f"{BOARD}/{identifier(2)}/timeline")["item"]["wait_reason"],
+                         "Dispatch is paused")
+
+    def test_result_events_explain_backward_transitions(self):
+        development = Execution(Target.MERGED, Stage.DEVELOPMENT)
+        candidate, head = "a" * 40, "b" * 40
+        pr = "https://github.com/example/project/pull/119"
+        with write_transaction(self.path) as db:
+            insert(db, 9000, development)
+            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                       ("attempt-9", identifier(9000), "pre_pr_validation", "runner", "digest", 1, EARLY, LATER))
+            db.execute("INSERT INTO attempt_workers VALUES ('attempt-9', 'worker-9', NULL)")
+            steps = [
+                (Stage.PRE_PR_VALIDATION, {}, None),
+                (Stage.DEVELOPMENT, {
+                    "stage": "pre_pr_validation", "outcome": "changes_required", "candidate": candidate,
+                    "review_notes": "PRIVATE TASK BODY",
+                    "local_checks": [{"name": "unit", "outcome": "failed",
+                                      "reason": "Timed out after 1800 seconds"},
+                                     {"name": "lint", "outcome": "passed", "reason": None}],
+                }, "attempt-9"),
+                (Stage.PR_PROMOTION, {}, None),
+                (Stage.DEVELOPMENT, {
+                    "stage": "pr_promotion", "outcome": "changes_required", "issue": "merge_conflict",
+                    "pull": {"head_sha": head}, "pr_url": pr, "findings": ["PRIVATE FINDING"],
+                }, None),
+                (Stage.DEVELOPMENT, {
+                    "stage": "development", "outcome": "failed",
+                    "failure_reason": "Push rejected with token ghp_" + "x" * 36 + " " + "y" * 900,
+                }, None),
+            ]
+            for version, (stage, details, attempt) in enumerate(steps, start=2):
+                state = json.dumps(asdict(replace(development, stage=stage)))
+                db.execute("UPDATE executions SET version=?, state_json=? WHERE id=?",
+                           (version, state, identifier(9000)))
+                record(db, identifier(9000), version, "result", details, state, LATER, attempt)
+        events = self.page(f"{BOARD}/{identifier(9000)}/timeline")["events"]
+        failure, conflict, _, checks = events[:4]
+        self.assertEqual((checks["from_stage"], checks["stage"]), ("pre_pr_validation", "development"))
+        self.assertEqual(checks["reason"], "changes_required; local check unit failed: "
+                                           f"Timed out after 1800 seconds; at {candidate[:12]}")
+        self.assertEqual((checks["candidate"], checks["attempt_id"], checks["worker_reference"]),
+                         (candidate, "attempt-9", "worker-9"))
+        self.assertEqual(conflict["from_stage"], "pr_promotion")
+        self.assertEqual(conflict["reason"], f"changes_required; merge_conflict; at {head[:12]}")
+        self.assertEqual((conflict["candidate"], conflict["pr_url"]), (head, pr))
+        self.assertTrue(failure["reason"].startswith("failed; Push rejected with token [redacted] yyy"))
+        self.assertLessEqual(len(failure["reason"]), 400)
+        text = json.dumps(events)
+        for secret in ("ghp_", "PRIVATE", "digest"):
+            self.assertNotIn(secret, text)
