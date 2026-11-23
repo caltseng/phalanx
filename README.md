@@ -280,6 +280,13 @@ archives their evidence once. An expired prepared packet with no relay effects
 uses the verified no-launch checkpoint for recovery without waiting for a
 native observation that cannot exist.
 
+A worker that is still active three hours after launch with no result keeps
+its reservation and lease; the loop never stops it. The slot reports
+`worker_overdue` once and the operator board shows it as the item's wait
+reason until the worker produces a result. A writer observed stopped without a
+result file stops renewing its lease, so stopped-attempt recovery reconciles
+the expired attempt instead of the item staying reserved forever.
+
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Loop status has one durable store and is
 written and emitted only when its status or reason changes. Ctrl+C stops scheduling
@@ -358,7 +365,8 @@ directory. Repeat this cycle while the loop runs:
    yourself with `python -m phalanx reply ... --answered-by captain`.
    Escalate to Caleb in the Captain chat only when human judgment materially
    changes the outcome or authority is missing. `attended status --all` shows
-   slot reasons.
+   slot reasons. Tell Caleb once about a `worker_overdue` slot, after
+   inspecting the worker to say whether it is still making progress.
 
 Identical requests waiting to be taken share one entry. Verified project resolutions
 are cached for ten minutes and failed ones for one minute, so an untrusted

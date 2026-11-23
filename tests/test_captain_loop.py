@@ -476,6 +476,36 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                                     for event in self.events[blocked:]))
         self.spin(loop, lambda: self.api.blockers[-1] is None)
 
+    def test_long_active_worker_is_published_once_as_overdue_and_keeps_renewing(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        loop = self.loop(overdue_seconds=0)
+        self.spin(loop, lambda: any("with no result" in (blocker or "") for blocker in self.api.blockers))
+        renewals = len(self.api.renewed)
+        self.spin(loop, lambda: len(self.api.renewed) > renewals + 3)
+        self.assertEqual([event["status"] for event in self.events if event["slot"] == 1][-1], "worker_overdue")
+        self.assertEqual(sum(event["status"] == "worker_overdue" for event in self.events), 1)
+        packet = self.write_result(1)
+        self.native.stopped.add(packet.marker)
+        self.spin(loop, lambda: bool(self.api.submissions) and not loop._records())
+
+    def test_stopped_writer_without_result_stops_renewing_for_recovery(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        loop = self.loop()
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        marker = AttendedRunner(self.root, self.config, self.api, slot=1)._handoff(loop._records()[1]).packet.marker
+        self.native.stopped.add(marker)
+        self.spin(loop, lambda: any(event["status"] == "stopped_without_result" for event in self.events))
+        self.spin(loop, lambda: 1 not in loop.renewals)
+        renewals = len(self.api.renewed)
+        for _ in range(20):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(self.api.renewed), renewals)
+        self.assertEqual(self.api.submissions, [])
+        self.assertIn(1, loop._records())
+
     def test_renewal_interval_near_the_lease_is_reported(self):
         self.config["capacity"] = 1
         self.api.waiting = ["first"]
