@@ -8,16 +8,18 @@
 
   function client(token) {
     async function read(path, signal, accept = "application/json") {
+      const headers = { Accept: accept };
+      if (token) headers.Authorization = "Bearer " + token;
       const response = await fetch(path, {
         signal,
         redirect: "error",
         cache: "no-store",
         credentials: "omit",
-        headers: { Authorization: "Bearer " + token, Accept: accept }
+        headers
       });
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
-          throw new Error("The server rejected the owner token.");
+          throw new Error(token ? "The server rejected the owner token." : "The server requires an owner token.");
         }
         if (response.status === 404) {
           throw new Error("This resource is unavailable on the server.");
@@ -184,6 +186,17 @@
     }
   }
 
+  function show(source) {
+    source.openReport = output => openReport(source, output);
+    unmount = window.PhalanxOperatorBoard.mount(board, source);
+    form.hidden = true;
+    board.hidden = false;
+    status.textContent = "";
+    const heading = board.querySelector("h1");
+    heading.tabIndex = -1;
+    heading.focus();
+  }
+
   form.addEventListener("submit", async event => {
     event.preventDefault();
     if (connect.disabled) return;
@@ -201,15 +214,8 @@
       const source = client(token);
       const access = await source.owner(AbortSignal.timeout(12000));
       if (access.role !== "owner") throw new Error("Owner access required.");
-      source.openReport = output => openReport(source, output);
-      unmount = window.PhalanxOperatorBoard.mount(board, source);
-      form.hidden = true;
-      board.hidden = false;
+      show(source);
       disconnect.hidden = false;
-      status.textContent = "";
-      const heading = board.querySelector("h1");
-      heading.tabIndex = -1;
-      heading.focus();
     } catch {
       status.textContent = "Could not verify owner access. Check the token and server, then try again.";
     } finally {
@@ -218,6 +224,20 @@
       if (!form.hidden) input.focus();
     }
   });
+
+  (async () => {
+    // A local board opens without a token; otherwise the server returns 401 and the form appears.
+    const source = client(null);
+    try {
+      await source.list({ kind: "open", cursor: null, limit: 1, signal: AbortSignal.timeout(12000) });
+      show(source);
+    } catch (error) {
+      form.hidden = false;
+      status.textContent = error.message === "The server requires an owner token."
+        ? "" : "Could not load the board without a token: " + error.message;
+      input.focus();
+    }
+  })();
 
   disconnect.addEventListener("click", () => {
     if (dialog.open) dialog.close();

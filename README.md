@@ -24,6 +24,7 @@ py -m venv .venv
 python -m pip install -r requirements.lock -e .
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:PHALANX_LOCAL_BOARD = "1"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -35,6 +36,7 @@ python3 -m venv .venv
 python -m pip install -r requirements.lock -e .
 export PHALANX_OWNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PHALANX_RUNNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export PHALANX_LOCAL_BOARD=1
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -457,7 +459,7 @@ polling, webhooks, or synchronization; it does not modify the GitHub issue.
 
 ### Operator work board
 
-Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
+Open `http://127.0.0.1:8000/operator/` on the running server. With `PHALANX_LOCAL_BOARD=1`, as in the local setup above, the board opens without a token: its read-only routes (`/v1/operator/*` and the stored report route) skip authentication for requests from a loopback client with a `localhost`, `127.0.0.1` or `[::1]` `Host` header. Every other route still requires its token. Leave the flag unset on a hosted server, including one behind a reverse proxy or tunnel on the same machine, because those connect from loopback too. Without the flag, the board asks for the owner token and holds it in memory until you disconnect or reload the page. The board uses the same-origin read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
 
 The board shows each item's prerequisite blockers, any scheduled retry or external recheck, its worker reference and chat link, its current PR and its final output. It is read-only. When an item is waiting for an answer, its detail shows the question and the `reply` command to answer it with. See [Answer a waiting item](#answer-a-waiting-item).
 
