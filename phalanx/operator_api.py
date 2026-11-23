@@ -28,7 +28,8 @@ SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
            execution.ready_since,
-           item.repository_id, json_extract(item.request_json, '$.goal') AS title,
+           item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
+           json_extract(item.request_json, '$.target') AS target,
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
@@ -195,11 +196,22 @@ def queue_wait(row, queue):
             "since": since}
 
 
+def short_title(goal, limit=80):
+    """One board line from the goal: its first sentence, cut at a word boundary."""
+    line = next((line for line in goal.splitlines() if line.strip()), "").strip().lstrip("#*-> ").strip()
+    sentence = re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0].strip() or line or "Untitled"
+    if len(sentence) <= limit:
+        return sentence
+    cut = sentence[:limit - 1]
+    return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:-") + "…"
+
+
 def summary(row, now, queue=None):
     state = json.loads(row["state_json"])
     wait = state.get("wait") or {}
     output = state["final_output"]
     outcome = None
+    delivery = None
     if output is not None:
         if row["status"] != "completed":
             outcome = row["status"]
@@ -207,6 +219,10 @@ def summary(row, now, queue=None):
             outcome = "report_stored"
         else:
             outcome = "checked_in" if output.get("merge_commit") else "ready_for_check_in"
+        if output.get("merge_commit"):
+            # What GitHub delivered, distinct from the Phalanx stage that recorded it.
+            delivery = {"merged": True, "merge_commit": output["merge_commit"],
+                        "merge_method": output.get("merge_method"), "merged_at": output.get("merged_at")}
         output = (
             {"kind": "report", "url": output["reference"]} if "reference" in output
             else {"kind": "pr", "url": output["url"]}
@@ -242,8 +258,11 @@ def summary(row, now, queue=None):
         "id": row["id"],
         "item_id": row["item_id"],
         "version": row["version"],
-        "title": row["title"],
+        "title": short_title(row["goal"]),
+        "goal": row["goal"],
+        "target": row["target"],
         "repository_id": row["repository_id"],
+        "created_at": row["created_at"],
         "stage": row["stage"],
         "status": row["status"],
         "last_advanced_at": row["last_advanced_at"],
@@ -269,6 +288,7 @@ def summary(row, now, queue=None):
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
+        "delivery": delivery,
         # The registered native worker session that holds this item, if any.
         "writer": None if row["writer_id"] is None or output is not None else {
             "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],
@@ -425,19 +445,29 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 JOIN transition_history AS checked
                     ON checked.execution_id = result.execution_id AND checked.version = result.version
                 WHERE result.execution_id = ?
+                UNION ALL
+                SELECT action.version, 'captain_action', action.created_at, NULL,
+                       json_extract(acted.state_json, '$.stage'),
+                       json_extract(acted.state_json, '$.status'),
+                       NULL, 'Captain ' || substr(action.captain_id, 1, 8) || ' ' || action.action
+                           || ': ' || action.reason, NULL, NULL
+                FROM captain_actions AS action
+                JOIN transition_history AS acted
+                    ON acted.execution_id = action.execution_id AND acted.version = action.version
+                WHERE action.execution_id = ?
             )
             SELECT events.*, worker.reference AS worker_reference FROM events
             LEFT JOIN attempt_workers AS worker ON worker.attempt_id = events.attempt_id
             {boundary}
             ORDER BY events.version DESC, events.created_at DESC LIMIT ?""",
-            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
         now = datetime.now(UTC)
         item = summary(execution, now, queue_ranks(db, [execution], now))
     return {
         "item": item,
         "attempt": attempt["id"] if attempt else None,
-        "prerequisites": [dict(row) for row in prerequisites],
+        "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
         "question": question,
         "events": [timeline_event(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),

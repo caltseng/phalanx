@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
-from .auth import authenticate, require_owner, require_runner, require_worker
+from .auth import authenticate, require_coordinator, require_owner, require_runner, require_worker
 from .store import read_transaction, write_transaction
 from .transitions import Stage
 from .intake_models import (
@@ -142,7 +142,7 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     if isinstance(body, Result):
         for field in (
             "failure_reason", "question", "retry_after_seconds", "review_notes", "local_checks",
-            "report_review_notes",
+            "report_review_notes", "pr_url",
         ):
             if payload[field] is None:
                 payload.pop(field)
@@ -239,7 +239,7 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
              dependencies=[Depends(require_runner)])
 def github_observation(request: Request, item_id: Identifier, execution_id: Identifier,
                        body: reconciliation.Observation):
-    """Record what the reconciler saw on GitHub; no lease, and the execution's version is unchanged."""
+    """Record what the reconciler saw on GitHub; no lease. It advances only a writer's PR stages."""
     return run(request, reconciliation.record, item_id, execution_id, body, write=True)
 
 
@@ -253,6 +253,11 @@ def local_checks(request: Request, item_id: Identifier, execution_id: Identifier
 @router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
 def reconciler_heartbeat(request: Request, runner_id: Identifier):
     return run(request, reconciliation.heartbeat, runner_id, write=True)
+
+
+@router.delete("/reconcilers/{runner_id}", dependencies=[Depends(require_coordinator)])
+def retire_reconciler(request: Request, runner_id: Identifier):
+    return run(request, reconciliation.retire, runner_id, write=True)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
@@ -284,6 +289,13 @@ def pr_publication_blocker(request: Request, item_id: Identifier, execution_id: 
 def pr_rework(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.Rework,
               lease: Lease = None, key: Key = None):
     return attempt_event(request, pr_observations.submit_rework, item_id, execution_id, body, lease, key)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-merged",
+             dependencies=[Depends(require_runner)])
+def pr_merged(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.ExternalMerge,
+              lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit_merged, item_id, execution_id, body, lease, key)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",

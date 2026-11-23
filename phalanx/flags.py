@@ -5,6 +5,7 @@ on read, so it clears itself when its condition clears.
 """
 
 from datetime import UTC, datetime, timedelta
+import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -12,7 +13,7 @@ from pydantic import StringConstraints
 
 from . import intake, reconciliation
 from .auth import authenticate_board_read, require_coordinator
-from .captains import STALE, is_live
+from .captains import STALE, gone_at, is_live, successor_name
 from .intake_api import run
 from .intake_models import Payload, Text
 from .operator_schema import OPEN
@@ -53,15 +54,19 @@ def at(value):
 
 
 def captain_stale(db, now):
-    return [
-        flag("captain_stale", f"No heartbeat since {row['heartbeat_at']}",
-             "Live Captains take over its intents. The successor or keeper archives it.",
-             at(row["heartbeat_at"]) + STALE, captain_id=row["id"])
-        for row in db.execute(
-            "SELECT * FROM captains WHERE state != 'ended' AND heartbeat_at < ? ORDER BY heartbeat_at LIMIT ?",
-            ((now - STALE).isoformat(timespec="microseconds"), DERIVED_LIMIT),
-        )
-    ]
+    flags = []
+    for row in db.execute("SELECT * FROM captains WHERE state != 'ended' ORDER BY heartbeat_at, id"):
+        if is_live(row, now):
+            continue
+        if len(flags) >= DERIVED_LIMIT:
+            break
+        overdue = row["ending_at"] is not None and gone_at(row) < at(row["heartbeat_at"]) + STALE
+        reason = (f"Ending since {row['ending_at']} without finishing its handoff" if overdue
+                  else f"No heartbeat since {row['heartbeat_at']}")
+        flags.append(flag("captain_stale", reason,
+                          "Live Captains take over its intents. The successor or keeper archives it.",
+                          gone_at(row), captain_id=row["id"]))
+    return flags
 
 
 def no_live_captain(db, now):
@@ -73,8 +78,7 @@ def no_live_captain(db, now):
     if any(is_live(row, now) for row in rows):
         return []
     # The last moment any Captain was live, or when open work first existed, whichever is later.
-    gone = [at(row["heartbeat_at"]) + (STALE if row["state"] != "ended" else timedelta()) for row in rows]
-    first_seen = max([at(oldest), *gone])
+    first_seen = max([at(oldest), *map(gone_at, rows)])
     last = max(rows, key=lambda row: (row["heartbeat_at"], row["id"]), default=None)
     reason = "No live Captain while open work exists"
     if last is not None:
@@ -138,8 +142,56 @@ def writer_flags(db, now):
     return flags
 
 
+def session_flags(db, now):
+    """Check the native sessions live Captains report against registered writers and Captains.
+
+    A session counts as an item's when its name carries the first 8 characters of the item's ID or
+    its writer's nonce as a word, as `shift launch` names it within the runtime's 40-character name
+    limit. A session carrying an unconfirmed intent's nonce is that launch, which launch_unconfirmed
+    covers.
+    """
+    reported = {}
+    for captain in db.execute("SELECT * FROM captains WHERE state != 'ended'").fetchall():
+        if not is_live(captain, now):
+            continue
+        for session in json.loads(captain["sessions_json"]):
+            known = reported.get(session["id"])
+            if known is None or session["first_seen"] < known["first_seen"]:
+                reported[session["id"]] = {**session, "captain_id": captain["id"]}
+    if not reported:
+        return []
+    registered = {row[0] for row in db.execute(
+        "SELECT session_id FROM writers WHERE ended_at IS NULL AND session_id IS NOT NULL "
+        "UNION SELECT session_ref FROM captains WHERE state != 'ended'")}
+    successors = {successor_name(row[0]) for row in db.execute(
+        "SELECT id FROM captains WHERE state = 'ending'")}
+    writers = db.execute(OPEN_WRITERS).fetchall()
+    by_word = {word: writer for writer in writers for word in (writer["item_id"][:8], writer["nonce"])}
+    flags = []
+    for session in sorted(reported.values(), key=lambda entry: (entry["first_seen"], entry["id"])):
+        if session["id"] in registered or session["name"] in successors:
+            continue
+        label = f"Session {session['id']} ({session['name']})"
+        writer = next((by_word[word] for word in session["name"].split() if word in by_word), None)
+        if writer is None:
+            flags.append(flag("orphan_session", f"{label} has no registered writer or Captain",
+                              "A Captain archives it if its work is done or abandoned, or stops it and "
+                              "reports it to the owner", at(session["first_seen"]),
+                              captain_id=session["captain_id"]))
+        elif writer["session_id"] is not None or writer["nonce"] not in session["name"].split():
+            flags.append(flag(
+                "duplicate_writer",
+                f"{label} carries item {writer['item_id']}, whose writer is {writer['session_id'] or writer['nonce']}",
+                "A Captain stops and archives the unregistered session", at(session["first_seen"]),
+                item_id=writer["item_id"], execution_id=writer["execution_id"], captain_id=session["captain_id"]))
+        if len(flags) >= DERIVED_LIMIT:
+            break
+    return flags
+
+
 # Each function is fn(db, now) -> list of flags in the GET /v1/flags shape.
-DERIVED = (captain_stale, no_live_captain, captain_idle_with_work, writer_flags, *reconciliation.DERIVED_FLAGS)
+DERIVED = (captain_stale, no_live_captain, captain_idle_with_work, writer_flags, session_flags,
+           *reconciliation.DERIVED_FLAGS)
 
 
 def raise_flag(db, payload):
