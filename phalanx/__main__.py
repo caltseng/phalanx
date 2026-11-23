@@ -13,6 +13,7 @@ from .captain_loop import add_captain_command, run_captain
 from .captain_relay import add_relay_command, run_relay
 from .github import GitHubError
 from .issue_intake import ingest_issue
+from .reconciler import ReconcilerError, add_reconcile_command, run_reconcile
 from .workspaces import WorkspaceError
 from .work_cli import add_work_command, run_work
 
@@ -81,6 +82,7 @@ def main() -> None:
     add_captain_command(commands)
     add_relay_command(commands)
     add_work_command(commands)
+    add_reconcile_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "server":
@@ -97,6 +99,9 @@ def main() -> None:
             run_relay(args)
         elif args.command == "work":
             run_work(args)
+        elif args.command == "reconcile":
+            if run_reconcile(args):
+                parser.exit(1)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
@@ -129,7 +134,8 @@ def main() -> None:
         else:
             result = api_request(args.api_url, f"/v1/items/{quote(args.item_id, safe='')}")
             print(json.dumps(result, indent=2))
-    except (OSError, ValueError, sqlite3.Error, RunnerError, WorkspaceError, GitHubError) as error:
+    except (OSError, ValueError, sqlite3.Error, RunnerError, WorkspaceError, GitHubError,
+            ReconcilerError) as error:
         parser.exit(1, f"phalanx: {error}\n")
 
 

@@ -11,6 +11,7 @@ from .dispatch_schema import ADOPTION_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEM
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
 from .operator_schema import BLOCKER_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
+from .reconciliation_schema import RECONCILIATION_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
 
@@ -106,6 +107,7 @@ MIGRATIONS = (
     REVISION_MIGRATION,
     BLOCKER_SCHEMA,
     DIRECT_SCHEMA,
+    RECONCILIATION_SCHEMA,
 )
 
 

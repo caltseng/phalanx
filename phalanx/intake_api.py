@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import dispatch, finalization, intake, pr_models, pr_observations, waits
+from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
 from .auth import authenticate, require_owner, require_runner, require_worker
 from .store import read_transaction, write_transaction
 from .transitions import Stage
@@ -233,6 +233,26 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
             body: Versioned, key: RequiredKey):
     return run(request, waits.recheck, item_id, execution_id, body, write=True,
                scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/github-observation",
+             dependencies=[Depends(require_runner)])
+def github_observation(request: Request, item_id: Identifier, execution_id: Identifier,
+                       body: reconciliation.Observation):
+    """Record what the reconciler saw on GitHub; no lease, and the execution's version is unchanged."""
+    return run(request, reconciliation.record, item_id, execution_id, body, write=True)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/local-checks", dependencies=[Depends(require_runner)])
+def local_checks(request: Request, item_id: Identifier, execution_id: Identifier,
+                 body: reconciliation.LocalChecks):
+    """Record trusted pre-PR check results for an observed PR head; a flag, never a gate."""
+    return run(request, reconciliation.record_local_checks, item_id, execution_id, body, write=True)
+
+
+@router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
+def reconciler_heartbeat(request: Request, runner_id: Identifier):
+    return run(request, reconciliation.heartbeat, runner_id, write=True)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",

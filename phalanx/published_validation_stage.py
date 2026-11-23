@@ -10,13 +10,14 @@ from pydantic import TypeAdapter, ValidationError
 
 from .draft_stage import RunnerAPI
 from .github import GitHubClient, GitHubError
-from .github_checks import PreviewReader, collect_github_checks
+from .github_checks import collect_github_checks
 from .intake_models import Identifier
 from .pr_models import (
     ExpectedRefs, GateObservation, GitHubPull, PublishedValidationClaimCheck, Rework, Validation,
 )
 from .transitions import Outcome, Stage
-from .validation import GateState, Phase, RequiredCheck
+from .validation import GateState, Phase
+from .validation_policy import PublishedValidationPolicy
 
 _IDENTIFIER = TypeAdapter(Identifier)
 
@@ -31,17 +32,6 @@ class PublishedValidationAssignment:
     lease: str = field(repr=False)
     # Optional next-stage offer headers for the attempt-ending submission.
     offer: dict = field(default_factory=dict, repr=False)
-
-
-@dataclass(frozen=True)
-class PublishedValidationPolicy:
-    """Complete ready-phase policy from trusted runner configuration."""
-
-    required: tuple[RequiredCheck, ...] | None
-    read_preview: PreviewReader | None = None
-    # Pending ready checks; None leaves the server defaults.
-    recheck_seconds: int | None = None
-    wait_limit_seconds: int | None = None
 
 
 class PublishedValidationRunner:

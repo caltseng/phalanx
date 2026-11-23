@@ -146,7 +146,8 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | `no_progress` | No progress post or stage advance for 2 h while `busy` | Captain checks the session, then nudges or replaces it |
 | `writer_stopped` | Writer reported `stopped`/`error` without a result | Captain resumes the same session or replaces the writer |
 | `head_drift`, `checks_failed`, `review_feedback`, `pr_closed` | From GitHub reconciliation | The writer acts, or the Captain relaunches |
-| `reconciler_stale` | No reconciler heartbeat for 15 min | Captain restarts it, or reports it to the owner |
+| `reconciler_stale` | A reconciler has sent no heartbeat for 15 min (one flag per reconciler) | Captain restarts it, or reports it to the owner |
+| `observation_stale` | An open item's latest GitHub observation is over 15 min old | Captain checks the reconciler's pass log for that item's error |
 
 ## Failure and recovery
 
