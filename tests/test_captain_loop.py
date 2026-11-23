@@ -1041,6 +1041,37 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
                          "queued")
 
+    def test_startup_rechecks_saved_owner_wait_once(self):
+        self.config["capacity"] = 1
+        database = self.directory / "startup-recheck.sqlite3"
+        self.start_server(database)
+        self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
+        _, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write a report", "target": "report",
+        })
+        self.api = RunnerAPI(self.url, RUNNER)
+        runner = AttendedRunner(self.root, self.config, self.api)
+        runner.prepare()
+        snapshot = runner._snapshot()
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("UPDATE attempts SET lease_expires_at=0 WHERE id=?",
+                       (snapshot["claim"]["attempt_id"],))
+        expired = {row["attempt_id"]: row for row in self.api.call("/dispatch/runners/desk/recovery")}
+        running = self.loop()
+        running.expired = expired
+        exhausted = {"status": "owner_wait", "reason": "Exhausted", "checked_at": 0, "failures": 4}
+        runner._transaction(lambda record, db: record.update(lease_expires_at=0, recovery=exhausted))
+        # A loop already running keeps the exhausted wait bounded.
+        self.assertEqual(running._advance(1, runner._snapshot(), None)["status"], "owner_wait")
+        self.assertTrue(runner._snapshot())
+        restarted = self.loop()
+        restarted.expired = expired
+        self.assertEqual(restarted._advance(1, runner._snapshot(), None)["status"], "recovered")
+        self.assertFalse(restarted.startup_rechecks)
+        self.assertFalse(runner._snapshot())
+        self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "queued")
+
     def test_restart_adopts_expired_attempt_before_and_after_receipt_without_redraft(self):
         for before_receipt in (True, False):
             with self.subTest(before_receipt=before_receipt):

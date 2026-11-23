@@ -76,6 +76,10 @@ class CaptainLoop:
         self.blocked: dict[int, str] = {}
         self.closed = False
         self._bind_identity()
+        # Recheck each saved owner wait once per start, so a runner code fix
+        # can clear it without a manual recheck. Later attempts stay bounded.
+        self.startup_rechecks = {slot for slot, record in self._records().items()
+                                 if record.get("recovery", {}).get("status") == "owner_wait"}
 
     def _runner(self, slot):
         return AttendedRunner(self.root, self.config, self.api, slot=slot)
@@ -420,12 +424,15 @@ class CaptainLoop:
                         "unchanged": True}
             if observation is not None and "packet" in snapshot:
                 self._check_observation(runner, snapshot, observation)
-            return run_recovery(
+            result = run_recovery(
                 self.root, self.config["runner_id"], self.api, RecoveryJournal(self.root, slot),
                 observations=observation.threads if observation else (),
                 discovery_complete=observation.discovery_complete if observation else False,
+                recheck=slot in self.startup_rechecks,
                 no_launch_proof=unlaunched_proof(runner, snapshot) if unlaunched else None,
             )
+            self.startup_rechecks.discard(slot)
+            return result
         if "packet" not in snapshot or unlaunched:
             return self._prepare(slot, discovery)
         if observation is None:
