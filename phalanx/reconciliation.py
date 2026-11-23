@@ -40,7 +40,7 @@ class ObservedPull(Payload):
 
 
 class LocalChecks(Payload):
-    """Trusted runner-local checks on one PR head. Empty failures means they passed."""
+    """Trusted runner-local checks on one observed PR head. Empty failures means they passed."""
 
     head: SHA
     failures: list[Reason] = Field(default_factory=list, max_length=50)
@@ -52,26 +52,28 @@ class Observation(Payload):
     checks: GateState | None = None
     check_reasons: list[Reason] = Field(default_factory=list, max_length=20)
     feedback: list[Reason] = Field(default_factory=list, max_length=50)
-    local_checks: LocalChecks | None = None
     # The item branch is reachable from its base, yet no PR exists.
     merged_branch: bool = False
 
     @model_validator(mode="after")
     def consistent(self):
-        if self.pr is None and (self.checks or self.check_reasons or self.feedback or self.local_checks):
-            raise ValueError("Checks, feedback and local checks describe a PR")
+        if self.pr is None and (self.checks or self.check_reasons or self.feedback):
+            raise ValueError("Checks and feedback describe a PR")
         if self.pr is not None and self.merged_branch:
             raise ValueError("merged_branch describes an item branch with no PR")
-        if self.local_checks is not None and self.local_checks.head != self.pr.head_sha:
-            raise ValueError("Local checks must describe the observed PR head")
         return self
 
 
-def record(db, item_id, execution_id, body: Observation):
+def _open_execution(db, item_id, execution_id):
     row = intake.execution_row(db, item_id, execution_id)
-    state = json.loads(row["state_json"])
-    if state["final_output"] is not None:
+    if json.loads(row["state_json"])["final_output"] is not None:
         raise intake.Conflict("Execution is closed")
+    return row
+
+
+def record(db, item_id, execution_id, body: Observation):
+    row = _open_execution(db, item_id, execution_id)
+    state = json.loads(row["state_json"])
     observed_at = body.observed_at.astimezone(UTC)
     if observed_at > datetime.now(UTC) + CLOCK_SKEW:
         raise intake.Conflict("observed_at is in the future")
@@ -104,11 +106,22 @@ def record(db, item_id, execution_id, body: Observation):
         db.execute("INSERT INTO github_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                    (*key, row["version"], stamp, stamp, intake.encode(payload)))
     checked = head and db.execute(
-        """SELECT 1 FROM github_observations WHERE execution_id=? AND head_sha=?
-           AND json_extract(observation_json, '$.local_checks.head') = ? LIMIT 1""",
-        (execution_id, head, head),
+        "SELECT 1 FROM local_check_results WHERE execution_id=? AND head_sha=?", (execution_id, head),
     ).fetchone()
     return {"recorded": seen is None, "local_checks_recorded": bool(checked)}
+
+
+def record_local_checks(db, item_id, execution_id, body: LocalChecks):
+    """Keep the first result for an observed head; it never re-asserts the PR snapshot."""
+    row = _open_execution(db, item_id, execution_id)
+    if db.execute("SELECT 1 FROM github_observations WHERE execution_id=? AND head_sha=? LIMIT 1",
+                  (execution_id, body.head)).fetchone() is None:
+        raise intake.Conflict("Observe the PR head before reporting its local checks")
+    recorded = db.execute(
+        "INSERT INTO local_check_results VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING RETURNING 1",
+        (execution_id, body.head, row["version"], intake.timestamp(), intake.encode(body.failures)),
+    ).fetchone()
+    return {"recorded": recorded is not None}
 
 
 def heartbeat(db, runner_id):
@@ -126,7 +139,11 @@ def _flag(kind, row, reason, recovery, first_seen, notify_owner=False):
 
 
 def observation_flags(db, now):
-    """Flag the latest observation of each open execution, so flags clear when GitHub does."""
+    """Flag the latest observation of each open execution, so flags clear when GitHub does.
+
+    An observation older than RECONCILER_STALE may no longer hold, so its flags say when it
+    was seen and an observation_stale flag asks for the reconciler's error on that item.
+    """
     flags = []
     for row in db.execute(
         f"""WITH latest AS (
@@ -137,66 +154,80 @@ def observation_flags(db, now):
                 JOIN executions AS execution ON execution.id = observation.execution_id
                 WHERE {OPEN}
             )
-            SELECT latest.*, (
-                SELECT checked.observation_json FROM github_observations AS checked
-                WHERE checked.execution_id = latest.execution_id AND checked.head_sha = latest.head_sha
-                  AND latest.head_sha <> ''
-                  AND json_extract(checked.observation_json, '$.local_checks.head') = latest.head_sha
-                ORDER BY checked.last_observed_at DESC LIMIT 1
-            ) AS checked_json
-            FROM latest WHERE rank = 1 ORDER BY execution_id"""
+            SELECT latest.*, checked.checked_at, checked.failures_json
+            FROM latest
+            LEFT JOIN local_check_results AS checked
+                ON checked.execution_id = latest.execution_id AND checked.head_sha = latest.head_sha
+            WHERE rank = 1 ORDER BY latest.execution_id"""
     ):
-        seen = row["observed_at"]
-        observation = json.loads(row["observation_json"])
-        pull = observation["pr"]
-        if pull is None:
-            if observation["merged_branch"]:
-                flags.append(_flag(
-                    "unpublished_branch_merged", row,
-                    f"{item_branch(row['item_id'])} is reachable from its base, but no PR exists",
-                    "A Captain confirms the work landed and closes the item, or reopens it", seen,
-                ))
-            continue
-        url = pull["url"]
-        candidate = json.loads(row["state_json"]).get("candidate")
-        if candidate and pull["head_sha"] != candidate:
-            flags.append(_flag(
-                "head_drift", row,
-                f"{url} head {pull['head_sha']} differs from the recorded candidate {candidate}",
-                "Informational: the writer records the new head with its next result", seen,
+        found = _observed(row, json.loads(row["observation_json"]))
+        last = datetime.fromisoformat(row["last_observed_at"])
+        if now - last >= RECONCILER_STALE:
+            for flag in found:
+                flag["reason"] += f" (last observed {row['last_observed_at']})"
+            found.insert(0, _flag(
+                "observation_stale", row, f"GitHub was last observed for this item at {row['last_observed_at']}",
+                "A Captain checks the reconciler's pass log for this item's error and repairs it",
+                (last + RECONCILER_STALE).isoformat(timespec="microseconds"),
             ))
-        if pull["state"] == "closed" and not pull["merged"]:
-            flags.append(_flag("pr_closed", row, f"{url} was closed without merging",
-                               "A Captain asks the owner whether to reopen it; never open a replacement",
-                               seen))
-        if pull["state"] == "open" and pull["mergeable"] is False:
-            flags.append(_flag("merge_conflict", row, f"{url} conflicts with {pull['base_ref']}",
-                               WRITER_RECOVERY, seen))
-        if observation["checks"] == GateState.FAILED:
-            reasons = "; ".join(observation["check_reasons"]) or "required checks failed"
-            flags.append(_flag("checks_failed", row, f"{url}: {reasons}", WRITER_RECOVERY, seen))
-        if observation["feedback"]:
-            count = len(observation["feedback"])
-            flags.append(_flag("review_feedback", row,
-                               f"{url} has {count} unresolved review item{'s' if count != 1 else ''}",
-                               WRITER_RECOVERY, seen))
-        if row["checked_json"]:
-            failures = json.loads(row["checked_json"])["local_checks"]["failures"]
-            if failures:
-                flags.append(_flag("pre_pr_checks_failed", row,
-                                   f"Local checks failed on {pull['head_sha']}: " + "; ".join(
-                                       failure.splitlines()[0] for failure in failures),
-                                   WRITER_RECOVERY, seen))
+        flags += found
+    return flags
+
+
+def _observed(row, observation):
+    seen, pull, flags = row["observed_at"], observation["pr"], []
+    if pull is None:
+        if observation["merged_branch"]:
+            flags.append(_flag(
+                "unpublished_branch_merged", row,
+                f"{item_branch(row['item_id'])} is reachable from its base, but no PR exists",
+                "A Captain confirms the work landed and closes the item, or reopens it", seen,
+            ))
+        return flags
+    url = pull["url"]
+    candidate = json.loads(row["state_json"]).get("candidate")
+    if candidate and pull["head_sha"] != candidate:
+        flags.append(_flag(
+            "head_drift", row,
+            f"{url} head {pull['head_sha']} differs from the recorded candidate {candidate}",
+            "Informational: the writer records the new head with its next result", seen,
+        ))
+    if pull["state"] == "closed" and not pull["merged"]:
+        flags.append(_flag("pr_closed", row, f"{url} was closed without merging",
+                           "A Captain asks the owner whether to reopen it; never open a replacement", seen))
+    if pull["state"] == "open" and pull["mergeable"] is False:
+        flags.append(_flag("merge_conflict", row, f"{url} conflicts with {pull['base_ref']}",
+                           WRITER_RECOVERY, seen))
+    if observation["checks"] == GateState.FAILED:
+        reasons = "; ".join(observation["check_reasons"]) or "required checks failed"
+        flags.append(_flag("checks_failed", row, f"{url}: {reasons}", WRITER_RECOVERY, seen))
+    if observation["feedback"]:
+        count = len(observation["feedback"])
+        flags.append(_flag("review_feedback", row,
+                           f"{url} has {count} unresolved review item{'s' if count != 1 else ''}",
+                           WRITER_RECOVERY, seen))
+    failures = json.loads(row["failures_json"] or "[]")
+    if failures:
+        flags.append(_flag("pre_pr_checks_failed", row,
+                           f"Local checks failed on {pull['head_sha']}: " + "; ".join(
+                               failure.splitlines()[0] for failure in failures),
+                           WRITER_RECOVERY, row["checked_at"]))
     return flags
 
 
 def reconciler_stale(db, now):
-    last_seen, = db.execute("SELECT max(last_seen) FROM reconciler_heartbeats").fetchone()
-    if last_seen is None or now - datetime.fromisoformat(last_seen) < RECONCILER_STALE:
-        return []
-    stale = (datetime.fromisoformat(last_seen) + RECONCILER_STALE).isoformat(timespec="microseconds")
-    return [_flag("reconciler_stale", None, f"No reconciler heartbeat since {last_seen}",
-                  "A Captain restarts the reconciler, or reports it to the owner", stale)]
+    """Flag each reconciler that has gone quiet, so a live one can't hide a dead one."""
+    flags = []
+    for runner_id, last_seen in db.execute(
+            "SELECT runner_id, last_seen FROM reconciler_heartbeats ORDER BY runner_id"):
+        seen = datetime.fromisoformat(last_seen)
+        if now - seen >= RECONCILER_STALE:
+            flags.append(_flag(
+                "reconciler_stale", None, f"Reconciler {runner_id} has sent no heartbeat since {last_seen}",
+                f"A Captain restarts reconciler {runner_id}, or reports it to the owner",
+                (seen + RECONCILER_STALE).isoformat(timespec="microseconds"),
+            ))
+    return flags
 
 
 DERIVED_FLAGS = (observation_flags, reconciler_stale)

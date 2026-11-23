@@ -243,6 +243,13 @@ def github_observation(request: Request, item_id: Identifier, execution_id: Iden
     return run(request, reconciliation.record, item_id, execution_id, body, write=True)
 
 
+@router.post("/items/{item_id}/executions/{execution_id}/local-checks", dependencies=[Depends(require_runner)])
+def local_checks(request: Request, item_id: Identifier, execution_id: Identifier,
+                 body: reconciliation.LocalChecks):
+    """Record trusted pre-PR check results for an observed PR head; a flag, never a gate."""
+    return run(request, reconciliation.record_local_checks, item_id, execution_id, body, write=True)
+
+
 @router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
 def reconciler_heartbeat(request: Request, runner_id: Identifier):
     return run(request, reconciliation.heartbeat, runner_id, write=True)

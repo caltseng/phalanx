@@ -504,8 +504,12 @@ runner configuration maps, and posts timestamped observations through the API.
 It holds no lease or slot, never changes an item's state and never blocks work.
 The server derives flags from the latest observation of each open execution:
 `head_drift`, `pr_closed`, `merge_conflict`, `checks_failed`, `review_feedback`,
-`unpublished_branch_merged` (item branch reachable from its base with no PR),
-`pre_pr_checks_failed` and `reconciler_stale` (no heartbeat for 15 minutes).
+`unpublished_branch_merged` (item branch reachable from its base with no PR)
+and `pre_pr_checks_failed`. An observation older than 15 minutes keeps its
+flags, marked with when it was seen, and adds `observation_stale`. Each
+reconciler with no heartbeat for 15 minutes raises its own `reconciler_stale`.
+An incomplete GitHub read posts nothing, so earlier flags stand, and backs that
+repository off until a later pass.
 
 ```powershell
 python -m phalanx reconcile --config runner.json --state C:\phalanx-reconciler
@@ -516,7 +520,10 @@ runner configuration's `base_url`, `runner_id`, `repositories` (checkout and
 `base_branch`), optional `validation_policy` and optional `notify_command`.
 With a validation policy, it reports each open PR's configured GitHub checks
 and runs the trusted local checks once per PR head, one at a time, in a scratch
-worktree under `--state`. Failures raise a flag; they never gate the item. A
+worktree under `--state`, heartbeating while they run. Results go to their own
+`local-checks` route, so they never re-assert an older PR snapshot. Failures
+raise a flag; they never gate the item. Only one reconciler can use a `--state`
+directory at a time. A
 checkout whose configured `origin` URL isn't the registered remote is refused.
 Owner-notify flags are sent once each to `notify_command`. Each pass prints one
 JSON line; `--once` runs a single pass and exits nonzero on any error.

@@ -1,16 +1,23 @@
 from datetime import UTC, datetime, timedelta
+from http.client import IncompleteRead, RemoteDisconnected
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from threading import Event
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from phalanx.github import GitHubError, PullRequest
-from phalanx.reconciler import Reconciler
+from phalanx.github_checks import CheckCollection
+from phalanx.reconciler import API, Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
+from phalanx.validation import GateResult, GateState
+from phalanx.workspaces import any_file_lock
 from phalanx.store import migrate, read_transaction, write_transaction
 from phalanx.transitions import item_branch
 
@@ -31,9 +38,13 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         return {"number": 7, "state": "open", "merged": False, "draft": False, "head_ref": self.head_ref,
                 "head_sha": HEAD, "base_ref": "main", "base_sha": BASE, **fields}
 
-    def flags(self):
+    def flags(self, minute=10):
         with read_transaction(self.path) as db:
-            return {flag["kind"]: flag for flag in observation_flags(db, datetime.now(UTC))}
+            return {flag["kind"]: flag
+                    for flag in observation_flags(db, self.start + timedelta(minutes=minute))}
+
+    def stamp(self, minute):
+        return (self.start + timedelta(minutes=minute)).isoformat(timespec="microseconds")
 
     def test_records_each_fact_once_and_shows_it_in_the_timelines(self):
         body = self.body(1, pr=self.pull())
@@ -46,45 +57,68 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
             (self.body(3, pr=self.pull(head_ref="feature")), 409),
             (self.body(120, pr=self.pull()), 409),
             (self.body(3, pr=self.pull(), merged_branch=True), 422),
-            (self.body(3, pr=self.pull(), local_checks={"head": OTHER, "failures": []}), 422),
             (self.body(3, feedback=["review"]), 422),
         ):
             self.assertEqual(self.request(self.post, RUNNER, invalid)[0], status, invalid)
-        checked = self.body(4, pr=self.pull(), local_checks={"head": HEAD, "failures": []})
-        self.assertEqual(self.request(self.post, RUNNER, checked)[1],
-                         {"recorded": True, "local_checks_recorded": True})
+        checks = f"{self.execution}/local-checks"
+        self.assertEqual(self.request(checks, OWNER, {"head": HEAD})[0], 403)
+        self.assertEqual(self.request(checks, RUNNER, {"head": OTHER})[0], 409)
+        self.assertEqual(self.request(checks, RUNNER, {"head": HEAD}), (200, {"recorded": True}))
+        self.assertEqual(self.request(checks, RUNNER, {"head": HEAD, "failures": ["late"]}),
+                         (200, {"recorded": False}))
+        self.assertTrue(self.request(self.post, RUNNER, repeat)[1]["local_checks_recorded"])
 
         status, events = self.request(f"{self.execution}/timeline", RUNNER)
         self.assertEqual(status, 200)
         observed = [event for event in events if event["event"] == "github_observation"]
         self.assertEqual([event["details"]["pr"]["url"] for event in observed],
-                         ["https://github.com/Example/Repo/pull/7"] * 2)
+                         ["https://github.com/Example/Repo/pull/7"])
+        checked, = [event for event in events if event["event"] == "local_checks"]
+        self.assertEqual(checked["details"], {"head": HEAD, "failures": []})
         self.assertEqual(observed[0]["details"]["last_observed_at"], datetime.fromisoformat(
             repeat["observed_at"]).isoformat(timespec="microseconds"))
         execution_id = self.execution.rsplit("/", 1)[1]
         status, page = self.request(f"/v1/operator/executions/{execution_id}/timeline", OWNER)
         self.assertEqual(status, 200)
-        self.assertIn(f"Observed https://github.com/Example/Repo/pull/7 open at {HEAD}",
-                      [event["reason"] for event in page["events"]])
+        reasons = [event["reason"] for event in page["events"]]
+        self.assertIn(f"Observed https://github.com/Example/Repo/pull/7 open at {HEAD}", reasons)
+        self.assertIn(f"Local checks passed on {HEAD}", reasons)
 
     def test_flags_follow_the_latest_observation(self):
         drifted = self.pull(head_sha=OTHER, mergeable=False)
         self.request(self.post, RUNNER, self.body(
             1, pr=drifted, checks="failed", check_reasons=["build failed"], feedback=["alice: fix"]))
         self.assertEqual(set(self.flags()), {"head_drift", "merge_conflict", "checks_failed", "review_feedback"})
-        self.request(self.post, RUNNER, self.body(
-            2, pr=drifted, local_checks={"head": OTHER, "failures": ["lint: Exited with status 1\n\ntail"]}))
+        self.request(f"{self.execution}/local-checks", RUNNER,
+                     {"head": OTHER, "failures": ["lint: Exited with status 1\n\ntail"]})
         flags = self.flags()
         self.assertEqual(flags["pre_pr_checks_failed"]["reason"],
                          f"Local checks failed on {OTHER}: lint: Exited with status 1")
-        self.assertEqual(flags["pre_pr_checks_failed"]["first_seen"],
-                         (self.start + timedelta(minutes=2)).isoformat(timespec="microseconds"))
+        with read_transaction(self.path) as db:
+            checked_at, = db.execute("SELECT checked_at FROM local_check_results").fetchone()
+        self.assertEqual(flags["pre_pr_checks_failed"]["first_seen"], checked_at)
         self.request(self.post, RUNNER, self.body(3, pr=self.pull(state="closed")))
         self.assertEqual(set(self.flags()), {"pr_closed"})
         self.request(self.post, RUNNER, self.body(4, pr=self.pull(state="closed", merged=True)))
         self.assertEqual(self.flags(), {})
         self.request(self.post, RUNNER, self.body(5, merged_branch=True))
         self.assertEqual(set(self.flags()), {"unpublished_branch_merged"})
+
+    def test_late_local_checks_never_revive_an_older_snapshot(self):
+        self.request(self.post, RUNNER, self.body(1, pr=self.pull(head_sha=OTHER, mergeable=False)))
+        self.request(self.post, RUNNER, self.body(2, pr=self.pull(state="closed")))
+        self.request(f"{self.execution}/local-checks", RUNNER, {"head": OTHER, "failures": ["lint: failed"]})
+        self.assertEqual(set(self.flags()), {"pr_closed"})
+
+    def test_an_old_observation_is_flagged_stale(self):
+        self.request(self.post, RUNNER, self.body(1, pr=self.pull(mergeable=False)))
+        self.assertEqual(set(self.flags(15)), {"merge_conflict"})
+        flags = self.flags(16)
+        self.assertEqual(set(flags), {"merge_conflict", "observation_stale"})
+        self.assertTrue(flags["merge_conflict"]["reason"].endswith(f"(last observed {self.stamp(1)})"))
+        self.assertEqual(flags["observation_stale"]["first_seen"], self.stamp(16))
+        self.request(self.post, RUNNER, self.body(20, pr=self.pull(mergeable=False)))
+        self.assertEqual(set(self.flags(21)), {"merge_conflict"})
 
     def test_heartbeat_is_runner_only(self):
         self.assertEqual(self.request("/v1/reconcilers/local/heartbeat", OWNER, {})[0], 403)
@@ -93,17 +127,30 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
 
 
 class ReconcilerStaleTest(unittest.TestCase):
-    def test_flags_only_after_a_heartbeat_goes_quiet(self):
+    def test_flags_each_reconciler_that_goes_quiet(self):
         with TemporaryDirectory() as root:
             path = Path(root) / "queue.sqlite3"
             migrate(path)
             with write_transaction(path) as db:
                 self.assertEqual(reconciler_stale(db, datetime.now(UTC)), [])
-                seen = datetime.fromisoformat(heartbeat(db, "local")["last_seen"])
+                seen = datetime.fromisoformat(heartbeat(db, "dead")["last_seen"])
                 self.assertEqual(reconciler_stale(db, seen + timedelta(minutes=14)), [])
-                flag, = reconciler_stale(db, seen + timedelta(minutes=16))
+                later = seen + timedelta(minutes=16)
+                db.execute("INSERT INTO reconciler_heartbeats VALUES ('live', ?)",
+                           (later.isoformat(timespec="microseconds"),))
+                flag, = reconciler_stale(db, later)
         self.assertEqual((flag["kind"], flag["first_seen"]),
                          ("reconciler_stale", (seen + timedelta(minutes=15)).isoformat(timespec="microseconds")))
+        self.assertIn("Reconciler dead ", flag["reason"])
+
+
+class APITest(unittest.TestCase):
+    def test_a_dropped_connection_is_a_reconciler_error(self):
+        api = API("http://localhost:1", "token")
+        for error in (ConnectionResetError("reset"), RemoteDisconnected("closed"), IncompleteRead(b"")):
+            with self.subTest(error=error), patch.object(api.opener, "open", side_effect=error), \
+                    self.assertRaisesRegex(ReconcilerError, "Phalanx API unavailable"):
+                api.call("/flags")
 
 
 def git(path, *args):
@@ -125,6 +172,7 @@ class FakeAPI:
         self.calls = []
         self.flags = []
         self.checked = False
+        self.local_checks = []
 
     def call(self, path, body=None):
         self.calls.append(path)
@@ -139,13 +187,17 @@ class FakeAPI:
         if path.endswith("/github-observation"):
             self.posts.append((path.split("/")[2], body))
             return {"recorded": True, "local_checks_recorded": self.checked}
+        if path.endswith("/local-checks"):
+            self.local_checks.append(body)
+            return {"recorded": True}
         return {"target": "ready_for_check_in", "target_branch": None}
 
 
 class FakeGitHub:
-    def __init__(self, pulls=(), error=None):
+    def __init__(self, pulls=(), error=None, feedback_error=None):
         self.pulls = pulls
         self.error = error
+        self.feedback_error = feedback_error
 
     def get_pull_request(self, number):
         if self.error:
@@ -156,6 +208,8 @@ class FakeGitHub:
         return tuple(pull for pull in self.pulls if pull.head_ref == head)
 
     def get_actionable_feedback(self, number):
+        if self.feedback_error:
+            raise self.feedback_error
         return (("THREAD", "alice on app.py: rename this"),)
 
 
@@ -225,6 +279,37 @@ class ReconcilerPassTest(unittest.TestCase):
         self.now += 61
         self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
 
+    def test_an_incomplete_github_read_posts_nothing_and_backs_off(self):
+        self.config["repositories"] = {"repo": {}}
+        self.config["validation_policy"] = "policy.json"
+        primary = "https://github.com/example/repo/pull/7"
+        api = FakeAPI([execution("one", primary=primary), execution("two", primary=primary)],
+                      {"repo": "https://github.com/example/repo"})
+        policy = SimpleNamespace(draft_checks=("ci",), local_checks=())
+        retry = CheckCollection(GateResult(GateState.BLOCKED, ("rate limited",)), retry_after_seconds=30)
+        for collected, github in (
+            (retry, FakeGitHub([pull_request(HEAD, "branch", draft=True)])),
+            (CheckCollection(GateResult(GateState.SATISFIED, ())), FakeGitHub(
+                [pull_request(HEAD, "branch", draft=True)], feedback_error=GitHubError("graphql", "errors"))),
+        ):
+            self.github["repo"] = github
+            reconciler = self.reconciler(api)
+            with self.subTest(collected=collected), patch.object(Reconciler, "policy", return_value=policy), \
+                    patch("phalanx.reconciler.collect_github_checks", return_value=collected):
+                api.calls.clear()
+                self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
+                self.assertEqual(api.posts, [])
+                self.assertNotIn("/items/two", api.calls)
+                self.assertGreater(reconciler.backoff["repo"], self.now)
+
+    def test_a_second_reconciler_cannot_share_the_state_directory(self):
+        state = self.root / "state"
+        state.mkdir()
+        with any_file_lock([state / "reconciler.lock"]):
+            with self.assertRaisesRegex(ReconcilerError, "Another reconciler"):
+                self.reconciler(FakeAPI([], {})).run(Event(), once=True)
+        self.assertEqual(self.reconciler(FakeAPI([], {})).run(Event(), once=True)["errors"], [])
+
     def test_the_owner_hears_about_each_flag_once(self):
         api = FakeAPI([], {})
         flag = {"kind": "no_live_captain", "item_id": "", "execution_id": "", "captain_id": "",
@@ -252,8 +337,8 @@ class ReconcilerPassTest(unittest.TestCase):
                       {"repo": "git@github.com:Example/Repo.git"})
         result = self.reconciler(api).run_pass()
         self.assertEqual(result["errors"], [])
-        self.assertEqual([(item, body["merged_branch"]) for item, body in api.posts],
-                         [(merged, True), (ahead, False)])
+        self.assertEqual([(item, body.get("merged_branch", False), "pr" in body) for item, body in api.posts],
+                         [(merged, True, False), (ahead, False, False), (missing, False, False)])
 
     def test_a_checkout_of_another_repository_is_refused(self):
         checkout, _ = self.repository({})
@@ -270,7 +355,7 @@ class ReconcilerPassTest(unittest.TestCase):
         policy = self.root / "policy.json"
         policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
             "local_checks": [
-                {"name": "pass", "argv": [sys.executable, "-c", "pass"]},
+                {"name": "slow", "argv": [sys.executable, "-c", "import time; time.sleep(1)"]},
                 {"name": "fail", "argv": [sys.executable, "-c", "import sys; print('broken'); sys.exit(3)"]},
                 {"name": "skipped", "allow_skip": True,
                  "bypass": {"outcome": "skipped", "reason": "slow", "authorization": "owner"}},
@@ -281,11 +366,15 @@ class ReconcilerPassTest(unittest.TestCase):
         self.github["repo"] = FakeGitHub([pull_request(heads[branch], branch, draft=True)])
         api = FakeAPI([execution("one")], {"repo": "https://github.com/example/repo"})
         reconciler = self.reconciler(api)
-        self.assertEqual(reconciler.run_pass()["checked"], 1)
-        (_, observed), (_, checked) = api.posts
-        self.assertNotIn("local_checks", observed)
-        self.assertEqual(checked["local_checks"]["head"], heads[branch])
-        failure, = checked["local_checks"]["failures"]
+        with patch("phalanx.reconciler.HEARTBEAT_SECONDS", 0.1):
+            self.assertEqual(reconciler.run_pass()["checked"], 1)
+        # The pass heartbeats once up front; the rest came while the slow check ran.
+        self.assertGreater(sum(call.endswith("/heartbeat") for call in api.calls), 3)
+        (_, observed), = api.posts
+        self.assertEqual(observed["pr"]["head_sha"], heads[branch])
+        checked, = api.local_checks
+        self.assertEqual(checked["head"], heads[branch])
+        failure, = checked["failures"]
         self.assertTrue(failure.startswith("fail: Exited with status 3"))
         self.assertIn("broken", failure)
         self.assertFalse((self.root / "state" / "checks" / heads[branch][:16]).exists())
@@ -293,7 +382,7 @@ class ReconcilerPassTest(unittest.TestCase):
 
         api.checked = True
         self.assertEqual(reconciler.run_pass()["checked"], 0)
-        self.assertEqual(len(api.posts), 3)
+        self.assertEqual((len(api.posts), len(api.local_checks)), (2, 1))
 
 
 if __name__ == "__main__":

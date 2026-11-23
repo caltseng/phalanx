@@ -69,6 +69,10 @@ def run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str, bool]:
             returncode = None
             reason = (f"Timed out after {check.timeout_seconds} seconds"
                       + (", no failure identified" if timed_out else " with failures"))
+        except BaseException:
+            # An interrupt must not leave the check tree running in a worktree about to be removed.
+            kill_tree(process)
+            raise
         if returncode == 0:
             return PreOutcome.PASSED, "", False
         output.seek(max(0, output.seek(0, os.SEEK_END) - OUTPUT_TAIL_BYTES))

@@ -178,6 +178,14 @@ def timeline(db, item_id, execution_id):
     } for row in db.execute(
         "SELECT * FROM github_observations WHERE execution_id=?", (execution_id,),
     )]
+    events += [{
+        "version": row["version"], "event": "local_checks", "attempt_id": None,
+        "created_at": row["checked_at"],
+        "details": {"head": row["head_sha"], "failures": json.loads(row["failures_json"])},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM local_check_results WHERE execution_id=?", (execution_id,),
+    )]
     return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 

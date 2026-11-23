@@ -206,6 +206,20 @@ class CandidateLocalTest(unittest.TestCase):
             kill_tree(process)
         self.assertIsNotNone(process.returncode)
 
+    def test_an_interrupted_check_stops_its_process_tree(self):
+        real_wait, started = subprocess.Popen.wait, []
+
+        def interrupted(process, timeout=None):
+            if timeout is None:
+                return real_wait(process)
+            started.append(process)
+            raise KeyboardInterrupt
+        with TemporaryDirectory() as path, patch.object(subprocess.Popen, "wait", interrupted), \
+                self.assertRaises(KeyboardInterrupt):
+            run_check(self.command("hangs", "import time; time.sleep(60)"), Path(path))
+        process, = started
+        self.assertIsNotNone(process.returncode)
+
     def test_stopping_claim_blocks_commands(self):
         operation = self.operation("pre_pr_validation")
         self.api.call.return_value = {"execution": {

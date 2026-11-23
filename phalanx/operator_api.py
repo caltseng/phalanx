@@ -319,16 +319,27 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                            'Observed ' || json_extract(observation.observation_json, '$.pr.url')
                                || ' ' || json_extract(observation.observation_json, '$.pr.state')
                                || ' at ' || observation.head_sha,
-                           'Observed the item branch with no PR'), NULL
+                           'Observed no PR for the item branch'), NULL
                 FROM github_observations AS observation
                 JOIN transition_history AS observed
                     ON observed.execution_id = observation.execution_id
                    AND observed.version = observation.version
                 WHERE observation.execution_id = ?
+                UNION ALL
+                SELECT result.version, 'local_checks', result.checked_at, NULL,
+                       json_extract(checked.state_json, '$.stage'),
+                       json_extract(checked.state_json, '$.status'),
+                       NULL, CASE WHEN json_array_length(result.failures_json) = 0
+                                  THEN 'Local checks passed on ' ELSE 'Local checks failed on ' END
+                           || result.head_sha, NULL
+                FROM local_check_results AS result
+                JOIN transition_history AS checked
+                    ON checked.execution_id = result.execution_id AND checked.version = result.version
+                WHERE result.execution_id = ?
             )
             SELECT * FROM events {boundary}
             ORDER BY version DESC, created_at DESC LIMIT ?""",
-            (execution_id, execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),

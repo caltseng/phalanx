@@ -4,7 +4,9 @@ It never changes an execution's state and never blocks work. The server derives
 flags from what it posts. Local check results are reported, never gated on.
 """
 
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
+from http.client import HTTPException
 import json
 import os
 from pathlib import Path
@@ -13,7 +15,7 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.error import HTTPError, URLError
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -24,6 +26,7 @@ from .pr_models import GITHUB_REMOTE
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy
+from .workspaces import WorkspaceError, any_file_lock
 
 PASS_SECONDS = 120
 HEARTBEAT_SECONDS = 60
@@ -72,8 +75,9 @@ class API:
             with error:
                 detail = error.read()[:500].decode("utf-8", errors="replace")
             raise ReconcilerError(f"Phalanx API returned HTTP {error.code} for {path}: {detail}") from None
-        except (URLError, TimeoutError, ValueError) as error:
-            raise ReconcilerError(f"Phalanx API unavailable for {path}: {error}") from None
+        # OSError covers URLError, timeouts and dropped connections while the server restarts.
+        except (OSError, HTTPException, ValueError) as error:
+            raise ReconcilerError(f"Phalanx API unavailable for {path}: {error!r}") from None
 
 
 def git(path, *args, check=True):
@@ -135,11 +139,10 @@ class Reconciler:
             if job is not None:
                 jobs.append(job)
         # Checks run after observing, so a long suite never delays an observation in this pass.
-        for path, body, checkout, checks in jobs:
+        for path, head, checkout, checks in jobs:
             try:
-                failures = self.run_checks(checkout, body["pr"]["head_sha"], checks)
-                self.api.call(path, dict(body, observed_at=datetime.now(UTC).isoformat(), local_checks={
-                    "head": body["pr"]["head_sha"], "failures": failures}))
+                failures = self.run_checks(checkout, head, checks)
+                self.api.call(path, {"head": head, "failures": failures})
             except ReconcilerError as error:
                 errors.append(f"{path}: {error}")
         try:
@@ -153,6 +156,25 @@ class Reconciler:
         if force or self.last_heartbeat is None or now - self.last_heartbeat >= HEARTBEAT_SECONDS:
             self.api.call(f"/reconcilers/{quote(self.config['runner_id'], safe='')}/heartbeat", {})
             self.last_heartbeat = now
+
+    @contextmanager
+    def heartbeating(self):
+        """Keep heartbeating while a long check runs, so the reconciler isn't flagged stale."""
+        stop = threading.Event()
+
+        def beat():
+            while not stop.wait(HEARTBEAT_SECONDS):
+                try:
+                    self.heartbeat(force=True)
+                except ReconcilerError as error:
+                    print(f"reconciler heartbeat failed: {error}", file=sys.stderr, flush=True)
+        thread = threading.Thread(target=beat, name="reconciler-heartbeat", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join()
 
     def open_executions(self):
         cursor = None
@@ -181,14 +203,14 @@ class Reconciler:
         checks = ()
         if pull is None:
             checkout = self.checkout(repo, remote, fetched)
-            if git(checkout, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}",
-                   check=False).returncode:
-                return 0, None
-            base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
-            body["merged_branch"] = git(
-                checkout, "merge-base", "--is-ancestor", f"refs/remotes/origin/{branch}",
-                f"refs/remotes/origin/{base}", check=False,
-            ).returncode == 0
+            # With no remote branch there is nothing to flag, but posting keeps the observation fresh.
+            if not git(checkout, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}",
+                       check=False).returncode:
+                base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
+                body["merged_branch"] = git(
+                    checkout, "merge-base", "--is-ancestor", f"refs/remotes/origin/{branch}",
+                    f"refs/remotes/origin/{base}", check=False,
+                ).returncode == 0
         else:
             body["pr"] = {
                 "number": pull.number, "state": pull.state, "merged": bool(pull.merged), "draft": pull.draft,
@@ -203,18 +225,32 @@ class Reconciler:
                     collected = collect_github_checks(
                         github, pull, Phase.DRAFT if pull.draft else Phase.READY, required,
                         read_preview=None if pull.draft else policy.ready.read_preview)
-                    # A retry means the PR or base moved mid-read; the next pass reads it afresh.
-                    if collected.retry_after_seconds is None:
-                        body["checks"] = collected.gate.state
-                        body["check_reasons"] = [_clip(reason) for reason in collected.gate.reasons[:20]]
+                    # An incomplete read (rate limit, transport error, or the PR moving) posts nothing,
+                    # so the previous observation's checks stand until the repo's backoff ends.
+                    if collected.retry_after_seconds is not None:
+                        raise GitHubError("collect checks", "; ".join(collected.gate.reasons),
+                                          retry_after_seconds=collected.retry_after_seconds)
+                    body["checks"] = collected.gate.state
+                    body["check_reasons"] = [_clip(reason) for reason in collected.gate.reasons[:20]]
                 if policy is not None:
                     checks = tuple(check for check in policy.local_checks or () if check.disposition is None)
-                body["feedback"] = [_clip(text) for _, text in github.get_actionable_feedback(pull.number)[:50]]
-        path = f"/items/{quote(item_id, safe='')}/executions/{quote(execution['id'], safe='')}/github-observation"
-        result = self.api.call(path, body)
+                body["feedback"] = [_clip(text) for _, text in self.feedback(github, pull.number)[:50]]
+        execution_path = f"/items/{quote(item_id, safe='')}/executions/{quote(execution['id'], safe='')}"
+        result = self.api.call(execution_path + "/github-observation", body)
         if not checks or result["local_checks_recorded"]:
             return 1, None
-        return 1, (path, body, self.checkout(repo, remote, fetched), checks)
+        return 1, (execution_path + "/local-checks", pull.head_sha, self.checkout(repo, remote, fetched), checks)
+
+    @staticmethod
+    def feedback(github, number):
+        try:
+            return github.get_actionable_feedback(number)
+        except GitHubError as error:
+            # GraphQL reports rate limits and outages without a retry hint, so back the repo off.
+            if error.status is None or error.status in {403, 429} or error.status >= 500:
+                raise GitHubError("read review feedback", str(error), error.status,
+                                  retry_after_seconds=BACKOFF_SECONDS) from None
+            raise
 
     def policy(self, repo, policies):
         if not self.config.get("validation_policy"):
@@ -254,7 +290,10 @@ class Reconciler:
         """Run trusted checks serially in a scratch worktree of the head. Return the failures."""
         scratch = self.state / "checks" / head[:16]
         self.remove_scratch(checkout, scratch)
-        scratch.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            scratch.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ReconcilerError(f"Cannot create the check scratch directory: {error}") from None
         if git(checkout, "cat-file", "-e", f"{head}^{{commit}}", check=False).returncode:
             git(checkout, "fetch", "--no-tags", "origin", head)
         git(checkout, "worktree", "add", "--detach", str(scratch), head)
@@ -263,7 +302,8 @@ class Reconciler:
             for check in checks:
                 self.heartbeat()
                 try:
-                    outcome, reason, _ = run_check(check, scratch)
+                    with self.heartbeating():
+                        outcome, reason, _ = run_check(check, scratch)
                 except CheckCommandError as error:
                     outcome, reason = PreOutcome.FAILED, str(error)
                 if outcome != PreOutcome.PASSED:
@@ -295,6 +335,18 @@ class Reconciler:
             self.notified.add(key)
 
     def run(self, stop, interval=PASS_SECONDS, once=False):
+        """Run passes while holding the state directory, so no other reconciler removes its scratch."""
+        with ExitStack() as stack:
+            try:
+                self.state.mkdir(parents=True, exist_ok=True)
+                held = stack.enter_context(any_file_lock([self.state / "reconciler.lock"]))
+            except (OSError, WorkspaceError) as error:
+                raise ReconcilerError(f"Cannot lock the reconciler state directory: {error}") from None
+            if held is None:
+                raise ReconcilerError(f"Another reconciler is using {self.state}")
+            return self._run(stop, interval, once)
+
+    def _run(self, stop, interval, once):
         while True:
             try:
                 result = self.run_pass()
