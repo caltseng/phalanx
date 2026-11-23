@@ -17,9 +17,10 @@ from uuid import UUID
 from .attended_drafts import development_checkpoint, github_repository, publish_draft
 from . import report_execution as reports
 from .handoff import WorkerHandoff, WorkPacket
+from . import merge_watch
 from .pr_notes import PRNotes
 from .runner_errors import RunnerError
-from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
+from .workspaces import WorkspaceError, WorkspaceManager, _file_lock, _item_branch
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -253,6 +254,9 @@ class AttendedRunner:
             snapshot = self._transaction(save_claim)
             if not snapshot:
                 return {"status": result["status"], "slot": self.slot, "unverified_mappings": blocked}
+            merge = self._merged_before_admission(snapshot)
+            if merge is not None:
+                return {**merge, "slot": self.slot}
 
         stage = snapshot["claim"]["execution"]["state"]["stage"]
         if runner_stage and stage != runner_stage:
@@ -282,6 +286,34 @@ class AttendedRunner:
 
         self._transaction(commit_launch)
         return {**launch, "slot": self.slot}
+
+    def _merged_before_admission(self, snapshot):
+        """Report a primary PR that already merged instead of starting a stage against it.
+
+        The claim stays journaled with no work started, so the Captain loop
+        confirms the stop with the no-launch proof and frees the slot. An
+        unreadable PR admits the stage; the merge watch keeps checking it.
+        """
+        claim = snapshot["claim"]
+        state = claim["execution"]["state"]
+        token = os.environ.get("PHALANX_GITHUB_TOKEN")
+        if not token or not state.get("primary_pr") or state["stage"] not in merge_watch.WATCHED_STAGES:
+            return None
+        ready = state.get("ready_revision") or {}
+        outcome = merge_watch.observe(token, state["primary_pr"], _item_branch(claim["item_id"]),
+                                      claim["request"].get("target_branch"),
+                                      {head for head in (state.get("candidate"), ready.get("head")) if head})
+        if not merge_watch.merged(outcome):
+            return None
+        try:
+            execution = merge_watch.report(self.api, claim["item_id"], claim["execution"]["id"],
+                                           claim["execution"]["version"], outcome, "admission")
+        except RunnerError as error:
+            if "HTTP 409" not in str(error):
+                raise
+            execution = None
+        return {"status": "merge_observed", "execution": execution,
+                "reason": f"{state['primary_pr']} merged before {state['stage']} started: {outcome.reason}"}
 
     def _run_draft(self, snapshot, token):
         claim = snapshot["claim"]

@@ -422,7 +422,7 @@ def stop_confirmed(db, item_id, execution_id, payload, lease_digest):
 
 
 def confirm_stop(db, row, state, attempt_id, *, details):
-    if state.stopping not in {Status.CANCELLED, Status.FAILED}:
+    if state.stopping is None:
         raise Conflict("No stop request is awaiting worker confirmation")
     request = db.execute(
         "SELECT details_json FROM transition_history WHERE execution_id=? AND version=?",

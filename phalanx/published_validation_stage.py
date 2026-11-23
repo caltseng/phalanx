@@ -97,6 +97,9 @@ class PublishedValidationRunner:
                 return _retry(event, str(error), error.retry_after_seconds)
             return _block(event, f"Restore access to the primary PR. {error}", handoff)
 
+        if pull.merged:
+            # The merge watch and the next stage's admission check reconcile it as one merge.
+            return _retry(event, f"{url} merged; Phalanx reconciles the merge rather than validating it", 30)
         if (
             pull.url.casefold() != url.casefold() or pull.state != "open"
             or pull.merged is not False or pull.draft

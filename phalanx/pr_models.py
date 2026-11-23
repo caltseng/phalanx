@@ -188,7 +188,17 @@ class VerifiedMerge(AttemptEvent):
     expected: ExpectedRefs
     pull: MergedPull
     operation_id: Identifier
-    merge_parent_shas: tuple[SHA, SHA]
+    # Informational; merge, squash and rebase merges verify by GitHub's merged flag and final head.
+    merge_parent_shas: tuple[SHA, ...] = ()
+
+
+class MergeObservation(Payload):
+    """A runner's verified read of a merged primary PR, made by Phalanx, the owner or GitHub."""
+
+    expected_version: PositiveInt
+    pull: MergedPull
+    merged_at: Annotated[str, StringConstraints(max_length=40)] | None = None
+    detected_by: Literal["admission", "watch"]
 
 
 Observation = Annotated[

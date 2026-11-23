@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from phalanx.check_in import MergeTarget, check_in
+from phalanx.check_in import MergeTarget, check_in, observe_merge
 from phalanx.github import GitHubClient, HTTPResponse
 from phalanx.transitions import Revision
 
@@ -55,7 +55,7 @@ class CheckInTests(unittest.TestCase):
 
     def test_merges_under_the_claim_and_verifies_the_merge_commit(self):
         result = self.run_check_in()
-        self.assertEqual((result.status, result.parents, self.puts, self.claims), ("merged", (BASE, HEAD), 1, 1))
+        self.assertEqual((result.status, self.puts, self.claims), ("merged", 1, 1))
         self.assertEqual(result.pull.merge_commit_sha, MERGE)
 
     def test_lost_response_is_reconciled_without_a_second_merge(self):
@@ -64,14 +64,32 @@ class CheckInTests(unittest.TestCase):
         result = self.run_check_in()
         self.assertEqual((result.status, self.puts), ("merged", 1))
 
-    def test_merge_after_the_base_advanced_is_verified_by_its_head_parent(self):
+    def test_squash_and_rebase_merges_of_the_recorded_head_verify_without_parents(self):
         self.complete_merge()
         self.pull["base"]["sha"] = OTHER
-        self.parents = [OTHER, HEAD]
-        self.assertEqual(self.run_check_in().status, "merged")
-        self.parents = [BASE, OTHER]
-        self.assertEqual(self.run_check_in().status, "unresolved")
-        self.assertEqual(self.puts, 0)
+        result = self.run_check_in()
+        self.assertEqual((result.status, result.pull.merge_commit_sha, self.puts), ("merged", MERGE, 0))
+
+    def test_observed_merge_of_another_head_is_a_mismatch(self):
+        github = GitHubClient("owner", "repo", token="fixture", transport=self.send)
+        self.complete_merge()
+        self.assertEqual(observe_merge(github, 12, TARGET.url, TARGET.head_ref, None, heads={HEAD}).status,
+                         "merged")
+        self.pull["head"]["sha"] = OTHER
+        self.assertEqual(observe_merge(github, 12, TARGET.url, TARGET.head_ref, None, heads={HEAD}).status,
+                         "mismatch")
+        self.pull["head"]["ref"] = "other"
+        self.assertEqual(observe_merge(github, 12, TARGET.url, TARGET.head_ref, None, heads={HEAD}).status,
+                         "unresolved")
+
+    def test_unmerged_or_unreadable_pr_is_pending(self):
+        github = GitHubClient("owner", "repo", token="fixture", transport=self.send)
+        self.assertEqual(observe_merge(github, 12, TARGET.url, TARGET.head_ref, None, heads={HEAD}).status,
+                         "pending")
+        failing = GitHubClient("owner", "repo", token="fixture",
+                               transport=lambda request, timeout: HTTPResponse(502, {}, b"{}"))
+        self.assertEqual(observe_merge(failing, 12, TARGET.url, TARGET.head_ref, None, heads={HEAD}).status,
+                         "pending")
 
     def test_moved_head_or_conflict_returns_to_development_without_a_write(self):
         self.pull["mergeable"] = False

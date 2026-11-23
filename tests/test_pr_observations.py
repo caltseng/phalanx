@@ -570,18 +570,12 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         self.assertIsNone(execution["state"]["final_output"])
 
         claim = self.claim("check_in")
-        # The base advanced before the merge, so only the head parent is the candidate.
+        # The base advanced before the merge; GitHub's merged flag and final head verify it.
         merged = self.observation(claim, operation_id="merge-7",
                                   merge_parent_shas=[OTHER, HEAD])
         merged["pull"].update(state="closed", merged=True, merge_commit=OTHER, base_sha=OTHER)
         self.assertEqual(self.result(claim)[0], 409)
         self.assertEqual(self.submit(dict(merged, operation_id="other-write"))[0], 409)
-        for parents, expected_status in (([BASE, OTHER], 409), ([HEAD, BASE], 409), ([HEAD], 422)):
-            with self.subTest(parents=parents):
-                self.assertEqual(self.submit(dict(merged, merge_parent_shas=parents))[0],
-                                 expected_status)
-        missing_parents = {key: value for key, value in merged.items() if key != "merge_parent_shas"}
-        self.assertEqual(self.submit(missing_parents)[0], 422)
         self.assertEqual(self.submit(dict(merged, expected=dict(merged["expected"], base_sha=OTHER)))[0], 409)
         self.assertEqual(self.submit(dict(merged, pull=dict(merged["pull"], number=8)))[0], 409)
         self.assertEqual(self.submit(dict(merged, pull=dict(merged["pull"], merged=False)))[0], 422)
@@ -606,3 +600,128 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         verified = [event for event in timeline if event["event"] == "merge_verified"]
         self.assertEqual(len(verified), 1)
         self.assertEqual(verified[0]["details"]["merge_parent_shas"], [OTHER, HEAD])
+
+
+class MergeObservedTest(PullObservationFixture, unittest.TestCase):
+    """A merge made outside Phalanx's own check-in stops obsolete work and delivers the item."""
+
+    target = "checked_in"
+
+    def merge(self, version, *, head=HEAD, key="merge", detected_by="watch"):
+        pull = {"number": 7, "head_ref": self.head_ref, "base_ref": "main", "head_sha": head,
+                "base_sha": BASE, "draft": False, "head_repository": "Example/Repo",
+                "base_repository": "example/repo", "state": "closed", "merged": True,
+                "merge_commit": OTHER}
+        return self.request(f"{self.execution}/pr-merged", RUNNER, {
+            "expected_version": version, "pull": pull, "merged_at": "2026-11-23T12:19:00Z",
+            "detected_by": detected_by,
+        }, {"Idempotency-Key": key})
+
+    def version(self):
+        with write_transaction(self.path) as db:
+            version, = db.execute("SELECT version FROM executions WHERE id=?",
+                                  (self.execution.rsplit("/", 1)[-1],)).fetchone()
+        return version
+
+    def open_attempts(self):
+        with write_transaction(self.path) as db:
+            return db.execute("SELECT count(*) FROM attempts WHERE ended_at IS NULL").fetchone()[0]
+
+    def nothing_to_claim(self):
+        status, assignment = self.request("/v1/dispatch/claim", RUNNER, {
+            "runner_id": "local", "repository_ids": ["repo"],
+        }, {"Phalanx-Lease": token_urlsafe(32)})
+        self.assertEqual(status, 200)
+        self.assertNotEqual(assignment.get("status"), "claimed")
+
+    def test_merge_while_review_runs_stops_the_worker_and_delivers_without_cancel(self):
+        item_id = self.item.rsplit("/", 1)[-1]
+        with write_transaction(self.path) as db:
+            dependent = intake.create(db, Intake(
+                repository_id="repo", goal="Build on the merged change", target="report",
+                dependencies=[{"upstream_id": item_id, "milestone": "checked_in"}]))
+        self.start_review()
+        claim = self.claim("adversarial_review")
+        status, stopping = self.merge(claim["expected_version"])
+        self.assertEqual(status, 200, stopping)
+        state = stopping["state"]
+        self.assertEqual((state["status"], state["stopping"]), ("waiting_for_external", "completed"))
+        self.assertEqual(state["wait"]["trigger"], "stop confirmed")
+        # The obsolete worker is fenced: its late result cannot change the delivered outcome.
+        self.assertEqual(self.submit(self.review(claim))[0], 409)
+        # A second runner read of the same merge is deduplicated.
+        self.assertEqual(self.merge(claim["expected_version"], key="again")[1]["version"],
+                         stopping["version"])
+        status, closed = self.request(f"{self.execution}/stop-confirmed", RUNNER,
+                                      dict(claim, expected_version=stopping["version"]), self.lease)
+        self.assertEqual(status, 200, closed)
+        state = closed["state"]
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual((state["final_output"]["merge_commit"], state["final_output"]["revision"]["head"]),
+                         (OTHER, HEAD))
+        self.assertEqual(self.open_attempts(), 0)
+        self.assertEqual(self.submit(self.review(claim))[0], 409)
+        self.assertEqual(self.merge(stopping["version"], key="late")[1]["version"], closed["version"])
+        _, timeline = self.request(f"{self.execution}/timeline", OWNER)
+        observed = [event for event in timeline if event["event"] == "merge_observed"]
+        self.assertEqual(len(observed), 1)
+        self.assertEqual((observed[0]["details"]["detected_by"], observed[0]["details"]["merged_at"]),
+                         ("watch", "2026-11-23T12:19:00Z"))
+        self.assertTrue(observed[0]["details"]["observed_at"])
+        self.assertNotIn("cancel", [event["event"] for event in timeline])
+        with write_transaction(self.path) as db:
+            waiting = intake.inspect(db, dependent["id"])["execution"]["unmet_dependencies"]
+        self.assertEqual(waiting, [])
+
+    def test_queued_stage_for_a_merged_pr_closes_delivered(self):
+        self.start_review()
+        status, closed = self.merge(self.version(), detected_by="admission")
+        self.assertEqual(status, 200, closed)
+        self.assertEqual((closed["state"]["status"], closed["state"]["final_output"]["merge_commit"]),
+                         ("completed", OTHER))
+        self.nothing_to_claim()
+
+    def test_waiting_for_input_with_no_attempt_closes_delivered(self):
+        self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
+        question = {"prompt": "Reconcile the primary PR?", "handoff": "Blocked on reconciliation"}
+        status, waiting = self.request(f"{self.execution}/result", RUNNER, dict(
+            self.claim("self_review"), outcome="needs_input", candidate=HEAD,
+            review_notes=question["prompt"], question=question,
+        ), self.lease)
+        self.assertEqual((status, waiting["state"]["status"]), (200, "waiting_for_input"))
+        status, closed = self.merge(waiting["version"])
+        self.assertEqual((status, closed["state"]["status"]), (200, "completed"))
+
+    def test_merge_of_an_unrecorded_head_is_a_blocker_not_a_delivery(self):
+        self.start_review()
+        status, blocked = self.merge(self.version(), head="d" * 40)
+        self.assertEqual(status, 200, blocked)
+        state = blocked["state"]
+        self.assertEqual((state["status"], state["wait"]["trigger"]), ("waiting_for_input", "owner reply"))
+        self.assertIn("never recorded", state["wait"]["reason"])
+        self.assertIsNone(state["final_output"])
+        self.nothing_to_claim()
+        self.assertEqual(self.merge(blocked["version"], head="d" * 40, key="repeat")[1]["version"],
+                         blocked["version"])
+
+    def test_mismatch_while_running_releases_the_worker_then_blocks(self):
+        self.start_review()
+        claim = self.claim("adversarial_review")
+        status, stopping = self.merge(claim["expected_version"], head="d" * 40)
+        self.assertEqual((status, stopping["state"]["stopping"]), (200, "waiting_for_input"))
+        status, blocked = self.request(f"{self.execution}/stop-confirmed", RUNNER,
+                                       dict(claim, expected_version=stopping["version"]), self.lease)
+        self.assertEqual(status, 200, blocked)
+        self.assertEqual((blocked["state"]["status"], blocked["state"]["stopping"]),
+                         ("waiting_for_input", None))
+        self.assertEqual(self.open_attempts(), 0)
+
+    def test_merge_watch_lists_open_executions_with_a_primary_pr(self):
+        self.start_review()
+        status, watched = self.request("/v1/runner/merge-watch", RUNNER)
+        self.assertEqual(status, 200)
+        self.assertEqual([(row["stage"], row["primary_pr"], row["heads"]) for row in watched],
+                         [("adversarial_review", "https://github.com/example/repo/pull/7", [HEAD])])
+        self.assertEqual(self.request("/v1/runner/merge-watch", OWNER)[0], 403)
+        self.merge(self.version())
+        self.assertEqual(self.request("/v1/runner/merge-watch", RUNNER)[1], [])

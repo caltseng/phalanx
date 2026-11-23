@@ -105,7 +105,11 @@ worktree, `pr_promotion` verifies draft checks and marks the primary PR ready, a
 requests due rechecks each poll. Pending draft and ready checks are rechecked every
 `"check_recheck_seconds"` (optional runner config, 5 to 86400, default 30). After
 `"check_wait_limit_seconds"` (60 to 2592000, default 7200) pending on one head and base,
-the owner is asked; a reply starts a fresh window. At most `"local_check_capacity"`
+the owner is asked; a reply starts a fresh window. The runner also reads the primary PR
+before admitting a claimed stage, and the Captain loop rereads every current primary PR at
+most every 120 s (doubling to 15 minutes on GitHub errors). A PR merged by the owner or GitHub
+closes the item as delivered with its merge commit and stops any obsolete worker; a merge of
+a head Phalanx never recorded asks the owner. At most `"local_check_capacity"`
 (1 to 64, default 1) validations run local checks at once on the runner host; the rest wait
 with the reason "Waiting for local check capacity" without using their check timeout. A local
 check that times out with no identified failure retries validation twice with backoff before
@@ -673,7 +677,9 @@ The authenticated API exposes these routes under `/v1`.
 | `POST /items/{item_id}/executions/{execution_id}/cancel` | Owner | Request cancellation with `expected_version` and `reason`. |
 | `POST /items/{item_id}/executions/{execution_id}/rerun` | Owner | Create a linked execution from the current closed execution with `expected_version` and an explicit `target`. |
 | `POST /items/{item_id}/executions/{execution_id}/result` | Runner | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
-| `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation under a live lease after accounting for the worker and its effects. |
+| `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation or merge stop under a live lease after accounting for the worker and its effects. |
+| `POST /items/{item_id}/executions/{execution_id}/pr-merged` | Runner | Record a primary PR merged outside check-in; see the [runner PR observation contract](docs/runner-pr-observations.md). |
+| `GET /runner/merge-watch?limit&after` | Runner | List current executions whose primary PR the runner checks for a merge. |
 
 Intake accepts `repository_id`, `goal` and `target`, plus optional `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the work item's output type.
 

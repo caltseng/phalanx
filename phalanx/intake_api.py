@@ -219,6 +219,19 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
                scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
 
 
+@router.get("/runner/merge-watch", dependencies=[Depends(require_runner)])
+def merge_watch(request: Request, limit: BatchLimit = 50, after: Annotated[str, Query(max_length=64)] = ""):
+    return run(request, pr_observations.merge_watch, limit, after)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-merged",
+             dependencies=[Depends(require_runner)])
+def pr_merged(request: Request, item_id: Identifier, execution_id: Identifier,
+              body: pr_models.MergeObservation, key: RequiredKey):
+    return run(request, pr_observations.merge_observed, item_id, execution_id, body, write=True,
+               scope=f"pr-merged:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
              dependencies=[Depends(require_runner)])
 def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,

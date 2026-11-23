@@ -399,6 +399,9 @@ def _disposition(runner, snapshot):
         pull = github.get_pull_request(int(number))
     except GitHubError as error:
         return _retry(snapshot, str(error), error.retry_after_seconds)
+    if pull.merged:
+        # The merge watch and the next stage's admission check reconcile it as one merge.
+        return _retry(snapshot, f"{url} merged; Phalanx reconciles the merge rather than validating it")
     if (pull.url.casefold() != url.casefold() or pull.state != "open" or pull.merged or pull.draft
             or (pull.head_ref, pull.base_ref) != (_item_branch(claim["item_id"]), base_ref)):
         return _question(snapshot, "Reconcile the primary PR with the recorded branch and target.", handoff)
@@ -479,7 +482,6 @@ def _check_in(runner, snapshot):
             expected=ExpectedRefs(head_ref=target.head_ref, base_ref=base_ref, base_sha=ready["base"]),
             pull=MergedPull.model_validate({**{field: getattr(pull, field) for field in GitHubPull.model_fields},
                                             "merge_commit": pull.merge_commit_sha}),
-            merge_parent_shas=result.parents,
         ).model_dump(mode="json")}
     if result.status == "pending":
         return _retry(snapshot, result.reason, result.retry_after_seconds)

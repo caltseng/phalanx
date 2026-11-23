@@ -7,6 +7,7 @@ from . import intake, validation, waits
 from .pr_models import GITHUB_REMOTE, IndependentReview, Publication, Revised, Validation, VerifiedMerge
 from .transitions import (
     Evidence, Event, Outcome, PullRequest, Revision, Stage, Status, Target, Wait, item_branch,
+    merge_heads, merge_mismatch,
 )
 
 
@@ -104,6 +105,89 @@ def _check_refs(db, item_id, execution_id, body, lease_digest):
     return row, state, repository
 
 
+def merge_observed(db, item_id, execution_id, body):
+    """Record a runner's read of a merged primary PR, made by Phalanx, the owner or GitHub.
+
+    A merge of a recorded head closes the execution as delivered, after any
+    running worker confirms its stop; any other head becomes an owner blocker.
+    Repeated reads of the same merge return the current view unchanged.
+    """
+    row = intake.current_execution(db, item_id)
+    if row["id"] != execution_id:
+        raise intake.Conflict("Execution or state version has changed")
+    state = intake.STATE.validate_json(row["state_json"])
+    pull = body.pull
+    item = intake.item_row(db, item_id)
+    remote, = db.execute("SELECT remote FROM repositories WHERE id=?",
+                         (item["repository_id"],)).fetchone()
+    match = GITHUB_REMOTE.fullmatch(remote)
+    if match is None:
+        raise intake.Conflict("PR observations require a registered github.com remote")
+    repository = match[1].lower()
+    url = f"https://github.com/{repository}/pull/{pull.number}"
+    target_branch = json.loads(item["request_json"])["target_branch"]
+    if (repository != pull.base_repository.lower() or repository != pull.head_repository.lower()
+            or pull.head_ref != item_branch(item_id)
+            or (target_branch is not None and pull.base_ref != target_branch)):
+        raise intake.Conflict("The merged PR must match the registered repository and item branch")
+    if state.primary_pr != url:
+        raise intake.Conflict("The merged PR must be the recorded primary PR")
+    seen = state.final_output if state.status == Status.COMPLETED else (
+        state.merged if state.stopping is not None or state.status == Status.WAITING_FOR_INPUT else None)
+    if isinstance(seen, PullRequest) and seen.merge_commit == pull.merge_commit:
+        return intake.execution_view(row)
+    if row["version"] != body.expected_version:
+        raise intake.Conflict("Execution or state version has changed")
+    if state.status != Status.RUNNING and db.execute(
+        "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
+    ).fetchone():
+        raise intake.Conflict("An attempt is still settling; observe the merge again")
+    reviewed = reviewed_head(db, execution_id, url, pull.base_ref)
+    heads = frozenset(head for head in (reviewed,) if head)
+    pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), merge_commit=pull.merge_commit, closed=True)
+    verified = pull.head_sha in merge_heads(state) | heads
+    details = {"reason": "primary PR merged", "detected_by": body.detected_by, "pr_url": url,
+               "merged_at": body.merged_at, "observed_at": intake.timestamp(),
+               "merge_commit": pull.merge_commit, "head_sha": pull.head_sha, "stage": state.stage,
+               "verified": verified, "pull": pull.model_dump(mode="json")}
+    if not verified:
+        details["question"] = {"prompt": merge_mismatch(pr).reason,
+                               "handoff": f"{url} merged {pull.head_sha} as {pull.merge_commit}"}
+    return intake.apply(db, row, state, Event.MERGE_OBSERVED, details=details,
+                        evidence=Evidence(pr=pr, merge_heads=heads))
+
+
+def merge_watch(db, limit, after):
+    """Current executions whose primary PR a runner should check for an outside merge.
+
+    Check-in reconciles its own merge, and a stop or finalization in progress
+    already decides the outcome, so neither is listed.
+    """
+    rows = db.execute(
+        """SELECT e.id, e.item_id, e.version, e.state_json, w.repository_id, w.request_json
+           FROM executions AS e JOIN work_items AS w ON w.id = e.item_id
+           WHERE e.id > ? AND e.status NOT IN ('completed', 'failed', 'cancelled')
+             AND json_type(e.state_json, '$.primary_pr') = 'text'
+             AND json_type(e.state_json, '$.stopping') IS NOT 'text'
+             AND json_type(e.state_json, '$.pending_output') IS NOT 'text'
+             AND json_extract(e.state_json, '$.stage') != 'check_in'
+             AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id = e.id)
+           ORDER BY e.id LIMIT ?""",
+        (after, limit),
+    ).fetchall()
+    watched = []
+    for row in rows:
+        state = intake.STATE.validate_json(row["state_json"])
+        watched.append({
+            "item_id": row["item_id"], "execution_id": row["id"], "version": row["version"],
+            "status": state.status, "stage": state.stage, "repository_id": row["repository_id"],
+            "primary_pr": state.primary_pr, "head_ref": item_branch(row["item_id"]),
+            "target_branch": json.loads(row["request_json"]).get("target_branch"),
+            "heads": sorted(merge_heads(state)),
+        })
+    return watched
+
+
 def _closed_question(details, url, candidate):
     """Ask the owner about a primary PR closed outside Phalanx; never open a replacement."""
     prompt = (f"{url} was closed outside Phalanx. Reopen it, or decide how this item should continue, "
@@ -181,9 +265,6 @@ def submit(db, item_id, execution_id, body, lease_digest):
                 or ready["pr_url"] != url or ready["expected"] != expected.model_dump()
                 or ready["pull"]["head_sha"] != revision.head):
             raise intake.Conflict("Verified merge must match the recorded authorized merge intent")
-        # The base may have advanced before the merge; the candidate must be the merged head parent.
-        if body.merge_parent_shas[1] != revision.head:
-            raise intake.Conflict("The merge commit's head parent must be the authorized candidate head")
         pr = PullRequest(url, revision, merge_commit=pull.merge_commit, closed=True)
         return intake.apply(db, row, state, Event.MERGE_VERIFIED, details=details,
                             attempt_id=body.attempt_id, evidence=Evidence(pr=pr))

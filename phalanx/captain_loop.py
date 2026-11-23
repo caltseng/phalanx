@@ -20,6 +20,7 @@ from .attended_recovery_service import RecoveryJournal, _verify_local, run_recov
 from .captain_adapter import (BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch,
                               RequestRetracted)
 from .captain_relay import RelayTransport
+from .merge_watch import MERGE_STOPS, WATCHED_STAGES, MergeWatch
 from .runner_preflight import preflight
 from .workspaces import _file_lock, _item_branch
 
@@ -28,6 +29,8 @@ _LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop", "recover_cl
 _GITHUB_STAGES = {"pr_creation", "pr_promotion", "pr_validation", "pr_reconciliation", "pr_revision",
                   "check_in"}
 _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reconciliation"}
+# Cancel and close-failure stops, plus a merged primary PR that stops obsolete work.
+STOP_DISPOSITIONS = {"cancelled", "failed", "completed", "waiting_for_input"}
 
 
 class CaptainLoop:
@@ -76,6 +79,8 @@ class CaptainLoop:
         self.reported_discovery, self.blocked_mappings = None, {}
         self.recheck_future = None
         self.recheck_due = 0
+        self.merge_watch = MergeWatch(api, config["repositories"])
+        self.merge_future, self.merge_due = None, 0
         try:
             self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
         except RunnerError:
@@ -331,6 +336,7 @@ class CaptainLoop:
                 raise RunnerError("Unsupported runner-only stop needs effect reconciliation")
             request = snapshot.get("cancel_stop")
             launched = any(field in snapshot for field in ("relay", "receipt"))
+            disposition = (request or {}).get("disposition") or ((current or {}).get("state") or {}).get("stopping")
             if launched:
                 if "packet" not in snapshot or (native is None and not (request or {}).get("thread_id")):
                     raise RunnerError("An ambiguous launch is not a stopped writer; verify its native receipt")
@@ -347,14 +353,17 @@ class CaptainLoop:
                     raise RunnerError(evidence.summary)
                 proof = f"Exact stopped native thread {thread_id}. " + json.dumps(checkpoint, sort_keys=True)
             else:
-                if "submission" in snapshot:
+                # A merge fences a runner gate's saved observation: the server rejects its stale
+                # version, and its GitHub reads and ready marking change nothing once the PR merged.
+                merge_stop = disposition in MERGE_STOPS and stage in WATCHED_STAGES
+                if "submission" in snapshot and not merge_stop:
                     raise RunnerError("Runner-only stop needs publication/storage effect reconciliation")
                 proof = unlaunched_proof(runner, snapshot)
             if request is not None and request["proof"] != proof:
                 raise RunnerError("Stopped checkpoint changed; reconcile it before replaying stop")
             if request is None:
                 if (current is None or current["id"] != claim["execution"]["id"]
-                        or current["state"]["stopping"] not in {"cancelled", "failed"}
+                        or current["state"]["stopping"] not in STOP_DISPOSITIONS
                         or current["state"]["stage"] != claim["execution"]["state"]["stage"]):
                     raise RunnerError("Stop does not match the current execution")
                 request = {
@@ -387,6 +396,17 @@ class CaptainLoop:
                 and isinstance(output, dict)
                 and output.get("reference") == "/v1" + route.removesuffix("/stop-confirmed") + "/report"
             )
+            # A merge stop closes on the observed merge or returns the mismatch to the owner.
+            merged = state.get("merged") or {}
+            if disposition == "completed":
+                pending, finalized = False, (
+                    response.get("version") == version + 1 and state.get("status") == "completed"
+                    and isinstance(output, dict) and bool(output.get("merge_commit"))
+                    and output.get("merge_commit") == merged.get("merge_commit"))
+            elif disposition == "waiting_for_input":
+                pending, finalized = False, (
+                    response.get("version") == version + 1 and state.get("status") == "waiting_for_input"
+                    and not state.get("stopping") and bool(merged.get("merge_commit")))
             if response.get("id") != claim["execution"]["id"] or not (pending or finalized):
                 raise RunnerError("Stop acknowledgment did not verify finalization; retain its exact request")
             def finish(record, db):
@@ -417,7 +437,7 @@ class CaptainLoop:
             current = self.api.call(f"/items/{snapshot['claim']['item_id']}")["execution"]
             stopping = (current["id"] == snapshot["claim"]["execution"]["id"]
                         and current["state"]["stage"] == snapshot["claim"]["execution"]["state"]["stage"]
-                        and current["state"].get("stopping") in {"cancelled", "failed"})
+                        and current["state"].get("stopping") in STOP_DISPOSITIONS)
         if unlaunched and stopping:
             return self._confirm_stop(runner, current)
         # A listed expired attempt has no accepted result, and its old lease cannot submit.
@@ -618,6 +638,7 @@ class CaptainLoop:
         if self.rechecks and self.recheck_future is None and now >= self.recheck_due:
             self.recheck_future = self.control_pool.submit(self._recheck_due)
             self.recheck_due = now + self.poll_seconds
+        self._watch_merges(now, records)
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
                     and self.lapsing.get(slot) != record["lease"] and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
@@ -697,6 +718,27 @@ class CaptainLoop:
         if self.relay_future is None and now >= self.relay_due:
             self.relay_future = self.native_pool.submit(self.adapter.relay_stall, self.relay_stall_seconds)
             self.relay_due = now + self.poll_seconds
+
+    def _watch_merges(self, now, records):
+        """Detect primary PRs merged outside check-in, once per heartbeat, off the slot lanes."""
+        if self.merge_future is not None and self.merge_future.done():
+            future, self.merge_future = self.merge_future, None
+            try:
+                merges = future.result()
+            except Exception as error:
+                self._status("merge-watch", "merge_watch_blocked", f"{type(error).__name__}: {error}")
+            else:
+                self._status("merge-watch", "merge_watch_ok", "Merged primary PRs are reconciled")
+                items = {merge["item_id"] for merge in merges}
+                for slot, record in records.items():
+                    if record.get("claim", {}).get("item_id") in items:
+                        # Confirm the obsolete worker's stop on this poll rather than the next.
+                        self.work_due[slot] = 0
+                for merge in merges:
+                    self.emit({"event": "merge_observed", **merge})
+        if self.rechecks and self.merge_future is None and now >= self.merge_due:
+            self.merge_future = self.native_pool.submit(self.merge_watch.sweep)
+            self.merge_due = now + self.heartbeat_seconds
 
     def _recheck_due(self):
         """Requeue published gates whose scheduled observation time has arrived."""

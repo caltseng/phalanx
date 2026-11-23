@@ -28,17 +28,16 @@ class MergeTarget:
 
 @dataclass(frozen=True)
 class CheckInOutcome:
-    """``merged`` carries the read-back and ordered merge parents.
+    """``merged`` carries the read-back.
 
     ``pending`` retries under a new attempt, ``moved`` and ``conflict`` return
     to development, ``refused`` waits on GitHub's rules, and ``unresolved``
-    needs the owner.
+    and ``mismatch`` need the owner.
     """
 
-    status: Literal["merged", "pending", "moved", "conflict", "refused", "unresolved"]
+    status: Literal["merged", "pending", "moved", "conflict", "refused", "unresolved", "mismatch"]
     reason: str
     pull: PullRequest | None = None
-    parents: tuple[str, ...] = ()
     retry_after_seconds: int | None = None
 
 
@@ -79,27 +78,36 @@ def check_in(github: GitHubClient, target: MergeTarget, *, assert_claim: Callabl
 
 
 def _observe(github: GitHubClient, target: MergeTarget) -> CheckInOutcome:
-    """Read the PR and verify a merge of the ready head; an unmerged PR is ``pending``."""
+    """Verify a merge of the ready head; an unmerged PR is ``pending``."""
+    return observe_merge(github, target.number, target.url, target.head_ref, target.base_ref,
+                         heads={target.revision.head})
+
+
+def observe_merge(github: GitHubClient, number: int, url: str, head_ref: str, base_ref: str | None, *,
+                  heads: set[str]) -> CheckInOutcome:
+    """Read the primary PR and verify GitHub merged one of the recorded heads.
+
+    This is the one merge verifier for Phalanx's own check-in and for merges
+    made by the owner or GitHub. GitHub's merged flag and the PR's final head
+    prove what merged, so merge, squash and rebase merges all verify without
+    reading merge-commit parents. A merge of any other head is ``mismatch``;
+    an unmerged PR or a GitHub error is ``pending`` and never counts as merged.
+    """
     try:
-        pull = github.get_pull_request(target.number)
+        pull = github.get_pull_request(number)
     except GitHubError as error:
         return CheckInOutcome("pending", str(error), retry_after_seconds=error.retry_after_seconds)
     repository = github.repository.casefold()
-    if (pull.number != target.number or pull.url.casefold() != target.url.casefold()
-            or (pull.head_ref, pull.base_ref) != (target.head_ref, target.base_ref)
-            or (pull.head_repository or "").casefold() != repository
+    if (pull.number != number or pull.url.casefold() != url.casefold() or pull.head_ref != head_ref
+            or (base_ref is not None and pull.base_ref != base_ref)
+            or (pull.head_repository or repository).casefold() != repository
             or pull.base_repository.casefold() != repository):
         return CheckInOutcome("unresolved", "The PR no longer matches the recorded branch and target", pull)
     if not pull.merged:
         return CheckInOutcome("pending", "GitHub has yet to show the merge", pull)
     if pull.state != "closed" or pull.draft or not pull.merge_commit_sha:
         return CheckInOutcome("pending", "GitHub has yet to show the merge commit", pull)
-    try:
-        parents = github.get_commit_parents(pull.merge_commit_sha)
-    except GitHubError as error:
-        return CheckInOutcome("pending", str(error), pull, retry_after_seconds=error.retry_after_seconds)
-    # The base may have advanced before the merge; the ready head must be the merged head parent.
-    if pull.head_sha != target.revision.head or len(parents) != 2 or parents[1] != target.revision.head:
-        return CheckInOutcome("unresolved", "GitHub merged the PR without the ready head as the merge "
-                              "commit's head parent", pull, parents)
-    return CheckInOutcome("merged", "GitHub confirmed the merge of the ready head", pull, parents)
+    if pull.head_sha not in heads:
+        return CheckInOutcome("mismatch", f"GitHub merged head {pull.head_sha}, which Phalanx never "
+                              "recorded for this PR", pull)
+    return CheckInOutcome("merged", "GitHub confirmed the merge of the recorded head", pull)

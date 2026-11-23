@@ -60,6 +60,8 @@ class Event(StrEnum):
     CLOSE_FAILURE = "close_failure"
     STOP_CONFIRMED = "stop_confirmed"
     MERGE_VERIFIED = "merge_verified"
+    # A runner read the primary PR merged, by Phalanx, the owner or GitHub, outside check-in.
+    MERGE_OBSERVED = "merge_observed"
     FINALIZE = "finalize"
 
 
@@ -118,6 +120,8 @@ class Execution:
     report_review_findings: str | None = None
     # Findings carried into the next development or pr_revision attempt.
     findings: str | None = None
+    # The observed merge of the primary PR while its obsolete worker stops or the owner decides.
+    merged: PullRequest | None = None
 
     def __post_init__(self) -> None:
         if (self.status in TERMINAL) != (self.final_output is not None):
@@ -165,6 +169,8 @@ class Evidence:
     findings: str | None = None
     # Findings are a merge conflict, which pr_revision resolves on the open PR at any PR stage.
     merge_conflict: bool = False
+    # Heads an independent review passed, which also deliver the item when merged.
+    merge_heads: frozenset[str] = frozenset()
 
 
 def _require(condition: object, message: str) -> None:
@@ -216,6 +222,33 @@ def _merge_verified(state: Execution, evidence: Evidence) -> Execution:
              and not pr.draft and pr.merge_commit,
              "Verified merge must match the primary PR and expected candidate")
     return _close(state, Status.COMPLETED, pr)
+
+
+def merge_mismatch(pr: PullRequest) -> Wait:
+    return Wait(f"{pr.url} merged head {pr.revision.head} as {pr.merge_commit}, which Phalanx never "
+                "recorded for this item. Verify the merged work, then cancel or replace the item; "
+                "a reply reruns the same check.", "owner reply")
+
+
+def merge_heads(state: Execution) -> set[str]:
+    """Heads Phalanx recorded for the primary PR; a merge of any of them delivers the item."""
+    return {head for head in (state.candidate, state.ready_revision and state.ready_revision.head) if head}
+
+
+def _merge_observed(state: Execution, evidence: Evidence) -> Execution:
+    pr = _primary(state, evidence)
+    _require(state.target is not Target.REPORT and state.stopping is None
+             and pr.closed and not pr.draft and pr.merge_commit,
+             "A merge observation requires a merged primary PR and no stop in progress")
+    verified = pr.revision.head in merge_heads(state) | evidence.merge_heads
+    if state.status is Status.RUNNING:
+        # Fence the obsolete worker; the runner confirms its stop before the item closes.
+        reason = "Stop obsolete work; the primary PR merged" if verified else merge_mismatch(pr).reason
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, Wait(reason, "stop confirmed"),
+                     stopping=Status.COMPLETED if verified else Status.WAITING_FOR_INPUT, merged=pr)
+    if verified:
+        return _close(replace(state, merged=pr), Status.COMPLETED, pr)
+    return _wait(state, Status.WAITING_FOR_INPUT, merge_mismatch(pr), merged=pr)
 
 
 def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
@@ -366,8 +399,16 @@ def decide(
     if event is Event.MERGE_VERIFIED:
         _require(state.stage is Stage.CHECK_IN, "Merge verification requires check-in")
         return _merge_verified(state, evidence)
+    if event is Event.MERGE_OBSERVED:
+        return _merge_observed(state, evidence)
     if state.stopping is not None:
         _require(event is Event.STOP_CONFIRMED, "Reconcile outstanding effects before closing")
+        if state.stopping is Status.COMPLETED:
+            _require(state.merged, "A merge stop requires the observed merge")
+            return _close(state, Status.COMPLETED, state.merged)
+        if state.stopping is Status.WAITING_FOR_INPUT:
+            _require(state.merged, "A merge stop requires the observed merge")
+            return _wait(state, Status.WAITING_FOR_INPUT, merge_mismatch(state.merged), stopping=None)
         return _disposition(state, state.stopping, evidence.stored_report)
     if event in {Event.CANCEL, Event.CLOSE_FAILURE}:
         status = Status.CANCELLED if event is Event.CANCEL else Status.FAILED

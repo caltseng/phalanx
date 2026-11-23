@@ -144,6 +144,10 @@ def resolve_dependencies(
         reason = f"Waiting for prerequisite milestone {milestone}"
         if state.pending_output == Status.COMPLETED:
             reason = "Waiting for prerequisite report finalization"
+        elif state.stopping == Status.COMPLETED:
+            reason = "Waiting for the merged prerequisite's obsolete worker to stop"
+        elif state.stopping == Status.WAITING_FOR_INPUT:
+            reason = "The prerequisite's primary PR merged an unrecorded head; waiting on its owner"
         elif state.status in (Status.FAILED, Status.CANCELLED) or state.stopping or state.pending_output:
             disposition = state.stopping or state.pending_output or state.status
             reason = f"Prerequisite disposition is {disposition}. Rerun or replace the prerequisite."

@@ -241,7 +241,7 @@ def recover_stopped(db, runner_id, attempt_id, body):
     row, state = intake.check_current(db, body.item_id, attempt["execution_id"], body.expected_version)
     details = {"runner_id": runner_id, "reconciliation": body.reconciliation,
                "capacity_release": "lease expired"}
-    if state.stopping in {Status.CANCELLED, Status.FAILED}:
+    if state.stopping is not None:
         return intake.confirm_stop(db, row, state, attempt_id, details=details)
     if state.status != Status.RUNNING or state.stage != attempt["stage"]:
         raise intake.Conflict("This attempt has no supported stopped-worker recovery")

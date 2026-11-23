@@ -114,7 +114,7 @@ class PullRequest:
     base_repository: str
     merge_commit_sha: str | None
     mergeable: bool | None
-
+    merged_at: str | None = None
 
 def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
     head, base = data["head"], data["base"]
@@ -135,9 +135,11 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
         base_repository=base["repo"]["full_name"],
         merge_commit_sha=data["merge_commit_sha"],
         mergeable=data["mergeable"] if exact else data.get("mergeable"),
+        merged_at=data.get("merged_at"),
     )
     if (
         type(result.number) is not int or result.number < 1
+        or (result.merged_at is not None and not isinstance(result.merged_at, str))
         or not all(
             isinstance(value, str) and value
             for value in (result.node_id, result.url, result.head_ref,
