@@ -100,4 +100,5 @@ When `handoff_due` is non-empty, at your first compaction, or at any sign of deg
 Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
 or the keeper, takes over your unconfirmed launches.
 
-Stop for good when a charter stop condition holds. End with `--state ended` and a handoff note that says why.
+Stop for good when a charter stop condition holds. End with `--state ended` and a handoff note that starts
+`Stop condition met:` and says which one. The keeper then leaves the work alone until the charter changes.

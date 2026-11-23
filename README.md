@@ -630,7 +630,8 @@ Each heartbeat re-reads the charter and records that revision.
    `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper
    --config <shift config>` and follow it." The keeper exits when a live
    Captain exists, or when the most recent Captain ended less than 10 minutes
-   ago with no successor registered yet. Otherwise it starts a Captain. An
+   ago with no successor registered yet, or when it stopped with `Stop condition
+   met:` under the current charter revision. Otherwise it starts a Captain. An
    automation run can't attach a session automation to itself, so the keeper
    creates a `phx captain keeper` chat with `create_session` and a 5-minute
    `schedule`, and then exits. The app keeps each exited keeper session, so
