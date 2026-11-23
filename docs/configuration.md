@@ -42,7 +42,7 @@ The runner reads a JSON file passed as `--config`:
 | `base_url` | API base URL. The runner journal refuses a different value later. |
 | `runner_id` | Stable runner ID across restarts. It scopes server capacity and recovery. The journal refuses a different value later. |
 | `capacity` | Local agent worker slots, default 1. The runner adds two runner-only slots, `capacity`+1 and `capacity`+2. The server also applies its per-runner capacity. |
-| `repositories` | Registered repository ID to `checkout`, `base_branch`, and the runtime's `host_id` and `project_id` (see the [runtime mapping](captain-relay.md#runtime-mapping)). |
+| `repositories` | Registered repository ID to `checkout`, `base_branch`, and the runtime's `host_id` and `project_id` (see the [runtime mapping](captain-relay.md#runtime-mapping)). An optional `post_merge_check` names the repository's [post-merge deployment check](direct-path.md#post-merge-deployment-status). |
 | `stages` | Optional list restricting which stages the loop claims. |
 | `validation_policy` | Absolute path, outside every checkout, of the [validation policy](runner-validation-policy.md). Without it, validation stages are not claimed. |
 | `check_recheck_seconds` | How often pending draft and ready checks are rechecked. 5 to 86400, default 30. |
