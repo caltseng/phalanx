@@ -132,6 +132,9 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         results = self.page(BOARD + "?kind=closed&limit=2")["items"]
         self.assertEqual([row["outcome"] for row in results], ["checked_in", "ready_for_check_in"])
         self.assertEqual(results[0]["output"], {"kind": "pr", "url": pr.url})
+        self.assertEqual(results[0]["delivery"], {"merged": True, "merge_commit": "merge", "merge_method": None,
+                                                  "merged_at": None})
+        self.assertIsNone(results[1]["delivery"])
 
     def test_timeline_pages_and_authentication(self):
         route = f"{BOARD}/{identifier(10)}/timeline"

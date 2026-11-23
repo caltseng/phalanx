@@ -114,6 +114,7 @@ class PullRequest:
     base_repository: str
     merge_commit_sha: str | None
     mergeable: bool | None
+    merged_at: str | None = None
 
 
 def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
@@ -135,6 +136,7 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
         base_repository=base["repo"]["full_name"],
         merge_commit_sha=data["merge_commit_sha"],
         mergeable=data["mergeable"] if exact else data.get("mergeable"),
+        merged_at=data.get("merged_at"),
     )
     if (
         type(result.number) is not int or result.number < 1
@@ -158,6 +160,7 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
         or not _SHA.fullmatch(result.head_sha)
         or not _SHA.fullmatch(result.base_sha)
         or (result.merge_commit_sha is not None and not _SHA.fullmatch(result.merge_commit_sha))
+        or (result.merged_at is not None and not isinstance(result.merged_at, str))
     ):
         raise ValueError("invalid pull request fields")
     return result
@@ -535,6 +538,19 @@ class GitHubClient:
         except (KeyError, TypeError):
             pass
         raise GitHubError(operation, "invalid test merge commit response")
+
+    def is_on_branch(self, sha: str, branch: str) -> bool:
+        """Whether the commit is reachable from the branch tip."""
+        if not _SHA.fullmatch(sha):
+            raise ValueError("a full commit SHA is required")
+        operation = "compare commit with branch"
+        data, _ = self._request(
+            operation, "GET", f"{self._repo_url}/compare/{sha}...{quote(branch, safe='/')}",
+        )
+        status = data.get("status") if isinstance(data, dict) else None
+        if status in ("identical", "ahead", "behind", "diverged"):
+            return status in ("identical", "ahead")
+        raise GitHubError(operation, "invalid comparison response")
 
     def merge(self, number: int, *, expected_head: str, method: str) -> str:
         """Request a direct merge. Verify its result by rereading the PR."""

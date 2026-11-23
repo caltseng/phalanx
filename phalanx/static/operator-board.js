@@ -44,7 +44,8 @@
    * orders closed items newest first and prioritizes input waits in open work.
    * Items contain string id, title, repo, stage, status, lastAdvancedAt, waitReason?,
    * retryAt? and recheckAt? (epoch ms), workerRef? (opaque bridge reference), chatUrl?, draftUrl?,
-   * primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}, and for replies itemId? and version?.
+   * primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url},
+   * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged, and for replies itemId? and version?.
    * Use status "waiting_for_input" for items requiring operator attention.
    * outcome is a display label, including "Checked in" vs "Ready for check-in".
    * source.detail({id, cursor, limit, signal}) resolves to
@@ -85,6 +86,13 @@
         parent.append(line);
       } else if (item.output) {
         addLink(parent, item.output.kind === "pr" ? "Verified PR" : "Field report", item.output.url);
+      }
+      if (item.delivery) {
+        const parts = ["Merged on GitHub"];
+        if (item.delivery.mergedAt) parts.push(when(item.delivery.mergedAt));
+        if (item.delivery.method) parts.push(label(item.delivery.method));
+        parts.push(item.delivery.mergeCommit.slice(0, 12));
+        parent.append(element("p", parts.join(" · "), { class: "meta" }));
       }
     }
 

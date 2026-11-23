@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from phalanx.github import GitHubClient, GitHubError, PullRequest, UncertainGitHubWrite
+from phalanx.pr_models import ExpectedRefs, GitHubPull, MergedPull
 from phalanx.transitions import Revision
 
 
@@ -40,6 +41,7 @@ class CheckInOutcome:
     pull: PullRequest | None = None
     parents: tuple[str, ...] = ()
     retry_after_seconds: int | None = None
+    method: Literal["merge", "squash_or_rebase"] | None = None
 
 
 def check_in(github: GitHubClient, target: MergeTarget, *, assert_claim: Callable[[], None]) -> CheckInOutcome:
@@ -47,7 +49,7 @@ def check_in(github: GitHubClient, target: MergeTarget, *, assert_claim: Callabl
 
     assert_claim must raise if the runner no longer owns the check-in attempt.
     """
-    observed = _observe(github, target)
+    observed = observe_merge(github, target)
     pull = observed.pull
     if observed.status != "pending" or pull is None or pull.merged:
         return observed
@@ -75,11 +77,16 @@ def check_in(github: GitHubClient, target: MergeTarget, *, assert_claim: Callabl
                                   f"and checks gate it ({error})", pull)
         return CheckInOutcome("unresolved", f"GitHub refused the merge ({error}). Grant the runner's token "
                               "permission to merge or resolve the refusal", pull)
-    return _observe(github, target)
+    return observe_merge(github, target)
 
 
-def _observe(github: GitHubClient, target: MergeTarget) -> CheckInOutcome:
-    """Read the PR and verify a merge of the ready head; an unmerged PR is ``pending``."""
+def observe_merge(github: GitHubClient, target: MergeTarget) -> CheckInOutcome:
+    """Read the PR and verify a merge of the ready head; an unmerged PR is ``pending``.
+
+    GitHub's PR record is authoritative for the final head. A merge commit must
+    have that head as its second parent. Squash and rebase merges leave one
+    parent, so their merge commit must instead be on the base branch.
+    """
     try:
         pull = github.get_pull_request(target.number)
     except GitHubError as error:
@@ -94,12 +101,34 @@ def _observe(github: GitHubClient, target: MergeTarget) -> CheckInOutcome:
         return CheckInOutcome("pending", "GitHub has yet to show the merge", pull)
     if pull.state != "closed" or pull.draft or not pull.merge_commit_sha:
         return CheckInOutcome("pending", "GitHub has yet to show the merge commit", pull)
+    if pull.head_sha != target.revision.head:
+        return CheckInOutcome("unresolved", f"GitHub merged the PR at head {pull.head_sha}, not the "
+                              f"validated candidate {target.revision.head}", pull)
     try:
         parents = github.get_commit_parents(pull.merge_commit_sha)
+        # The base may have advanced before the merge; the ready head must be the merged head parent.
+        if len(parents) == 2 and parents[1] == target.revision.head:
+            return CheckInOutcome("merged", "GitHub confirmed the merge of the ready head", pull, parents,
+                                  method="merge")
+        on_base = len(parents) == 1 and github.is_on_branch(pull.merge_commit_sha, target.base_ref)
     except GitHubError as error:
         return CheckInOutcome("pending", str(error), pull, retry_after_seconds=error.retry_after_seconds)
-    # The base may have advanced before the merge; the ready head must be the merged head parent.
-    if pull.head_sha != target.revision.head or len(parents) != 2 or parents[1] != target.revision.head:
-        return CheckInOutcome("unresolved", "GitHub merged the PR without the ready head as the merge "
-                              "commit's head parent", pull, parents)
-    return CheckInOutcome("merged", "GitHub confirmed the merge of the ready head", pull, parents)
+    if on_base:
+        return CheckInOutcome("merged", f"GitHub squashed or rebased the ready head onto {target.base_ref}",
+                              pull, parents, method="squash_or_rebase")
+    return CheckInOutcome("unresolved", "GitHub's merge commit neither has the ready head as its head "
+                          f"parent nor is a single-parent commit on {target.base_ref}", pull, parents)
+
+
+def merge_evidence(model, event: dict, outcome: CheckInOutcome, base_sha: str, **fields) -> dict:
+    """The server payload for a ``merged`` outcome, carrying GitHub's PR record."""
+    pull = outcome.pull
+    return model(
+        **event, **fields,
+        expected=ExpectedRefs(head_ref=pull.head_ref, base_ref=pull.base_ref, base_sha=base_sha),
+        pull=MergedPull.model_validate({
+            **{field: getattr(pull, field) for field in GitHubPull.model_fields},
+            "merge_commit": pull.merge_commit_sha, "merged_at": pull.merged_at,
+        }),
+        merge_parent_shas=list(outcome.parents), merge_method=outcome.method,
+    ).model_dump(mode="json")

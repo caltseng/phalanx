@@ -43,6 +43,7 @@ class FakeGitHub:
         self.threads = []
         self.lose_merge = False
         self.tip = None
+        self.merge_parents = None
 
     def __call__(self, request, _timeout):
         path = urlsplit(request.full_url).path
@@ -53,7 +54,10 @@ class FakeGitHub:
                 raise TimeoutError
             return response({"merged": True, "sha": "e" * 40})
         if path.endswith("/git/commits/" + "e" * 40):
-            return response({"sha": "e" * 40, "parents": [{"sha": self.base}, {"sha": self.head}]})
+            parents = self.merge_parents or [self.base, self.head]
+            return response({"sha": "e" * 40, "parents": [{"sha": parent} for parent in parents]})
+        if "/compare/" + "e" * 40 + "..." in path:
+            return response({"status": "ahead"})
         if request.method == "POST" and path == "/graphql":
             if "reviewThreads" in json.loads(request.data)["query"]:
                 return response({"data": {"repository": {"pullRequest": {
@@ -723,7 +727,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_check_in_merges_and_reconciles_a_lost_merge_response_over_http(self):
         self.live_review_path(blocking=False, merge=True)
 
-    def live_review_path(self, *, blocking, conflict=False, feedback=False, merge=False):
+    def test_repository_squash_merge_before_promotion_is_delivered_over_http(self):
+        self.live_review_path(blocking=False, external_merge=True)
+
+    def live_review_path(self, *, blocking, conflict=False, feedback=False, merge=False, external_merge=False):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -802,6 +809,19 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.assertEqual(reviewed["state"]["stage"], "pre_pr_validation")
             result = self.runner().prepare(stages=["pre_pr_validation"])
             self.assertEqual(result["execution"]["state"]["stage"], "pr_promotion", result)
+            if external_merge:
+                # The repository's own automation squash-merged the candidate (Churchtree #55 shape).
+                github.pull.update(state="closed", draft=False, merged=True, merge_commit_sha="e" * 40,
+                                   merged_at="2026-11-24T06:33:57Z")
+                github.merge_parents = [base]
+                result = self.runner().prepare(stages=["pr_promotion"])
+                state = result["execution"]["state"]
+                self.assertEqual((state["status"], state["stage"]), ("completed", "check_in"), result)
+                output = state["final_output"]
+                self.assertEqual((output["merge_commit"], output["merge_method"], output["revision"]["head"]),
+                                 ("e" * 40, "squash_or_rebase", candidate))
+                self.assertIsNone(state["wait"])
+                return
 
             def recheck():
                 with write_transaction(self.root.parent / "queue.sqlite3") as db:
@@ -1032,7 +1052,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "execution": {"id": "e", "version": 3, "state": {
                 "stage": "pr_promotion", "candidate": candidate,
                 "primary_pr": "https://github.com/o/r/pull/7"}}}}
-        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=draft, node_id="PR_7", mergeable=True)
+        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=draft, node_id="PR_7", mergeable=True, merged=False)
         github = SimpleNamespace(get_pull_request=lambda number: pull)
         runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root,
                                  api=SimpleNamespace(call=lambda path: timeline))

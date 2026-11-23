@@ -20,7 +20,8 @@
   };
   const success = {
     ...failure, id: "done", title: "Verify rollout", outcome: "Checked in",
-    output: { kind: "pr", url: "https://example.com/pull/1" }
+    output: { kind: "pr", url: "https://example.com/pull/1" },
+    delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
   let offline = false;
   let pending;
@@ -71,6 +72,8 @@
     assert(!root.querySelector('a[href^="javascript:"]'), "Unsafe link omitted");
     assert(root.querySelector('a[href="' + failure.output.url + '"]')?.textContent === "Field report", "Failure output");
     assert(root.querySelector('a[href="' + success.output.url + '"]')?.textContent === "Verified PR", "Success output");
+    assert(root.textContent.includes("Merged on GitHub") && root.textContent.includes("squash or rebase · a40536e00000"),
+           "GitHub delivery shown apart from the Phalanx outcome");
     item("wait").click();
     item("run").click();
     await tick();
