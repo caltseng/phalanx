@@ -28,6 +28,7 @@ class QueueAPI:
         self.checkout = checkout
         self.requests, self.renewed, self.submissions, self.recovered = [], [], [], []
         self.blockers = []
+        self.recovery_waits = []
         self.claims = {}
         self.waiting = ["first", "second"]
         self.stages = {}
@@ -81,6 +82,9 @@ class QueueAPI:
                     self.drop_result = False
                     raise RunnerError("lost result response")
                 return {"version": 4}
+            if route.endswith("/recovery-wait"):
+                self.recovery_waits.append((route.split("/")[-2], body["blocker"]))
+                return {"attempt_id": route.split("/")[-2], "blocker": body["blocker"]}
             if route.endswith("/recover-claim"):
                 attempt = route.split("/")[-2]
                 old = next(key for key, row in self.claims.items() if row["attempt_id"] == attempt)
@@ -1121,6 +1125,22 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(self.native.launches), 1)
         self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
                          "cancelled")
+
+    def test_recovery_owner_wait_is_published_once_and_cleared_when_recovery_moves_on(self):
+        loop = self.loop()
+        owner_wait = {"status": "owner_wait", "reason": "Could not verify one exact native thread for the launch",
+                      "next_action": "Inspect the original worker launch and workspace, then explicitly recheck"}
+        loop._publish_recovery_wait(2, "attempt-a", owner_wait)
+        loop._publish_recovery_wait(2, "attempt-a", owner_wait)
+        self.assertEqual(len(self.api.recovery_waits), 1)
+        attempt, blocker = self.api.recovery_waits[0]
+        self.assertEqual(attempt, "attempt-a")
+        self.assertTrue(blocker.startswith("Recovery is waiting on the owner: Could not verify"))
+        self.assertIn(f"attended-recover --config <runner config> --state {self.root} --slot 2 --recheck", blocker)
+        loop._publish_recovery_wait(2, "attempt-a", {"status": "retry", "reason": "Rechecking"})
+        loop._publish_recovery_wait(2, "attempt-a", {"status": "retry", "reason": "Rechecking"})
+        loop._publish_recovery_wait(2, "attempt-b", {"status": "retry", "reason": "Rechecking"})
+        self.assertEqual(self.api.recovery_waits[1:], [("attempt-a", None)])
 
     def test_expired_prepared_packet_without_relay_recovers_without_observation(self):
         from contextlib import closing

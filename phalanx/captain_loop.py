@@ -84,6 +84,7 @@ class CaptainLoop:
         self.blocked: dict[int, str] = {}
         # Leases left to expire because their exact writer stopped without a result.
         self.lapsing: dict[int, str] = {}
+        self.recovery_waits: dict[int, tuple[str, str] | None] = {}
         self.closed = False
         self._bind_identity()
         with self.runner._journal() as db:
@@ -437,12 +438,14 @@ class CaptainLoop:
                         "unchanged": True}
             if observation is not None and "packet" in snapshot:
                 self._check_observation(runner, snapshot, observation)
-            return run_recovery(
+            result = run_recovery(
                 self.root, self.config["runner_id"], self.api, RecoveryJournal(self.root, slot),
                 observations=observation.threads if observation else (),
                 discovery_complete=observation.discovery_complete if observation else False,
                 no_launch_proof=unlaunched_proof(runner, snapshot) if unlaunched else None,
             )
+            self._publish_recovery_wait(slot, snapshot.get("claim", {}).get("attempt_id"), result)
+            return result
         if "packet" not in snapshot or unlaunched:
             return self._prepare(slot, discovery)
         if observation is None:
@@ -467,6 +470,31 @@ class CaptainLoop:
                       "reservation while active. Inspect the worker; reply to it or cancel the item if it is stuck")
             return {"status": "worker_overdue", "reason": reason, "blocker": reason}
         return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
+
+    def _publish_recovery_wait(self, slot, attempt_id, result):
+        """Show an expired attempt's owner wait on the board, and clear it once recovery moves on."""
+        published = self.recovery_waits.get(slot)
+        if not attempt_id or result["status"] in {"adopted", "recovered"}:
+            self.recovery_waits.pop(slot, None)
+            return
+        blocker = None
+        if result["status"] == "owner_wait":
+            action = result.get("next_action") or "Address the reason"
+            blocker = (f"Recovery is waiting on the owner: {result['reason']}. {action.rstrip('.')}, then run "
+                       f"`python -m phalanx attended-recover --config <runner config> --state {self.root} "
+                       f"--slot {slot} --recheck`")
+        # Clear only a wait this loop published for the same attempt.
+        if blocker is None and not (published and published[0] == attempt_id):
+            self.recovery_waits.pop(slot, None)
+            return
+        if published != (attempt_id, blocker):
+            route = (f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/attempts/"
+                     f"{quote(attempt_id, safe='')}/recovery-wait")
+            self.api.call(route, {"blocker": blocker})
+        if blocker is None:
+            self.recovery_waits.pop(slot, None)
+        else:
+            self.recovery_waits[slot] = (attempt_id, blocker)
 
     def _check_observation(self, runner, snapshot, observation):
         if (datetime.now(timezone.utc) - observation.observed_at).total_seconds() > 60:
