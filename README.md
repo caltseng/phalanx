@@ -44,7 +44,7 @@ The `python -m phalanx` commands below are the same in either shell once the vir
 
 If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Without the lock file, `pip install -e .` installs only what the CLI, runner and Captain loop need; add the `server` extra (`pip install -e ".[server]"`) on the server host. Tests use the standard library and the same runtime dependencies.
 
-Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server applies pending migrations before serving requests and defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
+Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server creates a new store, or applies pending schema steps to an existing one, before serving requests and refuses a Phalanx store older than schema version 12 rather than upgrading it. It defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
 
 Set `PHALANX_LEASE_SECONDS` to change how long a claim or renewal keeps an attempt leased. It defaults to 300 and accepts whole seconds from 30 to 3600; the server refuses to start otherwise. Keep each runner's renewal interval well under it.
 
@@ -497,6 +497,125 @@ requirements from a separate operator-owned runner file. It is not yet wired
 into the attended CLI; preview adapters and draft-only recovery remain explicit
 integration requirements.
 
+### Run the GitHub reconciler
+
+The reconciler reads GitHub and git for every open item whose repository the
+runner configuration maps, and posts timestamped observations through the API.
+It holds no lease or slot, never changes an item's state and never blocks work.
+The server derives flags from the latest observation of each open execution:
+`head_drift`, `pr_closed`, `merge_conflict`, `checks_failed`, `review_feedback`,
+`unpublished_branch_merged` (item branch reachable from its base with no PR)
+and `pre_pr_checks_failed`. An observation older than 15 minutes keeps its
+flags, marked with when it was seen, and adds `observation_stale`. Each
+reconciler with no heartbeat for 15 minutes raises its own `reconciler_stale`.
+An incomplete GitHub read posts nothing, so earlier flags stand, and backs that
+repository off until a later pass.
+
+```powershell
+python -m phalanx reconcile --config runner.json --state C:\phalanx-reconciler
+```
+
+It needs `PHALANX_RUNNER_TOKEN` and `PHALANX_GITHUB_TOKEN`, and reuses the
+runner configuration's `base_url`, `runner_id`, `repositories` (checkout and
+`base_branch`), optional `validation_policy` and optional `notify_command`.
+With a validation policy, it reports each open PR's configured GitHub checks
+and runs the trusted local checks once per PR head, one at a time, in a scratch
+worktree under `--state`, heartbeating while they run. Results go to their own
+`local-checks` route, so they never re-assert an older PR snapshot. Failures
+raise a flag; they never gate the item. Only one reconciler can use a `--state`
+directory at a time. A
+checkout whose configured `origin` URL isn't the registered remote is refused.
+Owner-notify flags are sent once each to `notify_command`. Each pass prints one
+JSON line; `--once` runs a single pass and exits nonzero on any error.
+
+### Run a Captain on the direct path
+
+A Captain is an agent chat in any runtime that can start visible sessions. It
+launches one native worker session per item, registers it as the item's writer
+and coordinates it. It never does item work. The worker posts its own stage
+results with `phx work`, and the reconciler observes GitHub. See
+[docs/direct-sessions.md](docs/direct-sessions.md).
+
+The Captain's commands are `python -m phalanx shift ...`. They need
+`PHALANX_RUNNER_TOKEN` and a shift config, passed with `--config` (before or
+after the action) or set in `PHALANX_SHIFT_CONFIG`:
+
+```json
+{
+  "base_url": "http://127.0.0.1:8000",
+  "runtime": "copilot-app",
+  "charter": "C:\\phalanx\\charter\\charter.toml",
+  "worktrees": "C:\\phalanx\\direct\\worktrees",
+  "work_command": "python -m phalanx work",
+  "repositories": {
+    "phalanx-pilot-py": {"checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py", "base_branch": "main",
+                         "project_id": "<runtime project ID>"}
+  }
+}
+```
+
+`repositories` uses the runner configuration's mapping. `worktrees` is the root
+for item worktrees, and must be separate from any runner's. `work_command` is
+how a worker session runs `phx work` from its worktree. The default is
+`python -m phalanx work`.
+
+The charter is the Captain's standing authority. It is a TOML file on the
+runner host, outside every checkout, worktree and Git repository, so workers
+can't edit it:
+
+```toml
+goal = "Deliver the queued phalanx-pilot-py items"
+repositories = ["phalanx-pilot-py"]
+allowed_actions = ["launch, confirm, replace and withdraw writer sessions", "answer routine questions"]
+escalate = ["scope changes", "destructive actions", "missing credentials or authority"]
+stop_when = ["the owner ends the pilot"]
+notes = "Optional context for every Captain."
+
+[shift]
+max_hours = 4
+max_wakes = 48
+```
+
+`[shift]` is optional and defaults to 4 hours and 48 wakes (D7). `shift
+charter` validates the file and prints its revision, the SHA-256 of its bytes.
+Each heartbeat re-reads the charter and records that revision.
+
+| Command | Does |
+| --- | --- |
+| `shift prompt captain` | Prints the Captain prompt, the fixed wake loop. Needs no config |
+| `shift charter` | Validates the charter and prints it with its revision |
+| `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
+| `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session] [--handoff-note]` | Re-reads the charter and heartbeats. Omitted fields keep their last value. Prints `shift.handoff_due` once a shift bound is reached |
+| `shift status` | Flags, Captains and the charter's open items with their writers |
+| `shift launch --captain ID --item ITEM [--replaces WRITER]` | Prepares the item worktree, saves the writer credential in its Git directory and registers the writer intent. Prints `session_name`, which holds the nonce, and the worker's `kickoff` prompt. A rerun reuses the saved nonce, so a lost reply never launches twice |
+| `shift writer --captain --item --execution --writer [--session-id] [--session-url] [--state] [--abandon]` | Confirms a launched session or reports its state |
+| `shift withdraw --captain --item --execution --writer --reason [--stopped]` | Ends a writer whose session is stopped or never launched |
+
+#### In the GitHub Copilot app
+
+1. Start a new chat. Ask it to run `python -m phalanx shift prompt captain
+   --config <shift config>` and follow the printed prompt. Its first wake
+   registers it with `shift start --session-ref <its session ID>`.
+2. Have the Captain wake every 5 minutes (D5) with a session automation on its
+   own chat (`save_session_automation`, interval `minutes`, `every_minutes` 5).
+   Use the prompt "Wake: run `python -m phalanx shift prompt captain --config
+   <shift config>` and follow its Every wake steps." Idle notifications from
+   its worker sessions wake it sooner.
+3. To launch a worker, the Captain runs `shift launch`, then creates one
+   session with `create_session`:
+   - the `project_id` from `add_repository` with the returned `worktree` path;
+   - `workspace_type` `branch`, so the session uses that worktree;
+   - `name` set to `session_name`;
+   - kickoff `prompt` set to `kickoff`, with mode `autopilot`.
+
+   It confirms the session with `shift writer --session-id <session ID>`.
+   `list_sessions_and_chats` finds a lost launch by its name, which holds the
+   nonce.
+
+Watch the run on the [operator board](#operator-work-board), which shows each
+item's writer, the live Captains and the flags. `GET /v1/captains` and `GET
+/v1/flags` return the same data.
+
 ### Reconcile an attended reservation
 
 From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.
@@ -662,7 +781,7 @@ results under a recovery claim.
 
 #### Transactions and tests
 
-Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. So neither reads nor writes wait more than one turn of the other, however deep the write queue gets in DELETE journal mode. The gate adds no timeout of its own, because one write turn may legitimately outlast the busy timeout across `BEGIN` and `COMMIT`. Don't call it inside a write transaction. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Lease checks and idempotency keys make retrying the identical request safe. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
+Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. So neither reads nor writes wait more than one turn of the other, however deep the write queue gets in DELETE journal mode. The gate adds no timeout of its own, because one write turn may legitimately outlast the busy timeout across `BEGIN` and `COMMIT`. Don't call it inside a write transaction. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Lease checks and idempotency keys make retrying the identical request safe. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction. Steps change the schema only: don't add steps that rewrite existing rows or keep old formats readable. Stores older than `OLDEST_SUPPORTED_VERSION` are refused.
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. Before opening or updating a PR, run only the modules that cover the change, as [AGENTS.md](AGENTS.md) describes. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu and macOS with CPython 3.14. Each of those runs is split into three parallel jobs with `python tests/shard.py INDEX 3`, which deals the discovered tests round-robin so each test runs exactly once, and the single `Tests` check passes only when every shard passes. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
 
@@ -689,7 +808,10 @@ Set `PHALANX_OWNER_TOKEN` to the same owner token used by the server. Set `PHALA
 python -m phalanx register example https://github.com/example/project.git
 python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
 python -m phalanx inspect <item_id>
+python -m phalanx cancel <item_id> --reason "Superseded by a newer item"
 ```
+
+`cancel` reads the item's current execution and version, then requests cancellation with an idempotency key bound to that version. Retrying it after a lost response is safe: if the first request committed, the retry fails with a visible version conflict instead of cancelling twice.
 
 Register the expected remote without credentials. These are intake targets: `checked_in` (the default when `--target` is omitted) merges the PR once GitHub's required reviews and checks pass, unless the runner's `auto_merge` is off; `ready_for_check_in` stops at the reviewed, ready PR; `report` delivers a Markdown report. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
 

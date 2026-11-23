@@ -4,10 +4,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx.github import GitHubClient, HTTPResponse
-from phalanx.published_validation_stage import (
-    PublishedValidationAssignment, PublishedValidationPolicy, PublishedValidationRunner,
-)
+from phalanx.published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
 from phalanx.validation import CheckKind, RequiredCheck
+from phalanx.validation_policy import PublishedValidationPolicy
 from phalanx.workspaces import _item_branch
 
 from test_github import BASE, HEAD, pull, response

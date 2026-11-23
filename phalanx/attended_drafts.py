@@ -41,9 +41,7 @@ def development_checkpoint(journal, claim):
     if row is None or row[0] is None:
         return None
     checkpoint = json.loads(row[0])
-    provenance = checkpoint.get("base")
-    if provenance is None:
-        return None
+    provenance = checkpoint["base"]
     from .draft_stage import DevelopmentCheckpoint
 
     return DevelopmentCheckpoint(

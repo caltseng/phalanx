@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from phalanx import store
-from phalanx.store import connect, migrate, read_transaction, write_transaction
+from phalanx.store import APPLICATION_ID, connect, migrate, read_transaction, write_transaction
 from timing import WAIT_SECONDS
 
 
@@ -166,13 +166,19 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 with self.subTest(value=value), self.assertRaises(ValueError):
                     lease_seconds()
 
-    def test_migration_refuses_foreign_and_future_databases(self):
+    def test_migration_refuses_foreign_old_and_future_databases(self):
         with TemporaryDirectory() as directory:
             foreign = Path(directory) / "foreign.sqlite3"
             with connect(foreign, mode="rwc") as db:
                 db.execute("CREATE TABLE other (value TEXT)")
             with self.assertRaises(ValueError):
                 migrate(foreign)
+            old = Path(directory) / "old.sqlite3"
+            with connect(old, mode="rwc") as db:
+                db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
+                db.execute("PRAGMA user_version = 1")
+            with self.assertRaisesRegex(ValueError, "predates"):
+                migrate(old)
             future = Path(directory) / "future.sqlite3"
             migrate(future)
             with connect(future) as db:
