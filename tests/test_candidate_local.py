@@ -11,6 +11,7 @@ from uuid import uuid4
 from phalanx.attended import RunnerError
 from phalanx.candidate_local import CandidateLocal, LocalCheck, _kill_tree
 from phalanx.handoff import Outcome, WorkerResult
+from phalanx.intake_models import Result
 from phalanx.validation import PreCheck, PreOutcome
 from phalanx.workspaces import WorkspaceError, WorkspaceManager
 
@@ -137,11 +138,47 @@ class CandidateLocalTest(unittest.TestCase):
             f"pathlib.Path({str(started)!r}).touch(); time.sleep(60)"
         )), timeout_seconds=2)
         body = self.operation("pre_pr_validation").pre_validate((check,))
-        self.assertEqual(body["outcome"], "changes_required")
-        self.assertEqual(body["local_checks"][0]["reason"], "Timed out after 2 seconds")
+        self.assertEqual(body["outcome"], "failed")
+        self.assertEqual(body["local_checks"][0]["reason"],
+                         "Timed out after 2 seconds, no failure identified")
         self.assertTrue(started.exists())
         time.sleep(4)
         self.assertFalse(survived.exists())
+
+    def test_pure_timeout_retries_validation_before_returning_to_development(self):
+        hangs = replace(self.command("suite", "import time; print('Running', flush=True); time.sleep(60)"),
+                        timeout_seconds=1)
+        operation = self.operation("pre_pr_validation")
+        for retries, delay in ((0, 60), (1, 120)):
+            operation.execution["retry_count"] = retries
+            body = operation.pre_validate((hangs,))
+            self.assertEqual(body["outcome"], "failed")
+            self.assertEqual(body["retry_after_seconds"], delay)
+            self.assertEqual(body["candidate"], self.workspace.head)
+            self.assertIn(f"suite timed out with no failure identified; retrying validation in {delay} "
+                          f"seconds (retry {retries + 1} of 2)", body["failure_reason"])
+            Result.model_validate(body)
+        operation.execution["retry_count"] = 2
+        exhausted = operation.pre_validate((hangs,))
+        self.assertEqual(exhausted["outcome"], "changes_required")
+        self.assertEqual(exhausted["local_checks"][0]["reason"],
+                         "Timed out after 1 seconds, no failure identified\n\nOutput tail:\nRunning")
+
+    def test_timeout_with_identified_failures_returns_to_development(self):
+        operation = self.operation("pre_pr_validation")
+        for output in ("..F..", "FAIL: test_x (tests.test_y.Case.test_x)", "ERROR: test_x",
+                       "tests/test_y.py ..E. [ 40%]", "Traceback (most recent call last):"):
+            with self.subTest(output=output):
+                check = replace(self.command("suite", f"import time; print({output!r}, flush=True); "
+                                             "time.sleep(60)"), timeout_seconds=1)
+                body = operation.pre_validate((check,))
+                self.assertEqual(body["outcome"], "changes_required")
+                self.assertTrue(body["local_checks"][0]["reason"].startswith(
+                    "Timed out after 1 seconds with failures\n\nOutput tail:\n"))
+        hangs = replace(self.command("hangs", "import time; time.sleep(60)"), timeout_seconds=1)
+        fails = self.command("fails", "raise SystemExit(1)")
+        mixed = operation.pre_validate((hangs, fails))
+        self.assertEqual(mixed["outcome"], "changes_required")
 
     @unittest.skipIf(sys.platform == "win32", "POSIX process groups")
     def test_process_group_kill_tolerates_permission_error(self):

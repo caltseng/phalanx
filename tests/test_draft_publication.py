@@ -14,6 +14,7 @@ from phalanx.git_publication import PublicationResult
 from phalanx.github import ATTRIBUTION, GitHubClient
 from phalanx.workspaces import _item_branch
 from test_github import response
+from timing import WAIT_SECONDS
 
 CANDIDATE = "a" * 40
 BASE = "b" * 40
@@ -260,7 +261,7 @@ class DraftPublicationTests(unittest.TestCase):
 
         def pause():
             paused.set()
-            self.assertTrue(release.wait(30))
+            self.assertTrue(release.wait(WAIT_SECONDS))
 
         def check_claim(_intent, claim):
             if claim == second:
@@ -277,13 +278,13 @@ class DraftPublicationTests(unittest.TestCase):
         successor = None
         writer.start()
         try:
-            self.assertTrue(paused.wait(30))
+            self.assertTrue(paused.wait(WAIT_SECONDS))
             self.active = second
             self.git.head = OTHER
             newer = replace(self.intent, candidate=OTHER)
             successor = threading.Thread(target=publish, args=("second", newer, second))
             successor.start()
-            self.assertTrue(successor_started.wait(30))
+            self.assertTrue(successor_started.wait(WAIT_SECONDS))
             self.assertNotIn("second", results)
         finally:
             release.set()

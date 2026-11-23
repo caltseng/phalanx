@@ -77,7 +77,9 @@ make the worktree dirty. Arguments are literal: no path
 discovery, interpolation, or environment expansion. `timeout_seconds` defaults
 to 60 and must be an integer from 1 through 86400; booleans are not integers.
 A check that times out is stopped with the processes it started and recorded as
-failed.
+failed. Its reason says whether the output identified failures (`FAIL:`,
+`ERROR:` or `FAILED` lines, a traceback, or `F`/`E` progress markers):
+"timed out ... with failures" or "timed out ..., no failure identified".
 
 `allow_skip` and `allow_inapplicable` default to false and must be JSON booleans.
 A `bypass` replaces the command and cannot include `argv` or `timeout_seconds`.
@@ -150,7 +152,20 @@ with the findings in the server state. A failed check's reason includes the
 last 4 KB of its combined stdout and stderr. The next development packet carries
 them as `review_findings` in its context. If they need no change, for example a
 flaky check, development may return the candidate unchanged to rerun
-validation; the server's rework cap bounds such loops. When the reviewed candidate differs
+validation; the server's rework cap bounds such loops. A timeout with no
+identified failure is ambiguous between a hung test and host contention, so
+it doesn't go back to development at first: the runner submits a failed result
+and the server retries `pre_pr_validation` after 60 s, then 120 s. The retries
+appear in transition history and as "Retry scheduled" on the board. A third
+pure timeout, or any timeout with identified failures, returns to development
+with the output tail.
+
+The runner runs at most `"local_check_capacity"` (optional runner config, 1 to
+64, default 1) local check sets at once on its host, using lock files under
+the attended state root. A validation that finds every slot busy runs no
+check. It waits as external gate `local_check_capacity` with the reason
+"Waiting for local check capacity" and is rechecked after 30 s, so waiting
+never counts against a check's timeout. When the reviewed candidate differs
 from the primary PR's head, `pr_promotion` first fast-forwards the item branch
 to it, leased on the observed PR head, then collects draft checks on the new
 head. A rebased candidate replaces the PR head under the same lease, but only

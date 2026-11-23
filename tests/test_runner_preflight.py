@@ -86,11 +86,13 @@ class RunnerPreflightTests(ServerFixture, unittest.TestCase):
 
     def test_check_timing_must_be_bounded_whole_numbers(self):
         self.start_server(self.directory / "server.sqlite3")
-        preflight({"base_url": self.url, "check_recheck_seconds": 5, "check_wait_limit_seconds": 60}, RUNNER)
+        preflight({"base_url": self.url, "check_recheck_seconds": 5, "check_wait_limit_seconds": 60,
+                   "local_check_capacity": 2}, RUNNER)
         for key, value in (("check_recheck_seconds", 4), ("check_recheck_seconds", 86401),
                            ("check_recheck_seconds", 10.5), ("check_recheck_seconds", True),
                            ("check_recheck_seconds", "30"), ("check_wait_limit_seconds", 59),
-                           ("check_wait_limit_seconds", None)):
+                           ("check_wait_limit_seconds", None), ("local_check_capacity", 0),
+                           ("local_check_capacity", 65), ("local_check_capacity", True)):
             with self.subTest(key=key, value=value), self.assertRaisesRegex(RunnerError, key):
                 preflight({"base_url": self.url, key: value}, RUNNER)
 
