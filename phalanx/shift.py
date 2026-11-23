@@ -199,11 +199,28 @@ def _read_credential(path):
 
 def kickoff(item, worktree, nonce, work_command, base):
     criteria = item.get("acceptance_criteria") or []
+    mode = item["execution"]["state"].get("publication_mode", "ready")
+    if mode == "draft":
+        publication = (
+            f"open one draft PR with an explicit base (`gh pr create --draft --base {base}`). "
+            "Reuse the branch's open PR instead of creating another. Disable any existing auto-merge "
+            "(`gh pr merge --disable-auto`); if it is ready, convert it to draft (`gh pr ready --undo`). "
+            f"Retarget it to `{base}` if needed. Never promote, enable auto-merge or merge this PR, "
+            "even for a `checked_in` target. Delivery stops at a verified draft."
+        )
+    else:
+        publication = (
+            f"open one ready (not draft) PR with an explicit base (`gh pr create --base {base}`). "
+            "Reuse the branch's open PR instead of creating another: mark it ready if it is a draft "
+            f"(`gh pr ready`) and retarget it to `{base}` if needed. For a `checked_in` target, "
+            "enable GitHub auto-merge with any method the repository allows."
+        )
     template = Template(resources.files("phalanx").joinpath("prompts", "worker.md").read_text(encoding="utf-8"))
     return template.substitute(
         item_id=item["id"], execution_id=item["execution"]["id"], repository=item["repository_id"],
         target=item["target"], goal=item["goal"], worktree=worktree, nonce=nonce, work=work_command,
-        base=base, criteria="\n".join(f"- {entry}" for entry in criteria) or "- None beyond the goal",
+        base=base, publication=publication, publication_mode=mode,
+        criteria="\n".join(f"- {entry}" for entry in criteria) or "- None beyond the goal",
     )
 
 

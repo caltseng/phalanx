@@ -6,6 +6,11 @@ Phalanx lets its users dispatch work across registered repositories and have loc
 
 ## Work items and repositories
 
+- Direct writer sessions support intake `publication_mode: "draft"` (default `"ready"`) as a
+  publication ceiling for PR targets. The writer never promotes or merges that PR; delivery ends
+  only after the reconciler verifies the open draft at the self-reviewed head and target base.
+  Draft delivery does not satisfy ready/check-in dependencies. See
+  [direct-session publication](docs/direct-sessions.md#pr-publication-and-delivery).
 - A work item has an ID, repository, goal, output type (`report` or `pull_request`), status, and timestamps. Optional fields include context links, acceptance criteria, a target branch, and dependencies on other work items. An API caller may provide an idempotency key so resubmitting the same request returns the original item.
 - A registered repository has a stable ID and expected remote. Each runner maps that ID to a local checkout and verifies the remote before starting. Repository instructions apply to each run. An item waits if no eligible runner can access its repo.
 - GitHub issue intake is an explicit local `ingest-issue` command for a registered `github.com` repository and issue number. The local client reads the issue and all comments with its own GitHub credential, then submits an immutable snapshot and source link through owner-authenticated API intake. The operator chooses the completion target; issue content cannot grant permissions, change runner configuration, or register repositories. A stable per-repository issue idempotency key prevents duplicate retry publication; edited snapshots conflict instead of replacing existing work. Polling, webhooks and ongoing synchronization are not part of this path.

@@ -12,6 +12,12 @@ The first milestone runs the HTTP API server and durable store locally, with con
 
 See the [design spec](SPEC.md) for the proposed workflow, the [roadmap](ROADMAP.md) for the order of the big steps, and the [implementation plan](IMPLEMENTATION_PLAN.md) for milestones and acceptance checks. Open [state-machine.html](state-machine.html) locally in a browser to explore the lifecycle and execution status graphs.
 
+For a reviewable PR that must **stay a draft**, use direct sessions and add
+`--publication-mode draft` to `intake` or `ingest-issue` (API: `"publication_mode": "draft"`).
+This stops at a GitHub-verified draft even for a `checked_in` target, without promotion or
+auto-merge. The board shows **draft only** while open and **draft published** on completion;
+it does not count as ready for dependent work. See the [publication contract](docs/direct-sessions.md#pr-publication-and-delivery).
+
 Every closed work item has a final output. If it ends without the requested deliverable, Phalanx stores a field report explaining what happened and what remains.
 
 ## Run the local API

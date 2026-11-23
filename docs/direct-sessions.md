@@ -71,6 +71,27 @@ A writer-bound PR item goes `development` → `self_review` → `publication` �
 2. **Delivery.** The execution waits as `delivery / waiting_for_external` with no attempt, and the reconciler's observations drive it (see the next section). The writer stays registered. It watches the PR on GitHub and fixes failing checks, review feedback and conflicts by pushing to the open PR, which needs no attempt. The Captain sees the same problems as `checks_failed`, `review_feedback`, conflict and `head_drift` flags. The next observation picks up the new head.
 3. **Closed without merge.** The server asks the owner. A reply queues `delivery` for the writer, which reopens the PR or explains, then posts a result to return to the wait.
 
+**Draft-only publication.** Intake can set `"publication_mode": "draft"` (default: `"ready"`)
+for either PR target. This is a delivery ceiling, including for `checked_in`: the writer opens
+with `gh pr create --draft --base <target>`, never promotes or merges, and never enables auto-merge.
+When reusing an open ready PR it disables auto-merge and converts it to draft. The mode is
+snapshotted on the execution, retained on reruns, and included in the writer's kickoff and status.
+Draft-only items are reserved for direct writers and cannot enter the legacy runner's promotion path.
+
+The publication result still only records the primary PR URL. Delivery completes only when the
+trusted reconciler observes that exact PR open, unmerged and draft, on the deterministic item branch,
+at the self-reviewed candidate and target base branch. This verifies publication, not CI or merge
+readiness: draft-only delivery needs no check policy, ready-only CI, review approval or mergeability.
+A wrong base or head keeps waiting, and a ready PR also raises `draft_required`. A closed PR asks
+the owner as usual. An actual merge remains a GitHub delivery fact, never reported as a draft.
+Completing a draft ends the writer without setting a ready milestone or releasing ready/check-in
+dependencies. The board labels open work **draft only** and its completed outcome **draft published**,
+distinct from **ready for check in** and **checked in**.
+
+For example: `python -m phalanx intake churchtree "Prepare a reviewable PR" --target ready_for_check_in --publication-mode draft`.
+`ingest-issue` accepts the same option. This is an explicit intake setting; no change to
+`pr_promotion` or other runner-only stages is involved.
+
 Pre-PR local checks are flags, not a gate (D3). The reconciler runs the trusted policy's local checks on each new head and posts them as flags. Repository rules and required checks gate the merge. An independent reviewer session for `adversarial_review` isn't part of the direct path yet.
 
 ## GitHub reconciliation

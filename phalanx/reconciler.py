@@ -222,7 +222,8 @@ class Reconciler:
                 # The server records how and when the PR merged with the delivery.
                 body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
                 body["pr"]["merged_at"] = pull.merged_at
-            if pull.state == "open":
+            draft_only = item.get("execution", {}).get("state", {}).get("publication_mode") == "draft"
+            if pull.state == "open" and not draft_only:
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)
                 # None means the policy doesn't establish this phase's checks, so there is nothing to report.

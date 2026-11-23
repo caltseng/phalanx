@@ -324,6 +324,58 @@ class WriterTest(ServerFixture, unittest.TestCase):
                            (json.dumps(dict(state, stage=stage, primary_pr=primary)), execution_id))
             self.register(item_id, execution_id, code=409)
 
+    def test_draft_publication_verifies_github_without_releasing_ready_dependencies(self):
+        for target in ("ready_for_check_in", "checked_in"):
+            with self.subTest(target=target):
+                binding, token = self.publish(target, publication_mode="draft", target_branch="main")
+                dependent, execution_id = self.pr_item(
+                    "report", dependencies=[{"upstream_id": binding["item_id"], "milestone": "ready_for_check_in"}])
+                waiting, dependent_token, _ = self.register(dependent, execution_id)
+                self.assertIsNone(waiting["writer"]["attempt_id"])
+                binding = self.submit(token, binding, pr_url=PR_URL)
+                self.assertEqual(binding["state"]["publication_mode"], "draft")
+                self.assertIn("open draft", binding["state"]["wait"]["reason"])
+                for pull, flag in (({}, "draft_required"), ({"draft": True, "head_sha": OTHER}, "head_drift"),
+                                   ({"draft": True, "base_ref": "dev"}, "wrong_base")):
+                    state = self.observe(binding, **pull)["state"]
+                    self.assertEqual(state["status"], "waiting_for_external")
+                    self.assertEqual(state["candidate"], HEAD)
+                    self.assertIsNone(state["ready_revision"])
+                    self.assertIn(flag, {f["kind"] for f in self.ok("/v1/flags", OWNER)["flags"]
+                                         if f["item_id"] == binding["item_id"]})
+                # Draft-only publication does not wait for ready-only CI or mergeability.
+                body = {"observed_at": datetime.now(UTC).isoformat(), "target_base": "main",
+                        "pr": {"number": 7, "state": "open", "merged": False, "draft": True,
+                               "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD,
+                               "base_ref": "main", "base_sha": BASE}}
+                route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+                self.ok(route + "/github-observation", RUNNER, body)
+                state = self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]["state"]
+                self.assertEqual((state["status"], state["final_output"]["draft"]), ("completed", True))
+                self.assertIsNone(state["ready_revision"])
+                self.ok("/v1/writer", token, code=401)
+                self.assertIsNone(self.ok("/v1/writer/attempt", dependent_token, method="POST")["writer"]["attempt_id"])
+                board = self.ok(f"/v1/operator/executions/{binding['id']}/timeline", OWNER)["item"]
+                self.assertEqual((board["publication_mode"], board["outcome"]), ("draft", "draft_published"))
+                self.assertIsNone(board["delivery"])
+
+    def test_draft_intake_cannot_enter_legacy_promotion_and_survives_rerun(self):
+        item_id, execution_id = self.pr_item("checked_in", publication_mode="draft")
+        with write_transaction(self.path) as db:
+            claim = dispatch.claim(db, Claim(runner_id="local", repository_ids=["repo"], stages=["development"]),
+                                   intake.digest(token_urlsafe(32)))
+        self.assertEqual(claim["status"], "no_eligible_work")
+        binding, token, _ = self.register(item_id, execution_id)
+        binding = self.submit(token, binding, candidate=HEAD)
+        binding = self.submit(token, binding, reviewed_candidate=HEAD)
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.observe(binding, draft=True)
+        rerun = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/rerun", OWNER,
+                        {"expected_version": self.version(item_id), "target": "checked_in"})
+        self.assertEqual(rerun["state"]["publication_mode"], "draft")
+        self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "No PR", "target": "report",
+                                    "publication_mode": "draft"}, 422)
+
     def test_captain_sessions_actions_handoff_and_reconciler_retirement(self):
         item_id, execution_id = self.item()
         binding, _, body = self.register(item_id, execution_id)

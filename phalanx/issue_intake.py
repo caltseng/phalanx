@@ -8,7 +8,7 @@ from .github import GitHubClient
 from .intake_models import Intake
 
 
-def ingest_issue(api_request, base_url, repository_id, number, target, *, key=None):
+def ingest_issue(api_request, base_url, repository_id, number, target, *, key=None, publication_mode="ready"):
     if not os.environ.get("PHALANX_OWNER_TOKEN"):
         raise ValueError("PHALANX_OWNER_TOKEN is required for this command")
     token = os.environ.get("PHALANX_GITHUB_TOKEN", "")
@@ -30,7 +30,7 @@ def ingest_issue(api_request, base_url, repository_id, number, target, *, key=No
         goal += f"\n\n## Comment by @{comment.author}\n{comment.url}\n\n{comment.body}"
         _check_size(goal)
     payload = Intake(repository_id=repository_id, goal=goal, target=target,
-                     context_links=[issue.url])
+                     context_links=[issue.url], publication_mode=publication_mode)
     # Keep issue edits from silently creating another item after an uncertain POST.
     identity = f"{repository_id}:{repository}:{number}"
     key = key or f"github-issue:{sha256(identity.encode()).hexdigest()}"

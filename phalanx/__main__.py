@@ -58,11 +58,14 @@ def main() -> None:
     intake.add_argument("repository")
     intake.add_argument("goal")
     intake.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
+    intake.add_argument("--publication-mode", choices=["ready", "draft"], default="ready",
+                        help="direct sessions: stop at a verified draft instead of promoting or merging")
     intake.add_argument("--key", help="reuse this key when retrying the same request")
     issue = commands.add_parser("ingest-issue", help="file a registered repository's GitHub issue")
     issue.add_argument("repository", help="registered Phalanx repository ID")
     issue.add_argument("number", type=int, help="GitHub issue number in that repository")
     issue.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
+    issue.add_argument("--publication-mode", choices=["ready", "draft"], default="ready")
     issue.add_argument("--key", help="override the stable issue key for an intentional new import")
     inspect = commands.add_parser("inspect", help="show a work item and its current execution")
     inspect.add_argument("item_id")
@@ -116,12 +119,13 @@ def main() -> None:
         elif args.command == "intake":
             result = api_request(
                 args.api_url, "/v1/items", key=args.key,
-                body={"repository_id": args.repository, "goal": args.goal, "target": args.target},
+                body={"repository_id": args.repository, "goal": args.goal, "target": args.target,
+                      "publication_mode": args.publication_mode},
             )
             print(json.dumps(result, indent=2))
         elif args.command == "ingest-issue":
             result = ingest_issue(api_request, args.api_url, args.repository, args.number,
-                                  args.target, key=args.key)
+                                  args.target, key=args.key, publication_mode=args.publication_mode)
             print(json.dumps(result, indent=2))
         elif args.command == "inbox":
             query = {"limit": args.limit, "after_time": args.after_time}

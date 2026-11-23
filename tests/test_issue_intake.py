@@ -119,6 +119,18 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(explicit["execution"]["state"]["stage"], "report_drafting")
         self.assertEqual(self.ingest(target="report", key="intentional-new-import"), explicit)
 
+    def test_cli_intake_and_issue_intake_preserve_draft_publication(self):
+        for command in (["intake", "example", "Review only"],
+                        ["ingest-issue", "example", "42"]):
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["phalanx", "--api-url", self.url, *command,
+                                           "--target", "ready_for_check_in", "--publication-mode", "draft"]):
+                with redirect_stdout(output):
+                    main()
+            item = json.loads(output.getvalue())
+            self.assertEqual(item["publication_mode"], "draft")
+            self.assertEqual(item["execution"]["state"]["publication_mode"], "draft")
+
     def test_unregistered_or_non_github_repository_and_credentials_cannot_import(self):
         with self.assertRaisesRegex(ValueError, "not registered"):
             self.ingest(repository="unknown")

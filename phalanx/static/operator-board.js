@@ -124,7 +124,7 @@
    * The host supplies the authenticated adapter and translates API fields here.
    * source.list({kind, cursor, limit, signal}) resolves to {items, nextCursor}. kind is "open" or "closed".
    * Cursors are opaque strings or null. Closed items come newest first; open work puts input waits first.
-   * Items contain string id, itemId?, version?, title (one line), goal?, target?, repo, stage, status,
+   * Items contain string id, itemId?, version?, title (one line), goal?, target?, publicationMode?, repo, stage, status,
    * createdAt?, lastAdvancedAt, lastProgressAt?, waitSince?, waitReason?, resumeTrigger?, retryAt? and
    * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
@@ -390,7 +390,8 @@
           text: epoch(item.createdAt) && epoch(item.closedAt) ? span(epoch(item.closedAt) - epoch(item.createdAt)) : "—" }),
         h("span", { class: "reason faint", text: item.target ? "target " + label(item.target) : "" })
       ] : [
-        h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status), text: label(item.stage) }),
+        h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status),
+          text: label(item.stage) + (item.publicationMode === "draft" ? " · draft only" : "") }),
         ago(item.lastAdvancedAt, now, { class: "age", "aria-label": "In stage" }),
         prCell(item),
         writerCell(item),
@@ -463,6 +464,7 @@
         ["Status", item.outcome ? label(item.outcome) : label(item.status)],
         ["Stage", h("span", {}, label(item.stage), " · ", ago(item.lastAdvancedAt, now))],
         ["Target", item.target && label(item.target)],
+        ["Publication", item.publicationMode === "draft" ? "Draft only; no promotion or merge" : "Ready"],
         ["Version", item.version != null && "v" + item.version],
         ["Age", ago(item.createdAt, now)],
         ["Last progress", epoch(item.lastProgressAt) && ago(item.lastProgressAt, now)],
