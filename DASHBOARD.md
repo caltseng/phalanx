@@ -1,6 +1,8 @@
-# Phalanx dashboard
+# Phalanx dashboard (Scribe)
 
 Status: **accepted by Caleb** (#112). Implementation rows go into [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The [Operator view](SPEC.md#operator-view) in SPEC.md remains the v1 contract. This document sets the goals, the UI principles and the target experience for the hosted dashboard.
+
+The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API routes (`/v1/operator/*`) and its code keep the `operator` name. The local board at `/operator/` implements the home page, row anatomy and inline detail described below. It follows the direct-sessions model ([docs/direct-sessions.md](docs/direct-sessions.md)): items and executions, writers, Captains and flags. It doesn't design around slots or the relay.
 
 ## Goal
 
@@ -23,47 +25,43 @@ If every one of those had been a Phalanx work item, the dashboard would have nee
 
 | Situation | Example from the build | What the dashboard must show |
 | --- | --- | --- |
-| Burst intake | #4 to #10 opened within 7 minutes. | A running list with each item's stage and time in stage, plus slots used out of total. Rows don't jump around when new work arrives. |
+| Burst intake | #4 to #10 opened within 7 minutes. | A running list with each item's stage, time in stage and writer. Rows don't jump around when new work arrives. |
 | One goal, many PRs | PH-13 shipped as #15, #22, #31, #40 and #61. PH-14a and PH-15a were each split into numbered parts. | Grouping by label, such as a plan row or campaign, with a rollup: delivered, open, and age of the oldest open item. |
 | Small bookkeeping next to features | About 25 plan and decision PRs, such as #59, #84, #99, #103, #106 and #109. | Filters and grouping so one-line docs PRs don't bury feature work. |
 | Long-running outliers | #80, #81 and #82 were each open 8 to 11 hours. #43 took 2.6 hours and changed 2,000 lines. | Age that's visible and sortable. Work that is stale past a threshold rises into **Needs you**. |
 | Review fix rounds | #105 (the 503 mapping) and #108 (the unbounded writer wait) each needed one fix round. | The revision round count and the latest findings, on the row and in the detail view. |
 | Duplicates | #104 duplicated #103. | The primary PR with a "1 duplicate" chip that links to the duplicate. |
 | Stacks and prerequisites | #111 stacked on #110, and PH-19b had to finish before PH-V1. | "Blocked by" chips on the row. The detail view lists upstream and downstream items. |
-| Breakage found after delivery | Main went red after PH-19a (#105), which led to #107 and #108. | A health strip with default-branch CI for each repository. Later, links from a fix to the item that caused the breakage. |
+| Breakage found after delivery | Main went red after PH-19a (#105), which led to #107 and #108. | The top bar shows default-branch CI for each repository. Later, links from a fix to the item that caused the breakage. |
 | Questions for Caleb | Confirming decision 32, and the Google OAuth client. | **Needs you** at the top: the question, the options, the proposed default and how long it has waited. |
 | Decisions made on his behalf | 38 of the 46 decisions were made by the Captain. | Later, a review feed of Captain decisions waiting for Caleb's confirmation. |
 | Field reports | Scheduled reflections, and the PH-V1 acceptance report. | Reports rendered as Markdown on the page, not raw text. |
 | Interrupted work | PH-V1 gate 4 stopped the server mid-stage and held workers past lease expiry. | A disconnected or stale banner while the server is down. After a restart, recovering items stay visible and show "recovering". History stays complete. |
 | Several repositories | phalanx, phalanx-pilot-py and phalanx-pilot-web. | A repository column and filter, with counts for each repository. |
 
-This is roughly how the home page would have looked at the peak. The stages and times are illustrative.
+This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Each line is one row; `!`, `▶`, `◷`, `○`, `✓` and `✕` always come with their status text for screen readers.
 
 ```text
-PHALANX          ● Live · updated 4s ago   Dispatch on · Runner 1/1 · Slots 4/8 · Oldest queued 9m
-──────────────────────────────────────────────────────────────────────────────────────────────
-NEEDS YOU (0)    Nothing needs you.
-──────────────────────────────────────────────────────────────────────────────────────────────
-NOW (10)                                                   Group: label ▾   Repo: all ▾   🔍
- Running (4)
-  PH-15  Add direct GitHub check-in coordinator    development         4m   worker ↗
-  PH-12  Reconcile reservations after restart      self_review         2m   worker ↗
-  PH-14  Promote the verified primary PR           pr_promotion        1m   #30 draft ↗
-  PH-08  Persist waits, replies, rechecks          pr_revision  r2     6m   #24 ✕ CI ↗
- Waiting on checks (4)
-  PH-14  Collect GitHub validation checks          pr_validation       3m   #26 ● CI, recheck 1m
-  PH-11  Connect Captain to runner claims          pr_reconciliation  12m   #18 ● CI, recheck 30s
-  PH-18  Connect board to authenticated reads      check_in            1m   #28 merging
-  PH-07  Enforce prerequisites at claim            adversarial_review  2m   #20 review
- Queued (2)
-  PH-13  Run draft publication under the claim     queued              1m   next to run
-  PH-15  Record PR review and check-in evidence    blocked             9m   blocked by PH-15 #29
-──────────────────────────────────────────────────────────────────────────────────────────────
-DELIVERED (last 24h: 25)                                                             History →
-  ✓ checked in   PH-19  Exercise queue fairness under a stalled backlog    #25 +99/-0   27s
-  ✓ checked in   PH-17  Add bounded operator queue and timeline reads      #21 +468/-1  9m
-  ✓ checked in   PH-13  Journal and reconcile runner draft publication     #22 +657/-19 4m
-  …
+Ⓐ PHALANX Scribe  ● Live updated 4s ago   1 needs you  4 active  6 queued  2 flags  1/1 Captains live   ◐ Auto  Refresh
+NEEDS YOU 1
+ ! Confirm decision 32: OAuth client          phalanx  development     41m  —    idle         Which OAuth client should sign-in use?
+FLAGS 2
+ ◷ ▸ head drift ×2                            Head moved after validation; revalidate                                         6m
+CAPTAINS 1/1
+ ▶ Captain 52940744 live        ♥ 30s  wakes 8  charter e04f548  focus: PH-15, PH-12, PH-14
+ACTIVE 4
+ ▶ PH-15 Add direct GitHub check-in coordin…  phalanx  development      4m  —    busy         running
+ ▶ PH-12 Reconcile reservations after resta…  phalanx  self review      2m  —    busy         running
+ ▶ PH-14 Promote the verified primary PR      phalanx  pr promotion     1m  #30  unconfirmed  running
+ ▶ PH-08 Persist waits, replies, rechecks     phalanx  pr revision      6m  #24  busy         ↺ CI failed on head 7caa5c2
+QUEUED AND WAITING 6
+ ◷ PH-14 Collect GitHub validation checks     phalanx  pr validation    3m  #26  no writer    Waiting for CI; recheck in 1m
+ ◷ PH-15 Record PR review and check-in evid…  phalanx  development      9m  —    no writer    Waiting for 1 prerequisite
+ …
+RECENTLY CLOSED 25+
+ ✓ PH-19 Exercise queue fairness under a st…  phalanx  checked in      27s  #25  52m   target merged
+ ✓ PH-17 Add bounded operator queue and tim…  phalanx  checked in       9m  #21  1h 4m target merged
+ …
 ```
 
 ## Who uses it
@@ -75,7 +73,7 @@ DELIVERED (last 24h: 25)                                                        
   - owners also manage members, repositories, runners and dispatch.
 
   **Needs you** shows the questions routed to the signed-in user, and every action shows who took it.
-- **Devices:** phone and laptop are equally important. The phone matters most for **Needs you** and replies, and the laptop for **Now** and **History**.
+- **Devices:** phone and laptop are equally important. The phone matters most for **Needs you** and replies, and the laptop for **Active**, **Queued and waiting** and **History**.
 
 ## Goals
 
@@ -110,8 +108,8 @@ DELIVERED (last 24h: 25)                                                        
 8. **Everything has a URL.** Items, executions, reports, groups and filtered views all have shareable URLs, and a notification link lands on its item.
 9. **Times are honest.** Show relative times, with the absolute local time and UTC on hover. Always show the age of the data.
 10. **Neutral wording.** Say "worker chat", "runner" and "Captain", never the name of a specific agent runtime or operating system. This follows the runtime and platform neutrality rules in [AGENTS.md](AGENTS.md).
-11. **Accessible.** Full keyboard navigation, visible focus, WCAG 2.2 AA contrast, screen-reader labels, and respect for reduced motion.
-12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent. Readability comes first.
+11. **Accessible.** Full keyboard navigation, visible focus, WCAG 2.2 AA contrast, screen-reader labels, and respect for reduced motion. On the board, ↑/↓ or j/k move between rows, Enter expands a row and Escape collapses it.
+12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage.
 13. **Nothing secret or third-party in the browser.** No tokens in storage, and no third-party scripts, fonts or analytics. Keep the strict CSP.
 
 ## Pages
@@ -120,55 +118,60 @@ Every page reads state through the API. Filters live in the URL: repository, lab
 
 | Route | Page |
 | --- | --- |
-| `/operator/` | Home: health strip, **Needs you**, **Now**, **Delivered**. |
+| `/operator/` | Home: top bar, **Needs you**, **Flags**, **Captains**, **Active**, **Queued and waiting**, **Recently closed**. |
 | `/operator/items/{item_id}` | Item detail, showing the current execution, with earlier executions one click away. |
 | `/operator/executions/{execution_id}` | A specific execution, including closed ones and reruns. |
 | `/operator/queue` | The full open backlog, paginated and filterable. |
 | `/operator/history` | Closed executions, paginated and filterable, with counts for the filter. |
 | `/operator/groups/{label}` | Every item with that label, with a rollup. |
-| `/operator/runners` | Runners, their capacity, heartbeats and active attempts. |
+| `/operator/runners` | Old runner path: runners, heartbeats and active attempts. Drop it with direct sessions step 5. |
 
 ### Home
 
-1. **Health strip:**
-   - server status and data age;
-   - dispatch on or paused;
-   - runners online, and slots in use out of total;
-   - the age of the oldest queued item;
-   - later, default-branch CI for each repository.
-   
-   A disconnected or stale state turns the whole strip into a banner.
-2. **Needs you.** Each card shows the item, what it needs, how long it has waited, and the way to respond. In D1, that is the exact `reply` command. In D2, it is a reply form with the offered options and the proposed default. A card appears for:
-   - questions (`waiting_for_input`);
-   - owner waits;
-   - PRs that are ready but need a human merge;
-   - duplicate PRs to review;
-   - items stale past their threshold.
-3. **Now.** Sections for running, waiting on external checks, queued, and blocked by prerequisites. Each section can collapse and shows its count. Rows can be grouped by nothing, by repository, or by label.
-4. **Delivered.** The last 24 hours, newest first. Each row shows the outcome and links to all executions in History.
+Every section is a list of one-line rows. A section shows its count in its heading, and an empty section says so in one line.
+
+1. **Top bar** (sticky): the Scribe mark, data health (Live, Partial, Stale or Disconnected, with the age of the oldest displayed read), counts for each section, the theme toggle and Refresh. A failed or stale read turns the health pill amber or red and keeps the last loaded rows on screen. Later: dispatch on or paused, the age of the oldest queued item, and default-branch CI for each repository.
+2. **Needs you.** Items waiting for input, failed items, and items with a flag that notifies the owner, plus owner-notify flags that name no visible item. Expanding a question row shows the prompt, the options, the proposed default and the exact `reply` command. D2 replaces the command with a reply form. Later, it also takes PRs that need a human merge and duplicate PRs to review.
+3. **Flags.** The remaining derived flags from `GET /v1/flags`, grouped by kind. Each group shows its count, its reason (or the number of distinct reasons) and the age of its oldest flag, and expands to one line per flag with its recovery. Each item row also carries its own flags as chips.
+4. **Captains.** One line per Captain: live or stale, heartbeat age, wake count, charter revision, and its handoff note or focus.
+5. **Active.** Items that are running or have a writer.
+6. **Queued and waiting.** Everything else that is open: queued stages, external waits and prerequisite waits, with the open-work pager.
+7. **Recently closed.** Newest first, with the closed-work pager. Each row shows the outcome and links to its PR or report.
 
 ### Row anatomy
 
-From left to right:
+Open rows, from left to right, in aligned columns:
 
-- the label;
-- the title;
+- a status glyph, with its status text for screen readers; a red edge marks rows that need the owner;
+- the short title, derived on the server from the first sentence of the goal, followed by flag chips;
 - the repository;
 - the stage;
-- the revision round, if more than 1;
 - time in stage;
-- the wait reason or next action;
-- the PR number with its state (draft, ready or merged) and a CI dot;
-- the worker chat link.
+- the primary PR number, or a report link;
+- the writer: busy, idle, `unconfirmed` while its launch is unconfirmed, stopped, error, or `no writer`;
+- the reason: the wait reason, the highest-priority flag, a scheduled retry or recheck, or the status.
 
-Closed rows show the outcome instead of the stage:
+Closed rows show the outcome (`checked in`, `ready for check-in`, `report stored`, `failed` or `cancelled`) instead of the stage, the time since close, the PR or report, the total duration from intake to close, and the completion target.
 
-- `checked in`, `ready for check-in`, `report stored`, `failed` or `cancelled`;
-- the size of the change;
-- total duration.
+Later: the label, the revision round if more than 1, the PR state (draft, ready or merged) with a CI dot, and the size of the change.
+
+Below 760px wide, each row wraps to two or three lines: the title and age, then repository, stage, PR and writer, then the reason.
 
 ### Item detail
 
+Clicking a title, or pressing Enter on it, expands the detail in place under its row, so the list keeps its position. Only one row is open at a time, and a refresh keeps it open.
+
+Built now:
+
+- **Request:** the full goal.
+- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry and recheck times, attempt, writer and its session, PR or report, and IDs. Old runner-path facts (worker reference, worker chat and slot note) are isolated in one function for removal in direct sessions step 5.
+- **Flags** on this item, with their recovery and age.
+- **Question** with its options, proposed default and the exact `reply` command.
+- **Prerequisites** with their milestone and reason.
+- **Stage path:** the stages on the loaded history page, each with its duration. Returns to an earlier stage are marked ↺ and counted.
+- **History:** a paginated table of events with their from and to stages, status and reason. Backward transitions are highlighted.
+
+The target detail also includes:
 - **Header:** the title, repository, label, status or outcome, the completion target (ready or checked in), the primary PR and any duplicates, and the worker chat.
 - **Lifecycle rail:** the stage sequence from [STATE_MACHINE.md](STATE_MACHINE.md) with the current stage highlighted. Loops back to `development` or `pr_revision` appear as counts.
 - **Now:** the next action or resume trigger, the wait reason, retry and recheck times, and the runner and attempt holding the lease.
@@ -206,7 +209,7 @@ Computed on the server from work history and shown on History and group pages:
 ## Performance and data
 
 - The server computes the summary rows, and the client renders pages. Lists use the existing keyset cursors with a limit of at most 100.
-- A small overview endpoint returns the section counts and the health strip. That way the home page doesn't need to count rows on the client.
+- A small overview endpoint returns the section counts and the top-bar health. That way the home page doesn't need to count rows on the client.
 - Polling runs every 15 seconds with a change token, so an unchanged board returns `304`. It pauses while the tab is hidden. Server-sent events can come later if polling proves too slow.
 - Filters and search use bounded, indexed queries on the server.
 - The server learns PR and CI facts only from runner observations ([AGENTS.md](AGENTS.md): GitHub access stays on the runner). If the runner hasn't observed a fact, the dashboard shows it as unknown and doesn't guess.
@@ -220,8 +223,9 @@ Each phase row specifies these in detail. All are read-only except the D2 action
   - `label`;
   - a `pr` object with number, title, state, draft, head CI, additions and deletions;
   - `revision_round`;
-  - `duplicate_count`;
-  - `target`.
+  - `duplicate_count`.
+
+  Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
 - `GET /v1/operator/overview`: counts for each section, dispatch and runner health, and data age.
 - Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`.
 - `GET /v1/operator/runners` and `GET /v1/operator/groups/{label}`.
