@@ -50,6 +50,31 @@ def timestamp():
     return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
+def failed_check_findings(checks, limit=16000):
+    """Combine failed check reasons within limit, giving each check a fair share of the budget.
+
+    An oversized entry keeps its first line (check name and exit status) and its output tail.
+    """
+    entries = [f"Local check {check.name} {check.outcome}: {check.reason or 'no detail'}"
+               for check in checks if check.outcome == "failed"]
+    if not entries:
+        return None
+    marker = "\n[... truncated ...]\n"
+    remaining = limit - (len(entries) - 1)
+    shares = {}
+    for left, index in enumerate(sorted(range(len(entries)), key=lambda i: len(entries[i]))):
+        shares[index] = min(len(entries[index]), remaining // (len(entries) - left))
+        remaining -= shares[index]
+
+    def fit(text, share):
+        if len(text) <= share:
+            return text
+        head = text.split("\n", 1)[0][:share // 2]
+        return head + marker + text[len(text) - (share - len(head) - len(marker)):]
+
+    return "\n".join(fit(entry, shares[index]) for index, entry in enumerate(entries))
+
+
 
 def replayable(db, scope, key, payload, perform, *, should_record=None):
     if key is None:
@@ -519,8 +544,7 @@ def result(db, item_id, execution_id, payload, lease_digest):
     if payload.outcome == Outcome.CHANGES_REQUIRED and state.stage in {Stage.SELF_REVIEW, Stage.PR_REVISION}:
         findings = payload.review_notes
     elif payload.outcome == Outcome.CHANGES_REQUIRED and payload.local_checks:
-        findings = "\n".join(f"Local check {check.name} {check.outcome}: {check.reason or 'no detail'}"
-                             for check in payload.local_checks if check.outcome == "failed")[:16000] or None
+        findings = failed_check_findings(payload.local_checks)
     elif payload.outcome == Outcome.SUCCEEDED and payload.local_checks:
         skipped = [check for check in payload.local_checks if check.outcome != "passed"]
         if skipped:

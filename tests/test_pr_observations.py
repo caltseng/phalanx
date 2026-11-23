@@ -201,6 +201,26 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual((updated["state"]["stage"], updated["state"]["findings"]),
                          ("development", "Local check unit tests failed: Exited with status 1"))
 
+    def test_several_long_failed_check_tails_fit_the_findings_field(self):
+        self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
+        self.assertEqual(self.result(self.claim("self_review"), reviewed_candidate=HEAD)[0], 200)
+        failed = [{"name": f"check {n}", "outcome": "failed",
+                   "reason": f"Exited with status {n}\n\nOutput tail:\n{'x' * 4000}\nlast line {n}"}
+                  for n in range(6)]
+        status, updated = self.request(f"{self.execution}/result", RUNNER, dict(
+            self.claim("pre_pr_validation"), outcome="changes_required", candidate=HEAD,
+            local_checks=[{"name": "short", "outcome": "failed", "reason": "Exited with status 9"},
+                          *failed],
+        ), self.lease)
+        self.assertEqual(status, 200, updated)
+        findings = updated["state"]["findings"]
+        self.assertLessEqual(len(findings), 16000)
+        self.assertIn("Local check short failed: Exited with status 9\n", findings)
+        for n in range(6):
+            self.assertIn(f"Local check check {n} failed: Exited with status {n}\n[... truncated ...]\n",
+                          findings)
+            self.assertIn(f"last line {n}", findings)
+
     def test_unchanged_development_reruns_validation_until_the_repeat_limit(self):
         self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
         failed = [{"name": "unit tests", "outcome": "failed", "reason": "Exited with status 1"}]
