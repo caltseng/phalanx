@@ -34,3 +34,10 @@ def lease_seconds() -> int:
         raise ValueError(f"PHALANX_LEASE_SECONDS must be a whole number of seconds from "
                          f"{LEASE_RANGE.start} to {LEASE_RANGE.stop - 1}")
     return int(value)
+
+
+def local_board() -> bool:
+    value = os.environ.get("PHALANX_LOCAL_BOARD", "")
+    if value not in ("", "0", "1"):
+        raise ValueError("PHALANX_LOCAL_BOARD must be 1 to open the local board, or 0 or unset")
+    return value == "1"

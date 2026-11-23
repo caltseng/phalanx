@@ -7,13 +7,16 @@ import re
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 
-from .auth import authenticate
+from .auth import authenticate_board_read
+from .intake import report as stored_report
+from .intake_api import run
 from .intake_models import Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
 
-router = APIRouter(prefix="/v1/operator", dependencies=[Depends(authenticate)])
+router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate_board_read)])
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=512)]
 STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00")
@@ -176,7 +179,7 @@ def closed_page(db, after, size):
     ).fetchall()
 
 
-@router.get("/executions")
+@router.get("/operator/executions")
 def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
                     limit: Limit = 25, cursor: Cursor = None):
     with read_transaction(request.app.state.database_path) as db:
@@ -195,7 +198,12 @@ def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
     }
 
 
-@router.get("/executions/{execution_id}/timeline")
+@router.get("/items/{item_id}/executions/{execution_id}/report", response_class=PlainTextResponse)
+def report(request: Request, item_id: Identifier, execution_id: Identifier):
+    return run(request, stored_report, item_id, execution_id)
+
+
+@router.get("/operator/executions/{execution_id}/timeline")
 def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, cursor: Cursor = None):
     scope = f"timeline:{execution_id}"
     after = decode_cursor(cursor, scope, (is_version, is_stamp))
