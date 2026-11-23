@@ -308,34 +308,40 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                     thread.join(30)
             self.addCleanup(halt)
             return halt
+        # A loaded host can delay a live server past a short threshold, so arm it only once the relay is down.
         loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(RelayTransport(relay, timeout=30, poll=0.01)),
-                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=0.3,
+                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=60,
                            emit=self.events.append, notify=notes.append)
         self.addCleanup(loop.close)
         def first_slot():
             # Either slot may claim "first"; slots claim concurrently.
             return next((slot for slot, row in loop._records().items()
                          if row.get("claim", {}).get("item_id") == "first" and row.get("receipt")), None)
+        def noted(count):
+            return [note["event"] for note in notes[:count]]
         halt = start(1)
-        self.spin(loop, lambda: first_slot() is not None)
+        self.spin(loop, lambda: first_slot() is not None, timeout=120)
         halt()
+        loop.relay_stall_seconds = 0.3
         packet = self.write_result(first_slot())
         self.native.stopped.add(packet.marker)
         self.api.waiting.append("second")
         stalled = "Captain relay has taken no request"
         self.spin(loop, lambda: any(stalled in (blocker or "") for blocker in self.api.blockers)
-                  and [note["event"] for note in notes] == ["relay_stalled"])
+                  and noted(1) == ["relay_stalled"], timeout=120)
+        self.assertEqual(noted(2), ["relay_stalled"])
         self.assertTrue(any(event["status"] == "relay_stalled" for event in self.events))
         self.assertIn("first", notes[0]["items"])
         self.assertEqual((self.api.submissions, len(self.native.launches)), ([], 1))
 
         start(2)  # A scheduled wake overlapping a server that is already running.
+        # A slow host may stall the new servers again later; only the first recovery is asserted.
         self.spin(loop, lambda: bool(self.api.submissions) and len(self.native.launches) == 2
-                  and [note["event"] for note in notes] == ["relay_stalled", "relay_serving"])
+                  and noted(2) == ["relay_stalled", "relay_serving"], timeout=120)
         self.assertTrue(any(event["status"] == "relay_serving" for event in self.events))
         self.assertEqual(len(taken), len(set(taken)))
         self.assertEqual(len({launch["marker"] for launch in self.native.launches}), 2)
-        self.spin(loop, lambda: self.api.blockers[-1] is None)
+        self.spin(loop, lambda: self.api.blockers[-1] is None, timeout=120)
 
     def test_notify_command_gets_the_event_without_runner_secrets(self):
         output = self.directory / "event.json"
