@@ -41,6 +41,16 @@ class ObservedPull(Payload):
     base_sha: SHA
     merge_commit: SHA | None = None
     mergeable: bool | None = None
+    # For a merge into the target: "merge" or "squash_or_rebase" as the reconciler verified it
+    # (None when it couldn't), and GitHub's merged_at.
+    merge_method: Literal["merge", "squash_or_rebase"] | None = None
+    merged_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def merge_details(self):
+        if not self.merged and (self.merge_method or self.merged_at):
+            raise ValueError("Merge method and time describe a merged PR")
+        return self
 
 
 class LocalChecks(Payload):
@@ -137,7 +147,9 @@ def _advance(db, row, url, body, target_base, stamp):
             or state.pending_output or (pull.merged and pull.merge_commit is None)):
         return
     pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
-                     merge_commit=pull.merge_commit if pull.merged else None, closed=pull.state == "closed")
+                     merge_commit=pull.merge_commit if pull.merged else None, closed=pull.state == "closed",
+                     merge_method=pull.merge_method,
+                     merged_at=pull.merged_at and pull.merged_at.isoformat())
     ready = (pull.state == "open" and not pull.draft and pull.mergeable is not False and not body.feedback
              and body.checks in (GateState.SATISFIED, GateState.NOT_CONFIGURED))
     evidence = Evidence(pr=pr, pr_ready=ready, off_base=pull.base_ref != target_base)
@@ -184,6 +196,12 @@ def heartbeat(db, runner_id):
     db.execute("""INSERT INTO reconciler_heartbeats VALUES (?, ?)
                   ON CONFLICT DO UPDATE SET last_seen = excluded.last_seen""", (runner_id, now))
     return {"runner_id": runner_id, "last_seen": now}
+
+
+def retire(db, runner_id):
+    """Forget a decommissioned reconciler, so reconciler_stale stops flagging it."""
+    cursor = db.execute("DELETE FROM reconciler_heartbeats WHERE runner_id=?", (runner_id,))
+    return {"runner_id": runner_id, "retired": cursor.rowcount > 0}
 
 
 def _flag(kind, row, reason, recovery, first_seen, notify_owner=False):
@@ -283,7 +301,8 @@ def reconciler_stale(db, now):
         if now - seen >= RECONCILER_STALE:
             flags.append(_flag(
                 "reconciler_stale", None, f"Reconciler {runner_id} has sent no heartbeat since {last_seen}",
-                f"A Captain restarts reconciler {runner_id}, or reports it to the owner",
+                f"A Captain restarts reconciler {runner_id}, reports it to the owner, or retires it "
+                "with `phx shift retire-reconciler` if it was decommissioned",
                 (seen + RECONCILER_STALE).isoformat(timespec="microseconds"),
             ))
     return flags
