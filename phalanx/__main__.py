@@ -37,6 +37,17 @@ def api_request(base_url, route, *, body=None, key=None):
         raise ValueError(f"HTTP {error.code}: {detail}") from error
 
 
+TARGETS = ("report", "ready_for_check_in", "checked_in")
+
+
+def prerequisite(value):
+    upstream, separator, milestone = value.partition(":")
+    if not upstream or (separator and milestone not in TARGETS):
+        raise argparse.ArgumentTypeError(
+            f"expected ITEM or ITEM:MILESTONE with milestone in {', '.join(TARGETS)}")
+    return {"upstream_id": upstream, "milestone": milestone or "checked_in"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m phalanx")
     parser.add_argument("--api-url", default=os.environ.get("PHALANX_API_URL", "http://127.0.0.1:8000"))
@@ -54,8 +65,16 @@ def main() -> None:
     intake = commands.add_parser("intake", help="file a work item")
     intake.add_argument("repository")
     intake.add_argument("goal")
-    intake.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
+    intake.add_argument("--target", choices=TARGETS, required=True)
     intake.add_argument("--key", help="reuse this key when retrying the same request")
+    intake.add_argument("--after", type=prerequisite, action="append", default=[],
+                        metavar="ITEM[:MILESTONE]",
+                        help="wait for ITEM to reach MILESTONE (default checked_in); repeatable")
+    intake.add_argument("--priority", choices=("low", "normal", "urgent"), default="normal")
+    intake.add_argument("--context", action="append", default=[],
+                        help="context link or note; repeatable")
+    intake.add_argument("--accept", action="append", default=[],
+                        help="acceptance criterion; repeatable")
     issue = commands.add_parser("ingest-issue", help="file a registered repository's GitHub issue")
     issue.add_argument("repository", help="registered Phalanx repository ID")
     issue.add_argument("number", type=int, help="GitHub issue number in that repository")
@@ -98,10 +117,12 @@ def main() -> None:
                                  body={"id": args.repository, "remote": args.remote})
             print(json.dumps(result, indent=2))
         elif args.command == "intake":
-            result = api_request(
-                args.api_url, "/v1/items", key=args.key,
-                body={"repository_id": args.repository, "goal": args.goal, "target": args.target},
-            )
+            body = {"repository_id": args.repository, "goal": args.goal, "target": args.target,
+                    "context_links": args.context, "acceptance_criteria": args.accept,
+                    "priority": args.priority}
+            if args.after:
+                body["dependencies"] = args.after
+            result = api_request(args.api_url, "/v1/items", key=args.key, body=body)
             print(json.dumps(result, indent=2))
         elif args.command == "ingest-issue":
             result = ingest_issue(api_request, args.api_url, args.repository, args.number,
