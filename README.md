@@ -537,8 +537,8 @@ results with `phx work`, and the reconciler observes GitHub. See
 [docs/direct-sessions.md](docs/direct-sessions.md).
 
 The Captain's commands are `python -m phalanx shift ...`. They need
-`PHALANX_RUNNER_TOKEN` and a shift config, passed with `--config` or set in
-`PHALANX_SHIFT_CONFIG`:
+`PHALANX_RUNNER_TOKEN` and a shift config, passed with `--config` (before or
+after the action) or set in `PHALANX_SHIFT_CONFIG`:
 
 ```json
 {

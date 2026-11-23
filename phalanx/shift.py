@@ -5,7 +5,7 @@ runtime's session tools. It keeps no local state. This host holds only the shift
 the charter and each item worktree's writer credential file; everything else is server state.
 """
 
-from argparse import ArgumentParser
+from argparse import SUPPRESS, ArgumentParser
 from datetime import UTC, datetime
 import hashlib
 from importlib import resources
@@ -25,6 +25,8 @@ CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
 # Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
 SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48}
 MAX_OPEN_ITEMS = 1000
+# A launch's staged intent. It becomes the live credential once the server accepts its nonce.
+PENDING = "phalanx-writer.pending.json"
 
 
 class ShiftError(ValueError):
@@ -189,6 +191,10 @@ def _write_credential(path, data):
     os.replace(temporary, path)
 
 
+def _read_credential(path):
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
 def kickoff(item, worktree, nonce, work_command):
     criteria = item.get("acceptance_criteria") or []
     template = Template(resources.files("phalanx").joinpath("prompts", "worker.md").read_text(encoding="utf-8"))
@@ -202,8 +208,10 @@ def kickoff(item, worktree, nonce, work_command):
 def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     """Prepare the item's worktree and register a writer intent, ready for its session to launch.
 
-    The nonce and token are written to the worktree's credential file before registering, so a
-    rerun after a lost reply replays the same registration. Only an ended writer gets a new nonce.
+    The nonce and token are staged in a pending file next to the worktree's credential before
+    registering, so a rerun after a lost reply replays the same registration. The pending file
+    replaces the live credential only once the server accepts that nonce, so a refused launch never
+    disturbs the current writer. Only an ended writer gets a new nonce.
     """
     item = api(f"/v1/items/{_q(item_id)}")
     repository = item["repository_id"]
@@ -219,16 +227,21 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     _fetch(mapping["checkout"], base)
     workspace = manager.prepare(item_id, base=manager.resolve_origin_base(base))
     path = credential_path(workspace.path)
+    pending = path.with_name(PENDING)
     intent = {"item_id": item_id, "execution_id": item["execution"]["id"], "captain_id": captain_id,
               "replaces": replaces}
-    saved = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def matches(data):
+        return data.get("nonce") and all(data.get(key) == value for key, value in intent.items())
+
+    saved = next((data for data in map(_read_credential, (pending, path)) if matches(data)), None)
     route = f"/v1/items/{_q(item_id)}/executions/{_q(intent['execution_id'])}/writer"
     version = item["execution"]["version"]
     for fresh in (False, True):
-        if fresh or not saved.get("nonce") or any(saved.get(key) != value for key, value in intent.items()):
+        if fresh or saved is None:
             saved = {**intent, "base_url": config["base_url"], "nonce": secrets.token_urlsafe(16),
                      "token": secrets.token_urlsafe(32)}
-            _write_credential(path, saved)
+            _write_credential(pending, saved)
         if fresh:
             version = api(f"/v1/items/{_q(item_id)}")["execution"]["version"]
         binding = api(route, body={
@@ -242,6 +255,8 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     else:
         raise ShiftError("The new writer ended at registration; inspect the item")
     nonce = saved["nonce"]
+    if _read_credential(pending).get("nonce") == nonce:
+        os.replace(pending, path)
     return {
         "item_id": item_id, "execution_id": binding["id"], "version": binding["version"],
         "stage": binding["state"]["stage"], "status": binding["state"]["status"], "writer": binding["writer"],
@@ -256,12 +271,14 @@ def _writer_route(args, suffix=""):
 
 
 def add_shift_command(commands):
+    # --config is accepted before or after the action. The action's copy only overrides when given.
     shared = ArgumentParser(add_help=False)
-    shared.add_argument("--config", type=Path, default=os.environ.get("PHALANX_SHIFT_CONFIG"),
-                        help="shift config JSON (default: PHALANX_SHIFT_CONFIG)")
+    shared.add_argument("--config", type=Path, default=SUPPRESS, help="shift config JSON")
     shift = commands.add_parser("shift", help="a Captain's commands on the direct path (runner token)")
+    shift.add_argument("--config", type=Path, default=os.environ.get("PHALANX_SHIFT_CONFIG"),
+                       help="shift config JSON (default: PHALANX_SHIFT_CONFIG)")
     actions = shift.add_subparsers(dest="shift_command", required=True)
-    prompt = actions.add_parser("prompt", help="print the Captain prompt")
+    prompt = actions.add_parser("prompt", parents=[shared], help="print the Captain prompt")
     prompt.add_argument("name", choices=["captain"])
     actions.add_parser("charter", parents=[shared], help="validate the charter and show its revision")
     begin = actions.add_parser("start", parents=[shared], help="register this chat as a Captain")

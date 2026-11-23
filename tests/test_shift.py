@@ -150,6 +150,24 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(shift.ShiftError, "outside the charter"):
             shift.launch(self.api, self.config, self.charter, captain, self.item("other")["id"])
 
+    def test_refused_launch_leaves_the_live_credential_untouched(self):
+        first = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        second = shift.start(self.api, self.charter, "chat-2")["captain"]["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, first, item["id"])
+        worktree = Path(launched["worktree"])
+        live = shift.credential_path(worktree)
+        before = live.read_bytes()
+        for captain, replaces in ((second, None), (first, "0" * 32)):
+            with self.subTest(captain=captain), self.assertRaisesRegex(ValueError, "HTTP 409"):
+                shift.launch(self.api, self.config, self.charter, captain, item["id"], replaces=replaces)
+            self.assertEqual(live.read_bytes(), before)
+        base_url, token = credential(worktree)
+        self.assertEqual(request(base_url, token, "/v1/writer")["writer"]["id"], launched["writer"]["id"])
+        replay = shift.launch(self.api, self.config, self.charter, first, item["id"])
+        self.assertEqual(replay["writer"]["id"], launched["writer"]["id"])
+        self.assertEqual(live.read_bytes(), before)
+
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
             result = subprocess.run([sys.executable, "-m", "phalanx", "shift", *arguments],
@@ -161,7 +179,10 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn("# Phalanx Captain", phx("prompt", "captain"))
         config = Path(self.config["charter"]).parent / "shift.json"
         config.write_text(json.dumps(self.config), encoding="utf-8")
-        self.assertEqual(json.loads(phx("charter", "--config", str(config)))["revision"], self.charter["revision"])
+        self.assertIn("# Phalanx Captain", phx("prompt", "captain", "--config", str(config)))
+        for arguments in (("charter", "--config", str(config)), ("--config", str(config), "charter")):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(json.loads(phx(*arguments))["revision"], self.charter["revision"])
 
 
 if __name__ == "__main__":
