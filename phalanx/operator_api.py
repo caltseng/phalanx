@@ -132,14 +132,19 @@ def summary(row, now):
     if blocked_count and not wait:
         noun = "prerequisite" if blocked_count == 1 else "prerequisites"
         wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
-    if row["runner_blocker"] and not wait:
-        wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     expires = row["lease_expires_at"]
     if expires is not None and expires <= now.timestamp() and not wait:
         # Runners publish blockers only while renewing, so an expired lease needs its own reason.
+        # Recovery reports an owner wait as the expired attempt's blocker.
         at = datetime.fromtimestamp(expires, UTC).isoformat()
-        wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
-                "trigger": "The runner recovers the expired attempt on its next pass"}
+        if row["runner_blocker"]:
+            wait = {"reason": f"Lease expired at {at}; {row['runner_blocker']}",
+                    "trigger": "Resolve the blocker; the runner recovers the expired attempt on its next pass"}
+        else:
+            wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
+                    "trigger": "The runner recovers the expired attempt on its next pass"}
+    if row["runner_blocker"] and not wait:
+        wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     retrying = row["retry_at"] is not None and row["retry_at"] > now.timestamp() * 1000
     if (row["lanes_full"] and not wait and not retrying and row["status"] == "queued"
             and row["stage"] in RUNNER_ONLY_STAGES):

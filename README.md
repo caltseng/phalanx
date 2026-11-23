@@ -295,7 +295,16 @@ its reservation and lease; the loop never stops it. The slot reports
 `worker_overdue` once and the operator board shows it as the item's wait
 reason until the worker produces a result. A writer observed stopped without a
 result file stops renewing its lease, so stopped-attempt recovery reconciles
-the expired attempt instead of the item staying reserved forever.
+the expired attempt instead of the item staying reserved forever. If that
+writer left uncommitted changes or new commits without a result, recovery never
+releases or discards them: it resumes the same writer through the bridge's
+`resume` operation with a continue prompt, then adopts the same attempt under a
+fresh lease once the writer is observed active. Each resume gets 180 seconds to
+show the writer active. After three resumes the slot waits on the owner, naming
+the attempt, writer, worktree and its dirty state; the board shows the same
+reason and the optional notify command receives an `owner_wait` event once. A
+parked wait is adopted without a recheck if the exact writer is later observed
+active, and `--recheck` resets the resume count.
 
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Loop status has one durable store and is
@@ -328,6 +337,7 @@ variables are removed from its subprocess environment; keep the bridge trusted.
 | `resolve_project` | Receives `host_id`, `project_id`, `checkout`. Discover the exact project on that host and return those verified fields; do not echo unverified input. The checkout must resolve to the configured root. |
 | `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host whose first prompt is exactly `prompt`, which contains the marker. Use `title` as the session name where the runtime allows it; otherwise use a name that fits, such as the attempt UUID from the marker. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. You can also return a `worker_url`, an HTTPS link to that session with no credentials in it, which the operator board shows. The runner ignores an invalid link and reports a warning; the launch still succeeds. |
 | `observe` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). |
+| `resume` | Receives `host_id`, `project_id`, the recorded writer's `thread_id`, its `marker` and a continue `prompt`. Send `prompt` as a new turn to **that exact** worker session; never start another session. Return the same host, `thread_id` and marker. A runtime that cannot resume a session replies with an error; the runner counts it and eventually waits on the owner. |
 
 Session rows use the recovery observation fields documented below. A `stopped`
 row additionally requires `writers_stopped: true`. Observation timestamps must
@@ -355,6 +365,8 @@ directory. Repeat this cycle while the loop runs:
      the one-time setup action instead, and tell Caleb once.
    - `launch`: start the worker session **once**; reply with the host, marker
      and session UUID as `thread_id` (or a provisional ID as `client_thread_id`).
+   - `resume`: send the continue prompt to the exact `thread_id` session only;
+     reply with the host, `thread_id` and marker.
    - `observe`: read each receipt's session, or find the marker in session
      first prompts or history; reply with fresh rows. Set `writers_stopped` only after verifying
      the session's turn stopped. When the runtime's tools cannot read a
@@ -420,9 +432,10 @@ with no restart: queued observations are taken where they wait, and an expired
 launch or resolution is queued afresh on the next poll.
 
 Set `"notify_command"` in the runner config to an executable and its arguments,
-such as `["python", "notify.py"]`, to receive each `relay_stalled` and
-`relay_serving` event as one JSON object on stdin. Each event has `event`,
-`reason`, `items`, `runner_id` and `at`. The command runs without the Phalanx
+such as `["python", "notify.py"]`, to receive each `relay_stalled`,
+`relay_serving` and slot `owner_wait` event as one JSON object on stdin. Each
+event has `event`, `reason`, `items`, `runner_id` and `at`; `owner_wait` adds
+`slot`, `attempt_id` and `next_action`, and is sent once per new reason. The command runs without the Phalanx
 token variables and has 30 seconds. A failure shows as `notify_blocked` in loop
 status. The stall status itself is always written and emitted.
 
@@ -435,7 +448,7 @@ expired request also costs at most one more poll to requeue.
 
 #### Runtime mapping
 
-Each runtime serves the same three operations with its own tools. Set the
+Each runtime serves the same four operations with its own tools. Set the
 config's `host_id` and `project_id` to the values the runtime reports. The
 Codex desktop and GitHub Copilot app mappings have field evidence in
 [the worker recovery report](docs/pilots/worker-recovery.md); verify the others
@@ -447,6 +460,11 @@ in their first muster and record any correction here.
 | GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with an error that names the project ID and checkout path (two projects can share a name) and tells the owner to open a session in that project to get the app's trust prompt. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so pass each worker session with its state to the observe helper with `--runtime copilot`; it reads the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Pass each session with its state to the observe helper with `--runtime copilot`, which reads `~/.copilot/session-state/<id>/events.jsonl`. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
+
+`resume` sends the prompt to the recorded session: `send_session_message` with
+its session ID in the GitHub Copilot app, `copilot --resume <thread_id>` in the
+Copilot CLI and `claude --resume <thread_id>` in Claude Code, each in a visible
+terminal. The Codex desktop mapping is unverified; until it is, reply with an error.
 
 Standing relay serve per runtime:
 
@@ -499,7 +517,7 @@ Each thread row includes the following fields.
 | `writers_stopped` | Required as `true` on a `stopped` row, after accounting for every worktree writer the session started. |
 | `client_thread_id` | The queued UUID when the native launch can be positively correlated with its saved queued receipt. Otherwise omit it. |
 
-A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. An expired attempt with an active writer or a verified result is adopted under a recovery claim. Any stage other than development leaves the checkout unchanged, so its saved result is verified against the unchanged worktree. The claim request and its fresh secret are journaled before sending, so a lost reply replays the same key. Afterwards the Captain renews and submits under the new lease. If the server refuses adoption, the reservation backs off and then waits for the owner; nothing is released. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. A reservation with no relay, receipt or submission is released only after `--recheck` proves no launch happened: no result file and a clean worktree at the accounted revision, or no worktree or branch at all. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
+A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. While the Captain loop's recovery of an expired attempt waits on the owner, the board's wait reason names that reason and the exact `attended-recover --slot N --recheck` command. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. An expired attempt with an active writer or a verified result is adopted under a recovery claim. Any stage other than development leaves the checkout unchanged, so its saved result is verified against the unchanged worktree. The claim request and its fresh secret are journaled before sending, so a lost reply replays the same key. Afterwards the Captain renews and submits under the new lease. If the server refuses adoption, the reservation backs off and then waits for the owner; nothing is released. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. A reservation with no relay, receipt or submission is released only after `--recheck` proves no launch happened: no result file and a clean worktree at the accounted revision, or no worktree or branch at all. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.
 
 ### Import a GitHub issue
 
@@ -571,6 +589,7 @@ capacity and recovery within that trusted role.
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. The adoption appears in both timelines as a `recover_claim` event at the same version. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recovery-wait` | Runner sets `blocker` (or `null` to clear) on an expired open attempt while its recovery waits on the owner. The board shows it after the lease expiry. A live lease (report blockers on renewal) or an ended attempt is rejected. |
 
 A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
 `no_eligible_work`. A successful assignment includes the work request,

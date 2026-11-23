@@ -29,6 +29,7 @@ class QueueAPI:
         self.checkout = checkout
         self.requests, self.renewed, self.submissions, self.recovered = [], [], [], []
         self.blockers = []
+        self.recovery_waits = []
         self.claims = {}
         self.waiting = ["first", "second"]
         self.stages = {}
@@ -82,6 +83,9 @@ class QueueAPI:
                     self.drop_result = False
                     raise RunnerError("lost result response")
                 return {"version": 4}
+            if route.endswith("/recovery-wait"):
+                self.recovery_waits.append((route.split("/")[-2], body["blocker"]))
+                return {"attempt_id": route.split("/")[-2], "blocker": body["blocker"]}
             if route.endswith("/recover-claim"):
                 attempt = route.split("/")[-2]
                 old = next(key for key, row in self.claims.items() if row["attempt_id"] == attempt)
@@ -105,8 +109,17 @@ class NativeFixture:
         self.queued = False
         self.stopped = set()
         self.omit_queued = False
+        self.resumes = []
+        self.resume_errors = []
 
     def __call__(self, operation, arguments):
+        if operation == "resume":
+            self.resumes.append(arguments)
+            if self.resume_errors:
+                raise self.resume_errors.pop(0)
+            receipt = self.threads[arguments["marker"]]
+            return {"host_id": receipt["host_id"], "thread_id": receipt["thread_id"],
+                    "marker": arguments["marker"]}
         if operation == "resolve_project":
             return arguments.copy()
         if operation == "launch":
@@ -583,6 +596,65 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(self.api.renewed), renewals)
         self.assertEqual(self.api.submissions, [])
         self.assertIn(1, loop._records())
+
+    def test_dirty_stopped_writer_is_resumed_in_place_then_parks_visibly_and_readopts(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        notified = []
+        loop = self.loop(notify=notified.append)
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        record = loop._records()[1]
+        claim, packet = record["claim"], self._runner_packet(record)
+        work = packet.worktree / "work.txt"
+        work.write_text("unfinished", encoding="utf-8")
+        self.native.stopped.add(packet.marker)
+        self.spin(loop, lambda: 1 in loop.lapsing)
+        self.api.expired = [{
+            "attempt_id": claim["attempt_id"], "item_id": claim["item_id"],
+            "execution_id": claim["execution"]["id"], "stage": "report_drafting",
+            "version": claim["execution"]["version"], "lease_expires_at": 0,
+        }]
+        self.native.resume_errors = [LaunchNotDelivered("bridge never took it")]
+        with patch("phalanx.attended_recovery.RESUME_GRACE_SECONDS", 0):
+            self.spin(loop, lambda: any(event["status"] == "owner_wait" for event in self.events))
+        thread = self.native.threads[packet.marker]["thread_id"]
+        # The undelivered try was refunded, so the limit allows three delivered resumes.
+        self.assertEqual(len(self.native.resumes), 4)
+        for resume in self.native.resumes:
+            self.assertEqual((resume["thread_id"], resume["marker"], resume["host_id"]),
+                             (thread, packet.marker, "local"))
+            self.assertIn(str(packet.worktree), resume["prompt"])
+        self.assertTrue(any(event["status"] == "resume_failed" for event in self.events))
+        self.assertTrue(any(event["status"] == "writer_resumed" for event in self.events))
+        self.spin(loop, lambda: bool(notified))
+        # A pass that lacked an observation reports another status; the same wait is not notified again.
+        loop._status(1, "observing", "Awaiting native observation before recovery")
+        for _ in range(10):
+            loop.step()
+            time.sleep(0.01)
+        self.assertEqual(len(notified), 1)
+        self.assertEqual(notified[0]["event"], "owner_wait")
+        self.assertEqual(notified[0]["items"], ["first"])
+        self.assertIn(str(packet.worktree), notified[0]["reason"])
+        self.assertIn("Uncommitted changes", notified[0]["reason"])
+        waits = [blocker for attempt, blocker in self.api.recovery_waits if attempt == claim["attempt_id"]]
+        self.assertTrue(any(blocker and "Resuming the same writer" in blocker for blocker in waits))
+        self.assertIn("Recovery is waiting on the owner", waits[-1])
+        self.assertEqual(len(self.native.resumes), 4)
+        # The writer comes back on its own: the parked wait is re-evaluated and the attempt adopted.
+        self.native.stopped.discard(packet.marker)
+        self.spin(loop, lambda: bool(self.api.recovered))
+        self.assertEqual(self.api.recovered[0][0], claim["attempt_id"])
+        # The adopted lease renews again, and each renewal replaces the board blocker.
+        renewed = len(self.api.renewed)
+        self.spin(loop, lambda: len(self.api.renewed) > renewed)
+        self.assertIsNone(self.api.blockers[-1])
+        self.assertEqual(work.read_text(encoding="utf-8"), "unfinished")
+        self.assertEqual(len(self.native.launches), 1)
+        self.assertEqual(self.api.submissions, [])
+
+    def _runner_packet(self, record):
+        return AttendedRunner(self.root, self.config, self.api, slot=1)._handoff(record).packet
 
     def test_renewal_interval_near_the_lease_is_reported(self):
         self.config["capacity"] = 1
@@ -1181,6 +1253,22 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]["state"]["status"],
                          "cancelled")
 
+    def test_recovery_owner_wait_is_published_once_and_cleared_when_recovery_moves_on(self):
+        loop = self.loop()
+        owner_wait = {"status": "owner_wait", "reason": "Could not verify one exact native thread for the launch",
+                      "next_action": "Inspect the original worker launch and workspace, then explicitly recheck"}
+        loop._publish_recovery_wait(2, "attempt-a", owner_wait)
+        loop._publish_recovery_wait(2, "attempt-a", owner_wait)
+        self.assertEqual(len(self.api.recovery_waits), 1)
+        attempt, blocker = self.api.recovery_waits[0]
+        self.assertEqual(attempt, "attempt-a")
+        self.assertTrue(blocker.startswith("Recovery is waiting on the owner: Could not verify"))
+        self.assertIn(f"attended-recover --config <runner config> --state {self.root} --slot 2 --recheck", blocker)
+        loop._publish_recovery_wait(2, "attempt-a", {"status": "retry", "reason": "Rechecking"})
+        loop._publish_recovery_wait(2, "attempt-a", {"status": "retry", "reason": "Rechecking"})
+        loop._publish_recovery_wait(2, "attempt-b", {"status": "retry", "reason": "Rechecking"})
+        self.assertEqual(self.api.recovery_waits[1:], [("attempt-a", None)])
+
     def test_expired_prepared_packet_without_relay_recovers_without_observation(self):
         from contextlib import closing
         import sqlite3
@@ -1462,6 +1550,12 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             })
             launched = adapter.launch({"host_id": "local", "marker": "marker", "session": {}})
             self.assertEqual(launched, {"thread_id": thread, **expected})
+        adapter = BridgeAdapter(lambda operation, arguments: {
+            "host_id": "local", "marker": "marker", "thread_id": str(uuid4()),
+        })
+        with self.assertRaisesRegex(RunnerError, "exact host, writer"):
+            adapter.resume({"host_id": "local", "project_id": "project", "thread_id": thread,
+                            "marker": "marker", "prompt": "Continue"})
         loop = self.loop()
         loop.close()
         self.config["runner_id"] = "other"
