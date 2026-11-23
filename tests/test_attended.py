@@ -636,6 +636,70 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         runner.submit(marker, "local", thread_id)
         self.assertEqual(self.api.posts[0][0]["candidate"], self.api.candidate)
 
+    def off_base_rework(self, base_file):
+        """Rework an item branch whose earlier candidate predates the newly pinned base."""
+        self.api.drop_claim = self.api.drop_result = False
+        self.api.stage = "development"
+        manager = WorkspaceManager(self.checkout, str(self.checkout), self.root / "worktrees")
+        earlier = manager.prepare("item", base="refs/remotes/origin/main").path
+        (earlier / "guide.md").write_text("Earlier")
+        self.git(earlier, "add", "guide.md")
+        self.git(earlier, "commit", "-m", "Earlier candidate")
+        self.api.candidate = self.git(earlier, "rev-parse", "HEAD")
+        (self.checkout / base_file).write_text("Base")
+        self.git(self.checkout, "add", base_file)
+        self.git(self.checkout, "commit", "-m", "Base advance")
+        self.git(self.checkout, "update-ref", "refs/remotes/origin/main", "HEAD")
+        base = self.git(self.checkout, "rev-parse", "HEAD")
+        runner = self.runner()
+        launch = runner.prepare()
+        packet = runner.status()["packet"]
+        self.assertEqual(packet["base_revision"], base)
+        self.assertIn(f"base_revision {base}", launch["session"]["prompt"])
+        self.assertIn(f'"base_revision": "{base}"', launch["session"]["prompt"])
+        thread = str(uuid4())
+        runner.receipt(launch["marker"], "local", thread_id=thread)
+        self.git(earlier, "commit", "--allow-empty", "-m", "Rework on the old base")
+        rework = self.git(earlier, "rev-parse", "HEAD")
+        self.write_result(runner, launch["marker"], rework)
+        return runner, launch["marker"], thread, earlier, rework, base
+
+    def test_off_base_candidate_is_merged_with_the_pinned_base_when_clean(self):
+        runner, marker, thread, worktree, rework, base = self.off_base_rework("notes.md")
+        runner.submit(marker, "local", thread)
+        head = self.git(worktree, "rev-parse", "HEAD")
+        self.assertEqual(self.git(worktree, "rev-list", "--parents", "-n", "1", "HEAD").split(),
+                         [head, rework, base])
+        body = self.api.posts[0][0]
+        self.assertEqual((body["outcome"], body["candidate"]), ("succeeded", head))
+        self.assertEqual(self.git(worktree, "status", "--porcelain"), "")
+
+    def test_runner_merge_survives_a_lost_submission_record(self):
+        runner, marker, thread, worktree, rework, base = self.off_base_rework("notes.md")
+        # A crash after the runner's merge but before the submission was journaled.
+        self.git(worktree, "merge", "--no-ff", "--no-edit", base)
+        head = self.git(worktree, "rev-parse", "HEAD")
+        runner.submit(marker, "local", thread)
+        self.assertEqual(self.api.posts[0][0]["candidate"], head)
+        self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), head)
+
+    def test_conflicting_off_base_candidate_returns_to_development_with_reason(self):
+        runner, marker, thread, worktree, rework, base = self.off_base_rework("guide.md")
+        runner.submit(marker, "local", thread)
+        body = self.api.posts[0][0]
+        self.assertEqual(body["outcome"], "failed")
+        self.assertNotIn("candidate", body)
+        self.assertIn(base, body["failure_reason"])
+        self.assertIn("guide.md", body["failure_reason"])
+        self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), rework)
+        self.assertEqual(self.git(worktree, "status", "--porcelain"), "")
+        self.assertEqual(runner.status(), {"status": "idle"})
+        # The bounded retry relaunches on the kept rework instead of blocking the slot.
+        self.api.attempt = uuid4().hex
+        retry = self.runner().prepare()
+        self.assertEqual(self.runner().status()["packet"]["expected_revision"], rework)
+        self.assertIn(base, retry["session"]["prompt"])
+
     def start_development(self):
         self.api.remote = "git@github.com:example/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", self.api.remote)
