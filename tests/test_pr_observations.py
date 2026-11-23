@@ -489,6 +489,8 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertFalse(any((row["details"].get("pull") or {}).get("draft") for row in later))
 
     def rework(self, claim, issue, **fields):
+        if issue == "merge_conflict":
+            fields.setdefault("base_tip", "c" * 40)
         return self.request(f"{self.execution}/pr-rework", RUNNER,
                             self.observation(claim, issue=issue, **fields), self.lease)
 
@@ -503,6 +505,7 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         state = execution["state"]
         self.assertEqual((state["stage"], state["status"]), ("pr_revision", "queued"))
         self.assertIn("integrate it into the candidate", state["findings"])
+        self.assertIn(f"main at {'c' * 40}", state["findings"])
 
     def test_github_feedback_is_revised_on_the_ready_pr(self):
         self.start_review()
