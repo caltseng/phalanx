@@ -41,7 +41,7 @@ The runner reads a JSON file passed as `--config`:
 | --- | --- |
 | `base_url` | API base URL. The runner journal refuses a different value later. |
 | `runner_id` | Stable runner ID across restarts. It scopes server capacity and recovery. The journal refuses a different value later. |
-| `capacity` | Local slots, default 1. The server also applies its per-runner capacity. |
+| `capacity` | Local agent worker slots, default 1. The runner adds two runner-only slots, `capacity`+1 and `capacity`+2. The server also applies its per-runner capacity. |
 | `repositories` | Registered repository ID to `checkout`, `base_branch`, and the runtime's `host_id` and `project_id` (see the [runtime mapping](captain-relay.md#runtime-mapping)). |
 | `stages` | Optional list restricting which stages the loop claims. |
 | `validation_policy` | Absolute path, outside every checkout, of the [validation policy](runner-validation-policy.md). Without it, validation stages are not claimed. |

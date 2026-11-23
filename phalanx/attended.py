@@ -19,6 +19,7 @@ from . import report_execution as reports
 from .handoff import WorkerHandoff, WorkPacket
 from .pr_notes import PRNotes
 from .runner_errors import RunnerError
+from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
 
@@ -106,8 +107,7 @@ def development_candidate(record, packet, workspace, evidence: str) -> bool:
 
 
 # Runner-owned stages that need no worker session.
-RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
-                 "pr_reconciliation", "check_in")
+RUNNER_STAGES = tuple(sorted(map(str, RUNNER_ONLY_STAGES)))
 
 
 class AttendedRunner:
@@ -209,17 +209,26 @@ class AttendedRunner:
         if not snapshot:
             if draft and not github_token:
                 raise RunnerError("Set PHALANX_GITHUB_TOKEN in the runner environment for draft publication")
-            if self.slot > self.capacity:
+            claimed = sorted(stages) if stages is not None else [runner_stage] if runner_stage else sorted(STAGES)
+            lane = self.slot > self.capacity
+            if self.slot > self.capacity + RUNNER_ONLY_SLOTS:
                 raise RunnerError("Slot exceeds local capacity; use an enabled slot")
+            if lane and (set(claimed) | set(continue_stages or ())) - set(RUNNER_STAGES):
+                raise RunnerError("Slots above capacity run only runner-only stages")
             eligible, blocked = self._verified_mappings(draft=draft)
 
             def reserve(record, db):
-                if db.execute("SELECT count(*) FROM slot").fetchone()[0] >= self.capacity:
+                # Slots above capacity form the small runner-only lane and are counted apart.
+                # A reservation counts toward the lane only if it holds just runner-only stages,
+                # so a general reservation left above a reduced capacity still counts toward it.
+                limit = RUNNER_ONLY_SLOTS if lane else self.capacity
+                used = sum(
+                    (slot > self.capacity and set(json.loads(row).get("stages") or ()) <= set(RUNNER_STAGES)) == lane
+                    for slot, row in db.execute("SELECT id, record FROM slot"))
+                if used >= limit:
                     raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
                 record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                              repositories=eligible, blocked=blocked,
-                              stages=sorted(stages) if stages is not None else
-                              [runner_stage] if runner_stage else sorted(STAGES),
+                              repositories=eligible, blocked=blocked, stages=claimed,
                               slots=self.capacity)
                 if continue_stages:
                     record.update(next_lease=secrets.token_urlsafe(32),
