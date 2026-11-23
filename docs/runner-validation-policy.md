@@ -113,7 +113,7 @@ body = candidate_local.pre_validate(policy.local_checks)
 # Journal this exact body before the existing result submission.
 ```
 
-`policy.local_checks` contains the existing `candidate_local.LocalCheck` and
+`policy.local_checks` contains the existing `local_checks.LocalCheck` and
 `validation.PreCheck` types. `CandidateLocal.pre_validate` binds results to
 the claimed candidate only after verifying the clean worktree HEAD, records
 the affected check's name, disposition, reason and authorization, and returns
@@ -124,7 +124,7 @@ pass. The loader itself neither runs checks nor fabricates revision evidence.
 
 `policy.draft_checks` contains `validation.RequiredCheck` tuples for the draft
 collector/promotion caller. `policy.ready` is the existing
-`published_validation_stage.PublishedValidationPolicy`. All source-app,
+`validation_policy.PublishedValidationPolicy`. All source-app,
 head/test-merge revision and execution requirements survive conversion. A local
 bypass does **not** remove draft checks, ready CI, previews, or check-in gates.
 Carry the complete configured requirements into the existing exact-PR,
@@ -173,12 +173,11 @@ when the observed head is the last head Phalanx verified for that PR; an
 unverified head, or a PR that has left its item branch or target, becomes an
 owner question. Failed draft checks return the item to `development` with the
 failing reasons as findings. A target tip or PR head that moves during check
-collection is retried on the new revision rather than escalated. Draft
-evidence binds to the PR's head and the base GitHub records for it, not the
-live target tip, because GitHub doesn't advance a PR's `base.sha` when the
-target branch moves. An ordinary target advance therefore doesn't block
-promotion; a conflict goes through the merge-conflict path. Ready evidence
-still binds to the live target tip. A configured local bypass is recorded as
+collection is retried on the new revision rather than escalated. Draft and
+ready evidence bind to the PR's head and the base GitHub records for it, not
+the live target tip, because GitHub doesn't advance a PR's `base.sha` when
+the target branch moves. An ordinary target advance therefore doesn't block
+promotion or validation; a conflict goes through the merge-conflict path. A configured local bypass is recorded as
 the check's disposition and as the pre-validation bypass evidence; draft and
 ready checks still apply.
 

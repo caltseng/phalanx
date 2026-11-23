@@ -1,5 +1,4 @@
 from dataclasses import asdict, replace
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import time
@@ -8,8 +7,8 @@ import unittest
 from phalanx import dependencies, dispatch, finalization, intake
 from phalanx.dispatch_api import Claim
 from phalanx.intake_models import Intake, Rerun
-from phalanx.store import MIGRATIONS, REVISION_MIGRATION, connect, migrate, write_transaction
-from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target, Wait, start
+from phalanx.store import connect, migrate, write_transaction
+from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -131,75 +130,6 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             assignment = self.claim(db, "stored")
             self.assertEqual(assignment["item_id"], consumer["id"])
             self.assertEqual(assignment["dependencies"][0]["revision"], revision)
-
-    def test_released_schema_migrates_pending_report_and_operator_progress(self):
-        path = self.path.with_name("released.sqlite3")
-        markdown = "# Reviewed report before upgrade"
-        revision = intake.digest(markdown)
-        pending = replace(
-            start(Target.REPORT), stage=Stage.REPORT_STORAGE, status=Status.WAITING_FOR_EXTERNAL,
-            pending_output=Status.COMPLETED, report_draft=revision, wait=Wait("Store report", "finalize"),
-        )
-        with connect(path, mode="rwc") as db:
-            for migration in MIGRATIONS[:6]:
-                for statement in migration:
-                    db.execute(statement)
-            db.execute("PRAGMA user_version = 6")
-            intake.register(db, "source", "https://example.com/source.git")
-            stamp = intake.timestamp()
-            db.execute("INSERT INTO work_items VALUES ('item','source','{}',?)", (stamp,))
-            data = intake.encode(asdict(pending))
-            db.execute(
-                """INSERT INTO executions(id,item_id,version,state_json,created_at,updated_at)
-                   VALUES ('execution','item',1,?,?,?)""",
-                (data, stamp, stamp),
-            )
-            intake.record(db, "execution", 1, "result", {}, data, stamp)
-            db.execute("INSERT INTO report_drafts VALUES ('execution',?,?)", (revision, markdown))
-            db.execute("INSERT INTO report_finalizations(execution_id,intent_version,due_at) VALUES ('execution',1,0)")
-        migrate(path)
-        with connect(path, mode="ro") as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], len(MIGRATIONS))
-            self.assertEqual(db.execute("SELECT wait_since FROM operator_progress").fetchone()[0], stamp)
-            queue_indexes = db.execute(
-                "SELECT sql FROM sqlite_schema WHERE name IN ('queue_heads', 'queue_stage_heads')"
-            ).fetchall()
-            self.assertEqual(len(queue_indexes), 2)
-            for definition in queue_indexes:
-                self.assertIn("dependency_wait_json IS NULL", definition["sql"])
-        completed = finalization.attempt(path, "execution")
-        self.assertEqual(completed["state"]["final_output"]["draft_revision"], revision)
-
-    def test_revision_migration_folds_ready_for_check_in_into_reconciliation(self):
-        path = self.path.with_name("pre-revision.sqlite3")
-        legacy = {**asdict(start(Target.MERGED)), "stage": "ready_for_check_in",
-                  "development_findings": "Fix the build", "publication_conflict": False}
-        legacy.pop("findings")
-        with connect(path, mode="rwc") as db:
-            revision = MIGRATIONS.index(REVISION_MIGRATION)
-            for migration in MIGRATIONS[:revision]:
-                for statement in migration:
-                    db.execute(statement)
-            db.execute(f"PRAGMA user_version = {revision}")
-            intake.register(db, "source", "https://example.com/source.git")
-            stamp = intake.timestamp()
-            db.execute("INSERT INTO work_items VALUES ('item','source','{}',?)", (stamp,))
-            data = intake.encode(legacy)
-            db.execute(
-                """INSERT INTO executions(id,item_id,version,state_json,created_at,updated_at)
-                   VALUES ('execution','item',1,?,?,?)""",
-                (data, stamp, stamp),
-            )
-            intake.record(db, "execution", 1, "result",
-                          {"stage": "ready_for_check_in", "merge_intent": {"operation_id": "merge-1"}}, data, stamp)
-        migrate(path)
-        with connect(path, mode="ro") as db:
-            state = json.loads(db.execute("SELECT state_json FROM executions").fetchone()[0])
-            history = db.execute("SELECT state_json, details_json FROM transition_history").fetchone()
-        self.assertEqual((state["stage"], state["findings"]), ("pr_reconciliation", "Fix the build"))
-        self.assertFalse({"development_findings", "publication_conflict"} & state.keys())
-        self.assertEqual(json.loads(history["state_json"]), state)
-        self.assertEqual(json.loads(history["details_json"])["stage"], "pr_reconciliation")
 
     def test_restart_rechecks_missed_durable_milestone(self):
         server = self.start_server(self.path)

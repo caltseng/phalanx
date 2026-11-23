@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from phalanx.attended import RunnerError
-from phalanx.candidate_local import CandidateLocal, LocalCheck, _kill_tree
+from phalanx.candidate_local import CandidateLocal
+from phalanx.local_checks import _FAILURE, LocalCheck, kill_tree, run_check
 from phalanx.handoff import Outcome, WorkerResult
 from phalanx.intake_models import Result
 from phalanx.validation import PreCheck, PreOutcome
@@ -129,26 +130,39 @@ class CandidateLocalTest(unittest.TestCase):
     def test_timed_out_check_fails_and_stops_its_process_tree(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        started, survived = Path(temp.name) / "started", Path(temp.name) / "survived"
-        grandchild = (f"import pathlib, time; time.sleep(3); "
-                      f"pathlib.Path({str(survived)!r}).touch()")
+        started, beats = Path(temp.name) / "started", Path(temp.name) / "beats"
+        # The grandchild appends a byte every 50 ms for as long as it lives.
+        grandchild = ("import time\n"
+                      f"while True:\n    open({str(beats)!r}, 'ab').write(b'.'); time.sleep(0.05)")
         check = replace(self.command("hangs", (
             "import pathlib, subprocess, sys, time; "
             f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}]); "
+            f"beats = pathlib.Path({str(beats)!r})\n"
+            "while not beats.exists(): time.sleep(0.01)\n"
             f"pathlib.Path({str(started)!r}).touch(); time.sleep(60)"
-        )), timeout_seconds=2)
+        )), timeout_seconds=3)
         body = self.operation("pre_pr_validation").pre_validate((check,))
         self.assertEqual(body["outcome"], "failed")
         self.assertEqual(body["local_checks"][0]["reason"],
-                         "Timed out after 2 seconds, no failure identified")
+                         "Timed out after 3 seconds, no failure identified")
         self.assertTrue(started.exists())
-        time.sleep(4)
-        self.assertFalse(survived.exists())
+        size = beats.stat().st_size
+        time.sleep(1)
+        self.assertEqual(beats.stat().st_size, size)
 
     def test_pure_timeout_retries_validation_before_returning_to_development(self):
         hangs = replace(self.command("suite", "import time; print('Running', flush=True); time.sleep(60)"),
                         timeout_seconds=1)
         operation = self.operation("pre_pr_validation")
+        # Time out for real once, then replay that check result for the later retry counts.
+        timed_out = []
+        def run_once(check, path):
+            if not timed_out:
+                timed_out.append(run_check(check, path))
+            return timed_out[0]
+        patcher = patch("phalanx.candidate_local.run_check", run_once)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         for retries, delay in ((0, 60), (1, 120)):
             operation.execution["retry_count"] = retries
             body = operation.pre_validate((hangs,))
@@ -165,16 +179,20 @@ class CandidateLocalTest(unittest.TestCase):
                          "Timed out after 1 seconds, no failure identified\n\nOutput tail:\nRunning")
 
     def test_timeout_with_identified_failures_returns_to_development(self):
-        operation = self.operation("pre_pr_validation")
-        for output in ("..F..", "FAIL: test_x (tests.test_y.Case.test_x)", "ERROR: test_x",
-                       "tests/test_y.py ..E. [ 40%]", "Traceback (most recent call last):"):
+        for output in (b"..F..", b"FAIL: test_x (tests.test_y.Case.test_x)", b"ERROR: test_x",
+                       b"tests/test_y.py ..E. [ 40%]", b"Traceback (most recent call last):"):
             with self.subTest(output=output):
-                check = replace(self.command("suite", f"import time; print({output!r}, flush=True); "
-                                             "time.sleep(60)"), timeout_seconds=1)
-                body = operation.pre_validate((check,))
-                self.assertEqual(body["outcome"], "changes_required")
-                self.assertTrue(body["local_checks"][0]["reason"].startswith(
-                    "Timed out after 1 seconds with failures\n\nOutput tail:\n"))
+                self.assertTrue(_FAILURE.match(output))
+        for output in (b"Running", b"....s.", b"tests/test_y.py .... [ 40%]", b"Ran 3 tests in 0.1s"):
+            with self.subTest(output=output):
+                self.assertFalse(_FAILURE.match(output))
+        operation = self.operation("pre_pr_validation")
+        check = replace(self.command("suite", "import time; print('Running'); print('..F..', flush=True); "
+                                     "time.sleep(60)"), timeout_seconds=1)
+        body = operation.pre_validate((check,))
+        self.assertEqual(body["outcome"], "changes_required")
+        self.assertTrue(body["local_checks"][0]["reason"].startswith(
+            "Timed out after 1 seconds with failures\n\nOutput tail:\n"))
         hangs = replace(self.command("hangs", "import time; time.sleep(60)"), timeout_seconds=1)
         fails = self.command("fails", "raise SystemExit(1)")
         mixed = operation.pre_validate((hangs, fails))
@@ -184,8 +202,22 @@ class CandidateLocalTest(unittest.TestCase):
     def test_process_group_kill_tolerates_permission_error(self):
         process = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"],
                                    start_new_session=True)
-        with patch("phalanx.candidate_local.os.killpg", side_effect=PermissionError):
-            _kill_tree(process)
+        with patch("phalanx.local_checks.os.killpg", side_effect=PermissionError):
+            kill_tree(process)
+        self.assertIsNotNone(process.returncode)
+
+    def test_an_interrupted_check_stops_its_process_tree(self):
+        real_wait, started = subprocess.Popen.wait, []
+
+        def interrupted(process, timeout=None):
+            if timeout is None:
+                return real_wait(process)
+            started.append(process)
+            raise KeyboardInterrupt
+        with TemporaryDirectory() as path, patch.object(subprocess.Popen, "wait", interrupted), \
+                self.assertRaises(KeyboardInterrupt):
+            run_check(self.command("hangs", "import time; time.sleep(60)"), Path(path))
+        process, = started
         self.assertIsNotNone(process.returncode)
 
     def test_stopping_claim_blocks_commands(self):

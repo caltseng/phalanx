@@ -47,6 +47,10 @@ class Renewal(Payload):
     blocker: Text | None = None
 
 
+class RecoveryWait(Payload):
+    blocker: Text | None
+
+
 @router.put("/dispatch/settings", dependencies=[Depends(require_owner)])
 def settings(request: Request, body: DispatchSettings):
     return run(request, dispatch.set_dispatch, body, write=True)
@@ -70,6 +74,12 @@ def renew(request: Request, runner_id: Identifier, attempt_id: Identifier, lease
     blocker = body.blocker if body else None
     return run(request, dispatch.renew, runner_id, attempt_id, intake.digest(lease), worker, blocker,
                write=True)
+
+
+@router.post("/dispatch/runners/{runner_id}/attempts/{attempt_id}/recovery-wait",
+             dependencies=[Depends(require_runner)])
+def recovery_wait(request: Request, runner_id: Identifier, attempt_id: Identifier, body: RecoveryWait):
+    return run(request, dispatch.report_recovery_wait, runner_id, attempt_id, body.blocker, write=True)
 
 
 @router.get("/dispatch/runners/{runner_id}/recovery", dependencies=[Depends(require_runner)])

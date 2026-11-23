@@ -576,7 +576,7 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         merged["pull"].update(state="closed", merged=True, merge_commit=OTHER, base_sha=OTHER)
         self.assertEqual(self.result(claim)[0], 409)
         self.assertEqual(self.submit(dict(merged, operation_id="other-write"))[0], 409)
-        for parents, expected_status in (([BASE, OTHER], 409), ([HEAD, BASE], 409), ([HEAD], 422)):
+        for parents, expected_status in (([BASE, OTHER], 422), ([HEAD, BASE], 422), ([HEAD], 422)):
             with self.subTest(parents=parents):
                 self.assertEqual(self.submit(dict(merged, merge_parent_shas=parents))[0],
                                  expected_status)
@@ -606,3 +606,49 @@ class VerifiedMergeTest(PullObservationFixture, unittest.TestCase):
         verified = [event for event in timeline if event["event"] == "merge_verified"]
         self.assertEqual(len(verified), 1)
         self.assertEqual(verified[0]["details"]["merge_parent_shas"], [OTHER, HEAD])
+
+
+class ExternalMergeTest(PullObservationFixture, unittest.TestCase):
+    """The repository merged the primary PR itself before Phalanx reached check-in."""
+
+    def merged(self, claim, *, parents=(BASE,), method="squash_or_rebase", head=HEAD):
+        body = self.observation(claim, head=head, merge_parent_shas=list(parents), merge_method=method)
+        body["pull"].update(state="closed", merged=True, merge_commit=OTHER,
+                            merged_at="2026-11-24T06:33:57Z")
+        return body
+
+    def test_squash_merge_of_the_candidate_closes_at_validation_without_asking(self):
+        self.publish()
+        self.assertEqual(self.submit(self.observation(self.claim("pr_promotion"), gates=self.gates("draft")))[0], 200)
+        claim = self.claim("pr_validation")
+        body = self.merged(claim)
+        merged = f"{self.execution}/pr-merged"
+        for field, value in (("head_repository", "Other/Repo"), ("base_repository", "other/repo"),
+                             ("head_ref", "phalanx/other"), ("base_ref", "release"), ("head_sha", BASE),
+                             ("number", 8)):
+            with self.subTest(field=field):
+                self.assertEqual(self.request(merged, RUNNER, dict(body, pull=dict(body["pull"], **{field: value})),
+                                              self.lease)[0], 409)
+        self.assertEqual(self.request(merged, RUNNER, dict(body, expected=dict(body["expected"], base_ref="release"),
+                                                           pull=dict(body["pull"], base_ref="release")),
+                                      self.lease)[0], 409)
+        self.assertEqual(self.request(merged, RUNNER, dict(body, merge_method="merge"), self.lease)[0], 422)
+        self.assertEqual(self.request(merged, RUNNER, dict(body, merge_parent_shas=[BASE, OTHER]),
+                                      self.lease)[0], 422)
+        status, execution = self.request(merged, RUNNER, body, self.lease)
+        self.assertEqual(status, 200, execution)
+        state = execution["state"]
+        self.assertEqual((state["status"], state["stage"]), ("completed", "check_in"))
+        output = state["final_output"]
+        self.assertEqual((output["merge_commit"], output["merge_method"], output["revision"]),
+                         (OTHER, "squash_or_rebase", {"head": HEAD, "base": BASE}))
+        self.assertTrue(output["merged_at"].startswith("2026-11-24T06:33:57"))
+        self.assertEqual(self.request(merged, RUNNER, body, self.lease)[0], 409)
+
+    def test_merge_commit_of_the_candidate_closes_at_promotion(self):
+        self.publish()
+        body = self.merged(self.claim("pr_promotion"), parents=(BASE, HEAD), method="merge")
+        status, execution = self.request(f"{self.execution}/pr-merged", RUNNER, body, self.lease)
+        self.assertEqual(status, 200, execution)
+        self.assertEqual((execution["state"]["status"], execution["state"]["final_output"]["merge_method"]),
+                         ("completed", "merge"))

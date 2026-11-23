@@ -6,8 +6,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import dispatch, finalization, intake, pr_models, pr_observations, waits
-from .auth import authenticate, require_owner, require_runner
+from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
+from .auth import authenticate, require_coordinator, require_owner, require_runner, require_worker
 from .store import read_transaction, write_transaction
 from .transitions import Stage
 from .intake_models import (
@@ -19,7 +19,8 @@ from .intake_models import (
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 Key = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
 RequiredKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
-Lease = Annotated[str, Header(alias="Phalanx-Lease", pattern=r"^[A-Za-z0-9_-]{32,200}$")]
+# Runners send their lease; a writer's bearer token is its fence, so writers omit it.
+Lease = Annotated[str | None, Header(alias="Phalanx-Lease", pattern=r"^[A-Za-z0-9_-]{32,200}$")]
 BatchLimit = Annotated[int, Query(ge=1, le=100)]
 
 
@@ -124,14 +125,26 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
                scope=f"rerun:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
 
 
+def fence(request, lease):
+    """The digest an attempt is fenced by: the runner's lease or the writer's bearer token."""
+    writer = getattr(request.state, "writer", None)
+    if writer is not None:
+        return writer["token_digest"]
+    if lease is None:  # step5-remove: runner leases
+        raise HTTPException(422, "Runners must send the Phalanx-Lease header")
+    return intake.digest(lease)  # step5-remove: runner leases
+
+
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
-    lease_digest = intake.digest(lease)
+    from . import writers  # writers' routes import this module
+
+    lease_digest = fence(request, lease)
     payload = body.model_dump(mode="json")
     # Preserve receipt digests for results written before these optional fields existed.
     if isinstance(body, Result):
         for field in (
             "failure_reason", "question", "retry_after_seconds", "review_notes", "local_checks",
-            "report_review_notes",
+            "report_review_notes", "pr_url",
         ):
             if payload[field] is None:
                 payload.pop(field)
@@ -144,14 +157,17 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     if isinstance(body, ExternalWait) and body.wait_limit_seconds is None:
         payload.pop("wait_limit_seconds")
     receipt = {"body": payload, "lease_digest": lease_digest}
-    continuation = next_stage_offer(request)
+    writer = getattr(request.state, "writer", None)
+    continuation = None if writer else next_stage_offer(request)  # step5-remove: runner slots
     if continuation is not None:
         receipt["continuation"] = {"lease_digest": intake.digest(continuation["lease"]),
                                    "stages": continuation["stages"]}
 
     def perform(db, *args):
         view = operation(db, *args)
-        return dispatch.hand_off(db, item_id, body.attempt_id, view, continuation)
+        if writer is not None:
+            return writers.advance(db, writer["id"], body.attempt_id, view)
+        return dispatch.hand_off(db, item_id, body.attempt_id, view, continuation)  # step5-remove
 
     return run(
         request, perform, item_id, execution_id, body, lease_digest, write=True, finish=True,
@@ -173,16 +189,16 @@ def next_stage_offer(request):
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/result",
-             dependencies=[Depends(require_runner)])
+             dependencies=[Depends(require_worker)])
 def result(request: Request, item_id: Identifier, execution_id: Identifier,
-           body: Result, lease: Lease, key: Key = None):
+           body: Result, lease: Lease = None, key: Key = None):
     return attempt_event(request, intake.result, item_id, execution_id, body, lease, key)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/stop-confirmed",
-             dependencies=[Depends(require_runner)])
+             dependencies=[Depends(require_worker)])
 def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifier,
-                   body: AttemptEvent, lease: Lease, key: Key = None):
+                   body: AttemptEvent, lease: Lease = None, key: Key = None):
     return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
 
 
@@ -202,9 +218,9 @@ def reply(request: Request, item_id: Identifier, execution_id: Identifier,
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/external-wait",
-             dependencies=[Depends(require_runner)])
+             dependencies=[Depends(require_worker)])
 def external_wait(request: Request, item_id: Identifier, execution_id: Identifier,
-                  body: ExternalWait, lease: Lease, key: RequiredKey):
+                  body: ExternalWait, key: RequiredKey, lease: Lease = None):
     return attempt_event(request, waits.external_wait, item_id, execution_id, body, lease, key)
 
 
@@ -221,40 +237,72 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
                scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
 
 
-@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
+@router.post("/items/{item_id}/executions/{execution_id}/github-observation",
              dependencies=[Depends(require_runner)])
+def github_observation(request: Request, item_id: Identifier, execution_id: Identifier,
+                       body: reconciliation.Observation):
+    """Record what the reconciler saw on GitHub; no lease. It advances only a writer's PR stages."""
+    return run(request, reconciliation.record, item_id, execution_id, body, write=True)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/local-checks", dependencies=[Depends(require_runner)])
+def local_checks(request: Request, item_id: Identifier, execution_id: Identifier,
+                 body: reconciliation.LocalChecks):
+    """Record trusted pre-PR check results for an observed PR head; a flag, never a gate."""
+    return run(request, reconciliation.record_local_checks, item_id, execution_id, body, write=True)
+
+
+@router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
+def reconciler_heartbeat(request: Request, runner_id: Identifier):
+    return run(request, reconciliation.heartbeat, runner_id, write=True)
+
+
+@router.delete("/reconcilers/{runner_id}", dependencies=[Depends(require_coordinator)])
+def retire_reconciler(request: Request, runner_id: Identifier):
+    return run(request, reconciliation.retire, runner_id, write=True)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
+             dependencies=[Depends(require_worker)])
 def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
-                         body: pr_models.PublicationClaimCheck, lease: Lease):
+                         body: pr_models.PublicationClaimCheck, lease: Lease = None):
     return run(request, pr_observations.check_publication_claim, item_id, execution_id, body,
-               intake.digest(lease))
+               fence(request, lease))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
-             dependencies=[Depends(require_runner)])
+             dependencies=[Depends(require_worker)])
 def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,
                    body: pr_models.Observation,
-                   lease: Lease, key: Key = None):
+                   lease: Lease = None, key: Key = None):
     return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-blocker",
-             dependencies=[Depends(require_runner)])
+             dependencies=[Depends(require_worker)])
 def pr_publication_blocker(request: Request, item_id: Identifier, execution_id: Identifier,
                            body: pr_models.PublicationBlocker,
-                           lease: Lease, key: Key = None):
+                           lease: Lease = None, key: Key = None):
     return attempt_event(request, pr_observations.submit_blocker, item_id, execution_id, body, lease, key)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-rework",
-             dependencies=[Depends(require_runner)])
+             dependencies=[Depends(require_worker)])
 def pr_rework(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.Rework,
-              lease: Lease, key: Key = None):
+              lease: Lease = None, key: Key = None):
     return attempt_event(request, pr_observations.submit_rework, item_id, execution_id, body, lease, key)
 
 
-@router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
+@router.post("/items/{item_id}/executions/{execution_id}/pr-merged",
              dependencies=[Depends(require_runner)])
+def pr_merged(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.ExternalMerge,
+              lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit_merged, item_id, execution_id, body, lease, key)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
+             dependencies=[Depends(require_worker)])
 def pr_validation_claim(request: Request, item_id: Identifier, execution_id: Identifier,
-                        body: pr_models.PublishedValidationClaimCheck, lease: Lease):
+                        body: pr_models.PublishedValidationClaimCheck, lease: Lease = None):
     return run(request, pr_observations.check_published_validation_claim,
-               item_id, execution_id, body, intake.digest(lease))
+               item_id, execution_id, body, fence(request, lease))

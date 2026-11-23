@@ -14,32 +14,6 @@ OPERATOR_SCHEMA = (
         last_advanced_at TEXT NOT NULL,
         wait_since TEXT
     )""",
-    # Reconstruct the latest stage change and latest wait change from PH-05 history.
-    """INSERT INTO operator_progress
-       WITH changes AS (
-           SELECT execution_id, version,
-                  json_extract(state_json, '$.stage') AS stage,
-                  json_extract(state_json, '$.wait') AS wait,
-                  lag(json_extract(state_json, '$.stage')) OVER history AS prior_stage,
-                  lag(json_extract(state_json, '$.wait')) OVER history AS prior_wait
-           FROM transition_history
-           WINDOW history AS (PARTITION BY execution_id ORDER BY version)
-       ), latest AS (
-           SELECT execution_id,
-                  max(CASE WHEN stage IS NOT prior_stage THEN version END) AS advanced_version,
-                  max(CASE WHEN wait IS NOT prior_wait THEN version END) AS wait_version
-           FROM changes GROUP BY execution_id
-       )
-       SELECT latest.execution_id, advanced.created_at, waiting.created_at
-       FROM latest
-       JOIN transition_history AS advanced
-           ON advanced.execution_id = latest.execution_id AND advanced.version = latest.advanced_version
-       LEFT JOIN transition_history AS waiting
-           ON waiting.execution_id = latest.execution_id AND waiting.version = latest.wait_version""",
-    """UPDATE operator_progress SET wait_since = NULL
-       WHERE execution_id IN (
-           SELECT id FROM executions WHERE json_extract(state_json, '$.wait') IS NULL
-       )""",
     """CREATE TRIGGER operator_progress_insert AFTER INSERT ON executions BEGIN
            INSERT INTO operator_progress VALUES (
                NEW.id, NEW.created_at,

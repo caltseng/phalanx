@@ -14,6 +14,8 @@ Markdown = Annotated[str, StringConstraints(min_length=1, max_length=256000, pat
 # A free-form group name for related items, such as a campaign or a muster.
 LABEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 Label = Annotated[str, StringConstraints(pattern=LABEL_PATTERN)]
+PullUrl = Annotated[str, StringConstraints(
+    pattern=r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]{0,9}$")]
 
 
 class Payload(BaseModel):
@@ -122,3 +124,5 @@ class Result(AttemptEvent):
     prevalidated_candidate: Text | None = None
     review_notes: Text | None = None
     local_checks: list[LocalCheckResult] | None = Field(default=None, max_length=50)
+    # The PR a writer opened at publication. The reconciler's observation records the primary PR.
+    pr_url: PullUrl | None = None

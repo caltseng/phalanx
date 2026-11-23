@@ -10,7 +10,7 @@ from phalanx import dispatch, finalization, intake
 from phalanx.attended_recovery import acknowledge_stop, reconcile
 from phalanx.dispatch_api import Claim, DispatchSettings, ReconciledStop
 from phalanx.intake_models import Cancel, Intake, Result
-from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
+from phalanx.store import connect, migrate, write_transaction
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 from timing import WAIT_SECONDS
@@ -214,9 +214,17 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         expired = self.get(timeline, OWNER)[1]["item"]
         self.assertEqual(expired["wait_reason"], "Lease expired at 1970-01-01T00:00:00+00:00; awaiting runner recovery")
         self.assertIn("runner recovers", expired["resume_trigger"])
+        wait_path = f"/v1/dispatch/runners/local/attempts/{assigned['attempt_id']}/recovery-wait"
+        owner_wait = "Recovery is waiting on the owner: X. Then run `python -m phalanx attended-recover --slot 1 --recheck`"
+        self.assertEqual(self.request(wait_path, RUNNER, {"blocker": owner_wait})[0], 200)
+        self.assertEqual(self.get(timeline, OWNER)[1]["item"]["wait_reason"],
+                         f"Lease expired at 1970-01-01T00:00:00+00:00; {owner_wait}")
+        self.assertEqual(self.request(wait_path, RUNNER, {"blocker": None})[0], 200)
+        self.assertIn("awaiting runner recovery", self.get(timeline, OWNER)[1]["item"]["wait_reason"])
         with write_transaction(self.path) as db:
             db.execute("UPDATE attempts SET lease_expires_at = ? WHERE id = ?",
                        (assigned["lease_expires_at"], assigned["attempt_id"]))
+        self.assertEqual(self.request(wait_path, RUNNER, {"blocker": owner_wait})[0], 409)
         execution = assigned["execution"]
         result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
         result = {"expected_version": execution["version"], "attempt_id": assigned["attempt_id"],
@@ -379,32 +387,8 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.assertIsNone(result["retry_at_ms"])
         self.assertIn("Build resource unavailable", result["state"]["wait"]["reason"])
 
-    def test_schema_two_migrates_queue_and_preserves_running_attempt(self):
-        path = self.path.with_name("legacy.sqlite3")
-        with connect(path, mode="rwc") as db:
-            for migration in MIGRATIONS[:2]:
-                for statement in migration:
-                    db.execute(statement)
-            db.execute("PRAGMA user_version=2")
-            stamp = "2026-01-02T00:00:00.123000+00:00"
-            intake.register(db, "repo", "https://github.com/example/repo.git")
-            for status in ("queued", "running"):
-                db.execute("INSERT INTO work_items VALUES (?, 'repo', ?, ?)",
-                           (status, '{"priority":"urgent"}', stamp))
-                db.execute(
-                    """INSERT INTO executions (id, item_id, version, state_json, created_at, updated_at)
-                       VALUES (?, ?, 1, json_object('stage','report_drafting','status',?,
-                                                    'final_output',NULL), ?, ?)""",
-                    (status, status, status, stamp, stamp),
-                )
-            db.execute("INSERT INTO attempts VALUES ('attempt','running','report_drafting','local',"
-                       "'digest',1,?,NULL)", (stamp,))
-        migrate(path)
-        with connect(path) as db:
-            row = dispatch.queue_head(db, "local", ["repo"], NOW * 1000, 300_000)
-            self.assertEqual(row["id"], "queued")
-            self.assertEqual(row["ready_since"], 1767312000123)
-            self.assertEqual(dispatch.recovery_candidates(db, "local")[0]["attempt_id"], "attempt")
+    def test_queue_heads_use_their_indexes(self):
+        with connect(self.path) as db:
             plan = db.execute("EXPLAIN QUERY PLAN " + dispatch.QUEUE_HEAD,
                               (NOW * 1000, "repo", "", 2)).fetchone()["detail"]
             self.assertIn("SEARCH executions USING INDEX queue_heads", plan)
