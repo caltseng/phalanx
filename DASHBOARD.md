@@ -197,6 +197,7 @@ Computed on the server from work history and shown on History and group pages:
 
 - **Origin:** the hosted API origin serves the dashboard ([PH-20](IMPLEMENTATION_PLAN.md)), so it needs no CORS and no separate API base URL.
 - **Sign-in:** Google sign-in from PH-27. The session cookie is HttpOnly, Secure and SameSite=Lax. Sessions expire, and sign-out deletes the session on the server.
+- **Local board:** until PH-27, a local server started with `PHALANX_LOCAL_BOARD=1` serves the read-only board routes without a token to loopback clients with a loopback `Host` ([decision 57](docs/decisions.md)). A hosted server leaves the flag unset.
 - **Workspace scope:** every dashboard request is scoped to the signed-in user's selected workspace and checked against their role on the server. The browser only hides controls for convenience; it never enforces access.
 - **Write actions (D2):** the cookie authorizes owner write routes only with CSRF protection, using an Origin check plus a required custom header. Destructive actions ask for confirmation. Each action records the signed-in email in the item timeline, the same way reply authors are recorded today. Runner routes never accept the cookie.
 - **Caching:** static assets have hashed names and cache for a long time. API responses are `no-store`.

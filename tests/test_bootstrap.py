@@ -15,14 +15,14 @@ from urllib.request import Request, urlopen
 
 from phalanx import store
 from phalanx.store import connect, migrate, read_transaction, write_transaction
+from timing import WAIT_SECONDS
 
 
 OWNER = "o" * 32
 RUNNER = "r" * 32
-# Generous bounds: loaded or hosted machines can stall a single fsync-heavy request
-# or server start for seconds. Tests never assert on these timeouts.
-REQUEST_TIMEOUT = 30
-STARTUP_TIMEOUT = 30
+# Loaded or hosted machines can stall a single fsync-heavy request or server start.
+# Tests never assert on these timeouts.
+REQUEST_TIMEOUT = STARTUP_TIMEOUT = WAIT_SECONDS
 
 # Let the real server exit before its Python launcher exits on Windows.
 SERVER_PROCESS = """
@@ -44,13 +44,14 @@ server.run()
 
 
 class ServerFixture:
-    def start_server(self, path):
+    def start_server(self, path, **environment):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
         env = dict(os.environ, PHALANX_DB=str(path), PHALANX_OWNER_TOKEN=OWNER,
-                   PHALANX_RUNNER_TOKEN=RUNNER)
+                   PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0")
+        env.update(environment)
         log = path.with_suffix(".log")
         with log.open("w") as output:
             server = subprocess.Popen(
@@ -153,6 +154,18 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
+    def test_lease_seconds_defaults_and_rejects_invalid_values(self):
+        from phalanx.config import lease_seconds
+        with patch.dict(os.environ):
+            os.environ.pop("PHALANX_LEASE_SECONDS", None)
+            self.assertEqual(lease_seconds(), 300)
+            os.environ["PHALANX_LEASE_SECONDS"] = "45"
+            self.assertEqual(lease_seconds(), 45)
+            for value in ("0", "-5", "29", "3601", "1.5", "", "five"):
+                os.environ["PHALANX_LEASE_SECONDS"] = value
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    lease_seconds()
+
     def test_migration_refuses_foreign_and_future_databases(self):
         with TemporaryDirectory() as directory:
             foreign = Path(directory) / "foreign.sqlite3"
@@ -228,7 +241,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
         def hold():
             with gate.write():
-                release.wait(10)
+                release.wait(WAIT_SECONDS)
 
         def write():
             with gate.write():
@@ -248,7 +261,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             time.sleep(0.1)
             release.set()
             for future in (running, reader, *writers):
-                future.result(timeout=10)
+                future.result(timeout=WAIT_SECONDS)
         self.assertEqual(order, ["read"] + ["write"] * 5)
 
     def test_reader_waits_out_a_write_longer_than_the_busy_timeout(self):
@@ -256,7 +269,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
         def hold():
             with gate.write():
-                release.wait(10)
+                release.wait(WAIT_SECONDS)
 
         def read():
             with gate.read_start():
@@ -269,8 +282,8 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             reader = pool.submit(read)
             time.sleep(0.5)
             release.set()
-            running.result(timeout=10)
-            self.assertEqual(reader.result(timeout=10), "read")
+            running.result(timeout=WAIT_SECONDS)
+            self.assertEqual(reader.result(timeout=WAIT_SECONDS), "read")
 
     def test_readers_arriving_while_a_writer_waits_go_after_it(self):
         gate, order = store._Gate(), []
@@ -284,7 +297,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 order.append("read")
 
         def until(predicate):
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + WAIT_SECONDS
             while not predicate():
                 self.assertLess(time.monotonic(), deadline)
                 time.sleep(0.01)
@@ -296,6 +309,6 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 reader = pool.submit(read)
                 until(lambda: gate.queued == 1)
                 self.assertEqual(order, [])
-            writer.result(timeout=10)
-            reader.result(timeout=10)
+            writer.result(timeout=WAIT_SECONDS)
+            reader.result(timeout=WAIT_SECONDS)
         self.assertEqual(order, ["write", "read"])

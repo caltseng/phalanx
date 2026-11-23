@@ -76,6 +76,8 @@ class WorkPacket:
     context: str = ""
     handoff: str = ""
     base_branch: str | None = None
+    # The exact base commit pinned at claim, which a development candidate must contain.
+    base_revision: str | None = None
     report_checkpoint: dict[str, str] | None = None
     dependencies: tuple[dict, ...] = ()
 
@@ -154,6 +156,7 @@ class WorkerHandoff:
             "result_identity": packet.result_identity(),
             "output_type": packet.output_type,
             "base_branch": packet.base_branch,
+            **({"base_revision": packet.base_revision} if packet.base_revision else {}),
             "goal": packet.goal,
             "evidence_requirements": packet.evidence_requirements,
             "context": packet.context,

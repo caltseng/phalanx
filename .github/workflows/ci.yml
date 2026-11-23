@@ -15,19 +15,19 @@ concurrency:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.target.os }}, Python ${{ matrix.target.python }}, shard ${{ matrix.shard }}/3)
+    runs-on: ${{ matrix.target.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest]
-        python-version: ["3.12", "3.14"]
-        include:
-          - os: ubuntu-latest
-            python-version: "3.14"
-          - os: macos-latest
-            python-version: "3.14"
+        target:
+          - { os: windows-latest, python: "3.12" }
+          - { os: windows-latest, python: "3.14" }
+          - { os: ubuntu-latest, python: "3.14" }
+          - { os: macos-latest, python: "3.14" }
+        # Keep in step with the total passed to tests/shard.py below.
+        shard: [1, 2, 3]
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
@@ -37,7 +37,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.target.python }}
           cache: pip
           cache-dependency-path: |
             requirements.lock
@@ -49,4 +49,17 @@ jobs:
           python -m pip install -e .
 
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        run: python tests/shard.py ${{ matrix.shard }} 3
+
+  # The single required check: it fails unless every shard of every target passed.
+  tests:
+    name: Tests
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every test shard to pass
+        if: needs.test.result != 'success'
+        run: |
+          echo "::error::Test shards finished with result: ${{ needs.test.result }}"
+          exit 1

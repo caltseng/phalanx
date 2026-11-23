@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 from threading import Event
 from time import monotonic, time
 from urllib.parse import quote
@@ -31,10 +32,11 @@ _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reco
 
 class CaptainLoop:
     def __init__(self, root: Path, config: dict, api, adapter: BridgeAdapter, *,
-                 poll_seconds: float = 2, heartbeat_seconds: float = 20,
-                 batch_size: int = 8, wait_seconds: float = 2, emit=None):
-        if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds <= 20:
-            raise RunnerError("Poll interval must be at most 30s and heartbeat interval at most 20s")
+                 poll_seconds: float = 2, heartbeat_seconds: float = 60,
+                 batch_size: int = 8, wait_seconds: float = 2, overdue_seconds: float = 3 * 3600,
+                 relay_stall_seconds: float = 180, emit=None, notify=None):
+        if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds:
+            raise RunnerError("Poll interval must be at most 30s and heartbeat interval must be positive")
         if type(batch_size) is not int or not 1 <= batch_size <= 32 or not 0 < wait_seconds <= 5:
             raise RunnerError("Native batches need 1-32 slots and a wait of at most 5s")
         if not isinstance(config.get("runner_id"), str) or not config["runner_id"]:
@@ -46,11 +48,17 @@ class CaptainLoop:
                 raise RunnerError("The private runner state must be outside mapped checkouts")
         self.poll_seconds, self.heartbeat_seconds = poll_seconds, heartbeat_seconds
         self.batch_size, self.wait_seconds = batch_size, wait_seconds
+        self.overdue_seconds = overdue_seconds
+        self.relay_stall_seconds = relay_stall_seconds
         self.emit = emit or (lambda event: print(json.dumps(event), flush=True))
+        self.notify = notify or command_notifier(config.get("notify_command"))
         self.slot_pool = ThreadPoolExecutor(max_workers=256, thread_name_prefix="captain-slot")
         self.lease_pool = ThreadPoolExecutor(max_workers=256, thread_name_prefix="captain-lease")
         self.native_pool = ThreadPoolExecutor(max_workers=256, thread_name_prefix="captain-native")
         self.control_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="captain-recovery")
+        self.notify_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="captain-notify")
+        self.notifications: list[Future] = []
+        self.relay_future, self.relay_due = None, 0
         self.work: dict[int, Future] = {}
         self.renewals: dict[int, tuple[Future, str]] = {}
         self.observations: dict[tuple[int, ...], Future] = {}
@@ -74,8 +82,14 @@ class CaptainLoop:
             self.rechecks = False
         self.observing = set()
         self.blocked: dict[int, str] = {}
+        # Leases left to expire because their exact writer stopped without a result.
+        self.lapsing: dict[int, str] = {}
         self.closed = False
         self._bind_identity()
+        with self.runner._journal() as db:
+            row = db.execute("SELECT value FROM captain WHERE key='status-relay'").fetchone()
+        # A stall left by a previous loop is cleared, and announced, by this loop's first check.
+        self.relay_stall = "" if row and json.loads(row[0])["status"] == "relay_stalled" else None
 
     def _runner(self, slot):
         return AttendedRunner(self.root, self.config, self.api, slot=slot)
@@ -273,7 +287,10 @@ class CaptainLoop:
                 if not mappings:
                     continue
             runner = AttendedRunner(self.root, {**self.config, "repositories": mappings}, self.api, slot=slot)
-            result = runner.prepare(stages=stages)
+            # Keep this slot through the item's next runnable stages. Worker stages
+            # need verified runtime mappings, so skip them while any mapping is blocked.
+            continuing = [stage for stage in available if stage not in STAGES or not self.blocked_mappings]
+            result = runner.prepare(stages=stages, continue_stages=continuing)
             if result["status"] != "no_eligible_work":
                 return runner, result
         if blocked:
@@ -409,9 +426,9 @@ class CaptainLoop:
             packet = snapshot.get("packet")
             if packet:
                 receipt = snapshot["receipt"]
-                return {"status": "submitted", "execution": runner.submit(
+                return _submitted(runner.submit(
                     runner._handoff(snapshot).packet.marker, snapshot["host_id"], receipt["thread_id"],
-                )}
+                ))
             return self._prepare(slot, discovery)
         if snapshot.get("recover_stop") or snapshot.get("recover_claim") or expired:
             if ("packet" in snapshot and not unlaunched and observation is None
@@ -437,9 +454,18 @@ class CaptainLoop:
         if native.state == "stopped":
             if stopping:
                 return self._confirm_stop(runner, current, native)
-            return {"status": "submitted", "execution": runner.submit(
-                packet.marker, snapshot["host_id"], str(native.thread_id),
-            )}
+            if runner._handoff(snapshot).read_result() is None:
+                # Stopped-attempt recovery needs an expired lease; renewing would hold the item forever.
+                self.lapsing[slot] = snapshot["lease"]
+                return {"status": "stopped_without_result",
+                        "reason": "Exact native writer stopped without a result; the lease will lapse "
+                                  "and stopped-attempt recovery will reconcile it"}
+            return _submitted(runner.submit(packet.marker, snapshot["host_id"], str(native.thread_id)))
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot["started_at"])).total_seconds()
+        if age >= self.overdue_seconds:
+            reason = (f"Worker has run over {self.overdue_seconds / 3600:g}h with no result and keeps its "
+                      "reservation while active. Inspect the worker; reply to it or cancel the item if it is stuck")
+            return {"status": "worker_overdue", "reason": reason, "blocker": reason}
         return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
 
     def _check_observation(self, runner, snapshot, observation):
@@ -488,10 +514,17 @@ class CaptainLoop:
             if future.done():
                 del self.renewals[slot]
                 try:
-                    future.result()
+                    renewed = future.result()
                 except Exception as error:
                     self._status(slot, "renewal_blocked", f"{type(error).__name__}: {error}; reconcile the lease",
                                  lease=lease)
+                    continue
+                remaining = renewed["lease_expires_at"] - time()
+                if remaining < 2 * self.heartbeat_seconds:
+                    self._status(slot, "renewal_interval_too_long",
+                                 f"The {self.heartbeat_seconds:g}s heartbeat is not under half the {remaining:.0f}s "
+                                 "remaining lease; lower --heartbeat-seconds or raise the server's "
+                                 "PHALANX_LEASE_SECONDS", lease=lease)
         for slots, future in list(self.observations.items()):
             if future.done():
                 del self.observations[slots]
@@ -521,7 +554,7 @@ class CaptainLoop:
                         self.expired.pop(result["attempt_id"], None)
                     if result.get("unchanged") and slot in self.blocked:
                         continue
-                    self._block(slot, None)
+                    self._block(slot, result.get("blocker"))
                     self._status(slot, result["status"], result.get("reason", "Operation recorded"))
         records = self._records()
         for slot in list(self.cursors):
@@ -529,6 +562,8 @@ class CaptainLoop:
                 del self.cursors[slot]
         for slot in set(self.blocked) - set(records):
             del self.blocked[slot]
+        for slot in set(self.lapsing) - set(records):
+            del self.lapsing[slot]
         observing = {(slot, record.get("claim", {}).get("attempt_id")) for slot, record in records.items()
                      if "packet" in record and any(field in record for field in ("relay", "receipt"))}
         if self.observing - observing:
@@ -539,6 +574,7 @@ class CaptainLoop:
             except Exception as error:
                 self._status(0, "observation_blocked", f"{type(error).__name__}: {error}")
         self.observing = observing
+        self._check_relay(now, records)
         if self.recovery_future is not None and self.recovery_future.done():
             future, self.recovery_future = self.recovery_future, None
             try:
@@ -584,8 +620,8 @@ class CaptainLoop:
             self.recheck_due = now + self.poll_seconds
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
-                    and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
-                self.renewals[slot] = (self.lease_pool.submit(self._runner(slot).renew, self.blocked.get(slot)),
+                    and self.lapsing.get(slot) != record["lease"] and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
+                self.renewals[slot] = (self.lease_pool.submit(self._runner(slot).renew, self._blocker(slot, record)),
                                        record["lease"])
                 self.lease_due[slot] = now + self.heartbeat_seconds
             if slot not in self.work and now >= self.work_due.get(slot, 0):
@@ -616,6 +652,52 @@ class CaptainLoop:
                     self.work_due[slot] = now + self.poll_seconds
                     room -= 1
 
+    def _blocker(self, slot, record):
+        """A slot's own blocker, preceded by a relay stall when its worker needs the relay."""
+        reasons = [self.relay_stall] if self.relay_stall and "packet" in record else []
+        if self.blocked.get(slot):
+            reasons.append(self.blocked[slot])
+        return "; ".join(reasons) or None
+
+    def _check_relay(self, now, records):
+        """Surface a relay that stopped taking requests on every waiting item, and tell the owner once."""
+        for future in [future for future in self.notifications if future.done()]:
+            self.notifications.remove(future)
+            try:
+                future.result()
+            except Exception as error:
+                self._status("notify", "notify_blocked", f"{type(error).__name__}: {error}; "
+                             "check the runner configuration's notify_command")
+            else:
+                self._status("notify", "notified", "The owner notification command succeeded")
+        if self.relay_future is not None and self.relay_future.done():
+            future, self.relay_future = self.relay_future, None
+            try:
+                stall = future.result()
+            except Exception as error:
+                stall = f"Captain relay queue is unreadable: {type(error).__name__}: {error}"
+            if stall != self.relay_stall:
+                self.relay_stall = stall
+                affected = sorted(slot for slot, record in records.items() if "packet" in record)
+                items = [records[slot]["claim"]["item_id"] for slot in affected if "claim" in records[slot]]
+                for slot in affected:
+                    self.lease_due[slot] = 0
+                if stall:
+                    event = {"event": "relay_stalled", "reason": stall, "items": items}
+                    self._status("relay", "relay_stalled",
+                                 f"{stall}. Waiting items: {', '.join(items) or 'none'}")
+                else:
+                    event = {"event": "relay_serving", "reason": "The Captain relay is taking requests again; "
+                             "waiting work resumed", "items": items}
+                    self._status("relay", "relay_serving", event["reason"])
+                if self.notify is not None:
+                    self.notifications.append(self.notify_pool.submit(self.notify, {
+                        **event, "runner_id": self.config["runner_id"], "at": datetime.now(timezone.utc).isoformat(),
+                    }))
+        if self.relay_future is None and now >= self.relay_due:
+            self.relay_future = self.native_pool.submit(self.adapter.relay_stall, self.relay_stall_seconds)
+            self.relay_due = now + self.poll_seconds
+
     def _recheck_due(self):
         """Requeue published gates whose scheduled observation time has arrived."""
         errors = []
@@ -644,8 +726,31 @@ class CaptainLoop:
     def close(self):
         if not self.closed:
             self.closed = True
-            for pool in (self.slot_pool, self.lease_pool, self.native_pool, self.control_pool):
+            for pool in (self.slot_pool, self.lease_pool, self.native_pool, self.control_pool, self.notify_pool):
                 pool.shutdown(wait=True, cancel_futures=True)
+
+
+def command_notifier(command):
+    """Owner notification through a trusted command that reads one JSON event on stdin."""
+    if not command:
+        return None
+
+    def notify(event):
+        subprocess.run(command, input=json.dumps(event).encode("utf-8"), stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=30, check=True, shell=False,
+                       env={key: value for key, value in os.environ.items()
+                            if key.upper() not in {"PHALANX_RUNNER_TOKEN", "PHALANX_OWNER_TOKEN",
+                                                   "PHALANX_GITHUB_TOKEN"}})
+    return notify
+
+
+def _submitted(execution):
+    continuation = execution.get("continuation")
+    if continuation:
+        stage = continuation["execution"]["state"]["stage"]
+        return {"status": "continuing", "execution": execution,
+                "reason": f"Result accepted; this slot continues the item with {stage}"}
+    return {"status": "submitted", "execution": execution}
 
 
 def add_captain_command(commands):
@@ -653,7 +758,7 @@ def add_captain_command(commands):
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--poll-seconds", type=float, default=2)
-    parser.add_argument("--heartbeat-seconds", type=float, default=20)
+    parser.add_argument("--heartbeat-seconds", type=float, default=60)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--wait-seconds", type=float, default=2)
     parser.add_argument("--adapter-command", nargs=argparse.REMAINDER,
