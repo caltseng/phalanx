@@ -129,19 +129,25 @@ class CandidateLocalTest(unittest.TestCase):
     def test_timed_out_check_fails_and_stops_its_process_tree(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        started, survived = Path(temp.name) / "started", Path(temp.name) / "survived"
-        grandchild = (f"import pathlib, time; time.sleep(3); "
+        paths = [Path(temp.name) / name for name in ("started", "release", "survived")]
+        started, release, survived = paths
+        # The grandchild outlives the timeout until the test releases it, and the timeout leaves
+        # room for interpreter startup on a loaded host.
+        grandchild = (f"import pathlib, time; release = pathlib.Path({str(release)!r})\n"
+                      "deadline = time.monotonic() + 600\n"
+                      "while not release.exists() and time.monotonic() < deadline: time.sleep(0.05)\n"
                       f"pathlib.Path({str(survived)!r}).touch()")
         check = replace(self.command("hangs", (
             "import pathlib, subprocess, sys, time; "
             f"subprocess.Popen([sys.executable, '-I', '-c', {grandchild!r}]); "
-            f"pathlib.Path({str(started)!r}).touch(); time.sleep(60)"
-        )), timeout_seconds=2)
+            f"pathlib.Path({str(started)!r}).touch(); time.sleep(600)"
+        )), timeout_seconds=10)
         body = self.operation("pre_pr_validation").pre_validate((check,))
         self.assertEqual(body["outcome"], "failed")
         self.assertEqual(body["local_checks"][0]["reason"],
-                         "Timed out after 2 seconds, no failure identified")
+                         "Timed out after 10 seconds, no failure identified")
         self.assertTrue(started.exists())
+        release.touch()
         time.sleep(4)
         self.assertFalse(survived.exists())
 
