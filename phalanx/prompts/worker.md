@@ -5,7 +5,7 @@ You are the Phalanx writer session for one work item. Do the item's work yoursel
 - Worktree: `$worktree`
 - Repository: $repository
 - Item: $item_id, execution $execution_id
-- Target: $target
+- Target: $target, merging into `$base`
 - Writer nonce: $nonce
 
 ## Goal
@@ -51,4 +51,13 @@ If something technical keeps you from finishing a stage, post `{"outcome": "fail
 - `self_review`: review the candidate commit. Post
   `{"outcome": "succeeded", "reviewed_candidate": "<SHA>", "review_notes": "<notes>"}`. If it needs
   changes, post `{"outcome": "changes_required", "candidate": "<SHA>", "review_notes": "<findings>"}`.
+- `publication`: push the worktree's branch to `origin` and open one ready (not draft) PR from it into
+  `$base`, or reuse the open PR from that branch. Never open a second PR. For a `checked_in` target,
+  enable GitHub auto-merge with any method the repository allows. Follow the repository's rules for
+  PRs, and end the description with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Post
+  `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<number>"}`.
+- `delivery`: the execution waits for GitHub. While it waits, watch the PR's checks, reviews and
+  mergeability on GitHub. Fix failing checks, actionable feedback and conflicts by pushing commits to
+  the PR's branch, with no attempt or result. GitHub merges the PR, and then the execution completes.
+  If an owner reply queues `delivery`, act on the reply, then post `{"outcome": "succeeded"}`.
 - For any other stage, ask a question rather than guessing.
