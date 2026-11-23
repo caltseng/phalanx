@@ -31,10 +31,10 @@ _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reco
 
 class CaptainLoop:
     def __init__(self, root: Path, config: dict, api, adapter: BridgeAdapter, *,
-                 poll_seconds: float = 2, heartbeat_seconds: float = 20,
+                 poll_seconds: float = 2, heartbeat_seconds: float = 60,
                  batch_size: int = 8, wait_seconds: float = 2, emit=None):
-        if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds <= 20:
-            raise RunnerError("Poll interval must be at most 30s and heartbeat interval at most 20s")
+        if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds:
+            raise RunnerError("Poll interval must be at most 30s and heartbeat interval must be positive")
         if type(batch_size) is not int or not 1 <= batch_size <= 32 or not 0 < wait_seconds <= 5:
             raise RunnerError("Native batches need 1-32 slots and a wait of at most 5s")
         if not isinstance(config.get("runner_id"), str) or not config["runner_id"]:
@@ -488,10 +488,17 @@ class CaptainLoop:
             if future.done():
                 del self.renewals[slot]
                 try:
-                    future.result()
+                    renewed = future.result()
                 except Exception as error:
                     self._status(slot, "renewal_blocked", f"{type(error).__name__}: {error}; reconcile the lease",
                                  lease=lease)
+                    continue
+                remaining = renewed["lease_expires_at"] - time()
+                if remaining < 2 * self.heartbeat_seconds:
+                    self._status(slot, "renewal_interval_too_long",
+                                 f"The {self.heartbeat_seconds:g}s heartbeat is not under half the {remaining:.0f}s "
+                                 "remaining lease; lower --heartbeat-seconds or raise the server's "
+                                 "PHALANX_LEASE_SECONDS", lease=lease)
         for slots, future in list(self.observations.items()):
             if future.done():
                 del self.observations[slots]
@@ -653,7 +660,7 @@ def add_captain_command(commands):
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--poll-seconds", type=float, default=2)
-    parser.add_argument("--heartbeat-seconds", type=float, default=20)
+    parser.add_argument("--heartbeat-seconds", type=float, default=60)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--wait-seconds", type=float, default=2)
     parser.add_argument("--adapter-command", nargs=argparse.REMAINDER,

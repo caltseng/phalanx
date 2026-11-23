@@ -3,6 +3,9 @@ import os
 from pathlib import Path
 import re
 
+DEFAULT_LEASE_SECONDS = 300
+LEASE_RANGE = range(30, 3601)
+
 
 @dataclass(frozen=True)
 class Credentials:
@@ -23,3 +26,11 @@ class Credentials:
 
 def database_path() -> Path:
     return Path(os.environ.get("PHALANX_DB", ".phalanx/phalanx.sqlite3")).resolve()
+
+
+def lease_seconds() -> int:
+    value = os.environ.get("PHALANX_LEASE_SECONDS", str(DEFAULT_LEASE_SECONDS))
+    if not value.strip().isdecimal() or int(value) not in LEASE_RANGE:
+        raise ValueError(f"PHALANX_LEASE_SECONDS must be a whole number of seconds from "
+                         f"{LEASE_RANGE.start} to {LEASE_RANGE.stop - 1}")
+    return int(value)

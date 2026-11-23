@@ -153,6 +153,18 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
+    def test_lease_seconds_defaults_and_rejects_invalid_values(self):
+        from phalanx.config import lease_seconds
+        with patch.dict(os.environ):
+            os.environ.pop("PHALANX_LEASE_SECONDS", None)
+            self.assertEqual(lease_seconds(), 300)
+            os.environ["PHALANX_LEASE_SECONDS"] = "45"
+            self.assertEqual(lease_seconds(), 45)
+            for value in ("0", "-5", "29", "3601", "1.5", "", "five"):
+                os.environ["PHALANX_LEASE_SECONDS"] = value
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    lease_seconds()
+
     def test_migration_refuses_foreign_and_future_databases(self):
         with TemporaryDirectory() as directory:
             foreign = Path(directory) / "foreign.sqlite3"

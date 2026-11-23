@@ -476,6 +476,19 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                                     for event in self.events[blocked:]))
         self.spin(loop, lambda: self.api.blockers[-1] is None)
 
+    def test_renewal_interval_near_the_lease_is_reported(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        warned = lambda: any(event["status"] == "renewal_interval_too_long" for event in self.events)
+        fast = self.loop()
+        self.spin(fast, lambda: len(self.api.renewed) >= 3)
+        self.assertFalse(warned())
+        fast.close()
+        slow = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(self.native), poll_seconds=0.01,
+                           heartbeat_seconds=60, batch_size=1, emit=self.events.append)
+        self.addCleanup(slow.close)
+        self.spin(slow, warned)
+
     def test_malformed_resolution_blocks_only_its_mapping(self):
         self.config["repositories"]["healthy"] = {**self.config["repositories"]["repo"],
                                                    "project_id": "healthy-project"}

@@ -44,6 +44,8 @@ If the machine cannot reach PyPI, install from a local wheel directory with `pyt
 
 Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server applies pending migrations before serving requests and defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
 
+Set `PHALANX_LEASE_SECONDS` to change how long a claim or renewal keeps an attempt leased. It defaults to 300 and accepts whole seconds from 30 to 3600; the server refuses to start otherwise. Keep each runner's renewal interval well under it.
+
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health` (or `curl http://127.0.0.1:8000/health`). This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
 ### Run attended assignments
@@ -220,13 +222,14 @@ filters and secret. One asynchronous project discovery pass per poll verifies
 each distinct host/project/checkout mapping once and shares the results across
 slot admission and launch checks. Failed discovery is retried on the next poll.
 
-Each slot has one work lane. Lease renewals have separate lanes (20 seconds
+Each slot has one work lane. Lease renewals have separate lanes (60 seconds
 by default), as do bounded native observation batches (eight slots, two-second
 wait by default). Git, provider requests, a slow native batch, or an ambiguous
 slot cannot occupy the heartbeat or another slot's work lane. Configure
 `--batch-size 1` to isolate individual native waits. `--poll-seconds`,
 `--heartbeat-seconds`, `--batch-size`, and `--wait-seconds` tune the bounded
-scheduler. Per-attempt cursors and admission rotation stay in memory as
+scheduler. If a renewed lease has less than two heartbeat intervals left, the
+slot reports `renewal_interval_too_long`. Per-attempt cursors and admission rotation stay in memory as
 optimizations; they reset on restart and never prove stop or authorize replacement.
 
 Every prepared launch is relayed at most once. The loop journals relay intent
@@ -489,14 +492,15 @@ capacity and recovery within that trusted role.
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
 | `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
 | `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, by default every 60 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. The adoption appears in both timelines as a `recover_claim` event at the same version. |
 
 A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
 `no_eligible_work`. A successful assignment includes the work request,
-execution and version, attempt ID, and lease expiry (90 seconds from claim).
+execution and version, attempt ID, and lease expiry (`PHALANX_LEASE_SECONDS`
+after the claim, 300 by default).
 Pass its attempt ID, execution version, and stage to the existing result route
 with the same lease header. Keep the bearer token and lease secret with the runner.
 After a lost claim response, replay the same body and lease secret to retrieve
