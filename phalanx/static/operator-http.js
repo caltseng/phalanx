@@ -99,7 +99,32 @@
           : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null,
         primaryPrUrl: httpsUrl(row.primary_pr_url),
         closedAt: row.closed_at,
-        outcome: row.outcome
+        outcome: row.outcome,
+        writer: row.writer ? {
+          state: row.writer.state,
+          runtime: row.writer.runtime,
+          captainId: row.writer.captain_id,
+          sessionId: row.writer.session_id,
+          sessionUrl: httpsUrl(row.writer.session_url),
+          lastProgressAt: row.writer.last_progress_at,
+          progressNote: row.writer.progress_note
+        } : null
+      };
+    }
+
+    function captain(row) {
+      return {
+        id: row.id, sessionRef: row.session_ref, state: row.state, live: row.live === true,
+        stale: row.stale === true, heartbeatAt: row.heartbeat_at, wakeCount: row.wake_count,
+        focus: Array.isArray(row.focus) ? row.focus : [], handoffNote: row.handoff_note
+      };
+    }
+
+    function flag(row) {
+      return {
+        kind: row.kind, itemId: row.item_id, executionId: row.execution_id, captainId: row.captain_id,
+        reason: row.reason, recovery: row.recovery, firstSeen: row.first_seen,
+        notifyOwner: row.notify_owner === true
       };
     }
 
@@ -140,6 +165,14 @@
       report({ itemId, id }, signal) {
         const path = "/v1/items/" + identifier(itemId) + "/executions/" + identifier(id) + "/report";
         return read(path, signal, "text/plain");
+      },
+      async captains({ signal }) {
+        const page = await read("/v1/captains?limit=25", signal);
+        return { captains: pageRows(page.captains, 25).map(captain), nextCursor: null };
+      },
+      async flags({ signal }) {
+        const page = await read("/v1/flags", signal);
+        return { flags: Array.isArray(page.flags) ? page.flags.map(flag) : [], nextCursor: null };
       }
     };
   }
