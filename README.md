@@ -280,6 +280,13 @@ archives their evidence once. An expired prepared packet with no relay effects
 uses the verified no-launch checkpoint for recovery without waiting for a
 native observation that cannot exist.
 
+A worker that is still active three hours after launch with no result keeps
+its reservation and lease; the loop never stops it. The slot reports
+`worker_overdue` once and the operator board shows it as the item's wait
+reason until the worker produces a result. A writer observed stopped without a
+result file stops renewing its lease, so stopped-attempt recovery reconciles
+the expired attempt instead of the item staying reserved forever.
+
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Loop status has one durable store and is
 written and emitted only when its status or reason changes. Ctrl+C stops scheduling
@@ -358,7 +365,8 @@ directory. Repeat this cycle while the loop runs:
    yourself with `python -m phalanx reply ... --answered-by captain`.
    Escalate to Caleb in the Captain chat only when human judgment materially
    changes the outcome or authority is missing. `attended status --all` shows
-   slot reasons.
+   slot reasons. Tell Caleb once about a `worker_overdue` slot, after
+   inspecting the worker to say whether it is still making progress.
 
 Identical requests waiting to be taken share one entry. Verified project resolutions
 are cached for ten minutes and failed ones for one minute, so an untrusted
@@ -561,7 +569,7 @@ results under a recovery claim.
 
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. So neither reads nor writes wait more than one turn of the other, however deep the write queue gets in DELETE journal mode. The gate adds no timeout of its own, because one write turn may legitimately outlast the busy timeout across `BEGIN` and `COMMIT`. Don't call it inside a write transaction. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Lease checks and idempotency keys make retrying the identical request safe. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
-Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu and macOS with CPython 3.14. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
+Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu and macOS with CPython 3.14. Each of those runs is split into three parallel jobs with `python tests/shard.py INDEX 3`, which deals the discovered tests round-robin so each test runs exactly once, and the single `Tests` check passes only when every shard passes. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
 
 ### Answer a waiting item
 
