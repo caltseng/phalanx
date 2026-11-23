@@ -18,10 +18,6 @@ STATUS = RequiredCheck("ci", CheckKind.STATUS)
 PREVIEW = RequiredCheck("staging", CheckKind.PREVIEW)
 
 
-def tip(sha=BASE):
-    return response({"ref": "refs/heads/main", "object": {"sha": sha, "type": "commit"}})
-
-
 def run(run_id, *, sha=HEAD, app=42, status="completed", conclusion="success", prs=()):
     return {
         "id": run_id, "head_sha": sha, "app": {"id": app}, "name": "ci",
@@ -42,18 +38,17 @@ class GitHubCollectionTests(unittest.TestCase):
         return self.responses.popleft()
 
     def collect(self, policy, *pages, phase=Phase.DRAFT, draft=True,
-                merge=None, after=None, last_tip=None, **kwargs):
+                merge=None, after=None, **kwargs):
         snapshot = pull(draft=draft)
         if merge:
             snapshot.update(mergeable=True, merge_commit_sha=merge)
         self.responses.append(response(snapshot))
         expected = self.client.get_pull_request(7)
         self.urls.clear()
-        self.responses.extend((response(snapshot), tip(), *pages))
+        # The live target tip is never read: evidence binds to the PR's own head and base.
+        self.responses.extend((response(snapshot), *pages))
         if after is not False:
             self.responses.append(response(after if after is not None else snapshot))
-            if after is None:
-                self.responses.append(last_tip or tip())
         result = collect_github_checks(self.client, expected, phase, policy, **kwargs)
         self.assertFalse(self.responses)
         return result
@@ -76,8 +71,8 @@ class GitHubCollectionTests(unittest.TestCase):
             response({"check_runs": [run(11)]}, next_url=next_url),
             response({"check_runs": [run(13, status="queued"), run(14, app=99)]}),
         )
-        self.assertIn("filter=all", self.urls[2])
-        self.assertEqual(self.urls[3], next_url)
+        self.assertIn("filter=all", self.urls[1])
+        self.assertEqual(self.urls[2], next_url)
         self.assertEqual(result.gate.state, GateState.WAITING)
         self.assertTrue(all(row.phase == Phase.DRAFT for row in result.observations))
 
@@ -164,7 +159,9 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual((result.gate.state, len(result.gate.skipped)), (GateState.SATISFIED, 1))
 
     def test_mid_collection_base_change_discards_passing_evidence(self):
-        result = self.collect((RUN,), response({"check_runs": [run(10)]}), last_tip=tip(OTHER))
+        moved = pull()
+        moved["base"]["sha"] = OTHER
+        result = self.collect((RUN,), response({"check_runs": [run(10)]}), after=moved)
         self.assertEqual(result.gate.state, GateState.BLOCKED)
         self.assertEqual(result.observations, ())
 

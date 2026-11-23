@@ -42,7 +42,7 @@ flowchart TD
     Store -->|Artifact recorded| Done
 ```
 
-The arrows below apply only when their guards pass. A blocked guard keeps the stage and changes the execution status. Record evidence against the candidate revision. After PR publication, use the PR identity, head, and base revision where relevant. A changed head invalidates prior head-bound evidence. Recheck base-sensitive evidence when the base moves.
+The arrows below apply only when their guards pass. A blocked guard keeps the stage and changes the execution status. Record evidence against the candidate revision. After PR publication, use the PR identity, head, and base revision where relevant. A changed head invalidates prior head-bound evidence. Recheck base-sensitive evidence when the base moves. Check evidence binds to the PR's head and the base GitHub records for it, which GitHub doesn't advance when the target branch moves. An ordinary target advance therefore keeps that evidence; a resulting conflict takes the merge-conflict path, and a repo that requires an up-to-date branch enforces it through GitHub's rules at `check_in`.
 
 Before the PR is first marked ready, every fix goes back to `development`, which builds the candidate. After that, the PR stays ready and fixes go through the revision loop: `pr_reconciliation`, `pr_revision`, `pr_validation`, and `adversarial_review` when the new diff needs it. Each pass validates and reviews only what changed. `ready_for_check_in` remains a dependency milestone, reached when reconciliation finds every gate current.
 
