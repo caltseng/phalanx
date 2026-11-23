@@ -205,8 +205,9 @@ def create(db, payload):
         raise Missing("Repository not registered")
     item_id = uuid4().hex
     request = payload.model_dump(mode="json", exclude={"dependencies"})
-    if payload.runner_affinity is None:
-        del request["runner_affinity"]
+    for name in ("runner_affinity", "label"):
+        if request[name] is None:
+            del request[name]
     db.execute("INSERT INTO work_items VALUES (?, ?, ?, ?)",
                (item_id, payload.repository_id, encode(request), timestamp()))
     if payload.dependencies:
@@ -230,7 +231,7 @@ def steer(db, item_id, execution_id, payload):
         raise Conflict("Steering requires queued work. Resolve the active execution or rerun it first.")
 
     edits = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_version"})
-    if not edits or any(value is None for name, value in edits.items() if name != "runner_affinity"):
+    if not edits or any(value is None for name, value in edits.items() if name not in ("runner_affinity", "label")):
         raise Conflict("Steering requires at least one edit. Use an empty list to clear list fields.")
     request = json.loads(item_row(db, item_id)["request_json"])
     previous = {name: request.get(name) for name in edits if name != "dependencies"}

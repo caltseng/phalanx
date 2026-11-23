@@ -4,8 +4,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from phalanx import intake
 from phalanx.intake import record, steer
-from phalanx.intake_models import Steering
+from phalanx.intake_models import Intake, Steering
 from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, open_page
 from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, write_transaction
@@ -192,5 +193,122 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                   Steering(expected_version=execution["version"], dependencies=[]))
         ready = self.page(route)
         self.assertEqual(ready["item"]["blocked_prerequisite_count"], 0)
-        self.assertIsNone(ready["item"]["wait_reason"])
+        self.assertEqual(ready["item"]["wait_reason"], "No runner online")
         self.assertEqual(ready["prerequisites"], [])
+
+
+def observe(db, execution, version, stage, pull, **details):
+    state = replace(Execution(Target.READY, Stage.DEVELOPMENT), stage=stage)
+    data = json.dumps(asdict(state))
+    db.execute("UPDATE executions SET version=?, state_json=? WHERE id=?", (version, data, execution))
+    details = {"pr_url": "https://github.com/a/b/pull/5", "pull": pull, **details}
+    record(db, execution, version, "pr_observation", details, data, LATER)
+
+
+class DashboardTest(ServerFixture, unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "queue.sqlite3"
+        # Stop one migration short so the server backfills dashboard reads from history.
+        with write_transaction(self.path, create=True) as db:
+            for version, statements in enumerate(MIGRATIONS[:-1], start=1):
+                for statement in statements:
+                    db.execute(statement)
+                db.execute(f"PRAGMA user_version = {version}")
+            intake.register(db, "repo", "https://github.com/a/b.git")
+            item = intake.create(db, Intake(repository_id="repo", goal="Ship it", target="ready_for_check_in", label="wave-1"))
+            self.execution = item["execution"]["id"]
+            pull = {"number": 5, "state": "open", "draft": True, "merged": False, "head_sha": "a" * 40}
+            observe(db, self.execution, 2, Stage.PR_REVISION, pull,
+                    gate_result={"state": "passed", "reasons": []}, duplicate_numbers=[6])
+            intake.create(db, Intake(repository_id="repo", goal="Write notes", target="report"))
+        self.start_server(self.path)
+
+    def page(self, url, status=200):
+        code, body = self.get(url, OWNER)
+        self.assertEqual(code, status, body)
+        return body
+
+    def row(self, url):
+        return next(row for row in self.page(url)["items"] if row["id"] == self.execution)
+
+    def test_summary_pr_facts_and_revision_rounds(self):
+        row = self.row(BOARD)
+        self.assertEqual((row["label"], row["target"], row["revision_round"], row["duplicate_count"]),
+                         ("wave-1", "ready_for_check_in", 2, 1))
+        self.assertEqual(row["pr"], {
+            "url": "https://github.com/a/b/pull/5", "number": 5, "state": "open", "draft": True,
+            "head_sha": "a" * 40, "head_ci": "passed", "additions": None, "deletions": None,
+        })
+        pull = {"number": 5, "state": "open", "draft": False, "merged": False, "head_sha": "b" * 40,
+                "additions": 10, "deletions": 2}
+        with write_transaction(self.path) as db:
+            observe(db, self.execution, 3, Stage.DEVELOPMENT, pull)
+        row = self.row(BOARD)
+        self.assertEqual((row["revision_round"], row["duplicate_count"]), (3, 1))
+        self.assertEqual((row["pr"]["head_sha"], row["pr"]["head_ci"], row["pr"]["draft"],
+                          row["pr"]["additions"], row["pr"]["deletions"]), ("b" * 40, None, False, 10, 2))
+
+    def test_open_rows_always_say_why_and_runner_presence(self):
+        for row in self.page(BOARD)["items"]:
+            self.assertTrue(row["wait_reason"] or row["next_action"], row)
+            self.assertEqual(row["wait_reason"], "No runner online")
+        overview = self.page("/v1/operator/overview")
+        self.assertEqual(overview["sections"]["queued"], 2)
+        self.assertEqual((overview["runners"], overview["slots"], overview["dispatch"]),
+                         ({"online": 0, "known": 0}, {"used": 0, "total": 0}, {"paused": False}))
+        self.assertIsNotNone(overview["oldest_queued_age_seconds"])
+
+        claim = {"runner_id": "runner-a", "repository_ids": ["repo"], "slots": 1, "stages": ["report_drafting"]}
+        status, claimed = self.request("/v1/dispatch/claim", RUNNER, claim, {"Phalanx-Lease": "x" * 32})
+        self.assertEqual((status, claimed["status"]), (200, "claimed"), claimed)
+        rows = self.page(BOARD)["items"]
+        running = next(row for row in rows if row["status"] == "running")
+        self.assertEqual(running["next_action"], "A worker is running the report_drafting stage")
+        queued = next(row for row in rows if row["id"] == self.execution)
+        self.assertEqual(queued["wait_reason"], "Waiting for a free slot")
+        overview = self.page("/v1/operator/overview")
+        self.assertEqual((overview["runners"]["online"], overview["slots"]), (1, {"used": 1, "total": 1}))
+        self.assertEqual((overview["sections"]["running"], overview["sections"]["queued"]), (1, 1))
+        runner = self.page("/v1/operator/runners")["items"]
+        self.assertEqual([(entry["id"], entry["online"], entry["capacity"], entry["active"]) for entry in runner],
+                         [("runner-a", True, 1, 1)])
+        self.assertEqual(runner[0]["attempts"][0]["execution_id"], running["id"])
+        self.assertNotIn("runner-a", json.dumps(self.page(BOARD)))
+
+    def test_filters_labels_and_groups(self):
+        self.assertEqual([row["id"] for row in self.page(BOARD + "?label=wave-1")["items"]], [self.execution])
+        self.assertEqual(len(self.page(BOARD + "?repository=repo&status=queued")["items"]), 2)
+        self.assertEqual([row["title"] for row in self.page(BOARD + "?q=notes")["items"]], ["Write notes"])
+        self.assertEqual(self.page(BOARD + "?stage=check_in")["items"], [])
+        first = self.page(BOARD + "?repository=repo&limit=1")
+        self.assertIsNotNone(first["next_cursor"])
+        self.page(f"{BOARD}?limit=1&cursor={first['next_cursor']}", 400)
+        self.assertEqual(len(self.page(f"{BOARD}?repository=repo&limit=1&cursor={first['next_cursor']}")["items"]), 1)
+        for query in ("outcome=failed", "closed_after=2025-01-01T00:00:00Z", "status=cancelled",
+                      "kind=closed&status=queued"):
+            self.page(f"{BOARD}?{query}", 400)
+        self.page(BOARD + "?label=bad%20label", 422)
+
+        group = self.page("/v1/operator/groups/wave-1")
+        self.assertEqual((group["rollup"]["items"], group["rollup"]["open"], group["rollup"]["size_unknown_count"]),
+                         (1, 1, 1))
+        self.assertEqual([row["id"] for row in group["items"]], [self.execution])
+        self.page("/v1/operator/groups/wave-2", 404)
+        item_id = group["items"][0]["item_id"]
+        status, steered = self.request(f"/v1/items/{item_id}/executions/{self.execution}", OWNER,
+                                       {"expected_version": group["items"][0]["version"], "label": "wave-2"},
+                                       method="PATCH")
+        self.assertEqual(status, 200, steered)
+        moved = self.page("/v1/operator/groups/wave-2")
+        self.assertEqual(moved["rollup"]["items"], 1)
+        self.page("/v1/operator/groups/wave-1", 404)
+        with write_transaction(self.path) as db:
+            transition(db, int(self.execution, 16), moved["items"][0]["version"] + 1,
+                       replace(QUEUED, status=Status.CANCELLED, final_output=StoredReport("/v1/report")))
+        closed = self.page(BOARD + "?kind=closed&label=wave-2&outcome=cancelled&closed_after=2025-01-01T12:00:00Z")
+        self.assertEqual([row["id"] for row in closed["items"]], [self.execution])
+        self.assertEqual(self.page(BOARD + "?kind=closed&closed_after=2025-01-03T00:00:00Z")["items"], [])
+        rollup = self.page("/v1/operator/groups/wave-2")["rollup"]
+        self.assertEqual((rollup["open"], rollup["outcomes"]["cancelled"]), (0, 1))

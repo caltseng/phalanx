@@ -211,21 +211,23 @@ Computed on the server from work history and shown on History and group pages:
 - Filters and search use bounded, indexed queries on the server.
 - The server learns PR and CI facts only from runner observations ([AGENTS.md](AGENTS.md): GitHub access stays on the runner). If the runner hasn't observed a fact, the dashboard shows it as unknown and doesn't guess.
 
-## API additions (sketch)
+## API additions
 
-Each phase row specifies these in detail. All are read-only except the D2 actions, which reuse existing routes.
+All are read-only except the D2 actions, which reuse existing routes. The D1 server reads (PH-29a) are implemented as follows; [README.md](README.md#read-the-operator-board-data) lists the routes.
 
-- An optional `label` on work items, set at intake and by steering.
+- An optional `label` on work items, set at intake (`phalanx intake --label`) and by steering. Steering `label: null` clears it. Labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
 - New summary fields:
   - `label`;
-  - a `pr` object with number, title, state, draft, head CI, additions and deletions;
-  - `revision_round`;
-  - `duplicate_count`;
-  - `target`.
-- `GET /v1/operator/overview`: counts for each section, dispatch and runner health, and data age.
-- Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`.
-- `GET /v1/operator/runners` and `GET /v1/operator/groups/{label}`.
-- Reports rendered as sanitized Markdown, with raw HTML stripped.
+  - `target`;
+  - `revision_round`: 1, plus one each time the execution re-enters development, PR revision or report drafting;
+  - `duplicate_count`: duplicate PRs found at the latest publication;
+  - `pr`: the latest PR the runner observed, with `url`, `number`, `state` (`open`, `closed` or `merged`), `draft`, `head_sha`, `head_ci`, `additions` and `deletions`. `head_ci` is the last gate result for the current head. Size stays known only while the head is unchanged. Each field is `null` when not observed, and `pr` is `null` before the first observation. The PR title is not observed yet.
+  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. Queued rows without another reason show, in order: dispatch paused, a scheduled retry, no runner online, waiting for a free slot, or next to run.
+- `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch paused; runners online and known; slots used and total; the oldest eligible queued age; and `generated_at` for data age. A runner is online when it polled or renewed within the lease window.
+- Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. `outcome` and `closed_after` apply to `kind=closed`, and `status` must match the kind; otherwise the server returns 400. `q` matches title text, an item or execution ID, or a PR URL or number. Filtered cursors are bound to their filters. A filtered closed page inspects at most 2,000 closures, so it can return fewer rows than requested with a cursor to continue.
+- `GET /v1/operator/runners`: each runner's presence, offered slots, capacity and open attempts. Runner IDs appear only here.
+- `GET /v1/operator/groups/{label}`: a rollup of the current executions with that label (items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed) and an item page. Returns 404 when no item has the label.
+- Reports rendered as sanitized Markdown, with raw HTML stripped (later in D1).
 
 ## Phases
 

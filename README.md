@@ -537,9 +537,9 @@ Item inspection includes configured links and the execution's
 
 An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with
 `expected_version` and changes to `goal`, `context_links`,
-`acceptance_criteria`, `priority`, `runner_affinity`, or `dependencies`.
+`acceptance_criteria`, `priority`, `runner_affinity`, `label`, or `dependencies`.
 Omitted fields keep their values. An empty list clears a list field, and
-`null` clears runner affinity. The patch accepts `Idempotency-Key`.
+`null` clears runner affinity or the label. The patch accepts `Idempotency-Key`.
 Stale versions and executions outside the queued state return HTTP 409.
 
 A successful claim includes a `dependencies` snapshot with each upstream
@@ -592,7 +592,7 @@ Set `PHALANX_OWNER_TOKEN` to the same owner token used by the server. Set `PHALA
 
 ```powershell
 python -m phalanx register example https://github.com/example/project.git
-python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
+python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1 --label PH-29a
 python -m phalanx inspect <item_id>
 ```
 
@@ -615,7 +615,7 @@ The authenticated API exposes these routes under `/v1`.
 | `POST /items/{item_id}/executions/{execution_id}/result` | Runner | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
 | `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation under a live lease after accounting for the worker and its effects. |
 
-Intake accepts `repository_id`, `goal` and `target`, plus optional `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the work item's output type.
+Intake accepts `repository_id`, `goal` and `target`, plus optional `context_links`, `acceptance_criteria`, `target_branch`, `priority` (`low`, `normal` or `urgent`) and `label`, which groups related items on the board (letters, digits, `.`, `_` and `-`, up to 64 characters). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the work item's output type.
 
 Results and stop confirmations require a matching `attempt_id`, `stage` and `expected_version`, plus the current secret in the `Phalanx-Lease` header. A successful report-drafting result sends `report_markdown`. The server persists it and derives a SHA-256 revision. Report review and storage send `report_revision`. The server copies the reviewed draft into final storage in the same transaction that closes the execution. A `needs_input` result supplies `question.prompt` and `question.handoff`, with optional `options` and `proposed_default`. Active cancellation preserves the attempt while awaiting reconciliation. An expired lease or uncertain provider effect requires recovery before confirmation.
 
@@ -634,6 +634,16 @@ Both owner and runner bearer tokens can call these routes.
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
 | `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
+| `GET /v1/operator/overview` | Section counts, outcomes closed in the last 24 hours, dispatch pause, runners online and known, slots used and total, the oldest eligible queued age, and `generated_at`. |
+| `GET /v1/operator/runners` | `items` and `next_cursor`: each runner's presence, offered slots, capacity and open attempts, ordered by runner ID. |
+| `GET /v1/operator/groups/{label}` | The label's `rollup` and its `items` and `next_cursor`, oldest item first. Returns 404 when no item has the label. |
+
+The executions list accepts the filters `repository`, `label`, `status`, `stage`, `q`
+and, for `kind=closed`, `outcome` and `closed_after`. `q` matches title text, an item or
+execution ID, or a PR URL or number. A filtered cursor works only with the same
+filters. A filtered closed page inspects at most 2,000 closures, so it can return
+fewer entries with a cursor to continue. [DASHBOARD.md](DASHBOARD.md#api-additions)
+describes the fields.
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the
 returned `next_cursor` as `cursor` on the same route and list kind until it is
@@ -653,5 +663,9 @@ blocked on an item it would otherwise show as plainly running, such as an
 unreachable runtime or an ambiguous worker, it sends the reason as `blocker` with
 each renewal and the item's `wait_reason` shows it until a renewal omits it. `version` is the
 execution version that a reply must name. The timeline lists blocking `prerequisites`
-and, while the item is waiting for input, the current `question`. The draft state has
+and, while the item is waiting for input, the current `question`. Every open entry has a
+`wait_reason` or a `next_action`. A queued entry with nothing else in its way shows why it
+has not started: paused dispatch, a scheduled retry, no runner online, or no free slot.
+`label`, `target`, `revision_round`, `duplicate_count` and the `pr` object come from intake
+and runner observations; unobserved PR facts are `null`. The draft state has
 no current read mapping. Report output URLs use the authenticated report route.

@@ -56,6 +56,7 @@ def main() -> None:
     intake.add_argument("goal")
     intake.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
     intake.add_argument("--key", help="reuse this key when retrying the same request")
+    intake.add_argument("--label", help="group related items under this label on the work board")
     issue = commands.add_parser("ingest-issue", help="file a registered repository's GitHub issue")
     issue.add_argument("repository", help="registered Phalanx repository ID")
     issue.add_argument("number", type=int, help="GitHub issue number in that repository")
@@ -98,10 +99,10 @@ def main() -> None:
                                  body={"id": args.repository, "remote": args.remote})
             print(json.dumps(result, indent=2))
         elif args.command == "intake":
-            result = api_request(
-                args.api_url, "/v1/items", key=args.key,
-                body={"repository_id": args.repository, "goal": args.goal, "target": args.target},
-            )
+            body = {"repository_id": args.repository, "goal": args.goal, "target": args.target}
+            if args.label is not None:
+                body["label"] = args.label
+            result = api_request(args.api_url, "/v1/items", key=args.key, body=body)
             print(json.dumps(result, indent=2))
         elif args.command == "ingest-issue":
             result = ingest_issue(api_request, args.api_url, args.repository, args.number,

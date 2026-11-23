@@ -69,6 +69,15 @@ def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
     return best
 
 
+def seen(db, runner_id, slots):
+    # Presence for the operator board: polls and renewals mark the runner online.
+    db.execute(
+        """INSERT INTO runners VALUES (?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET slots=excluded.slots, last_seen_at=excluded.last_seen_at""",
+        (runner_id, slots, intake.timestamp()),
+    )
+
+
 def claim(db, request, lease_digest):
     # One fresh caller-generated secret per logical claim. Empty polls have
     # no receipt, so polling does not grow durable history or pin a miss.
@@ -76,6 +85,7 @@ def claim(db, request, lease_digest):
                "slots": request.slots}
     if request.stages is not None:
         filters["stages"] = sorted(set(request.stages))
+    seen(db, request.runner_id, request.slots)
     return intake.replayable(
         db, "dispatch:claim", lease_digest, filters,
         lambda: admit(db, request, lease_digest),
@@ -146,6 +156,7 @@ def renew(db, runner_id, attempt_id, lease_digest, worker=None, blocker=None):
     expires = max(attempt["lease_expires_at"], int(now) + LEASE_SECONDS)
     # Each renewal reports the runner's current blocker; omitting it clears the last one.
     db.execute("UPDATE attempts SET lease_expires_at=?, blocker=? WHERE id=?", (expires, blocker, attempt_id))
+    db.execute("UPDATE runners SET last_seen_at=? WHERE id=?", (intake.timestamp(), runner_id))
     if worker is not None:
         db.execute("INSERT OR REPLACE INTO attempt_workers VALUES (?, ?, ?)",
                    (attempt_id, worker.reference, worker.url))

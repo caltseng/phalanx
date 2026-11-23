@@ -11,6 +11,9 @@ WaitLimit = Annotated[int, Field(strict=True, ge=CHECK_WAIT_LIMIT_RANGE[0], le=C
 Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,100}$")]
 RevisionID = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 Markdown = Annotated[str, StringConstraints(min_length=1, max_length=256000, pattern=r"\S")]
+# A free-form group name for related items, such as a campaign or a muster.
+LABEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+Label = Annotated[str, StringConstraints(pattern=LABEL_PATTERN)]
 
 
 class Payload(BaseModel):
@@ -36,6 +39,7 @@ class Intake(Payload):
     target_branch: Text | None = None
     priority: Literal["low", "normal", "urgent"] = "normal"
     runner_affinity: Identifier | None = None
+    label: Label | None = None
     dependencies: list[Prerequisite] = Field(default_factory=list, max_length=100)
 
 
@@ -49,6 +53,7 @@ class Steering(Versioned):
     acceptance_criteria: list[Text] | None = Field(default=None, max_length=50)
     priority: Literal["low", "normal", "urgent"] | None = None
     runner_affinity: Identifier | None = None
+    label: Label | None = None
     dependencies: list[Prerequisite] | None = Field(default=None, max_length=100)
 
 
