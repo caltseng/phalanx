@@ -10,11 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from .auth import authenticate_board_read
+from .dispatch import DEFAULT_CAPACITY
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
+from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate_board_read)])
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -29,6 +31,10 @@ SUMMARY = """
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
+           writer.id AS writer_id, writer.state AS writer_state, writer.runtime AS writer_runtime,
+           writer.captain_id AS writer_captain_id, writer.session_id AS writer_session_id,
+           writer.session_url AS writer_session_url, writer.last_progress_at AS writer_progress_at,
+           writer.progress_note AS writer_progress_note,
            (SELECT attempt.blocker FROM attempts AS attempt
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
            (SELECT attempt.lease_expires_at FROM attempts AS attempt
@@ -43,7 +49,11 @@ SUMMARY = """
             FROM transition_history AS history
             WHERE history.execution_id = execution.id AND history.attempt_id IS NOT NULL
               AND history.event != 'claim'
-            ORDER BY history.version DESC LIMIT 1) AS capacity_release
+            ORDER BY history.version DESC LIMIT 1) AS capacity_release,
+           (SELECT coalesce(min(load.open >= coalesce(cap.capacity, {default}) + {lane}), 0)
+            FROM (SELECT runner_id, count(*) AS open FROM attempts WHERE ended_at IS NULL
+                  GROUP BY runner_id) AS load
+            LEFT JOIN runner_limits AS cap ON cap.runner_id = load.runner_id) AS lanes_full
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -53,7 +63,8 @@ SUMMARY = """
         SELECT attempt.id FROM attempts AS attempt WHERE attempt.execution_id = execution.id
         ORDER BY attempt.started_at DESC, attempt.id DESC LIMIT 1
     )
-"""
+    LEFT JOIN writers AS writer ON writer.execution_id = execution.id AND writer.ended_at IS NULL
+""".format(default=DEFAULT_CAPACITY, lane=RUNNER_ONLY_SLOTS)
 
 
 def encode_cursor(scope, key):
@@ -121,14 +132,25 @@ def summary(row, now):
     if blocked_count and not wait:
         noun = "prerequisite" if blocked_count == 1 else "prerequisites"
         wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
-    if row["runner_blocker"] and not wait:
-        wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     expires = row["lease_expires_at"]
     if expires is not None and expires <= now.timestamp() and not wait:
         # Runners publish blockers only while renewing, so an expired lease needs its own reason.
+        # Recovery reports an owner wait as the expired attempt's blocker.
         at = datetime.fromtimestamp(expires, UTC).isoformat()
-        wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
-                "trigger": "The runner recovers the expired attempt on its next pass"}
+        if row["runner_blocker"]:
+            wait = {"reason": f"Lease expired at {at}; {row['runner_blocker']}",
+                    "trigger": "Resolve the blocker; the runner recovers the expired attempt on its next pass"}
+        else:
+            wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
+                    "trigger": "The runner recovers the expired attempt on its next pass"}
+    if row["runner_blocker"] and not wait:
+        wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
+    retrying = row["retry_at"] is not None and row["retry_at"] > now.timestamp() * 1000
+    if (row["lanes_full"] and not wait and not retrying and row["status"] == "queued"
+            and row["stage"] in RUNNER_ONLY_STAGES):
+        # Every active runner holds its agent capacity and its runner-only lane.
+        wait = {"reason": "Waiting for runner-only lane capacity",
+                "trigger": "A runner finishes a stage and frees a slot"}
     return {
         "id": row["id"],
         "item_id": row["item_id"],
@@ -160,6 +182,13 @@ def summary(row, now):
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
+        # The registered native worker session that holds this item, if any.
+        "writer": None if row["writer_id"] is None or output is not None else {
+            "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],
+            "captain_id": row["writer_captain_id"], "session_id": row["writer_session_id"],
+            "session_url": row["writer_session_url"], "last_progress_at": row["writer_progress_at"],
+            "progress_note": row["writer_progress_note"],
+        },
     }
 
 
@@ -282,10 +311,35 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 JOIN transition_history AS adopted
                     ON adopted.execution_id = adoption.execution_id AND adopted.version = adoption.version
                 WHERE adoption.execution_id = ?
+                UNION ALL
+                SELECT observation.version, 'github_observation', observation.observed_at, NULL,
+                       json_extract(observed.state_json, '$.stage'),
+                       json_extract(observed.state_json, '$.status'),
+                       NULL, coalesce(
+                           'Observed ' || json_extract(observation.observation_json, '$.pr.url')
+                               || ' ' || json_extract(observation.observation_json, '$.pr.state')
+                               || ' at ' || observation.head_sha,
+                           'Observed no PR for the item branch'), NULL
+                FROM github_observations AS observation
+                JOIN transition_history AS observed
+                    ON observed.execution_id = observation.execution_id
+                   AND observed.version = observation.version
+                WHERE observation.execution_id = ?
+                UNION ALL
+                SELECT result.version, 'local_checks', result.checked_at, NULL,
+                       json_extract(checked.state_json, '$.stage'),
+                       json_extract(checked.state_json, '$.status'),
+                       NULL, CASE WHEN json_array_length(result.failures_json) = 0
+                                  THEN 'Local checks passed on ' ELSE 'Local checks failed on ' END
+                           || result.head_sha, NULL
+                FROM local_check_results AS result
+                JOIN transition_history AS checked
+                    ON checked.execution_id = result.execution_id AND checked.version = result.version
+                WHERE result.execution_id = ?
             )
             SELECT * FROM events {boundary}
             ORDER BY version DESC, created_at DESC LIMIT ?""",
-            (execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),

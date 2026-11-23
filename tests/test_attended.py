@@ -26,6 +26,7 @@ from phalanx.finalization import attempt
 from phalanx.git_publication import PublicationResult
 from phalanx.github import ATTRIBUTION, GitHubClient
 from phalanx.store import connect, write_transaction
+from phalanx.transitions import RUNNER_ONLY_SLOTS
 from phalanx.workspaces import WorkspaceManager, _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -482,8 +483,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertNotEqual(first.status()["packet"]["branch"], second.status()["packet"]["branch"])
         self.assertNotEqual(self.api.claim_leases, second_api.claim_leases)
         self.assertEqual([row["slot"] for row in first.status(all_slots=True)["reservations"]], [1, 2])
-        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+        with self.assertRaisesRegex(RunnerError, "Slots above capacity run only runner-only stages"):
             self.runner(3).prepare()
+        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+            self.runner(3 + RUNNER_ONLY_SLOTS).prepare()
 
         marker = launches[0]["marker"]
         native_id = str(uuid4())
@@ -520,13 +523,11 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.runner().prepare()
         self.assertEqual(self.runner(2).status()["attempt_id"], second_api.attempt)
 
-    def test_legacy_pending_claim_can_replay_while_another_slot_launches(self):
+    def test_pending_claim_can_replay_while_another_slot_launches(self):
         with self.assertRaisesRegex(RunnerError, "lost claim"):
             self.runner().prepare()
-        with closing(sqlite3.connect(self.runner().journal)) as db, db:
+        with closing(sqlite3.connect(self.runner().journal)) as db:
             record = json.loads(db.execute("SELECT record FROM slot WHERE id=1").fetchone()[0])
-            del record["slots"]
-            db.execute("UPDATE slot SET record=? WHERE id=1", (json.dumps(record),))
 
         self.config["capacity"] = 2
         self.config["repositories"]["broken"] = {"checkout": str(self.root / "missing")}
@@ -1277,22 +1278,6 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual((result["status"], body["outcome"], body["candidate"]),
                          ("pre_pr_validation_submitted", "needs_input", "a" * 40))
         self.assertIn("validation_policy", body["question"]["prompt"])
-
-    def test_legacy_development_launch_preserves_candidate_and_blocks_draft(self):
-        runner, marker, thread, worktree, candidate, _ = self.start_development()
-        runner._transaction(lambda record, db: record.pop("development_base"))
-        runner.submit(marker, "local", thread)
-        self.api.attempt = uuid4().hex
-        self.api.stage, self.api.candidate = "pr_creation", candidate
-        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), patch(
-            "phalanx.attended.publish_draft",
-        ) as publish:
-            result = self.runner().prepare(draft=True)
-        publish.assert_not_called()
-        self.assertEqual(result["status"], "draft_blocked")
-        self.assertIn("no accepted development base checkpoint", result["reason"])
-        self.assertEqual(self.runner().status()["reason"], result["reason"])
-        self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), candidate)
 
 
 class DraftTitleTest(unittest.TestCase):

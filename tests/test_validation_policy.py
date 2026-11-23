@@ -7,11 +7,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from phalanx.candidate_local import CandidateLocal, LocalCheck
+from phalanx.candidate_local import CandidateLocal
+from phalanx.local_checks import LocalCheck
 from phalanx.github import PullRequest
 from phalanx.github_checks import collect_github_checks
 from phalanx.intake_models import ExternalWait, Result
-from phalanx.published_validation_stage import PublishedValidationPolicy
+from phalanx.validation_policy import PublishedValidationPolicy
 from phalanx.transitions import Revision
 from phalanx.validation import (
     CheckKind, GateResult, GateState, Phase, PreOutcome, PublishedCandidate, RequiredCheck,
@@ -221,7 +222,7 @@ class ValidationPolicyTests(unittest.TestCase):
             "item_id": "item", "attempt_id": "attempt", "execution": execution,
             "request": {"repository_id": "repo"},
         }, runner_id="desk", lease="secret")
-        with patch("phalanx.candidate_local._run_check") as run:
+        with patch("phalanx.candidate_local.run_check") as run:
             body = operation.pre_validate(policy.local_checks)
         run.assert_not_called()
         validated = Result.model_validate(body)

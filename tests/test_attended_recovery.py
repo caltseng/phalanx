@@ -1,4 +1,4 @@
-import json
+﻿import json
 import unittest
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
@@ -6,7 +6,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from phalanx.attended_recovery import (
-    NativeObservation, StoppedEvidence, acknowledge_stop, reconcile, unmatched_leases,
+    RESUME_GRACE_SECONDS, RESUME_LIMIT, NativeObservation, StoppedEvidence, acknowledge_stop, reconcile,
+    unmatched_leases,
 )
 from phalanx.handoff import WorkPacket
 
@@ -192,6 +193,58 @@ class AttendedRecoveryTests(unittest.TestCase):
         self.assertEqual(decision["status"], "owner_wait")
         self.assertNotIn("recover_claim", self.record)
         self.assertEqual(self.decision(now=300, expired=moved)["status"], "owner_wait")
+
+    def test_dirty_stopped_writer_is_resumed_in_place_then_waits_visibly_at_the_limit(self):
+        dirty = replace(self.checkpoint, disposition="local_changes",
+                        summary="Uncommitted changes at HEAD revision and no attempt result")
+        stopped = dict(discovery_complete=True, observations=[self.observation], stopped=dirty)
+        now = 0
+        for count in range(1, RESUME_LIMIT + 1):
+            decision = self.decision(now=now, **stopped)
+            self.assertEqual(decision["status"], "resume_writer")
+            self.assertEqual(decision["resume"], {"host_id": "local", "project_id": "project",
+                                                  "thread_id": str(self.observation.thread_id),
+                                                  "marker": self.packet.marker})
+            self.assertIn(str(self.packet.worktree), decision["reason"])
+            self.assertIn("Uncommitted changes", decision["reason"])
+            self.assertEqual(self.record["resume"]["count"], count)
+            self.record = json.loads(json.dumps(self.record))
+            pending = self.decision(now=now + RESUME_GRACE_SECONDS - 1, **stopped)
+            self.assertEqual(pending["status"], "resume_pending")
+            now += RESUME_GRACE_SECONDS
+        decision = self.decision(now=now, **stopped)
+        self.assertEqual(decision["status"], "owner_wait")
+        self.assertIn(f"stopped again after {RESUME_LIMIT} resumes", decision["reason"])
+        self.assertIn(str(self.packet.attempt_id), decision["reason"])
+        self.assertIn(str(self.packet.worktree), decision["reason"])
+        self.assertIn("Never discard", decision["next_action"])
+        self.assertEqual(self.decision(now=now + 1000, **stopped)["status"], "owner_wait")
+        self.assertNotIn("recover_stop", self.record)
+        self.assertNotIn("recover_claim", self.record)
+        # A recheck resets the count, so the owner can let the runner try again.
+        self.assertEqual(self.decision(now=now + 1001, recheck=True, **stopped)["status"], "resume_writer")
+        self.assertEqual(self.record["resume"]["count"], 1)
+
+    def test_parked_owner_wait_is_adopted_when_the_exact_writer_is_active_again(self):
+        dirty = replace(self.checkpoint, disposition="local_changes", summary="Uncommitted changes")
+        thread = str(self.observation.thread_id)
+        limit = {"resume": {"count": RESUME_LIMIT, "at": 0, "thread_id": thread}}
+        exhausted = {"recovery": {"status": "owner_wait", "reason": "Unverified", "failures": 4,
+                                  "checked_at": 0}}
+        base = json.loads(json.dumps(self.record))
+        for parked in (limit, exhausted):
+            with self.subTest(parked=parked):
+                self.record = json.loads(json.dumps(base | parked))
+                if "resume" in parked:
+                    self.assertEqual(self.decision(now=500, discovery_complete=True,
+                                                   observations=[self.observation], stopped=dirty)["status"],
+                                     "owner_wait")
+                other = [replace(self.observation, state="active", marker="other")]
+                self.assertEqual(self.decision(now=600, observations=other)["status"], "owner_wait")
+                active = [replace(self.observation, state="active")]
+                self.assertEqual(self.decision(now=601, discovery_complete=True,
+                                               observations=active)["status"], "send_claim")
+                self.assertEqual(self.record["recover_claim"]["body"]["expected_version"], 3)
 
     def test_same_attempt_can_be_adopted_again_after_a_later_expiry(self):
         self.record["submission"] = {"body": {}}

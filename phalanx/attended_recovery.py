@@ -15,6 +15,10 @@ from .handoff import WorkPacket
 
 
 RECHECK_SECONDS = (2, 4, 8, 16)
+# A writer that stopped with unaccounted local changes is resumed in place at
+# most this many times per attempt, each given this long to be observed active.
+RESUME_LIMIT = 3
+RESUME_GRACE_SECONDS = 180
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,12 +76,14 @@ class StoppedEvidence:
     The caller verifies workspace registration, branch, checkpoint and effects.
     Missing or ambiguous output belongs in 'unresolved'. An absent result can
     be 'retry_safe' only after checkpoints and effects have been accounted for.
+    An absent result with changes in the registered worktree is 'local_changes',
+    which resumes the same writer rather than replacing it.
     """
 
     attempt_id: UUID
     thread_id: UUID
     worktree: str
-    disposition: Literal["retry_safe", "verified_result", "unresolved"]
+    disposition: Literal["retry_safe", "verified_result", "local_changes", "unresolved"]
     summary: str
 
 
@@ -169,6 +175,7 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
 
     if recheck:
         progress.clear()
+        record.pop("resume", None)
     if "recover_claim" in record and claim_failure == "conflict":
         del record["recover_claim"]
         return uncertain("The server refused adoption; recheck the attempt")
@@ -198,8 +205,14 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
                                next_action="Account for the changed worktree or result before replay")
             del record["stop_proof_stale"]
 
+    # A parked owner wait stays until a recheck, unless the exact writer is
+    # later observed active again, which the adoption path below handles.
+    active = packet is not None and any(obs.state == "active" and _matches(record, packet, obs)
+                                        for obs in observations)
     if progress.get("status") == "owner_wait" and (
-        "recover_stop" in record or progress.get("failures") == len(RECHECK_SECONDS)
+        "recover_stop" in record or (not active and (
+            progress.get("failures") == len(RECHECK_SECONDS)
+            or record.get("resume", {}).get("count", 0) >= RESUME_LIMIT))
     ):
         return {"attempt_id": attempt, **progress}
     if progress.get("status") == "retry" and now < progress["retry_at"]:
@@ -252,6 +265,8 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
                 or stopped.worktree != str(packet.worktree)):
             return publish("verify_outputs", "The exact writer stopped",
                            next_action="Verify its workspace, checkpoint and outputs")
+        if stopped.disposition == "local_changes":
+            return _resume_writer(record, packet, observation, stopped, now, publish)
         if stopped.disposition not in {"retry_safe", "verified_result"} or not stopped.summary.strip() or len(stopped.summary) > 15800:
             return uncertain("Local checkpoint or output reconciliation is incomplete")
     else:
@@ -281,6 +296,33 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
     record["recover_stop"] = request
     progress.clear()
     return publish("send_stop", "Stopped reservation is ready for server reconciliation", **request)
+
+
+def _resume_writer(record, packet, observation, stopped, now, publish):
+    """Resume the exact stopped writer in place, so its unaccounted local work is never discarded.
+
+    The intent and its count are journaled before the bridge is asked, so a
+    lost reply still counts toward the limit. A resumed writer observed active
+    is adopted by the normal path under a fresh lease for the same attempt.
+    """
+    thread_id = str(observation.thread_id)
+    resume = record.get("resume", {"count": 0})
+    detail = (f"Exact writer {thread_id} for attempt {packet.attempt_id} stopped without a result. "
+              f"Worktree {stopped.worktree}: {stopped.summary}")
+    if resume.get("thread_id") == thread_id and now < resume["at"] + RESUME_GRACE_SECONDS:
+        return publish("resume_pending", f"{detail}. Resumed it ({resume['count']} of {RESUME_LIMIT}); "
+                                         "waiting to observe it active")
+    if resume["count"] >= RESUME_LIMIT:
+        return publish("owner_wait", f"{detail}. It stopped again after {RESUME_LIMIT} resumes",
+                       next_action=("Inspect the writer and its preserved worktree changes. Resume the writer, "
+                                    "or commit and write its result, then recheck this reservation. "
+                                    "Never discard the changes"))
+    record["resume"] = {"count": resume["count"] + 1, "at": now, "thread_id": thread_id}
+    return publish("resume_writer", f"{detail}. Resuming the same writer ({resume['count'] + 1} of "
+                                    f"{RESUME_LIMIT})",
+                   next_action="Send this exact writer the continue prompt through the runtime bridge",
+                   resume={"host_id": record["host_id"], "project_id": record["project_id"],
+                           "thread_id": thread_id, "marker": packet.marker})
 
 
 def _redacted_claim(record):

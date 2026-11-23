@@ -170,6 +170,22 @@ def timeline(db, item_id, execution_id):
     } for row in db.execute(
         "SELECT * FROM attempt_adoptions WHERE execution_id=?", (execution_id,),
     )]
+    events += [{
+        "version": row["version"], "event": "github_observation", "attempt_id": None,
+        "created_at": row["observed_at"],
+        "details": {**json.loads(row["observation_json"]), "last_observed_at": row["last_observed_at"]},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM github_observations WHERE execution_id=?", (execution_id,),
+    )]
+    events += [{
+        "version": row["version"], "event": "local_checks", "attempt_id": None,
+        "created_at": row["checked_at"],
+        "details": {"head": row["head_sha"], "failures": json.loads(row["failures_json"])},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM local_check_results WHERE execution_id=?", (execution_id,),
+    )]
     return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 
@@ -244,7 +260,9 @@ def steer(db, item_id, execution_id, payload):
     now = timestamp()
     db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
     db.execute(
-        """UPDATE executions SET version=?, updated_at=?, queue_priority=?, queue_affinity=? WHERE id=?""",
+        """UPDATE executions SET version=?, updated_at=?, queue_priority=?,
+               queue_affinity=CASE WHEN queue_affinity='@writer' THEN queue_affinity ELSE ? END
+           WHERE id=?""",  # step5-remove: keeps writer-bound executions out of the old loop
         (row["version"] + 1, now, PRIORITY[request.get("priority", "normal")],
          request.get("runner_affinity") or "", execution_id),
     )

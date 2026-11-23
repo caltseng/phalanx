@@ -52,6 +52,8 @@ Each open execution has at most one registered writer, a native worker session. 
 
 One writer keeps its item across stages. The worker posts each stage's result. The server applies the existing transition rules and records a new attempt per stage under the same writer, so "keep working until you really can't anymore" holds without capacity reservations or continuation offers.
 
+As built in step 2, the writer token is bound to the writer registration and fences each stage attempt that registration opens. It ends when the writer ends, is replaced or is withdrawn, or the execution closes. So `replaces` names the open writer's ID, and the server ends that writer's open attempt. A queued execution can take a writer, and the worker runs `phx work next` when it becomes ready. An execution whose attempt a runner holds can't take a writer until that attempt ends.
+
 Review stages (`adversarial_review`) launch a separate reviewer session, registered as a non-writer reviewer bound to the PR head it reviews.
 
 ## Evidence submission
@@ -98,6 +100,8 @@ There is no relay polling and no foreground polling loop.
    3. Record each action on its item's timeline (`captain_action` with the item ID and reason).
 
    New work must be filed as an item before a session is launched for it. Any visible session without a registered writer, reviewer or Captain registration is flagged `orphan_session`.
+
+   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. The README's [Captain section](../README.md#run-a-captain-on-the-direct-path) shows the setup.
 4. **Deviation detection.** See [Deviation flags](#deviation-flags). The reconciler and server raise these flags. They never block.
 5. **Escalation.** Escalate to the owner only for trust, scope changes, destructive actions (overwriting a foreign head, closing PRs, deleting branches or data), missing credentials or authority, and exhausted retry caps. The Captain decides everything else and logs it (`answered_by: captain`, [decisions.md](decisions.md)).
 
@@ -144,7 +148,8 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | `no_progress` | No progress post or stage advance for 2 h while `busy` | Captain checks the session, then nudges or replaces it |
 | `writer_stopped` | Writer reported `stopped`/`error` without a result | Captain resumes the same session or replaces the writer |
 | `head_drift`, `checks_failed`, `review_feedback`, `pr_closed` | From GitHub reconciliation | The writer acts, or the Captain relaunches |
-| `reconciler_stale` | No reconciler heartbeat for 15 min | Captain restarts it, or reports it to the owner |
+| `reconciler_stale` | A reconciler has sent no heartbeat for 15 min (one flag per reconciler) | Captain restarts it, or reports it to the owner |
+| `observation_stale` | An open item's latest GitHub observation is over 15 min old | Captain checks the reconciler's pass log for that item's error |
 
 ## Failure and recovery
 
