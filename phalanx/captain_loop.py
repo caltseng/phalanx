@@ -207,7 +207,7 @@ class CaptainLoop:
                 "session": handoff.launch_arguments(original["project_id"]),
             }
         else:
-            # A legacy or interrupted claim retains the original filters and
+            # An interrupted claim retains the original filters and
             # secret. Do not substitute this loop's capabilities on replay.
             result = runner.prepare()
         if result["status"] != "launch_intent":

@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest
-from phalanx.store import APPLICATION_ID, connect, write_transaction
+from phalanx.store import connect, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -29,10 +29,6 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        # Start from a genuine migration-1 store.
-        with connect(self.path, mode="rwc") as db:
-            db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-            db.execute("PRAGMA user_version = 1")
         self.server = self.start_server(self.path)
 
     def submit(self, path, body, *, token=OWNER, key=None, lease=None):
