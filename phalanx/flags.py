@@ -10,7 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from pydantic import StringConstraints
 
-from . import intake
+from . import intake, reconciliation
 from .auth import authenticate_board_read, require_coordinator
 from .captains import STALE, is_live
 from .intake_api import run
@@ -139,7 +139,7 @@ def writer_flags(db, now):
 
 
 # Each function is fn(db, now) -> list of flags in the GET /v1/flags shape.
-DERIVED = (captain_stale, no_live_captain, captain_idle_with_work, writer_flags)
+DERIVED = (captain_stale, no_live_captain, captain_idle_with_work, writer_flags, *reconciliation.DERIVED_FLAGS)
 
 
 def raise_flag(db, payload):

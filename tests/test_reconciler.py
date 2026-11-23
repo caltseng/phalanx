@@ -89,6 +89,10 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         self.request(self.post, RUNNER, self.body(
             1, pr=drifted, checks="failed", check_reasons=["build failed"], feedback=["alice: fix"]))
         self.assertEqual(set(self.flags()), {"head_drift", "merge_conflict", "checks_failed", "review_feedback"})
+        status, body = self.request("/v1/flags", OWNER)
+        self.assertEqual(status, 200)
+        self.assertLessEqual({"head_drift", "merge_conflict", "observation_stale"},
+                             {flag["kind"] for flag in body["flags"]})
         self.request(f"{self.execution}/local-checks", RUNNER,
                      {"head": OTHER, "failures": ["lint: Exited with status 1\n\ntail"]})
         flags = self.flags()
