@@ -297,10 +297,14 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                            poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=0.3,
                            emit=self.events.append, notify=notes.append)
         self.addCleanup(loop.close)
+        def first_slot():
+            # Either slot may claim "first"; slots claim concurrently.
+            return next((slot for slot, row in loop._records().items()
+                         if row.get("claim", {}).get("item_id") == "first" and row.get("receipt")), None)
         halt = start(1)
-        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        self.spin(loop, lambda: first_slot() is not None)
         halt()
-        packet = self.write_result(1)
+        packet = self.write_result(first_slot())
         self.native.stopped.add(packet.marker)
         self.api.waiting.append("second")
         stalled = "Captain relay has taken no request"
