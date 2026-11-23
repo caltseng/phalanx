@@ -30,8 +30,8 @@ class Stage(StrEnum):
     DELIVERY = "delivery"
 
 
-# Stages a GitHub observation of the item's PR can advance.
-OBSERVED_STAGES = frozenset({Stage.PUBLICATION, Stage.DELIVERY})
+# A writer's stages after self-review, which take no changes_required: fixes go to the open PR.
+WRITER_PR_STAGES = frozenset({Stage.PUBLICATION, Stage.DELIVERY})
 
 
 # Stages the runner completes itself, without an agent worker session.
@@ -188,6 +188,10 @@ class Evidence:
     # The observed PR head is open and ready, with required checks green, no unresolved
     # feedback and no conflict.
     pr_ready: bool = False
+    # The observed PR's base branch isn't the item's target branch.
+    off_base: bool = False
+    # The PR URL a writer reports when publication succeeds.
+    published_pr: str | None = None
 
 
 def _require(condition: object, message: str) -> None:
@@ -244,22 +248,28 @@ def _merge_verified(state: Execution, evidence: Evidence) -> Execution:
 def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
     """Follow GitHub's view of a writer's PR. GitHub's head, URL and merge win (decision 69)."""
     pr = evidence.pr
-    _require(state.stage in OBSERVED_STAGES and state.target is not Target.REPORT
+    # Only the PR this execution's writer published can deliver it, never an earlier
+    # execution's PR on the shared item branch.
+    _require(state.stage is Stage.DELIVERY and state.target is not Target.REPORT
              and pr and pr.url and pr.revision.head and pr.revision.base
-             and (not state.primary_pr or state.primary_pr == pr.url),
-             "A PR observation requires the item's PR in publication or delivery")
+             and state.primary_pr == pr.url,
+             "A PR observation requires the PR this execution's writer published, in delivery")
+    if pr.merge_commit and evidence.off_base:
+        # A merge can't be undone, and this one didn't deliver into the item's target.
+        return _wait(state, Status.WAITING_FOR_INPUT,
+                     Wait(f"{pr.url} was merged into a branch other than the item's target",
+                          "owner reply"), ready_revision=None)
     if pr.merge_commit:
         # A merge by any method, by anyone, delivers either PR target. GitHub's head is the
         # candidate. Interim: routes through _merge_verified once #168 lands.
-        return _close(replace(state, primary_pr=pr.url, candidate=pr.revision.head),
-                      Status.COMPLETED, pr)
-    if state.stage is not Stage.DELIVERY or state.status is not Status.WAITING_FOR_EXTERNAL:
+        return _close(replace(state, candidate=pr.revision.head), Status.COMPLETED, pr)
+    if state.status is not Status.WAITING_FOR_EXTERNAL:
         return state
-    state = replace(state, primary_pr=pr.url, candidate=pr.revision.head)
+    state = replace(state, candidate=pr.revision.head)
     if pr.closed:
         return _wait(state, Status.WAITING_FOR_INPUT,
                      Wait(f"{pr.url} was closed without merging", "owner reply"), ready_revision=None)
-    if not evidence.pr_ready:
+    if not evidence.pr_ready or evidence.off_base:
         return replace(state, ready_revision=None)
     if state.target is Target.READY:
         return _close(replace(state, ready_revision=pr.revision), Status.COMPLETED, pr)
@@ -274,10 +284,15 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None, direct: bo
         _require(evidence.candidate, "Development requires a recoverable candidate")
         next_stage = Stage.SELF_REVIEW if state.primary_pr or direct else Stage.PR_CREATION
         return _queue(state, next_stage, candidate=evidence.candidate, findings=None)
-    if stage is Stage.PUBLICATION or stage is Stage.DELIVERY:
-        # The writer pushed and opened the PR, or acted on an owner reply. The reconciler's
-        # observations of GitHub decide what happens next.
-        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT, stage=Stage.DELIVERY)
+    if stage is Stage.PUBLICATION:
+        # The writer pushed and opened the PR. The reconciler's observations of that exact PR
+        # decide what happens next.
+        _require(evidence.published_pr, "Publication requires the published PR's URL")
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT, stage=Stage.DELIVERY,
+                     primary_pr=evidence.published_pr)
+    if stage is Stage.DELIVERY:
+        # The writer acted on an owner reply.
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT)
     if stage is Stage.PR_CREATION:
         pr = evidence.pr
         _require(pr and pr.url and pr.draft and not pr.closed and not pr.merge_commit
@@ -356,7 +371,7 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None, direct: bo
 
 def _changes(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
     stage = state.stage
-    _require(stage not in OBSERVED_STAGES,
+    _require(stage not in WRITER_PR_STAGES,
              "Push fixes to the open PR; publication and delivery take no changes_required")
     if stage is Stage.PR_CREATION:
         # An existing PR on the item branch blocked the first draft; adopt it.

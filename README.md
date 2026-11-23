@@ -503,7 +503,8 @@ The reconciler reads GitHub and git for every open item whose repository the
 runner configuration maps, and posts timestamped observations through the API.
 It holds no lease or slot, never changes an item's state and never blocks work.
 The server derives flags from the latest observation of each open execution:
-`head_drift`, `pr_closed`, `merge_conflict`, `checks_failed`, `review_feedback`,
+`head_drift`, `pr_closed`, `merge_conflict`, `wrong_base` (the PR's base isn't
+the item's target branch), `checks_failed`, `review_feedback`,
 `unpublished_branch_merged` (item branch reachable from its base with no PR)
 and `pre_pr_checks_failed`. An observation older than 15 minutes keeps its
 flags, marked with when it was seen, and adds `observation_stale`. Each

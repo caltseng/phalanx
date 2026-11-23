@@ -203,13 +203,14 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((binding["state"]["stage"], binding["state"]["status"]), ("publication", "running"))
         return binding, token
 
-    def observe(self, binding, **pull):
+    def observe(self, binding, code=200, **pull):
         pull = {"number": 7, "state": "open", "merged": False, "draft": False,
                 "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD, "base_ref": "main",
                 "base_sha": BASE, **pull}
-        body = {"observed_at": datetime.now(UTC).isoformat(), "pr": pull,
+        body = {"observed_at": datetime.now(UTC).isoformat(), "pr": pull, "target_base": "main",
                 **({"checks": "satisfied"} if pull["state"] == "open" else {})}
-        self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/github-observation", RUNNER, body)
+        self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/github-observation", RUNNER,
+                body, code)
         return self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]
 
     def test_writer_publishes_and_any_merge_delivers(self):
@@ -228,11 +229,47 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((ready["state"]["status"], ready["state"]["ready_revision"]),
                          ("waiting_for_external", {"head": HEAD, "base": BASE}))
         self.assertEqual(self.observe(binding)["version"], ready["version"])
+        self.observe(binding, number=8, code=409)
         # A squash merge has a fresh commit and a pushed fix moved the head: GitHub wins.
         merged = self.observe(binding, state="closed", merged=True, head_sha=OTHER, merge_commit=MERGE)
         self.assertEqual((merged["state"]["status"], merged["state"]["candidate"]), ("completed", OTHER))
         self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
         self.ok("/v1/writer", token, code=401)
+
+    def test_a_rerun_is_delivered_only_by_the_pr_its_writer_published(self):
+        binding, token = self.publish("checked_in")
+        self.submit(token, binding, pr_url=PR_URL)
+        first = self.observe(binding, state="closed", merged=True, merge_commit=MERGE)
+        self.assertEqual(first["state"]["status"], "completed")
+        rerun = self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/rerun", OWNER,
+                        {"expected_version": first["version"], "target": "checked_in"})
+        second, token, _ = self.register(binding["item_id"], rerun["id"])
+        second = self.submit(token, second, candidate=OTHER)
+        second = self.submit(token, second, reviewed_candidate=OTHER)
+        # The reconciler still finds the earlier execution's merged PR on the shared item branch.
+        before = self.observe(second, state="closed", merged=True, merge_commit=MERGE)
+        self.assertEqual((before["state"]["stage"], before["state"]["status"], before["state"]["primary_pr"]),
+                         ("publication", "running", None))
+        result = f"/v1/items/{second['item_id']}/executions/{second['id']}/result"
+        self.ok(result, token, {"attempt_id": second["writer"]["attempt_id"], "stage": "publication",
+                                "expected_version": before["version"], "outcome": "succeeded",
+                                "pr_url": PR_URL}, 409)
+        second = self.submit(token, second, pr_url="https://github.com/e/r/pull/8")
+        self.observe(second, state="closed", merged=True, merge_commit=MERGE, code=409)
+        done = self.observe(second, number=8, state="closed", merged=True, head_sha=OTHER, merge_commit=OTHER)
+        self.assertEqual((done["state"]["status"], done["state"]["final_output"]["url"]),
+                         ("completed", "https://github.com/e/r/pull/8"))
+
+    def test_a_pr_into_another_base_never_delivers(self):
+        binding, token = self.publish("ready_for_check_in")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        wrong = self.observe(binding, base_ref="dev")
+        self.assertEqual((wrong["state"]["status"], wrong["state"]["ready_revision"]), ("waiting_for_external", None))
+        self.assertIn("wrong_base", {flag["kind"] for flag in self.ok("/v1/flags", OWNER)["flags"]})
+        merged = self.observe(binding, base_ref="dev", state="closed", merged=True, merge_commit=MERGE)
+        self.assertEqual((merged["state"]["status"], merged["state"]["final_output"]),
+                         ("waiting_for_input", None))
+        self.assertIn("merged into a branch other than", merged["state"]["wait"]["reason"])
 
     def test_ready_head_unblocks_dependents_and_closes_a_ready_target(self):
         binding, token = self.publish("checked_in")
@@ -260,12 +297,13 @@ class WriterTest(ServerFixture, unittest.TestCase):
                          ("waiting_for_input", "owner reply"))
 
         item_id, execution_id = self.pr_item("checked_in")
-        with write_transaction(self.path) as db:
-            state = json.loads(db.execute("SELECT state_json FROM executions WHERE id=?",
-                                          (execution_id,)).fetchone()[0])
-            db.execute("UPDATE executions SET state_json=? WHERE id=?",
-                       (json.dumps(dict(state, stage="pr_creation")), execution_id))
-        self.register(item_id, execution_id, code=409)
+        for stage, primary in (("pr_creation", None), ("development", PR_URL)):
+            with write_transaction(self.path) as db:
+                state = json.loads(db.execute("SELECT state_json FROM executions WHERE id=?",
+                                              (execution_id,)).fetchone()[0])
+                db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                           (json.dumps(dict(state, stage=stage, primary_pr=primary)), execution_id))
+            self.register(item_id, execution_id, code=409)
 
 
 class CaptainFlagTest(ServerFixture, unittest.TestCase):

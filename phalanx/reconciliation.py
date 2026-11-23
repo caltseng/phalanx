@@ -1,9 +1,9 @@
 """GitHub and git observations from the background reconciler, and the flags derived from them.
 
 Observations are timestamped facts, and they never block work. They advance only a writer's
-publication and delivery stages, where GitHub decides: a merge by any method delivers, and a
-ready PR reaches ready_for_check_in (decision 69). Elsewhere they leave the execution's state and
-version alone, so recording one can't race a running attempt.
+delivery stage, and only for the PR that writer published, where GitHub decides: a merge into the
+target by any method delivers, and a ready PR reaches ready_for_check_in (decision 69). Elsewhere
+they leave the execution's state and version alone, so recording one can't race a running attempt.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -17,7 +17,7 @@ from .intake_models import Payload
 from .operator_schema import OPEN
 from .pr_models import GITHUB_REMOTE, SHA
 from .transitions import (
-    OBSERVED_STAGES, TERMINAL, Event, Evidence, PullRequest, Revision, Status, decide, item_branch,
+    TERMINAL, Event, Evidence, PullRequest, Revision, Stage, Status, decide, item_branch,
 )
 from .validation import GateState
 
@@ -56,8 +56,11 @@ class Observation(Payload):
     checks: GateState | None = None
     check_reasons: list[Reason] = Field(default_factory=list, max_length=20)
     feedback: list[Reason] = Field(default_factory=list, max_length=50)
-    # The item branch is reachable from its base, yet no PR exists.
+    # An item branch reachable from its base, yet no PR exists.
     merged_branch: bool = False
+    # The branch the PR must merge into: the item's target_branch, else the repository's base_branch
+    # from the reconciler's mapping. The server prefers the item's own target_branch.
+    target_base: Ref | None = None
 
     @model_validator(mode="after")
     def consistent(self):
@@ -65,6 +68,8 @@ class Observation(Payload):
             raise ValueError("Checks and feedback describe a PR")
         if self.pr is not None and self.merged_branch:
             raise ValueError("merged_branch describes an item branch with no PR")
+        if (self.pr is None) != (self.target_base is None):
+            raise ValueError("A PR observation names the branch it must merge into, and only it does")
         return self
 
 
@@ -98,6 +103,8 @@ def record(db, item_id, execution_id, body: Observation):
         url, head = primary or url, body.pr.head_sha
     payload = body.model_dump(mode="json", exclude={"observed_at"})
     payload["pr"] = payload["pr"] and dict(payload["pr"], url=url)
+    if body.pr is not None:
+        payload["target_base"] = json.loads(item["request_json"]).get("target_branch") or body.target_base
     stamp = observed_at.isoformat(timespec="microseconds")
     key = (execution_id, url, head, intake.digest(intake.encode(payload)))
     latest, = db.execute("SELECT max(last_observed_at) FROM github_observations WHERE execution_id=?",
@@ -116,34 +123,38 @@ def record(db, item_id, execution_id, body: Observation):
     ).fetchone()
     # An older snapshot than one already seen only ever adds a merge, which can't be undone.
     if body.pr is not None and (latest is None or stamp >= latest or body.pr.merged):
-        _advance(db, row, url, body, stamp)
+        _advance(db, row, url, body, payload["target_base"], stamp)
     return {"recorded": seen is None, "local_checks_recorded": bool(checked)}
 
 
-def _advance(db, row, url, body, stamp):
+def _advance(db, row, url, body, target_base, stamp):
     """Apply every post, not only new ones, so a lost apply recovers on the next pass."""
     state = intake.STATE.validate_json(row["state_json"])
     pull = body.pr
-    if (state.stage not in OBSERVED_STAGES or state.stopping or state.pending_output
-            or (pull.merged and pull.merge_commit is None)):
+    # Only the PR this execution's writer published moves it; an earlier execution's PR on the
+    # shared item branch is recorded and flagged, never delivered.
+    if (state.stage is not Stage.DELIVERY or state.primary_pr != url or state.stopping
+            or state.pending_output or (pull.merged and pull.merge_commit is None)):
         return
     pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
                      merge_commit=pull.merge_commit if pull.merged else None, closed=pull.state == "closed")
     ready = (pull.state == "open" and not pull.draft and pull.mergeable is not False and not body.feedback
              and body.checks in (GateState.SATISFIED, GateState.NOT_CONFIGURED))
-    evidence = Evidence(pr=pr, pr_ready=ready)
+    evidence = Evidence(pr=pr, pr_ready=ready, off_base=pull.base_ref != target_base)
     following = decide(state, Event.PR_OBSERVED, evidence=evidence)
     if following == state:
         return
     details = {"pr": url, "pr_state": "merged" if pull.merged else pull.state, "head": pull.head_sha,
                "observed_at": stamp}
     if following.status == Status.WAITING_FOR_INPUT:
+        action = ("Reopen it and reply to resume delivery, or cancel the item. "
+                  "Phalanx never opens a replacement PR" if not pr.merge_commit
+                  else f"A merge can't be undone. Rerun the item to deliver into {target_base}, or cancel it")
         details["question"] = {
-            "prompt": f"{url} was closed without merging. Reopen it and reply to resume delivery, "
-                      "or cancel the item. Phalanx never opens a replacement PR.",
+            "prompt": f"{following.wait.reason}. {action}.",
             "handoff": f"Item branch {item_branch(row['item_id'])}, head {pull.head_sha}",
         }
-    if pr.merge_commit:
+    if pr.merge_commit and following.status in TERMINAL:
         details["merge_commit"] = pr.merge_commit
         if state.candidate and state.candidate != pull.head_sha:
             details["head_drift"] = f"Merged head differs from the recorded candidate {state.candidate}"
@@ -244,6 +255,10 @@ def _observed(row, observation):
     if pull["state"] == "open" and pull["mergeable"] is False:
         flags.append(_flag("merge_conflict", row, f"{url} conflicts with {pull['base_ref']}",
                            WRITER_RECOVERY, seen))
+    target = observation.get("target_base")
+    if pull["state"] == "open" and pull["base_ref"] != target:
+        flags.append(_flag("wrong_base", row, f"{url} merges into {pull['base_ref']}, not the item's target {target}",
+                           "The writer retargets the PR; delivery waits until it does", seen))
     if observation["checks"] == GateState.FAILED:
         reasons = "; ".join(observation["check_reasons"]) or "required checks failed"
         flags.append(_flag("checks_failed", row, f"{url}: {reasons}", WRITER_RECOVERY, seen))

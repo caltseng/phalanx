@@ -149,19 +149,27 @@ class TransitionTests(unittest.TestCase):
         state = result(state, Evidence(reviewed_candidate=REV.head), direct=True)
         self.assertEqual(state.stage, Stage.PUBLICATION)
         running = decide(state, Event.CLAIM)
-        self.assertEqual(decide(running, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True)), running)
+        with self.assertRaises(ValueError):
+            decide(running, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True))
         with self.assertRaises(ValueError):
             decide(running, Event.RESULT, outcome=Outcome.CHANGES_REQUIRED, evidence=Evidence(findings="x"))
-        waiting = decide(running, Event.RESULT, outcome=Outcome.SUCCEEDED, direct=True)
-        self.assertEqual((waiting.stage, waiting.status), (Stage.DELIVERY, Status.WAITING_FOR_EXTERNAL))
+        with self.assertRaises(ValueError):
+            decide(running, Event.RESULT, outcome=Outcome.SUCCEEDED, direct=True)
+        waiting = decide(running, Event.RESULT, outcome=Outcome.SUCCEEDED, direct=True,
+                         evidence=Evidence(published_pr=READY.url))
+        self.assertEqual((waiting.stage, waiting.status, waiting.primary_pr),
+                         (Stage.DELIVERY, Status.WAITING_FOR_EXTERNAL, READY.url))
         observed = decide(waiting, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True))
-        self.assertEqual((observed.status, observed.primary_pr, observed.ready_revision),
-                         (Status.WAITING_FOR_EXTERNAL, READY.url, REV))
+        self.assertEqual((observed.status, observed.ready_revision), (Status.WAITING_FOR_EXTERNAL, REV))
         stale = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=READY))
         self.assertIsNone(stale.ready_revision)
         with self.assertRaises(ValueError):
             decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=replace(READY, url="https://example.com/pull/2")))
+        retargeted = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True, off_base=True))
+        self.assertIsNone(retargeted.ready_revision)
         merged = replace(READY, revision=Revision("squashed-head", "base"), merge_commit="merge", closed=True)
+        elsewhere = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=merged, off_base=True))
+        self.assertEqual((elsewhere.status, elsewhere.final_output), (Status.WAITING_FOR_INPUT, None))
         done = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=merged))
         self.assertEqual((done.status, done.final_output, done.candidate),
                          (Status.COMPLETED, merged, "squashed-head"))
