@@ -14,6 +14,7 @@ from .captain_relay import add_relay_command, run_relay
 from .github import GitHubError
 from .issue_intake import ingest_issue
 from .reconciler import ReconcilerError, add_reconcile_command, run_reconcile
+from .shift import add_shift_command, run_shift
 from .workspaces import WorkspaceError
 from .work_cli import add_work_command, run_work
 
@@ -83,6 +84,7 @@ def main() -> None:
     add_relay_command(commands)
     add_work_command(commands)
     add_reconcile_command(commands)
+    add_shift_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "server":
@@ -102,6 +104,8 @@ def main() -> None:
         elif args.command == "reconcile":
             if run_reconcile(args):
                 parser.exit(1)
+        elif args.command == "shift":
+            run_shift(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
