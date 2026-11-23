@@ -18,7 +18,7 @@ from phalanx.validation import (
     evaluate_published_checks,
 )
 from phalanx.validation_policy import ValidationPolicyError, load_validation_policy
-from phalanx.validation_stages import _pre_validation
+from phalanx.validation_stages import _pre_validation, run
 from phalanx.workspaces import any_file_lock
 
 
@@ -241,8 +241,11 @@ class ValidationPolicyTests(unittest.TestCase):
         self.repo.update(local_checks=[self.command()])
         policy = self.load()
         root = self.path.parent
-        runner = SimpleNamespace(root=root, config={"local_check_capacity": 1})
-        snapshot = {"claim": {"attempt_id": "attempt", "execution": {
+        record = {}
+        runner = SimpleNamespace(root=root, config={"local_check_capacity": 1},
+                                 _ensure_reservation=Mock(), _send_submission=Mock(return_value="execution"),
+                                 _transaction=lambda save: save(record, None))
+        snapshot = {"lease": "secret", "claim": {"attempt_id": "attempt", "execution": {
             "version": 3, "state": {"stage": "pre_pr_validation", "candidate": "a" * 40},
         }}}
         slot = [root / "local-check-0.lock"]
@@ -258,8 +261,13 @@ class ValidationPolicyTests(unittest.TestCase):
                 patch("phalanx.validation_stages._policy", return_value=policy):
             with any_file_lock(slot) as held:
                 self.assertEqual(held, slot[0])
-                waiting = _pre_validation(runner, snapshot)
+                sent = run(runner, snapshot)
             local.pre_validate.assert_not_called()
+            local._inspect.assert_not_called()
+            self.assertEqual(sent["status"], "pre_pr_validation_submitted")
+            waiting = runner._send_submission.call_args.args[1]
+            self.assertIs(waiting, record["submission"])
+            self.assertEqual(runner._send_submission.call_args.args[2], "pre_pr_validation:attempt:3")
             self.assertEqual(waiting["route"], "external-wait")
             self.assertIn("local check capacity", waiting["reason"])
             self.assertEqual(ExternalWait.model_validate(waiting["body"]).gate, "local_check_capacity")

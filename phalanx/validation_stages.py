@@ -51,7 +51,7 @@ def run(runner, snapshot):
         submission = _save(runner, snapshot, handler(runner, snapshot))
     claim = snapshot["claim"]
     key = f"{stage}:{claim['attempt_id']}:{claim['execution']['version']}"
-    if stage == Stage.PRE_PR_VALIDATION and submission["body"]["outcome"] == Outcome.SUCCEEDED:
+    if stage == Stage.PRE_PR_VALIDATION and submission["body"].get("outcome") == Outcome.SUCCEEDED:
         _candidate(runner, snapshot)._inspect()
         _note_bypass(runner, snapshot, submission["body"])
     execution = runner._send_submission(snapshot, submission, key)
