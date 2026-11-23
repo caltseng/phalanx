@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
-from phalanx.github import GitHubError, PullRequest
+from phalanx.github import CommitChecks, GitHubError, PullRequest
 from phalanx.github_checks import CheckCollection
 from phalanx.reconciler import API, Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
@@ -172,8 +172,9 @@ def pull_request(head, branch, *, state="open", draft=False, merged=False, merge
 
 
 class FakeAPI:
-    def __init__(self, executions, remotes):
+    def __init__(self, executions, remotes, closed=()):
         self.executions = executions
+        self.closed = closed
         self.remotes = remotes
         self.posts = []
         self.calls = []
@@ -186,7 +187,7 @@ class FakeAPI:
         if path == "/repositories":
             return [{"id": repo, "remote": remote} for repo, remote in self.remotes.items()]
         if path.startswith("/operator/executions?"):
-            return {"items": self.executions, "next_cursor": None}
+            return {"items": self.closed if "kind=closed" in path else self.executions, "next_cursor": None}
         if path.endswith("/heartbeat"):
             return {}
         if path == "/flags":
@@ -320,7 +321,7 @@ class ReconcilerPassTest(unittest.TestCase):
                 self.assertGreater(reconciler.backoff["repo"], self.now)
 
     def test_a_merge_into_the_target_is_posted_with_how_and_when_it_merged(self):
-        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        self.config["repositories"] = {"repo": {"base_branch": "main", "post_merge_check": "deploy"}}
         merged = replace(pull_request(HEAD, item_branch("one"), state="closed"), merged=True,
                          merge_commit_sha=OTHER, merged_at="2026-11-24T06:33:57Z")
         api = FakeAPI([execution("one", primary="https://github.com/example/repo/pull/7")],
@@ -335,11 +336,83 @@ class ReconcilerPassTest(unittest.TestCase):
                 (_, body), = api.posts
                 self.assertEqual((body["pr"]["merge_method"], body["pr"]["merged_at"]),
                                  (method, "2026-11-24T06:33:57Z"))
+                self.assertNotIn("deployment", body)
         # A merge into another base never delivers, so how it merged doesn't matter.
         self.github["repo"] = FakeGitHub([replace(merged, base_ref="dev")], parents=(BASE, HEAD))
         api.posts.clear()
         reconciler.run_pass()
         self.assertNotIn("merge_method", api.posts[0][1]["pr"])
+
+    def test_deployment_is_opt_in_and_keeps_observing_checked_in_items(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        primary = "https://github.com/example/repo/pull/7"
+        merged = replace(pull_request(HEAD, item_branch("done"), state="closed"), merged=True,
+                         merge_commit_sha=OTHER)
+        done = dict(execution("done", primary=primary), outcome="checked_in")
+        # A ready-only completion and an unmapped repository must not be deployment work.
+        closed = [done, dict(execution("ready"), outcome="ready_for_check_in"),
+                  dict(execution("elsewhere", repo="unmapped"), outcome="checked_in")]
+        api = FakeAPI([], {"repo": "https://github.com/example/repo"}, closed=closed)
+        self.github["repo"] = FakeGitHub([merged], parents=(BASE, HEAD))
+        reconciler = self.reconciler(api)
+        self.assertEqual(reconciler.run_pass()["observed"], 0)
+        self.assertFalse(any("kind=closed" in path for path in api.calls))
+        self.config["repositories"]["repo"]["post_merge_check"] = "deploy"
+        with patch.object(self.github["repo"], "get_commit_checks", create=True,
+                          return_value=CommitChecks(OTHER, (), ())) as read:
+            result = reconciler.run_pass()
+        self.assertEqual((result["observed"], result["checked"], result["errors"]), (1, 0, []))
+        read.assert_called_once_with(OTHER, include_statuses=False)
+        self.assertEqual(api.posts[0][1]["deployment"],
+                         {"commit": OTHER, "check_name": "deploy", "state": "pending"})
+        # An incomplete provider read cannot turn the previous deployment into pending or success.
+        with patch.object(self.github["repo"], "get_commit_checks", create=True,
+                          side_effect=GitHubError("check runs", "rate limited", 429, retry_after_seconds=30)):
+            self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
+        self.assertEqual(len(api.posts), 1)
+        self.assertGreater(reconciler.backoff["repo"], self.now)
+
+    def test_deployment_reads_the_latest_named_check_on_the_merge_commit(self):
+        github = SimpleNamespace()
+        run = {"id": 2, "name": "deploy", "head_sha": OTHER, "status": "completed", "conclusion": "success"}
+        cases = [
+            ([], "pending"), ([dict(run, name="CI")], "pending"),
+            ([dict(run, status="in_progress", conclusion=None)], "pending"),
+            ([run], "deployed"),
+            *[([dict(run, conclusion=conclusion)], "failed")
+              for conclusion in ("failure", "cancelled", "timed_out", "skipped", "neutral")],
+            ([run, dict(run, id=3, status="queued", conclusion=None)], "pending"),
+            ([dict(run, id=3), dict(run, conclusion="failure")], "deployed"),
+        ]
+        for runs, expected in cases:
+            with self.subTest(runs=runs):
+                github.get_commit_checks = lambda sha, **kw: CommitChecks(sha, tuple(runs), ())
+                self.assertEqual(Reconciler.deployment(github, OTHER, "deploy")["state"], expected)
+        for invalid in (dict(run, head_sha=HEAD), dict(run, conclusion=None), dict(run, id=None)):
+            github.get_commit_checks = lambda sha, **kw: CommitChecks(sha, (invalid,), ())
+            with self.assertRaises(GitHubError):
+                Reconciler.deployment(github, OTHER, "deploy")
+
+    def test_invalid_deployment_configuration_is_explicit(self):
+        for value in ("", " ", 7, "x" * 256):
+            self.config["repositories"] = {"repo": {"post_merge_check": value}}
+            with self.subTest(value=value), self.assertRaisesRegex(ReconcilerError, "post_merge_check"):
+                self.reconciler(FakeAPI([], {}))
+
+    def test_a_merge_into_a_non_deploying_branch_has_no_deployment_signal(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main", "post_merge_check": "deploy"}}
+        api = FakeAPI([], {"repo": "https://github.com/example/repo"}, closed=[
+            dict(execution("done"), outcome="checked_in")])
+        original_call = api.call
+
+        def call(path, body=None):
+            if path == "/items/done":
+                return {"target": "checked_in", "target_branch": "release"}
+            return original_call(path, body)
+
+        api.call = call
+        result = self.reconciler(api).run_pass()
+        self.assertEqual((result["observed"], result["errors"], api.posts), (0, [], []))
 
     def test_a_second_reconciler_cannot_share_the_state_directory(self):
         state = self.root / "state"

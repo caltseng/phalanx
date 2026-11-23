@@ -529,6 +529,23 @@ checkout whose configured `origin` URL isn't the registered remote is refused.
 Owner-notify flags are sent once each to `notify_command`. Each pass prints one
 JSON line; `--once` runs a single pass and exits nonzero on any error.
 
+For repositories that deploy from their base branch, optionally set
+`"post_merge_check": "deploy"` in that repository's runner mapping. Use the
+exact check-run name emitted by the post-merge deployment job (for example
+your GitHub Pages deploy job), not a PR build check. The reconciler also
+polls executions checked into the mapping's `base_branch` for configured repositories and reads that check
+on each PR's **merge commit**, never its PR head or the latest base tip.
+The board shows a derived `deployment_pending`, `deployment_failed` or
+`deployed` flag. Missing or running checks are pending; only a successful
+completed run means deployed. Other conclusions, including skipped or
+cancelled, mean failed. The newest run wins when a job is rerun.
+Unconfigured repositories keep the existing behavior. This is GitHub
+observation only: check-in still completes on merge, dependencies unblock,
+and no deployment stage or agent-runtime integration is added. A stale
+observation stays visibly timestamped rather than claiming current status.
+Deployment reads start after check-in is recorded, so even an unavailable
+deployment-check API cannot hold up delivery.
+
 ### Run a Captain on the direct path
 
 A Captain is an agent chat in any runtime that can start visible sessions. It

@@ -60,6 +60,14 @@ class LocalChecks(Payload):
     failures: list[Reason] = Field(default_factory=list, max_length=50)
 
 
+class Deployment(Payload):
+    """Optional check-run signal on the merge commit, not a delivery gate."""
+
+    commit: SHA
+    check_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    state: Literal["pending", "failed", "deployed"]
+
+
 class Observation(Payload):
     observed_at: AwareDatetime
     pr: ObservedPull | None = None
@@ -71,6 +79,7 @@ class Observation(Payload):
     # The branch the PR must merge into: the item's target_branch, else the repository's base_branch
     # from the reconciler's mapping. The server prefers the item's own target_branch.
     target_base: Ref | None = None
+    deployment: Deployment | None = None
 
     @model_validator(mode="after")
     def consistent(self):
@@ -80,6 +89,10 @@ class Observation(Payload):
             raise ValueError("merged_branch describes an item branch with no PR")
         if (self.pr is None) != (self.target_base is None):
             raise ValueError("A PR observation names the branch it must merge into, and only it does")
+        if self.deployment is not None and (
+                self.pr is None or not self.pr.merged or self.pr.base_ref != self.target_base
+                or self.pr.merge_commit != self.deployment.commit):
+            raise ValueError("Deployment describes the merge commit of a PR merged into its target")
         return self
 
 
@@ -91,8 +104,14 @@ def _open_execution(db, item_id, execution_id):
 
 
 def record(db, item_id, execution_id, body: Observation):
-    row = _open_execution(db, item_id, execution_id)
+    row = intake.execution_row(db, item_id, execution_id)
     state = json.loads(row["state_json"])
+    output = state["final_output"]
+    if output is not None and (
+            row["status"] != "completed" or body.deployment is None or body.pr is None
+            or output.get("merge_commit") != body.deployment.commit
+            or output.get("revision", {}).get("head") != body.pr.head_sha):
+        raise intake.Conflict("Closed executions only accept deployment observations for their delivered merge")
     observed_at = body.observed_at.astimezone(UTC)
     if observed_at > datetime.now(UTC) + CLOCK_SKEW:
         raise intake.Conflict("observed_at is in the future")
@@ -107,6 +126,8 @@ def record(db, item_id, execution_id, body: Observation):
         if body.pr.head_ref != item_branch(item_id):
             raise intake.Conflict("The PR head branch must be the item branch")
         url = f"https://github.com/{match[1]}/pull/{body.pr.number}"
+        if output is not None and output.get("url", "").lower() != url.lower():
+            raise intake.Conflict("Deployment must describe the delivered PR")
         primary = state.get("primary_pr")
         if primary and primary.lower() != url.lower():
             raise intake.Conflict("The PR must be the item's primary PR")
@@ -115,6 +136,8 @@ def record(db, item_id, execution_id, body: Observation):
     payload["pr"] = payload["pr"] and dict(payload["pr"], url=url)
     if body.pr is not None:
         payload["target_base"] = json.loads(item["request_json"]).get("target_branch") or body.target_base
+        if body.deployment is not None and body.pr.base_ref != payload["target_base"]:
+            raise intake.Conflict("Deployment must describe a merge into the item's target branch")
     stamp = observed_at.isoformat(timespec="microseconds")
     key = (execution_id, url, head, intake.digest(intake.encode(payload)))
     latest, = db.execute("SELECT max(last_observed_at) FROM github_observations WHERE execution_id=?",
@@ -143,7 +166,7 @@ def _advance(db, row, url, body, target_base, stamp):
     pull = body.pr
     # Only the PR this execution's writer published moves it; an earlier execution's PR on the
     # shared item branch is recorded and flagged, never delivered.
-    if (state.stage is not Stage.DELIVERY or state.primary_pr != url or state.stopping
+    if (state.final_output is not None or state.stage is not Stage.DELIVERY or state.primary_pr != url or state.stopping
             or state.pending_output or (pull.merged and pull.merge_commit is None)):
         return
     pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
@@ -225,7 +248,8 @@ def observation_flags(db, now):
                            ORDER BY observation.last_observed_at DESC, observation.observed_at DESC) AS rank
                 FROM github_observations AS observation
                 JOIN executions AS execution ON execution.id = observation.execution_id
-                WHERE {OPEN}
+                WHERE ({OPEN}) OR (execution.status = 'completed'
+                    AND json_extract(execution.state_json, '$.final_output.merge_commit') IS NOT NULL)
             )
             SELECT latest.*, checked.checked_at, checked.failures_json
             FROM latest
@@ -233,7 +257,11 @@ def observation_flags(db, now):
                 ON checked.execution_id = latest.execution_id AND checked.head_sha = latest.head_sha
             WHERE rank = 1 ORDER BY latest.execution_id"""
     ):
-        found = _observed(row, json.loads(row["observation_json"]))
+        observation = json.loads(row["observation_json"])
+        closed = json.loads(row["state_json"])["final_output"] is not None
+        found = _deployment_flags(row, observation) if closed else _observed(row, observation)
+        if closed and not observation.get("deployment"):
+            continue
         last = datetime.fromisoformat(row["last_observed_at"])
         if now - last >= RECONCILER_STALE:
             for flag in found:
@@ -247,8 +275,22 @@ def observation_flags(db, now):
     return flags
 
 
+def _deployment_flags(row, observation):
+    deployment = observation.get("deployment")
+    if not deployment:
+        return []
+    state = deployment["state"]
+    recovery = ("Informational: GitHub reported a successful deployment check" if state == "deployed"
+                else "Check the post-merge workflow on GitHub and rerun or repair it; reconciliation refreshes this flag")
+    return [_flag(
+        "deployed" if state == "deployed" else f"deployment_{state}", row,
+        f"{deployment['check_name']} on merge commit {deployment['commit']}: {state}",
+        recovery, row["observed_at"],
+    )]
+
+
 def _observed(row, observation):
-    seen, pull, flags = row["observed_at"], observation["pr"], []
+    seen, pull, flags = row["observed_at"], observation["pr"], _deployment_flags(row, observation)
     if pull is None:
         if observation["merged_branch"]:
             flags.append(_flag(
