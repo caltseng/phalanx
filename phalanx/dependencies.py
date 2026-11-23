@@ -104,7 +104,7 @@ def milestone_evidence(state: Execution):
         return state.status
     if state.status == Status.COMPLETED:
         return state.final_output
-    if (state.stage == Stage.CHECK_IN
+    if (state.stage in (Stage.CHECK_IN, Stage.DELIVERY)
             and state.ready_revision and state.ready_revision.head == state.candidate
             and state.primary_pr):
         return state.primary_pr, state.ready_revision
@@ -167,7 +167,7 @@ def resolve_dependencies(
                 upstream_id, milestone, execution_id, output.url, output.revision.head, output.revision,
             ))
             continue
-        elif (state.stage == Stage.CHECK_IN
+        elif (state.stage in (Stage.CHECK_IN, Stage.DELIVERY)
               and state.ready_revision and state.primary_pr
               and state.ready_revision.head == state.candidate):
             resolved.append(ResolvedDependency(

@@ -14,6 +14,7 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                 with urlopen(self.url + "/operator/", timeout=REQUEST_TIMEOUT) as response:
                     self.assertEqual(response.headers.get_content_type(), "text/html")
                     self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
+                    self.assertIn("img-src data:;", response.headers["Content-Security-Policy"])
                     self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
                     shell = response.read().decode("utf-8")
                 for asset, marker in (

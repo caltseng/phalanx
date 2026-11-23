@@ -3,7 +3,7 @@
 import re
 from typing import Annotated, Literal
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from . import validation
 from .intake_models import AttemptEvent, Identifier, Payload, Text, WaitLimit
@@ -40,6 +40,7 @@ class MergedPull(GitHubPull):
     draft: Literal[False]
     merged: Literal[True]
     merge_commit: SHA
+    merged_at: AwareDatetime | None = None
 
 
 class RequiredCheck(Payload):
@@ -183,12 +184,39 @@ class Rework(AttemptEvent):
         return self
 
 
-class VerifiedMerge(AttemptEvent):
-    stage: Literal[Stage.CHECK_IN]
+class MergeEvidence(AttemptEvent):
+    """GitHub's authoritative record of a merged primary PR.
+
+    A merge commit has the PR's final head as its second parent. A squash or
+    rebase merge has one parent; the runner verified that commit is on the base
+    branch. GitHub does not report which of the two it was.
+    """
+
     expected: ExpectedRefs
     pull: MergedPull
+    merge_parent_shas: list[SHA] = Field(min_length=1, max_length=2)
+    merge_method: Literal["merge", "squash_or_rebase"] = "merge"
+
+    @model_validator(mode="after")
+    def provenance(self):
+        parents = self.merge_parent_shas
+        if self.merge_method == "merge":
+            if len(parents) != 2 or parents[1] != self.pull.head_sha:
+                raise ValueError("A merge commit's head parent must be the PR head")
+        elif len(parents) != 1:
+            raise ValueError("A squash or rebase merge has one parent")
+        return self
+
+
+class VerifiedMerge(MergeEvidence):
+    stage: Literal[Stage.CHECK_IN]
     operation_id: Identifier
-    merge_parent_shas: tuple[SHA, SHA]
+
+
+class ExternalMerge(MergeEvidence):
+    """The repository merged the validated candidate before Phalanx's check-in."""
+
+    stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION]
 
 
 Observation = Annotated[

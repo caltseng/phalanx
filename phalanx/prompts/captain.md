@@ -42,8 +42,11 @@ Do these steps in order and keep each wake short:
      1. Run `phx shift launch --captain <id> --item <item>`. This prepares the item worktree and registers
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
      2. Search your sessions for the returned `session_name`. If one exists, confirm that one instead.
-     3. Otherwise create one new worker session with your session tools. It runs autonomously, works in
-        the returned `worktree`, is named `session_name` and gets `kickoff` as its first prompt.
+     3. Otherwise create one new worker session with your session tools. It runs autonomously, is named
+        `session_name` and gets `kickoff` as its first prompt, which names the item's `worktree`. Open it
+        in the returned `session_workspace`: one runtime workspace for the whole worktrees folder, which
+        the owner approves once. Never register a workspace per worktree. If `session_workspace` is null,
+        stop and ask the owner to set it in the shift config.
      4. Confirm it right away with `phx shift writer ... --session-id <ID> [--session-url <link>]`.
    - **Waiting for input:** answer routine questions with
      `python -m phalanx reply <item> <execution> <answer> --version <version> --key <unique key> --answered-by captain`,

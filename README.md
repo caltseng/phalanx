@@ -503,7 +503,8 @@ The reconciler reads GitHub and git for every open item whose repository the
 runner configuration maps, and posts timestamped observations through the API.
 It holds no lease or slot, never changes an item's state and never blocks work.
 The server derives flags from the latest observation of each open execution:
-`head_drift`, `pr_closed`, `merge_conflict`, `checks_failed`, `review_feedback`,
+`head_drift`, `pr_closed`, `merge_conflict`, `wrong_base` (the PR's base isn't
+the item's target branch), `checks_failed`, `review_feedback`,
 `unpublished_branch_merged` (item branch reachable from its base with no PR)
 and `pre_pr_checks_failed`. An observation older than 15 minutes keeps its
 flags, marked with when it was seen, and adds `observation_stale`. Each
@@ -546,10 +547,10 @@ after the action) or set in `PHALANX_SHIFT_CONFIG`:
   "runtime": "copilot-app",
   "charter": "C:\\phalanx\\charter\\charter.toml",
   "worktrees": "C:\\phalanx\\direct\\worktrees",
+  "session_workspace": "<runtime workspace ID for the worktrees folder>",
   "work_command": "python -m phalanx work",
   "repositories": {
-    "phalanx-pilot-py": {"checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py", "base_branch": "main",
-                         "project_id": "<runtime project ID>"}
+    "phalanx-pilot-py": {"checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py", "base_branch": "main"}
   }
 }
 ```
@@ -557,7 +558,9 @@ after the action) or set in `PHALANX_SHIFT_CONFIG`:
 `repositories` uses the runner configuration's mapping. `worktrees` is the root
 for item worktrees, and must be separate from any runner's. `work_command` is
 how a worker session runs `phx work` from its worktree. The default is
-`python -m phalanx work`.
+`python -m phalanx work`. `session_workspace` is the runtime's workspace for the
+`worktrees` folder, where every worker session opens. In the GitHub Copilot app
+it is the ID `add_repository` returns for that folder.
 
 The charter is the Captain's standing authority. It is a TOML file on the
 runner host, outside every checkout, worktree and Git repository, so workers
@@ -603,14 +606,18 @@ Each heartbeat re-reads the charter and records that revision.
    its worker sessions wake it sooner.
 3. To launch a worker, the Captain runs `shift launch`, then creates one
    session with `create_session`:
-   - the `project_id` from `add_repository` with the returned `worktree` path;
-   - `workspace_type` `branch`, so the session uses that worktree;
+   - `project_id` set to the returned `session_workspace`: the shift config's
+     folder project for its `worktrees` folder. One project covers every item
+     worktree, so the owner trusts it once. Registering each worktree as its
+     own project would hold every launch on a trust prompt, and autopilot
+     denies tools until it is answered;
    - `name` set to `session_name`;
-   - kickoff `prompt` set to `kickoff`, with mode `autopilot`.
+   - kickoff `prompt` set to `kickoff`, which names the item worktree, with
+     mode `autopilot`.
 
-   It confirms the session with `shift writer --session-id <session ID>`.
-   `list_sessions_and_chats` finds a lost launch by its name, which holds the
-   nonce.
+   It confirms the session with `shift writer --session-id <session ID>
+   --session-url ghapp://sessions/<session ID>`. `list_sessions_and_chats`
+   finds a lost launch by its name, which holds the nonce.
 
 Watch the run on the [operator board](#operator-work-board), which shows each
 item's writer, the live Captains and the flags. `GET /v1/captains` and `GET
