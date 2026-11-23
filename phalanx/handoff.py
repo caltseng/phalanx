@@ -166,6 +166,13 @@ class WorkerHandoff:
             + (f" (optional: {', '.join(OPTIONAL_FIELDS[outcome])})" if outcome in OPTIONAL_FIELDS else "")
             for outcome, fields in OUTCOME_FIELDS.items()
         )
+        # pre_pr_validation runs the full suite, so development only runs targeted tests.
+        checks = (
+            "run only the tests targeted at your change (leave the full\n"
+            "suite to pre_pr_validation), and leave GitHub writes to the runner."
+            if packet.stage == "development" else
+            "run relevant checks, and leave GitHub writes to the\nrunner."
+        )
         return {
             "project_id": project_id,
             "title": f"Phalanx worker [{packet.marker}]",
@@ -174,8 +181,7 @@ class WorkerHandoff:
 Execute only the assigned stage in the packet below. Scope is authorized
 repository development, maintenance, documentation, testing, or defensive
 review. Do not perform offensive or exploit workflows. Read the applicable
-repository instructions, run relevant checks, and leave GitHub writes to the
-runner.
+repository instructions, {checks}
 
 The session may start in the project checkout. Use the absolute worktree path in
 the packet as the explicit working directory for every repository command and

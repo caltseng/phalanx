@@ -64,6 +64,15 @@ class WorkerHandoffTests(unittest.TestCase):
         self.assertIn("explicit working directory", prompt)
         self.assertIn("leave GitHub writes to the", prompt)
 
+    def test_development_runs_targeted_tests_only(self):
+        prompt = self.handoff.launch_arguments("project-1")["prompt"]
+        self.assertIn("run only the tests targeted at your change", prompt)
+        self.assertIn("suite to pre_pr_validation", prompt)
+        other = replace(self.handoff, packet=replace(self.handoff.packet, stage="pr_revision"))
+        prompt = other.launch_arguments("project-1")["prompt"]
+        self.assertIn("run relevant checks", prompt)
+        self.assertNotIn("targeted at your change", prompt)
+
     def test_attempt_specific_final_file_only(self):
         handoff = self.handoff
         handoff.temporary_path.write_text(json.dumps(self.result), encoding="utf-8")

@@ -84,7 +84,7 @@ The runner passes the agent a packet with these fields and instructions.
 | Stage assignment | Current stage, attempt ID, expected state version and revision when applicable, and the outcome and evidence requirements for this stage. |
 | Workspace | Verified repository and local working directory. For PR work, include the base and topic branches and use the item’s isolated worktree. |
 | Handoff | Attempt history relevant to resuming, known branch or PR, remaining work, and any answer supplied by the user. |
-| Execution instructions | Read applicable repository instructions, stay within the assigned scope, run relevant checks, and ask for input when a missing decision materially affects the outcome. |
+| Execution instructions | Read applicable repository instructions, stay within the assigned scope, run relevant checks (development runs only tests targeted at the change and leaves the full suite to pre-PR validation), and ask for input when a missing decision materially affects the outcome. |
 
 ### Result contract
 
