@@ -13,6 +13,7 @@ from phalanx.intake_models import Cancel, Intake, Result
 from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
+from timing import WAIT_SECONDS
 
 
 NOW = 1_800_000_000
@@ -115,7 +116,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         barrier = Barrier(16)
 
         def contender(number):
-            barrier.wait(timeout=5)
+            barrier.wait(timeout=WAIT_SECONDS)
             return self.claim("even" if number % 2 == 0 else "odd", ["repo"])
 
         with patch.object(dispatch, "time", return_value=NOW):

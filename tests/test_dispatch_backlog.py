@@ -13,6 +13,7 @@ from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import Event, Outcome, Wait
+from timing import WAIT_SECONDS
 
 
 NOW = 1_800_000_000
@@ -45,7 +46,7 @@ class BacklogAdmissionTest(TestCase):
                 barrier = Barrier(CONTENDERS)
 
                 def contend(_):
-                    barrier.wait(timeout=10)
+                    barrier.wait(timeout=WAIT_SECONDS)
                     return self.claim()
 
                 with ThreadPoolExecutor(CONTENDERS) as pool:

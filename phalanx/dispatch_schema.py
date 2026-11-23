@@ -25,7 +25,7 @@ DISPATCH_SCHEMA = (
         paused INTEGER NOT NULL CHECK (paused IN (0, 1)),
         aging_seconds INTEGER NOT NULL CHECK (aging_seconds > 0)
     )""",
-    "INSERT INTO dispatch_settings VALUES (1, 0, 300)",
+    "INSERT INTO dispatch_settings VALUES (1, 0, 3600)",
     """CREATE TABLE runner_limits (
         runner_id TEXT PRIMARY KEY NOT NULL,
         capacity INTEGER NOT NULL CHECK (capacity >= 1)
@@ -45,12 +45,6 @@ ADOPTION_SCHEMA = (
         created_at TEXT NOT NULL
     )""",
     "CREATE INDEX adoptions_by_execution ON attempt_adoptions(execution_id, version, created_at)",
-)
-
-
-# Raise the original 5 minute default unless the owner already changed it.
-AGING_DEFAULT_SCHEMA = (
-    "UPDATE dispatch_settings SET aging_seconds = 3600 WHERE aging_seconds = 300",
 )
 
 
