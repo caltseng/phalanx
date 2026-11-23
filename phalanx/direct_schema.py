@@ -67,3 +67,13 @@ CAPTAIN_SHIFT_SCHEMA = (
     )""",
     "CREATE INDEX captain_actions_by_execution ON captain_actions (execution_id, created_at)",
 )
+
+# Report finalization closed executions without ending their writers. End those writers as
+# intake.end_writers does.
+CLOSED_WRITER_MIGRATION = (
+    """UPDATE writers SET ended_at = strftime('%Y-%m-%dT%H:%M:%f000+00:00', 'now'),
+           end_reason = 'closed as ' || (SELECT status FROM executions WHERE id = writers.execution_id),
+           attempt_id = NULL
+       WHERE ended_at IS NULL AND execution_id IN (
+           SELECT id FROM executions WHERE status IN ('completed', 'failed', 'cancelled'))""",
+)

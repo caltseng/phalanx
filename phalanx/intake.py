@@ -363,6 +363,13 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
     return execution_view(execution_row(db, row["item_id"], row["id"]))
 
 
+def end_writers(db, execution_id, status):
+    """End every open writer of an execution that closed as the terminal status."""
+    db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL
+                  WHERE execution_id=? AND ended_at IS NULL""",
+               (timestamp(), f"closed as {status}", execution_id))
+
+
 def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None,
                   continued_from=None):
     """Persist a claim after PH-06 selects and admits it in this same write transaction."""

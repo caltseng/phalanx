@@ -257,8 +257,7 @@ def advance(db, writer_id, previous_attempt_id, view):
     writer = writer_row(db, writer_id)
     if writer["ended_at"] is None:
         if view["state"]["status"] in TERMINAL:
-            db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
-                       (intake.timestamp(), f"closed as {view['state']['status']}", writer_id))
+            intake.end_writers(db, writer["execution_id"], view["state"]["status"])
         else:
             claim_next(db, writer, continued_from=previous_attempt_id)
     return binding(db, writer_row(db, writer_id))
