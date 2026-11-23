@@ -31,6 +31,10 @@ SUMMARY = """
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
+           writer.id AS writer_id, writer.state AS writer_state, writer.runtime AS writer_runtime,
+           writer.captain_id AS writer_captain_id, writer.session_id AS writer_session_id,
+           writer.session_url AS writer_session_url, writer.last_progress_at AS writer_progress_at,
+           writer.progress_note AS writer_progress_note,
            (SELECT attempt.blocker FROM attempts AS attempt
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
            (SELECT attempt.lease_expires_at FROM attempts AS attempt
@@ -59,6 +63,7 @@ SUMMARY = """
         SELECT attempt.id FROM attempts AS attempt WHERE attempt.execution_id = execution.id
         ORDER BY attempt.started_at DESC, attempt.id DESC LIMIT 1
     )
+    LEFT JOIN writers AS writer ON writer.execution_id = execution.id AND writer.ended_at IS NULL
 """.format(default=DEFAULT_CAPACITY, lane=RUNNER_ONLY_SLOTS)
 
 
@@ -177,6 +182,13 @@ def summary(row, now):
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
+        # The registered native worker session that holds this item, if any.
+        "writer": None if row["writer_id"] is None or output is not None else {
+            "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],
+            "captain_id": row["writer_captain_id"], "session_id": row["writer_session_id"],
+            "session_url": row["writer_session_url"], "last_progress_at": row["writer_progress_at"],
+            "progress_note": row["writer_progress_note"],
+        },
     }
 
 
