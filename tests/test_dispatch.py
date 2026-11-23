@@ -213,9 +213,17 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         expired = self.get(timeline, OWNER)[1]["item"]
         self.assertEqual(expired["wait_reason"], "Lease expired at 1970-01-01T00:00:00+00:00; awaiting runner recovery")
         self.assertIn("runner recovers", expired["resume_trigger"])
+        wait_path = f"/v1/dispatch/runners/local/attempts/{assigned['attempt_id']}/recovery-wait"
+        owner_wait = "Recovery is waiting on the owner: X. Then run `python -m phalanx attended-recover --slot 1 --recheck`"
+        self.assertEqual(self.request(wait_path, RUNNER, {"blocker": owner_wait})[0], 200)
+        self.assertEqual(self.get(timeline, OWNER)[1]["item"]["wait_reason"],
+                         f"Lease expired at 1970-01-01T00:00:00+00:00; {owner_wait}")
+        self.assertEqual(self.request(wait_path, RUNNER, {"blocker": None})[0], 200)
+        self.assertIn("awaiting runner recovery", self.get(timeline, OWNER)[1]["item"]["wait_reason"])
         with write_transaction(self.path) as db:
             db.execute("UPDATE attempts SET lease_expires_at = ? WHERE id = ?",
                        (assigned["lease_expires_at"], assigned["attempt_id"]))
+        self.assertEqual(self.request(wait_path, RUNNER, {"blocker": owner_wait})[0], 409)
         execution = assigned["execution"]
         result_path = f"/v1/items/{item['id']}/executions/{execution['id']}/result"
         result = {"expected_version": execution["version"], "attempt_id": assigned["attempt_id"],

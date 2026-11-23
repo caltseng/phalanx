@@ -150,6 +150,15 @@ def renew(db, runner_id, attempt_id, lease_digest, worker=None, blocker=None):
     return {"attempt_id": attempt_id, "lease_expires_at": expires}
 
 
+def report_recovery_wait(db, runner_id, attempt_id, blocker):
+    # An expired lease cannot renew, so recovery reports its owner wait here; None clears it.
+    attempt = open_attempt(db, runner_id, attempt_id)
+    if attempt["lease_expires_at"] > time():
+        raise intake.Conflict("The lease is live. Report blockers on renewal")
+    db.execute("UPDATE attempts SET blocker=? WHERE id=?", (blocker, attempt_id))
+    return {"attempt_id": attempt_id, "blocker": blocker}
+
+
 def recovery_candidates(db, runner_id):
     return [
         {**dict(row), "reason": "lease_expired",
