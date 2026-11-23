@@ -135,7 +135,7 @@
     item("done").click();
     await tick();
     const done = root.querySelector("#detail-done")?.textContent || "";
-    assert(done.includes("Merged on GitHub") && done.includes("squash or rebase ? a40536e00000"),
+    assert(done.includes("Merged on GitHub") && done.includes("squash or rebase · a40536e00000"),
            "GitHub delivery shown apart from the Phalanx outcome");
     item("done").click();
     offline = true;

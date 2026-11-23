@@ -19,7 +19,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .github import GitHubClient, GitHubError
+from .github import GitHubClient, GitHubError, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
 from .pr_models import GITHUB_REMOTE
@@ -218,6 +218,10 @@ class Reconciler:
                 "head_ref": pull.head_ref, "head_sha": pull.head_sha, "base_ref": pull.base_ref,
                 "base_sha": pull.base_sha, "merge_commit": pull.merge_commit_sha, "mergeable": pull.mergeable,
             }
+            if pull.merged and pull.merge_commit_sha and pull.base_ref == base:
+                # The server records how and when the PR merged with the delivery.
+                body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
+                body["pr"]["merged_at"] = pull.merged_at
             if pull.state == "open":
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)

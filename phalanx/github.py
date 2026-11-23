@@ -567,3 +567,17 @@ class GitHubClient:
         except (KeyError, TypeError):
             pass
         raise UncertainGitHubWrite(operation, "GitHub did not confirm the merge", 200)
+
+
+def merge_method(github, merge_commit: str, head: str, base_ref: str) -> tuple[str | None, tuple[str, ...]]:
+    """How GitHub merged a PR whose final head is ``head``, with the merge commit's parents.
+
+    "merge" when the merge commit's second parent is the head, "squash_or_rebase" when it is a
+    single-parent commit on the base branch, else None. GitHub doesn't say which method it used.
+    """
+    parents = github.get_commit_parents(merge_commit)
+    if len(parents) == 2 and parents[1] == head:
+        return "merge", parents
+    if len(parents) == 1 and github.is_on_branch(merge_commit, base_ref):
+        return "squash_or_rebase", parents
+    return None, parents
