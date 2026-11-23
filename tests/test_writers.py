@@ -398,6 +398,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.kinds(now), {("no_live_captain", "server")})
         with write_transaction(self.path) as db:
             captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+        now = datetime.now(UTC)  # after the item and heartbeat exist, so slow hosts can't make them look newer
         self.assertEqual(self.kinds(now), set())
         later = now + captains.STALE + timedelta(seconds=1)
         self.assertEqual(self.kinds(later), {("no_live_captain", "server"), ("captain_stale", "server")})
