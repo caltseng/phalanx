@@ -127,6 +127,7 @@ def summary(row, now):
     wait = state.get("wait") or {}
     output = state["final_output"]
     outcome = None
+    delivery = None
     if output is not None:
         if row["status"] != "completed":
             outcome = row["status"]
@@ -134,6 +135,10 @@ def summary(row, now):
             outcome = "report_stored"
         else:
             outcome = "checked_in" if output.get("merge_commit") else "ready_for_check_in"
+        if output.get("merge_commit"):
+            # What GitHub delivered, distinct from the Phalanx stage that recorded it.
+            delivery = {"merged": True, "merge_commit": output["merge_commit"],
+                        "merge_method": output.get("merge_method"), "merged_at": output.get("merged_at")}
         output = (
             {"kind": "report", "url": output["reference"]} if "reference" in output
             else {"kind": "pr", "url": output["url"]}
@@ -196,6 +201,7 @@ def summary(row, now):
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
+        "delivery": delivery,
         # The registered native worker session that holds this item, if any.
         "writer": None if row["writer_id"] is None or output is not None else {
             "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],

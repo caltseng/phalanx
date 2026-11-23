@@ -11,12 +11,12 @@ from pathlib import Path
 from .attended import RunnerError
 from .attended_drafts import github_repository
 from .candidate_local import LOCAL_CHECK_CAPACITY, CandidateLocal
-from .check_in import MergeTarget, check_in
+from .check_in import MergeTarget, check_in, merge_evidence, observe_merge
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError
 from .github_checks import collect_github_checks
-from .pr_models import (ExpectedRefs, GateObservation, GitHubPull, MergedPull, MergeIntent, Reconciliation, Revised,
-                        Rework, Validation, VerifiedMerge)
+from .pr_models import (ExpectedRefs, ExternalMerge, GateObservation, GitHubPull, MergeIntent, Reconciliation,
+                        Revised, Rework, Validation, VerifiedMerge)
 from .pr_notes import PRNotes
 from .promotion import DraftChecks, promote
 from .published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
@@ -195,6 +195,8 @@ def _promotion(runner, snapshot):
         pull = github.get_pull_request(int(number))
     except GitHubError as error:
         return _retry(snapshot, str(error), error.retry_after_seconds)
+    if pull.merged:
+        return _external_merge(github, snapshot, pull, base_ref)
     if pull.head_sha != candidate:
         update = _publish_update(snapshot, local, pull, base_ref, _verified_head(runner, snapshot, url))
         if update is not None:
@@ -219,6 +221,8 @@ def _promotion(runner, snapshot):
         return _retry(snapshot, result.reason)
     if result.status == "revision_changed":
         observed = result.pull
+        if observed is not None and observed.merged:
+            return _external_merge(github, snapshot, observed, base_ref)
         if (observed is None or observed.state != "open"
                 or observed.merged or observed.head_ref != _item_branch(claim["item_id"])
                 or observed.base_ref != base_ref):
@@ -399,6 +403,8 @@ def _disposition(runner, snapshot):
         pull = github.get_pull_request(int(number))
     except GitHubError as error:
         return _retry(snapshot, str(error), error.retry_after_seconds)
+    if pull.merged:
+        return _external_merge(github, snapshot, pull, base_ref)
     if (pull.url.casefold() != url.casefold() or pull.state != "open" or pull.merged or pull.draft
             or (pull.head_ref, pull.base_ref) != (_item_branch(claim["item_id"]), base_ref)):
         return _question(snapshot, "Reconcile the primary PR with the recorded branch and target.", handoff)
@@ -474,13 +480,9 @@ def _check_in(runner, snapshot):
     result = check_in(github, target, assert_claim=_candidate(runner, snapshot)._authorize)
     pull = result.pull
     if result.status == "merged":
-        return {"route": "pr-observation", "body": VerifiedMerge(
-            **_event(snapshot), operation_id=intent["operation_id"],
-            expected=ExpectedRefs(head_ref=target.head_ref, base_ref=base_ref, base_sha=ready["base"]),
-            pull=MergedPull.model_validate({**{field: getattr(pull, field) for field in GitHubPull.model_fields},
-                                            "merge_commit": pull.merge_commit_sha}),
-            merge_parent_shas=result.parents,
-        ).model_dump(mode="json")}
+        return {"route": "pr-observation", "body": merge_evidence(
+            VerifiedMerge, _event(snapshot), result, ready["base"], operation_id=intent["operation_id"],
+        )}
     if result.status == "pending":
         return _retry(snapshot, result.reason, result.retry_after_seconds)
     if result.status == "moved":
@@ -495,6 +497,22 @@ def _check_in(runner, snapshot):
             "retry_after_seconds": interval, "wait_limit_seconds": limit,
         }}
     return _question(snapshot, result.reason, handoff)
+
+
+def _external_merge(github, snapshot, pull, base_ref):
+    """Deliver a primary PR the repository merged itself, once GitHub shows it merged the candidate."""
+    state = snapshot["claim"]["execution"]["state"]
+    candidate, url = state["candidate"], state.get("primary_pr") or ""
+    outcome = observe_merge(github, MergeTarget(pull.number, url, _item_branch(snapshot["claim"]["item_id"]),
+                                                base_ref, Revision(candidate, pull.base_sha)))
+    if outcome.status == "merged":
+        return {"route": "pr-merged", "reason": outcome.reason, "body": merge_evidence(
+            ExternalMerge, _event(snapshot), outcome, outcome.pull.base_sha)}
+    if outcome.status == "pending":
+        return _retry(snapshot, outcome.reason, outcome.retry_after_seconds)
+    return _question(snapshot, f"{url} was merged outside Phalanx, but not as the validated candidate: "
+                     f"{outcome.reason}. Decide how this item should continue, then reply.",
+                     f"{url}, candidate {candidate}")
 
 
 def _recorded_intent(runner, snapshot, url):
