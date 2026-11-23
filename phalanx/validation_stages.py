@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .attended import RunnerError
 from .attended_drafts import github_repository
-from .candidate_local import CandidateLocal
+from .candidate_local import LOCAL_CHECK_CAPACITY, CandidateLocal
 from .check_in import MergeTarget, check_in
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError
@@ -23,10 +23,12 @@ from .published_validation_stage import PublishedValidationAssignment, Published
 from .transitions import Outcome, Revision, Stage, Target
 from .validation import CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_SECONDS, DRAFT_SKIP_REASON, GateState, Phase
 from .validation_policy import ValidationPolicyError, load_validation_policy
-from .workspaces import WorkspaceError, _item_branch
+from .workspaces import WorkspaceError, _item_branch, any_file_lock
 
 # GitHub usually reflects a ready mutation or new base within seconds.
 _PROVIDER_RETRY_SECONDS = 30
+# Waiting for a local check slot starts no check, so it never counts against a check timeout.
+_LOCAL_CHECK_CAPACITY_RETRY_SECONDS = 30
 
 
 def _check_timing(runner):
@@ -49,7 +51,7 @@ def run(runner, snapshot):
         submission = _save(runner, snapshot, handler(runner, snapshot))
     claim = snapshot["claim"]
     key = f"{stage}:{claim['attempt_id']}:{claim['execution']['version']}"
-    if stage == Stage.PRE_PR_VALIDATION and submission["body"]["outcome"] == Outcome.SUCCEEDED:
+    if stage == Stage.PRE_PR_VALIDATION and submission["body"].get("outcome") == Outcome.SUCCEEDED:
         _candidate(runner, snapshot)._inspect()
         _note_bypass(runner, snapshot, submission["body"])
     execution = runner._send_submission(snapshot, submission, key)
@@ -134,7 +136,21 @@ def _pre_validation(runner, snapshot):
         checks = _policy(runner, snapshot).local_checks
     except ValidationPolicyError as error:
         return _question(snapshot, str(error), "Repair the runner's trusted validation policy, then reply.")
-    return {"body": local.pre_validate(checks)}
+    if not any(check.disposition is None for check in checks or ()):
+        return {"body": local.pre_validate(checks)}
+    # Concurrent suites on one host starve each other into timeouts, so cap local check runs.
+    capacity = runner.config.get("local_check_capacity", LOCAL_CHECK_CAPACITY)
+    with any_file_lock([runner.root / f"local-check-{index}.lock" for index in range(capacity)]) as slot:
+        if slot is not None:
+            return {"body": local.pre_validate(checks)}
+    candidate = snapshot["claim"]["execution"]["state"]["candidate"]
+    reason = (f"Waiting for local check capacity: all {capacity} local check "
+              f"slot{'s' if capacity != 1 else ''} on this runner host are busy")
+    return {"route": "external-wait", "reason": reason, "body": {
+        **_event(snapshot), "reason": reason, "gate": "local_check_capacity",
+        "revision": {"head": candidate, "base": candidate},
+        "retry_after_seconds": _LOCAL_CHECK_CAPACITY_RETRY_SECONDS,
+    }}
 
 
 def _promotion(runner, snapshot):
@@ -190,13 +206,12 @@ def _promotion(runner, snapshot):
         if pull.head_sha != candidate:
             return _retry(snapshot, "GitHub has not shown the pushed candidate on the PR yet")
     if pull.head_sha == candidate and pull.mergeable is False:
-        return _rework(snapshot, pull, base_ref, "merge_conflict")
+        return _conflict(github, snapshot, pull, base_ref)
     if pull.draft and not _may_mark_ready(runner, snapshot, url):
         return _question(snapshot, _REPROMOTE_PROMPT, handoff)
     result = promote(
         github, item_id=claim["item_id"], number=int(number), base_ref=base_ref,
-        revision=Revision(candidate, pull.base_sha), collect=collect,
-        read_base=lambda: github.get_branch_tip(base_ref), claim_current=claim_current,
+        revision=Revision(candidate, pull.base_sha), collect=collect, claim_current=claim_current,
     )
     if result.status == "claim_lost":
         raise RunnerError("Promotion claim changed. Reconcile the reservation before continuing")
@@ -208,8 +223,12 @@ def _promotion(runner, snapshot):
                 or observed.merged or observed.head_ref != _item_branch(claim["item_id"])
                 or observed.base_ref != base_ref):
             return _question(snapshot, result.reason, handoff)
-        # A moved head or target is reobserved; a foreign push is integrated by development.
-        return _retry(snapshot, "The primary PR changed during promotion; reobserving it")
+        if observed.head_sha == candidate and observed.mergeable is False:
+            return _conflict(github, snapshot, observed, base_ref)
+        # A moved head is reobserved, and a foreign push is integrated by development.
+        return _retry(snapshot, f"The primary PR changed during promotion; reobserving it. Observed head "
+                                f"{observed.head_sha}, base {observed.base_sha}; expected head {candidate}, "
+                                f"base {pull.base_sha}")
     gates = result.gates
     if changed:
         return _retry(snapshot, "; ".join(changed[-1].gate.reasons), changed[-1].retry_after_seconds)
@@ -281,7 +300,7 @@ def _verified_head(runner, snapshot, url):
 
 
 def publish_revision(runner, snapshot, candidate):
-    """Push a pr_revision commit to the ready PR and return its Revised body.
+    """Push a pr_revision commit to the open PR and return its Revised body.
 
     Lag and lost leases raise RunnerError so the Captain retries the submit with
     the reservation kept; a FAILED result would relaunch the worker. A push that
@@ -388,7 +407,7 @@ def _disposition(runner, snapshot):
     if pull.mergeable is None:
         return _retry(snapshot, "GitHub is still computing mergeability")
     if not pull.mergeable:
-        return _rework(snapshot, pull, base_ref, "merge_conflict")
+        return _conflict(github, snapshot, pull, base_ref)
     try:
         feedback = github.get_actionable_feedback(pull.number)
     except GitHubError as error:
@@ -451,7 +470,8 @@ def _check_in(runner, snapshot):
     base_ref = claim["request"].get("target_branch") or mapping["base_branch"]
     target = MergeTarget(int(number), url, _item_branch(claim["item_id"]), base_ref,
                          Revision(ready["head"], ready["base"]))
-    result = check_in(_github(snapshot), target, assert_claim=_candidate(runner, snapshot)._authorize)
+    github = _github(snapshot)
+    result = check_in(github, target, assert_claim=_candidate(runner, snapshot)._authorize)
     pull = result.pull
     if result.status == "merged":
         return {"route": "pr-observation", "body": VerifiedMerge(
@@ -463,8 +483,10 @@ def _check_in(runner, snapshot):
         ).model_dump(mode="json")}
     if result.status == "pending":
         return _retry(snapshot, result.reason, result.retry_after_seconds)
-    if result.status in ("moved", "conflict"):
-        return _rework(snapshot, pull, base_ref, "unexpected_head" if result.status == "moved" else "merge_conflict")
+    if result.status == "moved":
+        return _rework(snapshot, pull, base_ref, "unexpected_head")
+    if result.status == "conflict":
+        return _conflict(github, snapshot, pull, base_ref)
     if result.status == "refused":
         interval, limit = _check_timing(runner)
         return {"route": "external-wait", "reason": result.reason[:16000], "body": {
@@ -506,15 +528,25 @@ def _handed_off_feedback(runner, snapshot):
     return {node for entry in timeline for node in (entry.get("details") or {}).get("feedback_ids") or ()}
 
 
-def _rework(snapshot, pull, base_ref, issue, feedback=()):
+def _conflict(github, snapshot, pull, base_ref):
+    """Send a merge conflict to rework against the target branch tip, which pull.base_sha can lag."""
+    try:
+        tip = github.get_branch_tip(base_ref)
+    except GitHubError as error:
+        return _retry(snapshot, str(error), error.retry_after_seconds)
+    return _rework(snapshot, pull, base_ref, "merge_conflict", base_tip=tip)
+
+
+def _rework(snapshot, pull, base_ref, issue, feedback=(), *, base_tip=None):
     reasons = {"merge_conflict": f"The PR conflicts with {base_ref}",
                "unexpected_head": f"The PR head {pull.head_sha} is not the candidate",
                "feedback": "The PR has new actionable GitHub feedback"}
-    fixer = "returning it to development" if snapshot["claim"]["execution"]["state"]["stage"] == Stage.PR_PROMOTION \
-        else "sending it to pr_revision"
+    fixer = "returning it to development" if (
+        issue != "merge_conflict" and snapshot["claim"]["execution"]["state"]["stage"] == Stage.PR_PROMOTION
+    ) else "sending it to pr_revision"
     return {"route": "pr-rework", "reason": f"{reasons[issue]}; {fixer}",
             "body": Rework(
-                **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue,
+                **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue, base_tip=base_tip,
                 findings=[text[:16000] for _, text in feedback], feedback_ids=[node for node, _ in feedback],
             ).model_dump(mode="json")}
 
@@ -550,7 +582,7 @@ def _published_validation(runner, snapshot):
     execution = claim["execution"]
     assignment = PublishedValidationAssignment(
         claim["item_id"], execution["id"], snapshot["runner_id"], claim["attempt_id"],
-        execution["version"], snapshot["lease"],
+        execution["version"], snapshot["lease"], runner.offer(snapshot),
     )
     result = PublishedValidationRunner(runner.root / "publication", runner.api, _github(snapshot)).run(
         assignment, policy,
@@ -560,7 +592,7 @@ def _published_validation(runner, snapshot):
 
     def finish(record, db):
         if record.get("lease") == snapshot["lease"]:
-            record.clear()
+            runner._settle(record, result)
 
     runner._transaction(finish)
     return result

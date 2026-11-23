@@ -7,13 +7,16 @@ import re
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 
-from .auth import authenticate
+from .auth import authenticate_board_read
+from .intake import report as stored_report
+from .intake_api import run
 from .intake_models import Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
 
-router = APIRouter(prefix="/v1/operator", dependencies=[Depends(authenticate)])
+router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate_board_read)])
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=512)]
 STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00")
@@ -29,7 +32,18 @@ SUMMARY = """
            (SELECT attempt.blocker FROM attempts AS attempt
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
            (SELECT attempt.lease_expires_at FROM attempts AS attempt
-            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at,
+           (SELECT attempt.id FROM attempts AS attempt
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS stage_owner,
+           (SELECT json_extract(history.details_json, '$.continued_from') IS NOT NULL
+            FROM transition_history AS history
+            WHERE history.execution_id = execution.id AND history.event = 'claim'
+            ORDER BY history.version DESC LIMIT 1) AS slot_retained,
+           (SELECT json_extract(history.details_json, '$.capacity_release')
+            FROM transition_history AS history
+            WHERE history.execution_id = execution.id AND history.attempt_id IS NOT NULL
+              AND history.event != 'claim'
+            ORDER BY history.version DESC LIMIT 1) AS capacity_release
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -137,6 +151,11 @@ def summary(row, now):
         "recheck_at_ms": row["recheck_at_ms"],
         "worker_reference": row["worker_reference"],
         "worker_url": row["worker_url"],
+        # Who runs the current stage, whether it kept its slot from the previous
+        # stage, and otherwise why the item last gave its runner slot back.
+        "stage_owner": row["stage_owner"],
+        "slot_retained": bool(row["stage_owner"] and row["slot_retained"]),
+        "capacity_release": None if row["stage_owner"] else row["capacity_release"],
         "wait_since": wait_since,
         "wait_age_seconds": (
             max(0, int((now - datetime.fromisoformat(wait_since)).total_seconds()))
@@ -181,7 +200,7 @@ def closed_page(db, after, size):
     ).fetchall()
 
 
-@router.get("/executions")
+@router.get("/operator/executions")
 def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
                     limit: Limit = 25, cursor: Cursor = None):
     with read_transaction(request.app.state.database_path) as db:
@@ -200,7 +219,12 @@ def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
     }
 
 
-@router.get("/executions/{execution_id}/timeline")
+@router.get("/items/{item_id}/executions/{execution_id}/report", response_class=PlainTextResponse)
+def report(request: Request, item_id: Identifier, execution_id: Identifier):
+    return run(request, stored_report, item_id, execution_id)
+
+
+@router.get("/operator/executions/{execution_id}/timeline")
 def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, cursor: Cursor = None):
     scope = f"timeline:{execution_id}"
     after = decode_cursor(cursor, scope, (is_version, is_stamp))

@@ -5,10 +5,12 @@ import json
 from time import time
 
 from . import intake
-from .transitions import Event, Status, Wait
+from .config import DEFAULT_LEASE_SECONDS
+from .transitions import TERMINAL, Event, Status, Wait
 
 
-LEASE_SECONDS = 90
+# The server sets this once at startup from PHALANX_LEASE_SECONDS.
+LEASE_SECONDS = DEFAULT_LEASE_SECONDS
 DEFAULT_CAPACITY = 4
 PRIORITIES = range(3)
 QUEUE_BUCKET = """
@@ -124,6 +126,79 @@ def admit(db, request, lease_digest):
     return {"status": "no_eligible_work"}
 
 
+def hand_off(db, item_id, attempt_id, view, continuation):
+    """Keep the ended attempt's slot for the next stage, or record why it was released.
+
+    Runs in the transaction that ended the attempt, so no other claim can take
+    the slot in between. The next stage still gets its own attempt and lease.
+    """
+    attempt = db.execute("SELECT runner_id, ended_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if attempt is None or attempt["ended_at"] is None:
+        return view
+    runner_id = attempt["runner_id"]
+    row = intake.execution_row(db, item_id, view["id"])
+    state = intake.STATE.validate_json(row["state_json"])
+    now = time()
+    reason = _release_reason(db, row, state, runner_id, continuation, now)
+    assignment = None
+    expires = int(now) + LEASE_SECONDS
+    if reason is None:
+        assignment = intake.claim_attempt(
+            db, row, state, runner_id=runner_id, lease_digest=intake.digest(continuation["lease"]),
+            lease_expires_at=expires, now=now, continued_from=attempt_id,
+        )
+        reason = None if assignment is not None else "dependency wait"
+    if assignment is None:
+        db.execute(
+            """UPDATE transition_history SET details_json=json_set(details_json, '$.capacity_release', ?)
+               WHERE execution_id=? AND attempt_id=? AND event != ? AND version=(
+                   SELECT max(version) FROM transition_history
+                   WHERE execution_id=? AND attempt_id=? AND event != ?)""",
+            (reason, row["id"], attempt_id, Event.CLAIM, row["id"], attempt_id, Event.CLAIM),
+        )
+        return view
+    work_item = intake.item_row(db, row["item_id"])
+    return {**view, "continuation": {
+        "status": "claimed", **assignment, "runner_id": runner_id, "lease_expires_at": expires,
+        "item_id": row["item_id"], "request": json.loads(work_item["request_json"]),
+    }}
+
+
+def _release_reason(db, row, state, runner_id, continuation, now):
+    if state.status in TERMINAL:
+        return f"closed as {state.status}"
+    if state.pending_output is not None:
+        return "finalizing output"
+    if state.stopping is not None:
+        return "stop requested"
+    if state.status == Status.WAITING_FOR_INPUT:
+        return "input wait"
+    if state.status == Status.WAITING_FOR_EXTERNAL:
+        return "external wait"
+    if state.status != Status.QUEUED:
+        return str(state.status)
+    if row["retry_at"] is not None or row["ready_since"] > int(now * 1000):
+        return "retry backoff"
+    if row["dependency_wait_json"] is not None:
+        return "dependency wait"
+    if continuation is None:
+        return "runner did not offer a continuation"
+    if state.stage not in continuation["stages"]:
+        return f"runner cannot run {state.stage}"
+    if row["queue_affinity"] not in ("", runner_id):
+        return "pinned to another runner"
+    if db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]:
+        return "dispatch paused"
+    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?", (runner_id,)).fetchone()
+    capacity = limit["capacity"] if limit else DEFAULT_CAPACITY
+    reserved = db.execute(
+        "SELECT count(*) FROM attempts WHERE runner_id=? AND ended_at IS NULL", (runner_id,),
+    ).fetchone()[0]
+    if reserved >= capacity:
+        return "runner at capacity"
+    return None
+
+
 def open_attempt(db, runner_id, attempt_id):
     attempt = db.execute(
         "SELECT * FROM attempts WHERE id=? AND runner_id=? AND ended_at IS NULL",
@@ -173,7 +248,8 @@ def recover_stopped(db, runner_id, attempt_id, body):
     if attempt["lease_expires_at"] > now:
         raise intake.Conflict("The existing lease is still live")
     row, state = intake.check_current(db, body.item_id, attempt["execution_id"], body.expected_version)
-    details = {"runner_id": runner_id, "reconciliation": body.reconciliation}
+    details = {"runner_id": runner_id, "reconciliation": body.reconciliation,
+               "capacity_release": "lease expired"}
     if state.stopping in {Status.CANCELLED, Status.FAILED}:
         return intake.confirm_stop(db, row, state, attempt_id, details=details)
     if state.status != Status.RUNNING or state.stage != attempt["stage"]:

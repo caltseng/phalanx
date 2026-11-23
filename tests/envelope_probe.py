@@ -616,7 +616,7 @@ class Probe:
             self.violation("Interrupted item did not reach report_review")
             return
         # The worker process dies here and stops renewing. Jump its lease past expiry rather
-        # than waiting the production 90 s.
+        # than waiting the production lease.
         interrupted = time.monotonic()
         claims_before = len(self.metrics.claims)
         with sqlite3.connect(self.path, timeout=30, isolation_level=None) as db:
