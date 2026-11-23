@@ -179,8 +179,6 @@ class Rework(AttemptEvent):
         if ((self.issue == "feedback") != bool(self.findings and self.feedback_ids)
                 or len(self.findings) != len(self.feedback_ids)):
             raise ValueError("Feedback rework names the feedback and its IDs; other issues carry neither")
-        if (self.issue == "merge_conflict") != (self.base_tip is not None):
-            raise ValueError("Only merge-conflict rework carries the target branch tip")
         return self
 
 
