@@ -244,7 +244,9 @@ def steer(db, item_id, execution_id, payload):
     now = timestamp()
     db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
     db.execute(
-        """UPDATE executions SET version=?, updated_at=?, queue_priority=?, queue_affinity=? WHERE id=?""",
+        """UPDATE executions SET version=?, updated_at=?, queue_priority=?,
+               queue_affinity=CASE WHEN queue_affinity='@writer' THEN queue_affinity ELSE ? END
+           WHERE id=?""",  # step5-remove: keeps writer-bound executions out of the old loop
         (row["version"] + 1, now, PRIORITY[request.get("priority", "normal")],
          request.get("runner_affinity") or "", execution_id),
     )
