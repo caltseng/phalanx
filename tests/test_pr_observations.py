@@ -517,17 +517,30 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(execution["state"]["stage"], "pr_revision")
         self.assertIn("Handle the empty list", execution["state"]["findings"])
 
+    def test_draft_conflict_is_revised_on_the_draft_then_promoted(self):
+        self.publish()
+        status, execution = self.rework(self.claim("pr_promotion"), "merge_conflict", draft=True)
+        self.assertEqual(status, 200, execution)
+        self.assertEqual(execution["state"]["stage"], "pr_revision")
+        self.assertIn(f"main at {'c' * 40}", execution["state"]["findings"])
+        status, execution = self.revise(OTHER, draft=True)
+        self.assertEqual(status, 200, execution)
+        self.assertEqual((execution["state"]["stage"], execution["state"]["candidate"]), ("pr_promotion", OTHER))
+        status, execution = self.submit(self.observation(
+            self.claim("pr_promotion"), head=OTHER, gates=self.gates("draft", head=OTHER)))
+        self.assertEqual((status, execution["state"]["stage"]), (200, "pr_validation"), execution)
+
     def test_repeated_rework_without_progress_asks_the_owner(self):
         self.publish()
+        head = HEAD
         for attempt in range(3):
-            status, execution = self.rework(self.claim("pr_promotion"), "merge_conflict")
+            status, execution = self.rework(self.claim("pr_promotion"), "merge_conflict", head=head, draft=True)
             self.assertEqual(status, 200, execution)
             if attempt == 2:
                 break
-            self.assertEqual(execution["state"]["stage"], "development")
-            self.develop()
-            self.assertEqual(self.result(self.claim("self_review"), reviewed_candidate=HEAD)[0], 200)
-            self.assertEqual(self.result(self.claim("pre_pr_validation"), prevalidated_candidate=HEAD)[0], 200)
+            self.assertEqual(execution["state"]["stage"], "pr_revision")
+            head = f"{attempt + 1}" * 40
+            self.assertEqual(self.revise(head, draft=True)[1]["state"]["stage"], "pr_promotion")
         state = execution["state"]
         self.assertEqual((state["stage"], state["status"]), ("pr_promotion", "waiting_for_input"))
         self.assertIn("same findings", state["wait"]["reason"])

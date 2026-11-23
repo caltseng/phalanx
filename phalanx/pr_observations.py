@@ -258,7 +258,8 @@ def submit_rework(db, item_id, execution_id, body, lease_digest):
     pr = PullRequest(url, Revision(pull.head_sha, expected.base_sha), draft=pull.draft)
     return intake.apply(db, row, state, Event.RESULT, details=details, attempt_id=body.attempt_id,
                         outcome=Outcome.CHANGES_REQUIRED,
-                        evidence=Evidence(pr=pr, findings=findings[:16000]))
+                        evidence=Evidence(pr=pr, findings=findings[:16000],
+                                          merge_conflict=body.issue == "merge_conflict"))
 
 
 def check_review_assignment(db, execution_id, expected, pull):

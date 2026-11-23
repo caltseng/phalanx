@@ -281,7 +281,7 @@ def _verified_head(runner, snapshot, url):
 
 
 def publish_revision(runner, snapshot, candidate):
-    """Push a pr_revision commit to the ready PR and return its Revised body.
+    """Push a pr_revision commit to the open PR and return its Revised body.
 
     Lag and lost leases raise RunnerError so the Captain retries the submit with
     the reservation kept; a FAILED result would relaunch the worker. A push that
@@ -522,8 +522,9 @@ def _rework(snapshot, pull, base_ref, issue, feedback=(), *, base_tip=None):
     reasons = {"merge_conflict": f"The PR conflicts with {base_ref}",
                "unexpected_head": f"The PR head {pull.head_sha} is not the candidate",
                "feedback": "The PR has new actionable GitHub feedback"}
-    fixer = "returning it to development" if snapshot["claim"]["execution"]["state"]["stage"] == Stage.PR_PROMOTION \
-        else "sending it to pr_revision"
+    fixer = "returning it to development" if (
+        issue != "merge_conflict" and snapshot["claim"]["execution"]["state"]["stage"] == Stage.PR_PROMOTION
+    ) else "sending it to pr_revision"
     return {"route": "pr-rework", "reason": f"{reasons[issue]}; {fixer}",
             "body": Rework(
                 **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue, base_tip=base_tip,

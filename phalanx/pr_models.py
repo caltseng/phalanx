@@ -146,7 +146,7 @@ class Reconciliation(AttemptEvent):
 
 
 class Revised(AttemptEvent):
-    """A pr_revision commit pushed to the ready PR, with the PR as observed after the push.
+    """A pr_revision commit pushed to the open PR, with the PR as observed after the push.
 
     A pull whose head is not the candidate records a push that lost to a foreign one.
     """
@@ -160,7 +160,8 @@ class Revised(AttemptEvent):
 class Rework(AttemptEvent):
     """Routine PR state that development (before promotion) or pr_revision resolves.
 
-    ``merge_conflict`` and ``feedback`` observe the candidate on the PR;
+    Merge conflicts always go to pr_revision. ``merge_conflict`` and ``feedback``
+    observe the candidate on the PR;
     ``unexpected_head`` observes a head Phalanx did not publish. A conflict
     carries the target branch tip, since GitHub's PR ``base.sha`` can lag it.
     """
