@@ -244,7 +244,7 @@ def submit_rework(db, item_id, execution_id, body, lease_digest):
     if (pull.head_sha == state.candidate) == (body.issue == "unexpected_head"):
         raise intake.Conflict("Only an unexpected head may differ from the candidate")
     if body.issue == "merge_conflict":
-        findings = (f"The PR conflicts with {expected.base_ref} at {expected.base_sha}. Fetch that commit, "
+        findings = (f"The PR conflicts with {expected.base_ref} at {body.base_tip}. Fetch that commit, "
                     "integrate it into the candidate, resolve the conflicts and rerun the checks.")
     elif body.issue == "unexpected_head":
         findings = (f"The PR branch {expected.head_ref} has commits Phalanx did not publish (head "

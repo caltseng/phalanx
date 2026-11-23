@@ -161,13 +161,15 @@ class Rework(AttemptEvent):
     """Routine PR state that development (before promotion) or pr_revision resolves.
 
     ``merge_conflict`` and ``feedback`` observe the candidate on the PR;
-    ``unexpected_head`` observes a head Phalanx did not publish.
+    ``unexpected_head`` observes a head Phalanx did not publish. A conflict
+    carries the target branch tip, since GitHub's PR ``base.sha`` can lag it.
     """
 
     stage: Literal[Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.CHECK_IN]
     expected: ExpectedRefs
     pull: GitHubPull
     issue: Literal["merge_conflict", "unexpected_head", "feedback"]
+    base_tip: SHA | None = None
     findings: list[Text] = Field(default_factory=list, max_length=100)
     feedback_ids: list[Annotated[str, StringConstraints(min_length=1, max_length=200)]] = Field(
         default_factory=list, max_length=100)
@@ -177,6 +179,8 @@ class Rework(AttemptEvent):
         if ((self.issue == "feedback") != bool(self.findings and self.feedback_ids)
                 or len(self.findings) != len(self.feedback_ids)):
             raise ValueError("Feedback rework names the feedback and its IDs; other issues carry neither")
+        if (self.issue == "merge_conflict") != (self.base_tip is not None):
+            raise ValueError("Only merge-conflict rework carries the target branch tip")
         return self
 
 
