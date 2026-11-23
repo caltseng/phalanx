@@ -37,6 +37,11 @@ def preflight(config: dict, token: str | None) -> None:
     if type(config.get("auto_merge", True)) is not bool:
         blockers.append(f"Set auto_merge in the runner configuration to true or false; "
                         f"found {config['auto_merge']!r}")
+    notify = config.get("notify_command")
+    if notify is not None and (not isinstance(notify, list) or not notify
+                               or any(not isinstance(part, str) or not part for part in notify)):
+        blockers.append("Set notify_command in the runner configuration to a nonempty array of "
+                        f"executable and argument strings, or omit it; found {notify!r}")
     if config.get("validation_policy"):
         from pathlib import Path
         from .validation_policy import ValidationPolicyError, load_validation_policy

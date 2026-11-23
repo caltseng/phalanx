@@ -195,8 +195,7 @@ def _promotion(runner, snapshot):
         return _question(snapshot, _REPROMOTE_PROMPT, handoff)
     result = promote(
         github, item_id=claim["item_id"], number=int(number), base_ref=base_ref,
-        revision=Revision(candidate, pull.base_sha), collect=collect,
-        read_base=lambda: github.get_branch_tip(base_ref), claim_current=claim_current,
+        revision=Revision(candidate, pull.base_sha), collect=collect, claim_current=claim_current,
     )
     if result.status == "claim_lost":
         raise RunnerError("Promotion claim changed. Reconcile the reservation before continuing")
@@ -208,8 +207,12 @@ def _promotion(runner, snapshot):
                 or observed.merged or observed.head_ref != _item_branch(claim["item_id"])
                 or observed.base_ref != base_ref):
             return _question(snapshot, result.reason, handoff)
-        # A moved head or target is reobserved; a foreign push is integrated by development.
-        return _retry(snapshot, "The primary PR changed during promotion; reobserving it")
+        if observed.head_sha == candidate and observed.mergeable is False:
+            return _conflict(github, snapshot, observed, base_ref)
+        # A moved head is reobserved, and a foreign push is integrated by development.
+        return _retry(snapshot, f"The primary PR changed during promotion; reobserving it. Observed head "
+                                f"{observed.head_sha}, base {observed.base_sha}; expected head {candidate}, "
+                                f"base {pull.base_sha}")
     gates = result.gates
     if changed:
         return _retry(snapshot, "; ".join(changed[-1].gate.reasons), changed[-1].retry_after_seconds)
@@ -563,7 +566,7 @@ def _published_validation(runner, snapshot):
     execution = claim["execution"]
     assignment = PublishedValidationAssignment(
         claim["item_id"], execution["id"], snapshot["runner_id"], claim["attempt_id"],
-        execution["version"], snapshot["lease"],
+        execution["version"], snapshot["lease"], runner.offer(snapshot),
     )
     result = PublishedValidationRunner(runner.root / "publication", runner.api, _github(snapshot)).run(
         assignment, policy,
@@ -573,7 +576,7 @@ def _published_validation(runner, snapshot):
 
     def finish(record, db):
         if record.get("lease") == snapshot["lease"]:
-            record.clear()
+            runner._settle(record, result)
 
     runner._transaction(finish)
     return result

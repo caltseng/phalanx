@@ -114,6 +114,11 @@ class BridgeAdapter:
         if retract is not None:
             retract(observing)
 
+    def relay_stall(self, threshold: float) -> str | None:
+        """Report a queueing transport whose server has left requests untaken past threshold seconds."""
+        stall = getattr(self.transport, "stall", None)
+        return stall(threshold) if stall is not None else None
+
     def resolve_project(self, mapping: dict) -> None:
         expected = {field: mapping[field] for field in ("host_id", "project_id", "checkout")}
         response = self.transport("resolve_project", expected)

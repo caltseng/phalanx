@@ -32,7 +32,18 @@ SUMMARY = """
            (SELECT attempt.blocker FROM attempts AS attempt
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
            (SELECT attempt.lease_expires_at FROM attempts AS attempt
-            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at,
+           (SELECT attempt.id FROM attempts AS attempt
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS stage_owner,
+           (SELECT json_extract(history.details_json, '$.continued_from') IS NOT NULL
+            FROM transition_history AS history
+            WHERE history.execution_id = execution.id AND history.event = 'claim'
+            ORDER BY history.version DESC LIMIT 1) AS slot_retained,
+           (SELECT json_extract(history.details_json, '$.capacity_release')
+            FROM transition_history AS history
+            WHERE history.execution_id = execution.id AND history.attempt_id IS NOT NULL
+              AND history.event != 'claim'
+            ORDER BY history.version DESC LIMIT 1) AS capacity_release
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -135,6 +146,11 @@ def summary(row, now):
         "recheck_at_ms": row["recheck_at_ms"],
         "worker_reference": row["worker_reference"],
         "worker_url": row["worker_url"],
+        # Who runs the current stage, whether it kept its slot from the previous
+        # stage, and otherwise why the item last gave its runner slot back.
+        "stage_owner": row["stage_owner"],
+        "slot_retained": bool(row["stage_owner"] and row["slot_retained"]),
+        "capacity_release": None if row["stage_owner"] else row["capacity_release"],
         "wait_since": wait_since,
         "wait_age_seconds": (
             max(0, int((now - datetime.fromisoformat(wait_since)).total_seconds()))
