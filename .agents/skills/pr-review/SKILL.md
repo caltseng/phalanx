@@ -21,7 +21,7 @@ Record the head SHA first and review only that commit (`git fetch origin pull/<n
 ## Scope and tests
 
 - Match the PR to its IMPLEMENTATION_PLAN.md row, but expect no plan edits in feature PRs. Flag extra scope and acceptance claimed without evidence. End-to-end validation belongs to the PH-V1 gate, not to each PR.
-- Behavior changes need a few focused tests that would fail without the change. Tests must be deterministic and host-independent, and must not just restate the implementation. Run them with `python -m unittest discover -s tests [-p test_x.py]`.
+- Behavior changes need a few focused tests that would fail without the change. Tests must be deterministic and host-independent, and must not just restate the implementation. Run the relevant modules with `python -m unittest discover -s tests -p test_x.py`, as AGENTS.md describes. The full suite runs in CI.
 
 ## Decide
 

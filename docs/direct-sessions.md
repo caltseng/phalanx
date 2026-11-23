@@ -52,6 +52,8 @@ Each open execution has at most one registered writer, a native worker session. 
 
 One writer keeps its item across stages. The worker posts each stage's result. The server applies the existing transition rules and records a new attempt per stage under the same writer, so "keep working until you really can't anymore" holds without capacity reservations or continuation offers.
 
+As built in step 2, the writer token is bound to the writer registration and fences each stage attempt that registration opens. It ends when the writer ends, is replaced or is withdrawn, or the execution closes. So `replaces` names the open writer's ID, and the server ends that writer's open attempt. A queued execution can take a writer, and the worker runs `phx work next` when it becomes ready. An execution whose attempt a runner holds can't take a writer until that attempt ends.
+
 Review stages (`adversarial_review`) launch a separate reviewer session, registered as a non-writer reviewer bound to the PR head it reviews.
 
 ## Evidence submission
