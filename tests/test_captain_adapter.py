@@ -11,15 +11,20 @@ import unittest
 
 from phalanx.captain_adapter import CommandTransport, MAX_ADAPTER_REPLY_BYTES
 from phalanx.runner_errors import RunnerError
+from timing import WAIT_SECONDS
+
+
+# Long enough for a loaded host to start the probe; the probe's descendant outlives every bound.
+TRANSPORT_SECONDS = 10
+DESCENDANT_SECONDS = 2 * WAIT_SECONDS
 
 
 class CommandTransportTests(unittest.TestCase):
-    # The probe's descendant sleeps 4s; bounds stay below that and leave startup headroom under load.
     def probe(self, directory, *, parent_wait):
         identities = Path(directory) / "owned-probe-processes.json"
         code = (
             "import json, os, subprocess, sys, time; "
-            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(4)']); "
+            f"child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep({DESCENDANT_SECONDS})']); "
             f"open({str(identities)!r}, 'w').write(json.dumps([os.getpid(), child.pid])); "
             "print('{\"accepted\": true}', flush=True); "
             f"time.sleep({parent_wait})"
@@ -42,12 +47,12 @@ class CommandTransportTests(unittest.TestCase):
 
     def test_timeout_does_not_drain_descendant_inherited_stdio(self):
         with TemporaryDirectory() as directory:
-            identities, command = self.probe(directory, parent_wait=10)
+            identities, command = self.probe(directory, parent_wait=DESCENDANT_SECONDS)
             started = time.monotonic()
             try:
                 with self.assertRaisesRegex(RunnerError, "unavailable"):
-                    CommandTransport(command, timeout=2)("launch", {})
-                self.assertLess(time.monotonic() - started, 3.5)
+                    CommandTransport(command, timeout=TRANSPORT_SECONDS)("launch", {})
+                self.assertLess(time.monotonic() - started, WAIT_SECONDS)
                 self.assertTrue(identities.exists(), "Probe did not spawn its inheriting child")
             finally:
                 self.cleanup_probe(identities)
@@ -57,9 +62,9 @@ class CommandTransportTests(unittest.TestCase):
             identities, command = self.probe(directory, parent_wait=0)
             started = time.monotonic()
             try:
-                response = CommandTransport(command, timeout=2)("observe", {})
+                response = CommandTransport(command, timeout=30)("observe", {})
                 self.assertEqual(response, {"accepted": True})
-                self.assertLess(time.monotonic() - started, 3.5)
+                self.assertLess(time.monotonic() - started, WAIT_SECONDS)
             finally:
                 self.cleanup_probe(identities)
 

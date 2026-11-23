@@ -20,7 +20,7 @@ from phalanx.captain_loop import CaptainLoop, command_notifier
 from phalanx.captain_relay import RelayTransport, respond, take_next
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
-from timing import WAIT_SECONDS
+from timing import Clock, WAIT_SECONDS
 
 
 class QueueAPI:
@@ -291,11 +291,17 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             def halt():
                 stop.set()
                 for thread in threads:
-                    thread.join(30)
+                    thread.join(WAIT_SECONDS)
             self.addCleanup(halt)
             return halt
-        loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(RelayTransport(relay, timeout=30, poll=0.01)),
-                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=0.3,
+        # A busy server must never look stalled, so the threshold is long and only the clock reaches it.
+        clock = Clock()
+        patcher = patch("phalanx.captain_relay.time", clock)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        transport = RelayTransport(relay, timeout=WAIT_SECONDS, poll=0.01)
+        loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(transport),
+                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=60,
                            emit=self.events.append, notify=notes.append)
         self.addCleanup(loop.close)
         def first_slot():
@@ -308,6 +314,8 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         packet = self.write_result(first_slot())
         self.native.stopped.add(packet.marker)
         self.api.waiting.append("second")
+        self.spin(loop, lambda: transport.stall(0) is not None)
+        clock.advance(120)
         stalled = "Captain relay has taken no request"
         self.spin(loop, lambda: any(stalled in (blocker or "") for blocker in self.api.blockers)
                   and [note["event"] for note in notes] == ["relay_stalled"])
@@ -1322,18 +1330,18 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertNotIn("lease", archive)
 
     def test_close_does_not_join_transport_descendant_stdio(self):
-        from test_captain_adapter import CommandTransportTests
+        from test_captain_adapter import DESCENDANT_SECONDS, TRANSPORT_SECONDS, CommandTransportTests
         self.api.waiting = []
         self.config["stages"] = ["report_storage"]
         probe = CommandTransportTests()
-        identities, command = probe.probe(self.directory, parent_wait=10)
+        identities, command = probe.probe(self.directory, parent_wait=DESCENDANT_SECONDS)
         loop = self.loop()
-        future = loop.native_pool.submit(CommandTransport(command, timeout=2), "observe", {})
+        future = loop.native_pool.submit(CommandTransport(command, timeout=TRANSPORT_SECONDS), "observe", {})
         try:
             self.spin(loop, identities.exists)
             started = time.monotonic()
             loop.close()
-            self.assertLess(time.monotonic() - started, 2.6)
+            self.assertLess(time.monotonic() - started, WAIT_SECONDS)
             with self.assertRaisesRegex(RunnerError, "unavailable"):
                 future.result()
         finally:

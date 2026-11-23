@@ -83,7 +83,8 @@ class CommandTransport:
             if process is not None and process.poll() is None:
                 process.kill()
                 try:
-                    process.wait(timeout=0.25)
+                    # A killed helper exits promptly, but a loaded host can take seconds to reap it.
+                    process.wait(timeout=5)
                 except subprocess.TimeoutExpired as error:
                     raise RunnerError(f"Bridge adapter {operation} helper did not exit; retain its reservation") from error
         try:

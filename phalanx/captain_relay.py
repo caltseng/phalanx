@@ -67,8 +67,9 @@ class RelayTransport:
         failed = self.unresolved.get(key)
         if failed and time() - failed[0] < RESOLVE_FAILURE_CACHE_SECONDS:
             raise RunnerError(failed[1])
-        now = time()
         with _queue(self.root) as db:
+            # Stamp inside the lock, so no request is created before a poll that could not see it.
+            now = time()
             db.execute("DELETE FROM request WHERE status != 'pending' AND updated_at < ?", (now - RETAIN_SECONDS,))
             # Identical requests waiting for the Captain share one action.
             row = db.execute("SELECT id FROM request WHERE key=? AND status='pending'", (key,)).fetchone()
