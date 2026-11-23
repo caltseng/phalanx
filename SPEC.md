@@ -2,7 +2,7 @@
 
 Phalanx lets its users dispatch work across registered repositories and have local agents carry it through to a Markdown report or pull request. Caleb is the first user, and the design must also serve other people and teams (see [Users and workspaces](#users-and-workspaces)). The backend is the durable source of truth. Agents run locally on machines with access to the relevant checkouts and credentials. The initial design should favor a small API, recoverable execution, and a flexible work-item format.
 
-**Proposed replacement:** [docs/direct-sessions.md](docs/direct-sessions.md) proposes replacing the Captain relay, attended slots, admission gating and runner-local SQLite stores with direct sessions, a GitHub reconciler and shift-based Captains (decisions 68–70). Until it is decided and implemented, this spec describes the running system.
+**Decided replacement:** [docs/direct-sessions.md](docs/direct-sessions.md) replaces the Captain relay, attended slots, admission gating and runner-local SQLite stores with direct sessions, a GitHub reconciler and shift-based Captains (decisions 68–71). Until it is implemented, this spec describes the running system.
 
 ## Work items and repositories
 

@@ -1,6 +1,6 @@
 # Direct sessions: coordination, not a gate
 
-**Status: proposed.** Caleb decided the principle ([decision 68](decisions.md)), the sources of truth with no runner-local database (decision 69) and multiple Captains with periodic successors (decision 70). The design below is the Captain's proposal and isn't decided until Caleb settles the [open decisions](#open-decisions). Nothing here is implemented yet. Until it is, [SPEC.md](../SPEC.md) and [STATE_MACHINE.md](../STATE_MACHINE.md) describe the running system. The [gap check](#appendix-gap-check-of-attended-mode) at the end records what attended mode already does.
+**Status: decided, not implemented.** Caleb decided the principle ([decision 68](decisions.md)), the sources of truth with no runner-local database (decision 69), multiple Captains with periodic successors (decision 70) and the design defaults [D1–D8](#decisions) (decision 71). Nothing here is implemented yet. Until it is, [SPEC.md](../SPEC.md) and [STATE_MACHINE.md](../STATE_MACHINE.md) describe the running system. The [gap check](#appendix-gap-check-of-attended-mode) at the end records what attended mode already does.
 
 ## Principle
 
@@ -34,7 +34,7 @@ Rules:
 | --- | --- | --- |
 | **Server** (HTTP API, `phalanx.sqlite3`) | The only Phalanx state store and the [source of truth](#sources-of-truth) for Phalanx facts: items, executions, stages, attempts, each item's registered writer and launch nonce, evidence and timeline, questions and replies, reports, Captain registrations, heartbeats and handoff notes, flags, and timestamped GitHub observations. It is the only writer to its store. | Launch or stop sessions, read GitHub, or override a GitHub fact. |
 | **Captain chat** (an agent turn in any runtime; one or more at once) | Launching, messaging and stopping worker sessions with its runtime's session tools, registering them through the API, triaging questions, acting on flags and starting its successor at the end of its [shift](#captain-shifts-and-handoff). It reads the [charter](#captain-continuity-and-goal-adherence) and keeps no other local state. | Keep state that a fresh Captain couldn't rebuild from the API, GitHub, runtime session status and the charter. |
-| **Worker session** | The item's work in its worktree and branch, posting progress, evidence and results with its writer token. Git and GitHub writes are [open decision D1](#open-decisions). | Run without a registered writer, or write for another item. |
+| **Worker session** | The item's work in its worktree and branch, posting progress, evidence and results with its writer token. Git and GitHub writes follow [decision D1](#decisions). | Run without a registered writer, or write for another item. |
 | **Reconciler** (background Python on the runner host) | Reading GitHub (PR state, head, checks, reviews, merges by any method, deployments), git (ancestry and merge-base) and the API. It posts observations and flags through the API. | Block work, write the store directly, kill processes by name, launch or stop sessions, or bypass trust. |
 | **GitHub** | The [source of truth](#sources-of-truth) for PR state, heads, checks, reviews, merges and deployments. | |
 
@@ -222,11 +222,13 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
    - merged-to-delivered for all three merge methods;
    - a shift handoff with overlap, and a keeper restart after every Captain is gone.
 
-   Then remove the relay, slots, adoption, runner-only stages and every runner-local SQLite store, and update SPEC.md, STATE_MACHINE.md, the HTML diagram and README.
+   Then remove the relay, slots, adoption, runner-only stages and every runner-local SQLite store, and update AGENTS.md (D1, D3), SPEC.md, STATE_MACHINE.md, the HTML diagram and README.
 
-## Open decisions
+## Decisions
 
-| # | Decision | Recommendation |
+Caleb accepted every default below on 2026-11-23 ([decision 71](decisions.md)). They take effect as the migration steps land. Until then, AGENTS.md's runner-owned GitHub writes and draft-promotion rules still govern the running system, and step 5 updates them.
+
+| # | Decision | Decided |
 | --- | --- | --- |
 | D1 | Should worker sessions push and open PRs themselves? AGENTS.md currently keeps GitHub writes on the runner-owned path. | Yes. Repository rules and branch protection still apply, and Phalanx reconciles one primary PR. |
 | D2 | Who merges `checked_in` items? | GitHub auto-merge, enabled by the writer once the PR is ready (decision 19 already uses it). Accept any merge method. |
