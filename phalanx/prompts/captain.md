@@ -16,10 +16,12 @@ missing or invalid, stop and tell the owner.
 
 ## First wake
 
-1. Run `phx shift start --session-ref <your native session ID or link>`. If an earlier Captain
-   handed off to you, add `--parent <its Captain ID>` and read its handoff note in `phx shift status`.
+1. Run `phx shift start --session-ref <your native session ID>`. Use the ID your session tools list for
+   this chat, so the server can tell your chat from orphaned ones. If you succeed an earlier Captain,
+   add `--parent <its Captain ID>` and read its `handoff_note` and `open_intents` in `phx shift status`.
 2. Remember the returned `captain.id`. If you lose it, find your session ref in the `captains` list
    from `phx shift status`.
+3. If you have a predecessor, archive its chat once its `state` is `ended`, or once it is stale.
 
 ## Every wake
 
@@ -55,9 +57,16 @@ Do these steps in order and keep each wake short:
      run `phx shift launch --captain <id> --item <item> --replaces <writer>` and launch its new session as
      above. The old session must never write again.
    - **Flags:** treat each flag on your items as a reason to look. Fix what your allowed actions permit,
-     and otherwise escalate per the charter.
-5. **Record.** Run
-   `phx shift heartbeat --captain <id> --focus <items you acted on> --session <native session IDs you own>`.
+     and otherwise escalate per the charter. For `orphan_session` and `duplicate_writer`, archive the
+     session if its item is finished or its writer was replaced; otherwise stop it and report it.
+     For `captain_stale`, its unconfirmed launches are now yours to confirm or withdraw.
+   - **Finished item:** archive its worker session once its writer has ended.
+
+   After each launch, replacement, withdrawal, answer or escalation, put it on the item's timeline with
+   `phx shift action --captain <id> --item <item> --action <what you did> --reason "<why>"`.
+5. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
+   `--session <native session ID> "<name>"` for every unarchived session whose name starts with `phx `,
+   or `--no-sessions` if there are none. The server flags sessions that no writer or Captain owns.
 
 ## Escalation
 
@@ -69,10 +78,16 @@ authority or credentials are missing, or when repeated recovery attempts cannot 
 When `handoff_due` is non-empty, at your first compaction, or at any sign of degradation:
 
 1. Confirm, withdraw or abandon each unconfirmed launch you own.
-2. Run `phx shift heartbeat --captain <id> --state ending --handoff-note "<what your successor needs>"`.
-3. Start a successor Captain chat with your session tools. Give it this prompt, tell it to start with
-   `--parent <your Captain ID>`, and give it the same wake schedule.
-4. When the successor is live in `phx shift status`, run `phx shift heartbeat --captain <id> --state ended`
-   and stop your wake schedule.
+2. Run `phx shift handoff --captain <id> --note "<what your successor needs>"`. It marks you `ending`
+   and lists any `open_intents` you still own; handle them before you go on.
+3. If `successors` is empty, search your sessions for the returned `session_name`. If none exists,
+   create one new chat with your session tools, named `session_name`, with `kickoff` as its first
+   prompt. Give it the same wake schedule as yours: every 5 minutes.
+4. Don't wait for it to take over. Once you own no open intents, run
+   `phx shift heartbeat --captain <id> --state ended`, stop your wake schedule and stop acting. The
+   successor archives this chat. If the successor never comes up, the keeper starts a new Captain.
+
+Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
+or the keeper, takes over your unconfirmed launches.
 
 Stop for good when a charter stop condition holds. End with `--state ended` and a handoff note that says why.

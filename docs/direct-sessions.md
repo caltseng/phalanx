@@ -135,6 +135,14 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   3. It doesn't wait for the successor to take over. It finishes or explicitly abandons each of its own intents, which the server records, so they become actionable by any Captain.
   4. It sets `ended` and stops acting.
 - **Cleanup.** The successor confirms the predecessor is `ended` with no owned intents, then archives the predecessor's chat. A predecessor still `ending` after 30 min is treated as dead (below).
+
+  As built in step 4:
+  - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
+  - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
+  - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
+  - The record step reports every runtime session named `phx …` with its ID and name. The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` from these reports by matching name words to open writers' item ID prefix or nonce. A pending successor's name is exempt while its parent is `ending`.
+  - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
+  - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
 - **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`. Its unconfirmed intents become actionable by any live Captain, which resolves them by nonce. If it had already launched a successor, that successor continues. If not, [No live Captain](#no-live-captain) applies.
 
 ### No live Captain
