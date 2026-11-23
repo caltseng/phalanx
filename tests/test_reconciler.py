@@ -166,9 +166,9 @@ def git(path, *args):
                           cwd=path, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def pull_request(head, branch, *, state="open", draft=False):
-    return PullRequest(7, "PR_7", "https://github.com/example/repo/pull/7", state, draft, False, head,
-                       branch, "example", "example/repo", BASE, "main", "example/repo", None, True)
+def pull_request(head, branch, *, state="open", draft=False, merged=False, mergeable=True):
+    return PullRequest(7, "PR_7", "https://github.com/example/repo/pull/7", state, draft, merged, head,
+                       branch, "example", "example/repo", BASE, "main", "example/repo", None, mergeable)
 
 
 class FakeAPI:
@@ -201,8 +201,10 @@ class FakeAPI:
 
 
 class FakeGitHub:
-    def __init__(self, pulls=(), error=None, feedback_error=None, parents=(), on_branch=False):
+    def __init__(self, pulls=(), error=None, feedback_error=None, parents=(), on_branch=False, listed=None):
         self.pulls = pulls
+        # What the list endpoint returns, if it differs from the exact PRs.
+        self.listed = pulls if listed is None else listed
         self.error = error
         self.feedback_error = feedback_error
         self.parents = parents
@@ -217,10 +219,10 @@ class FakeGitHub:
     def get_pull_request(self, number):
         if self.error:
             raise self.error
-        return self.pulls[0]
+        return next(pull for pull in self.pulls if pull.number == number)
 
     def list_matching_pull_requests(self, *, head_owner, head):
-        return tuple(pull for pull in self.pulls if pull.head_ref == head)
+        return tuple(pull for pull in self.listed if pull.head_ref == head)
 
     def get_actionable_feedback(self, number):
         if self.feedback_error:
@@ -376,6 +378,18 @@ class ReconcilerPassTest(unittest.TestCase):
         self.assertEqual(result["errors"], [])
         self.assertEqual([(item, body.get("merged_branch", False), "pr" in body) for item, body in api.posts],
                          [(merged, True, False), (ahead, False, False), (missing, False, False)])
+
+    def test_a_merged_pr_found_by_branch_is_observed_exactly(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        branch = item_branch("one")
+        # The list endpoint leaves merged and mergeable unset.
+        self.github["repo"] = FakeGitHub(
+            [pull_request(HEAD, branch, state="closed", merged=True, mergeable=None)],
+            listed=[pull_request(HEAD, branch, state="closed", merged=None, mergeable=None)])
+        api = FakeAPI([execution("one")], {"repo": "https://github.com/example/repo"})
+        self.assertEqual(self.reconciler(api).run_pass()["errors"], [])
+        (_, body), = api.posts
+        self.assertEqual((body["pr"]["state"], body["pr"]["merged"]), ("closed", True))
 
     def test_a_checkout_of_another_repository_is_refused(self):
         checkout, _ = self.repository({})

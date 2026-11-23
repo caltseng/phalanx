@@ -34,6 +34,7 @@ The Captain's commands are `python -m phalanx shift ...`. They need `PHALANX_RUN
   "worktrees": "C:\\phalanx\\direct\\worktrees",
   "session_workspace": "<runtime workspace ID for the worktrees folder>",
   "work_command": "python -m phalanx work",
+  "shift_command": "python -m phalanx shift --config C:\\phalanx\\shift.json",
   "repositories": {
     "phalanx-pilot-py": {"checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py", "base_branch": "main"}
   }
@@ -43,7 +44,7 @@ The Captain's commands are `python -m phalanx shift ...`. They need `PHALANX_RUN
 - `repositories` uses the runner configuration's mapping.
 - `worktrees` is the root for item worktrees, and must be separate from any runner's.
 - `work_command` is how a worker session runs `phx work` from its worktree. The default is `python -m phalanx work`.
-- `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
+- `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.- `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
 
 ### Charter
 
@@ -68,7 +69,7 @@ max_wakes = 48
 
 | Command | Does |
 | --- | --- |
-| `shift prompt captain\|keeper` | Prints the Captain prompt (the fixed wake loop) or the keeper prompt. Needs no config |
+| `shift prompt captain\|keeper\|worker` | Prints the Captain prompt (the fixed wake loop), the keeper prompt, or the worker prompt template, which a Captain quotes when a writer's kickoff predates a change. Needs no config |
 | `shift charter` | Validates the charter and prints it with its revision |
 | `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
 | `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session ID NAME]... [--no-sessions] [--handoff-note]` | Re-reads the charter and heartbeats. `--session` reports each of the runtime's `phx ` sessions, and the server flags any that no writer or Captain owns. Omitted fields keep their last value. Prints `shift.handoff_due` once a shift bound is reached |
@@ -90,7 +91,8 @@ max_wakes = 48
    - kickoff `prompt` set to `kickoff`, which names the item worktree, with mode `autopilot`.
 
    It confirms the session with `shift writer --session-id <session ID> --session-url ghapp://sessions/<session ID>`. `list_sessions_and_chats` finds a lost launch by its name, which holds the nonce.
-4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper --config <shift config>` and follow it." The keeper exits when a live Captain exists. Otherwise it becomes the Captain and gives itself the 5-minute wake automation. The app keeps each exited keeper session, so archive them now and then.
+4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." The keeper exits when a live Captain exists, when the most recent Captain ended less than 10 minutes ago with no successor registered yet, or when it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run can't attach a session automation to itself or create a chat, so the keeper calls `create_session` with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`, and then exits. The app keeps each exited keeper session, so archive them now and then.
+5. The app may let only a session's creator archive it. A successor Captain can't archive its predecessor's chat or the worker sessions its predecessor launched, so it asks the owner to archive those.
 
 A Captain's shift ends when the charter's `[shift]` bounds are reached, at its first compaction or when it degrades. It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, and heartbeats `--state ended` without waiting for the successor. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches.
 
