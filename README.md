@@ -497,6 +497,30 @@ requirements from a separate operator-owned runner file. It is not yet wired
 into the attended CLI; preview adapters and draft-only recovery remain explicit
 integration requirements.
 
+### Run the GitHub reconciler
+
+The reconciler reads GitHub and git for every open item whose repository the
+runner configuration maps, and posts timestamped observations through the API.
+It holds no lease or slot, never changes an item's state and never blocks work.
+The server derives flags from the latest observation of each open execution:
+`head_drift`, `pr_closed`, `merge_conflict`, `checks_failed`, `review_feedback`,
+`unpublished_branch_merged` (item branch reachable from its base with no PR),
+`pre_pr_checks_failed` and `reconciler_stale` (no heartbeat for 15 minutes).
+
+```powershell
+python -m phalanx reconcile --config runner.json --state C:\phalanx-reconciler
+```
+
+It needs `PHALANX_RUNNER_TOKEN` and `PHALANX_GITHUB_TOKEN`, and reuses the
+runner configuration's `base_url`, `runner_id`, `repositories` (checkout and
+`base_branch`), optional `validation_policy` and optional `notify_command`.
+With a validation policy, it reports each open PR's configured GitHub checks
+and runs the trusted local checks once per PR head, one at a time, in a scratch
+worktree under `--state`. Failures raise a flag; they never gate the item. A
+checkout whose configured `origin` URL isn't the registered remote is refused.
+Owner-notify flags are sent once each to `notify_command`. Each pass prints one
+JSON line; `--once` runs a single pass and exits nonzero on any error.
+
 ### Reconcile an attended reservation
 
 From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.

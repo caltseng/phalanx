@@ -113,7 +113,7 @@ body = candidate_local.pre_validate(policy.local_checks)
 # Journal this exact body before the existing result submission.
 ```
 
-`policy.local_checks` contains the existing `candidate_local.LocalCheck` and
+`policy.local_checks` contains the existing `local_checks.LocalCheck` and
 `validation.PreCheck` types. `CandidateLocal.pre_validate` binds results to
 the claimed candidate only after verifying the clean worktree HEAD, records
 the affected check's name, disposition, reason and authorization, and returns
@@ -124,7 +124,7 @@ pass. The loader itself neither runs checks nor fabricates revision evidence.
 
 `policy.draft_checks` contains `validation.RequiredCheck` tuples for the draft
 collector/promotion caller. `policy.ready` is the existing
-`published_validation_stage.PublishedValidationPolicy`. All source-app,
+`validation_policy.PublishedValidationPolicy`. All source-app,
 head/test-merge revision and execution requirements survive conversion. A local
 bypass does **not** remove draft checks, ready CI, previews, or check-in gates.
 Carry the complete configured requirements into the existing exact-PR,

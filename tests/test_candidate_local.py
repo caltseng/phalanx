@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from phalanx.attended import RunnerError
-from phalanx.candidate_local import _FAILURE, CandidateLocal, LocalCheck, _kill_tree, _run_check
+from phalanx.candidate_local import CandidateLocal
+from phalanx.local_checks import _FAILURE, LocalCheck, kill_tree, run_check
 from phalanx.handoff import Outcome, WorkerResult
 from phalanx.intake_models import Result
 from phalanx.validation import PreCheck, PreOutcome
@@ -157,9 +158,9 @@ class CandidateLocalTest(unittest.TestCase):
         timed_out = []
         def run_once(check, path):
             if not timed_out:
-                timed_out.append(_run_check(check, path))
+                timed_out.append(run_check(check, path))
             return timed_out[0]
-        patcher = patch("phalanx.candidate_local._run_check", run_once)
+        patcher = patch("phalanx.candidate_local.run_check", run_once)
         patcher.start()
         self.addCleanup(patcher.stop)
         for retries, delay in ((0, 60), (1, 120)):
@@ -201,8 +202,8 @@ class CandidateLocalTest(unittest.TestCase):
     def test_process_group_kill_tolerates_permission_error(self):
         process = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"],
                                    start_new_session=True)
-        with patch("phalanx.candidate_local.os.killpg", side_effect=PermissionError):
-            _kill_tree(process)
+        with patch("phalanx.local_checks.os.killpg", side_effect=PermissionError):
+            kill_tree(process)
         self.assertIsNotNone(process.returncode)
 
     def test_stopping_claim_blocks_commands(self):

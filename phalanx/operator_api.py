@@ -311,10 +311,24 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 JOIN transition_history AS adopted
                     ON adopted.execution_id = adoption.execution_id AND adopted.version = adoption.version
                 WHERE adoption.execution_id = ?
+                UNION ALL
+                SELECT observation.version, 'github_observation', observation.observed_at, NULL,
+                       json_extract(observed.state_json, '$.stage'),
+                       json_extract(observed.state_json, '$.status'),
+                       NULL, coalesce(
+                           'Observed ' || json_extract(observation.observation_json, '$.pr.url')
+                               || ' ' || json_extract(observation.observation_json, '$.pr.state')
+                               || ' at ' || observation.head_sha,
+                           'Observed the item branch with no PR'), NULL
+                FROM github_observations AS observation
+                JOIN transition_history AS observed
+                    ON observed.execution_id = observation.execution_id
+                   AND observed.version = observation.version
+                WHERE observation.execution_id = ?
             )
             SELECT * FROM events {boundary}
             ORDER BY version DESC, created_at DESC LIMIT ?""",
-            (execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),
