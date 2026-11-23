@@ -8,6 +8,7 @@
   const TICK_MS = 5000;
   const STALE_MS = 45000;
   const READ_TIMEOUT_MS = 12000;
+  const CHANGED_MS = 2400;
   const THEME_KEY = "phalanx-board-theme";
   const STAGES = ["development", "pr_creation", "self_review", "pre_pr_validation", "pr_promotion",
     "pr_validation", "adversarial_review", "pr_reconciliation", "pr_revision", "check_in",
@@ -142,7 +143,7 @@
     const slot = () => ({ rows: [], cursors: [null], next: null, updated: 0, failed: false, request: null });
     const state = {
       open: slot(), closed: slot(), flags: slot(), captains: slot(),
-      expanded: null, details: new Map(), flagGroups: new Set(), seen: new Map(), changed: new Set()
+      expanded: null, expandedAt: 0, details: new Map(), flagGroups: new Set(), seen: new Map(), changed: new Map()
     };
     const enabled = { open: true, closed: true, flags: Boolean(source.flags), captains: Boolean(source.captains) };
     let disposed = false;
@@ -173,8 +174,25 @@
       try { choice = localStorage.getItem(THEME_KEY) || "auto"; } catch { /* Ignore. */ }
       const next = { auto: "dark", dark: "light", light: "auto" }[choice] || "auto";
       try { localStorage.setItem(THEME_KEY, next); } catch { /* Ignore. */ }
-      applyTheme();
+      if (!document.startViewTransition || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        applyTheme();
+        return;
+      }
+      // The stylesheet spills the new theme outward from the toggle.
+      const box = theme.getBoundingClientRect();
+      const x = box.left + box.width / 2;
+      const y = box.top + box.height / 2;
+      const style = document.documentElement.style;
+      style.setProperty("--ink-x", x + "px");
+      style.setProperty("--ink-y", y + "px");
+      style.setProperty("--ink-r", Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y)) + "px");
+      document.startViewTransition(applyTheme);
     });
+
+    // Looping animations start at minus the page clock so rebuilt rows stay in step.
+    function syncClock(node) {
+      node.style.setProperty("--clock", -Math.round(performance.now()) + "ms");
+    }
 
     async function guarded(target, read) {
       if (disposed || target.request) return undefined;
@@ -249,7 +267,7 @@
       for (const item of items) {
         const signature = [item.version, item.stage, item.status, item.outcome].join("|");
         const previous = state.seen.get(item.id);
-        if (previous !== undefined && previous !== signature) state.changed.add(item.id);
+        if (previous !== undefined && previous !== signature) state.changed.set(item.id, Date.now());
         state.seen.set(item.id, signature);
       }
     }
@@ -271,6 +289,7 @@
         state.details.delete(previous);
       }
       state.expanded = previous === id ? null : id;
+      state.expandedAt = Date.now();
       render();
       if (state.expanded) loadDetail(state.expanded);
     }
@@ -386,8 +405,11 @@
         if (!event.target.closest("a, button")) toggle(item.id);
       });
       title.addEventListener("click", () => toggle(item.id));
+      const changedAt = state.changed.get(item.id);
       const row = h("li", { class: "row t-" + itemTone + (expanded ? " open" : "") +
-        (state.changed.has(item.id) ? " changed" : ""), "data-id": item.id }, line);
+        (changedAt != null ? " changed" : ""), "data-id": item.id }, line);
+      // A rebuilt row resumes its change highlight instead of restarting it.
+      if (changedAt != null) row.style.setProperty("--since", changedAt - now + "ms");
       if (expanded) row.append(renderDetail(item, flags, now));
       return row;
     }
@@ -426,6 +448,7 @@
     function renderDetail(row, flags, now) {
       const detail = state.details.get(row.id);
       const box = h("div", { class: "detail", id: "detail-" + row.id, role: "region", "aria-label": "Details: " + row.title });
+      box.style.setProperty("--since", state.expandedAt - now + "ms");
       const data = detail?.data;
       if (!data) {
         box.append(h("p", { class: "faint", text: detail?.failed ? "Could not load details. Refresh to retry." : "Loading details…" }));
@@ -585,7 +608,7 @@
         glyph(health, word),
         h("span", { class: "name" }, h("strong", { text: "Captain " + short(captain.id) }),
           h("span", { class: "faint", text: " " + word })),
-        h("span", { class: "stat", title: "Heartbeat " + stamp(captain.heartbeatAt) }, "♥ ", ago(captain.heartbeatAt, now)),
+        h("span", { class: "stat", title: "Heartbeat " + stamp(captain.heartbeatAt) }, h("span", { class: "beat", text: "♥" }), " ", ago(captain.heartbeatAt, now)),
         h("span", { class: "stat", text: "wakes " + (captain.wakeCount ?? 0) }),
         h("span", { class: "stat", title: captain.charterRevision || "", text: captain.charterRevision ? "charter " + captain.charterRevision.slice(0, 7) : "no charter" }),
         h("span", { class: "reason", title: [focus.join(", "), captain.handoffNote].filter(Boolean).join("\n"),
@@ -612,6 +635,7 @@
     function renderHealth() {
       const fresh = freshness();
       health.className = "health h-" + fresh.kind;
+      syncClock(health);
       health.replaceChildren(h("span", { class: "dot", "aria-hidden": "true" }), h("strong", { text: fresh.text }),
         h("span", { class: "faint", title: fresh.oldest ? "Oldest displayed update " + stamp(fresh.oldest) : "", text: fresh.note }));
       const message = fresh.kind === "live" ? "Connected." : fresh.kind === "down"
@@ -626,6 +650,7 @@
     function render() {
       if (disposed) return;
       const now = Date.now();
+      for (const [id, at] of state.changed) if (now - at >= CHANGED_MS) state.changed.delete(id);
       const focused = root.contains(document.activeElement) ? document.activeElement.dataset?.focus : null;
       const index = flagIndex();
       const titles = new Map();
@@ -684,6 +709,7 @@
       if (state.closed.failed) closedSection.append(h("p", { class: "warn", text: "Closed work update failed. Showing the previous contents." }));
       sections.push(closedSection);
 
+      syncClock(body);
       body.replaceChildren(...sections);
       counts.replaceChildren(
         h("li", { class: needs.length + looseNotify.length ? "t-attn" : "" }, h("strong", { text: String(needs.length + looseNotify.length) }), " needs you"),
@@ -692,7 +718,6 @@
         enabled.flags ? h("li", { class: state.flags.rows.length ? "t-wait" : "" }, h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
         enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
       renderHealth();
-      state.changed.clear();
       if (focused) {
         const target = root.querySelector('[data-focus="' + CSS.escape(focused) + '"]');
         if (target && document.activeElement !== target) target.focus({ preventScroll: true });
