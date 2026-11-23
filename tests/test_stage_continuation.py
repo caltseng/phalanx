@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from secrets import token_urlsafe
 from tempfile import TemporaryDirectory
@@ -6,10 +7,11 @@ from unittest.mock import patch
 
 from pydantic import TypeAdapter
 
-from phalanx import dispatch, finalization, intake, pr_models, pr_observations, waits
+from phalanx import dispatch, finalization, intake, operator_api, pr_models, pr_observations, waits
 from phalanx.dispatch_api import Claim, DispatchSettings, ReconciledStop
 from phalanx.intake_models import AttemptEvent, Cancel, ExternalWait, Intake, Rerun, Result
 from phalanx.store import connect, migrate, write_transaction
+from phalanx.transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES
 from phalanx.workspaces import _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -25,6 +27,8 @@ RESULTS = {"development": {"candidate": HEAD}, "self_review": {"reviewed_candida
            "pre_pr_validation": {"prevalidated_candidate": HEAD}}
 OBSERVATION = TypeAdapter(pr_models.Observation)
 GATES = {"pr_promotion": "draft", "pr_validation": "ready", "pr_reconciliation": "ready"}
+AGENT = sorted(set(ALL) - set(map(str, RUNNER_ONLY_STAGES)))
+CAPACITIES = (1, 5, 10)
 
 
 def offer(stages=ALL):
@@ -139,8 +143,9 @@ class StageContinuationTest(ServerFixture, unittest.TestCase):
             self.assertEqual(handed["execution"]["state"]["stage"], "pr_creation")
             self.assertNotEqual(handed["attempt_id"], assignment["attempt_id"])
             self.assertEqual(self.reserved(), 1)
+            # The continued pr_creation is runner-only, so the agent slot still takes the older item.
+            self.assertEqual(self.claim()[0]["item_id"], older["id"])
             self.assertEqual(self.claim()[0]["status"], "at_capacity")
-            self.assertEqual(self.state(older["id"])["status"], "queued")
             with write_transaction(self.path) as db:
                 with self.assertRaisesRegex(intake.Conflict, "no longer reserved"):
                     dispatch.renew(db, "local", assignment["attempt_id"], intake.digest(lease))
@@ -292,7 +297,9 @@ class StageContinuationTest(ServerFixture, unittest.TestCase):
             assignment, lease = self.claim()
             handed = self.finish(assignment, lease, offer())["continuation"]
             clock.now = handed["lease_expires_at"]
-            self.assertEqual(self.claim()[0]["status"], "at_capacity")
+            # The expired attempt stays reserved until recovery; nothing else is eligible meanwhile.
+            self.assertEqual(self.claim()[0]["status"], "no_eligible_work")
+            self.assertEqual(self.reserved(), 1)
             with write_transaction(self.path) as db:
                 recovered = dispatch.recover_stopped(db, "local", handed["attempt_id"], ReconciledStop(
                     item_id=item["id"], expected_version=handed["execution"]["version"],
@@ -342,6 +349,104 @@ class StageContinuationTest(ServerFixture, unittest.TestCase):
         self.assertIn(backlog["id"], admitted)
         self.assertTrue(all(count == 1 for count in admitted.values()))
         self.assertTrue(all(status == "completed" for _, status in finished))
+
+    def queue_at(self, stage, at, **fields):
+        """Create an item, pass it through earlier stages, and leave `stage` queued since `at`."""
+        item = self.create(**fields)
+        while self.state(item["id"])["stage"] != stage:
+            assignment, lease = self.claim("driver", [name for name in ALL if name != stage])
+            self.assertEqual(assignment["item_id"], item["id"])
+            self.finish(assignment, lease)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE executions SET ready_since=? WHERE item_id=?", (at * 1000, item["id"]))
+        return item
+
+    def fill_agents(self, capacity):
+        with write_transaction(self.path) as db:
+            dispatch.set_capacity(db, "local", capacity)
+        for _ in range(capacity + 1):
+            self.create(priority="urgent")
+        for _ in range(capacity):
+            self.assertEqual(self.claim(stages=AGENT)[0]["execution"]["state"]["stage"], "development")
+        self.assertEqual(self.claim(stages=AGENT)[0]["status"], "at_capacity")
+
+    def test_runner_only_stage_is_admitted_while_agents_fill_capacity(self):
+        for capacity in CAPACITIES:
+            with self.subTest(capacity=capacity), Clock(NOW):
+                self.setUp()
+                promotions = [self.queue_at("pr_promotion", NOW - 100 + n) for n in range(RUNNER_ONLY_SLOTS + 1)]
+                self.fill_agents(capacity)
+                self.assertIsNone(self.board(promotions[0]["id"])["wait_reason"])
+                admitted_leases = [self.claim() for _ in range(RUNNER_ONLY_SLOTS)]
+                admitted = [assignment for assignment, _ in admitted_leases]
+                self.assertEqual([(row["item_id"], row["execution"]["state"]["stage"]) for row in admitted],
+                                 [(item["id"], "pr_promotion") for item in promotions[:RUNNER_ONLY_SLOTS]])
+                # The lane is bounded, and it never lends room to agent stages.
+                self.assertEqual(self.claim()[0]["status"], "at_capacity")
+                self.assertEqual(self.claim(stages=AGENT)[0]["status"], "at_capacity")
+                self.assertEqual(self.reserved(), capacity + RUNNER_ONLY_SLOTS)
+                self.assertEqual(self.state(promotions[-1]["id"])["status"], "queued")
+                # A runner-only stage that can't be admitted shows why on the board.
+                self.assertEqual(self.board(promotions[-1]["id"])["wait_reason"],
+                                 "Waiting for runner-only lane capacity")
+                self.finish(*admitted_leases[0])
+                self.assertIsNone(self.board(promotions[-1]["id"])["wait_reason"])
+
+    def board(self, item_id):
+        with connect(self.path) as db:
+            row = db.execute(f"{operator_api.SUMMARY} WHERE execution.item_id=?", (item_id,)).fetchone()
+        return operator_api.summary(row, datetime.now(UTC))
+
+    def test_runner_only_stages_keep_rank_order_under_sustained_agent_intake(self):
+        for capacity in CAPACITIES:
+            with self.subTest(capacity=capacity), Clock(NOW) as clock:
+                self.setUp()
+                promotions = [self.queue_at("pr_promotion", NOW - 100 + n)
+                              for n in range(2 * RUNNER_ONLY_SLOTS + 1)]
+                self.fill_agents(capacity)
+                first = []
+                for tick in range(20):
+                    self.create(priority="urgent", at=clock.now)
+                    lane = []
+                    while (assignment := self.claim())[0]["status"] == "claimed":
+                        self.assertIn(assignment[0]["execution"]["state"]["stage"], RUNNER_ONLY_STAGES)
+                        lane.append(assignment)
+                    self.assertTrue(lane)
+                    self.assertLessEqual(len(lane), RUNNER_ONLY_SLOTS)
+                    for assignment, lease in lane:
+                        if assignment["execution"]["state"]["stage"] == "pr_promotion":
+                            first.append(assignment["item_id"])
+                        self.finish(assignment, lease)
+                    clock.now += 10
+                    if len(first) == len(promotions):
+                        break
+                self.assertEqual(first, [item["id"] for item in promotions])
+                self.assertEqual(self.reserved(), capacity)
+
+    def test_agent_stages_are_admitted_under_a_runner_only_stream(self):
+        for capacity in CAPACITIES:
+            with self.subTest(capacity=capacity), Clock(NOW) as clock:
+                self.setUp()
+                with write_transaction(self.path) as db:
+                    dispatch.set_capacity(db, "local", capacity)
+                for n in range(3 * RUNNER_ONLY_SLOTS):
+                    self.queue_at("pr_promotion", NOW - 1000 + n, priority="urgent")
+                agents = [self.create(at=NOW) for _ in range(capacity)]
+                admitted = []
+                for tick in range(3):
+                    # Worker-first, as the Captain loop's general slots claim.
+                    while (assignment := self.claim(stages=AGENT)[0])["status"] == "claimed":
+                        admitted.append(assignment["item_id"])
+                    self.assertEqual(len(admitted), capacity)
+                    lane = []
+                    while (assignment := self.claim())[0]["status"] == "claimed":
+                        lane.append(assignment)
+                    self.assertEqual(len(lane), RUNNER_ONLY_SLOTS)
+                    for assignment, lease in lane:
+                        self.finish(assignment, lease)
+                    clock.now += 10
+                self.assertCountEqual(admitted, [item["id"] for item in agents])
+                self.assertEqual(self.reserved(), capacity)
 
 
 if __name__ == "__main__":

@@ -10,11 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from .auth import authenticate_board_read
+from .dispatch import DEFAULT_CAPACITY
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
+from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate_board_read)])
 Limit = Annotated[int, Query(ge=1, le=100)]
@@ -43,7 +45,11 @@ SUMMARY = """
             FROM transition_history AS history
             WHERE history.execution_id = execution.id AND history.attempt_id IS NOT NULL
               AND history.event != 'claim'
-            ORDER BY history.version DESC LIMIT 1) AS capacity_release
+            ORDER BY history.version DESC LIMIT 1) AS capacity_release,
+           (SELECT coalesce(min(load.open >= coalesce(cap.capacity, {default}) + {lane}), 0)
+            FROM (SELECT runner_id, count(*) AS open FROM attempts WHERE ended_at IS NULL
+                  GROUP BY runner_id) AS load
+            LEFT JOIN runner_limits AS cap ON cap.runner_id = load.runner_id) AS lanes_full
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -53,7 +59,7 @@ SUMMARY = """
         SELECT attempt.id FROM attempts AS attempt WHERE attempt.execution_id = execution.id
         ORDER BY attempt.started_at DESC, attempt.id DESC LIMIT 1
     )
-"""
+""".format(default=DEFAULT_CAPACITY, lane=RUNNER_ONLY_SLOTS)
 
 
 def encode_cursor(scope, key):
@@ -129,6 +135,12 @@ def summary(row, now):
         at = datetime.fromtimestamp(expires, UTC).isoformat()
         wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
                 "trigger": "The runner recovers the expired attempt on its next pass"}
+    retrying = row["retry_at"] is not None and row["retry_at"] > now.timestamp() * 1000
+    if (row["lanes_full"] and not wait and not retrying and row["status"] == "queued"
+            and row["stage"] in RUNNER_ONLY_STAGES):
+        # Every active runner holds its agent capacity and its runner-only lane.
+        wait = {"reason": "Waiting for runner-only lane capacity",
+                "trigger": "A runner finishes a stage and frees a slot"}
     return {
         "id": row["id"],
         "item_id": row["item_id"],

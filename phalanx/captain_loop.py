@@ -21,6 +21,7 @@ from .captain_adapter import (BridgeAdapter, CommandTransport, LaunchNotDelivere
                               RequestRetracted)
 from .captain_relay import RelayTransport
 from .runner_preflight import preflight
+from .transitions import RUNNER_ONLY_SLOTS
 from .workspaces import _file_lock, _item_branch
 
 
@@ -70,16 +71,18 @@ class CaptainLoop:
         self.expired, self.unmatched = {}, []
         self.last_unmatched = None
         self.rotation = 0
-        self.admission, self.cursors = {}, {}
+        self.cursors = {}
         self.discovery_future = None
         self.discovery_due = 0
         self.reported_discovery, self.blocked_mappings = None, {}
         self.recheck_future = None
         self.recheck_due = 0
         try:
-            self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
+            capabilities = set(self._capabilities())
         except RunnerError:
-            self.rechecks = False
+            capabilities = set()
+        self.rechecks = bool({"pr_promotion", "pr_validation"} & capabilities)
+        self.runner_only = bool(capabilities - set(STAGES))
         self.observing = set()
         self.blocked: dict[int, str] = {}
         # Leases left to expire because their exact writer stopped without a result.
@@ -262,12 +265,12 @@ class CaptainLoop:
             "runner": [stage for stage in available if stage not in STAGES],
             "worker": [stage for stage in available if stage in STAGES],
         }
-        first = self.admission.get(slot, "runner")
-        second = "worker" if first == "runner" else "runner"
-        self.admission[slot] = second
+        # Slots up to capacity prefer agent work and take runner-only work when none is eligible.
+        # Slots above it are the small runner-only lane, so those stages never wait behind workers.
+        lane = slot > self.runner.capacity
         result = None
         blocked = []
-        for mode in (first, second):
+        for mode in ("runner",) if lane else ("worker", "runner"):
             stages = groups[mode]
             if not stages:
                 continue
@@ -289,7 +292,8 @@ class CaptainLoop:
             runner = AttendedRunner(self.root, {**self.config, "repositories": mappings}, self.api, slot=slot)
             # Keep this slot through the item's next runnable stages. Worker stages
             # need verified runtime mappings, so skip them while any mapping is blocked.
-            continuing = [stage for stage in available if stage not in STAGES or not self.blocked_mappings]
+            continuing = [stage for stage in available if stage not in STAGES
+                          or not (lane or self.blocked_mappings)]
             result = runner.prepare(stages=stages, continue_stages=continuing)
             if result["status"] != "no_eligible_work":
                 return runner, result
@@ -597,7 +601,8 @@ class CaptainLoop:
         self.last_unmatched = self.unmatched.copy()
         self._report_mappings()
         # Each project check is a Captain request; run it only for a free slot or a pending launch.
-        free = self.recovery_ready and len(records) + len(self.unmatched) < self.runner.capacity
+        general = [slot for slot in records if slot <= self.runner.capacity]
+        free = self.recovery_ready and len(general) + len(self.unmatched) < self.runner.capacity
         launching = any(not any(field in record for field in (*_LAUNCH_EFFECTS, "cancel_stop"))
                         for record in records.values())
         if (free or launching) and now >= self.discovery_due and (
@@ -645,12 +650,23 @@ class CaptainLoop:
                     self.observe_due[slot] = now + self.poll_seconds
         if self.recovery_ready:
             occupied = set(records) | set(self.work)
-            room = max(0, self.runner.capacity - len(occupied) - len(self.unmatched))
-            for slot in range(1, self.runner.capacity + 1):
-                if room and slot not in occupied and now >= self.work_due.get(slot, 0):
-                    self.work[slot] = self.slot_pool.submit(self._prepare, slot, self.discovery_future)
-                    self.work_due[slot] = now + self.poll_seconds
+            capacity = self.runner.capacity
+            lane = range(capacity + 1, capacity + RUNNER_ONLY_SLOTS + 1) if self.runner_only else ()
+            room = max(0, capacity - len(occupied - set(lane)) - len(self.unmatched))
+            # Unmatched attempts may be runner-only too; the server's count stays authoritative.
+            lane_room = min(len(set(lane) - occupied),
+                            max(0, capacity + RUNNER_ONLY_SLOTS - len(occupied) - len(self.unmatched)))
+            for slot in (*range(1, capacity + 1), *lane):
+                if slot in occupied or now < self.work_due.get(slot, 0):
+                    continue
+                if slot > capacity and lane_room:
+                    lane_room -= 1
+                elif slot <= capacity and room:
                     room -= 1
+                else:
+                    continue
+                self.work[slot] = self.slot_pool.submit(self._prepare, slot, self.discovery_future)
+                self.work_due[slot] = now + self.poll_seconds
 
     def _blocker(self, slot, record):
         """A slot's own blocker, preceded by a relay stall when its worker needs the relay."""
