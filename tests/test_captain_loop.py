@@ -901,7 +901,9 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             loop.step()
             time.sleep(0.01)
         self.assertEqual(len(self.native.launches), 1)
-        self.assertEqual(len(loop._records()) + len(loop.unmatched), self.config["capacity"])
+        # Runner-only lane slots sit above capacity and may hold a transient claim journal.
+        agent = [slot for slot in loop._records() if slot <= self.config["capacity"]]
+        self.assertEqual(len(agent) + len(loop.unmatched), self.config["capacity"])
         self.assertTrue(any(event["status"] == "unmatched_attempts" for event in self.events))
 
     def test_unmatched_attempts_status_clears_when_none_remain_and_after_restart(self):

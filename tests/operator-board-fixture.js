@@ -28,7 +28,8 @@
   };
   const success = {
     ...failure, id: "done", title: "Verify rollout", status: "completed", outcome: "checked_in",
-    output: { kind: "pr", url: "https://example.com/pull/1" }
+    output: { kind: "pr", url: "https://example.com/pull/1" },
+    delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
   const flags = [
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
@@ -131,6 +132,12 @@
     item("run").focus();
     item("run").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert(!detail() && document.activeElement === item("run"), "Escape collapses and keeps focus");
+    item("done").click();
+    await tick();
+    const done = root.querySelector("#detail-done")?.textContent || "";
+    assert(done.includes("Merged on GitHub") && done.includes("squash or rebase ? a40536e00000"),
+           "GitHub delivery shown apart from the Phalanx outcome");
+    item("done").click();
     offline = true;
     refresh();
     await tick();

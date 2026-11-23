@@ -120,6 +120,9 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         results = self.page(BOARD + "?kind=closed&limit=2")["items"]
         self.assertEqual([row["outcome"] for row in results], ["checked_in", "ready_for_check_in"])
         self.assertEqual(results[0]["output"], {"kind": "pr", "url": pr.url})
+        self.assertEqual(results[0]["delivery"], {"merged": True, "merge_commit": "merge", "merge_method": None,
+                                                  "merged_at": None})
+        self.assertIsNone(results[1]["delivery"])
 
     def test_rows_carry_short_title_full_goal_target_and_created_at(self):
         goal = ("\n  Redesign the operator board for density. Then update DASHBOARD.md and the fixture.\n"

@@ -135,6 +135,21 @@ class TransitionTests(unittest.TestCase):
         state = decide(state, Event.MERGE_VERIFIED, evidence=Evidence(pr=merged))
         self.assertEqual((state.status, state.final_output), (Status.COMPLETED, merged))
 
+    def test_external_merge_of_the_validated_candidate_closes_from_pr_gates(self):
+        merged = replace(READY, merge_commit="merged", closed=True, merge_method="squash_or_rebase")
+        validating = result(promotion(), Evidence(pr=READY, draft_checks=REV))
+        for state in [promotion(), validating]:
+            with self.subTest(stage=state.stage):
+                with self.assertRaises(ValueError):
+                    decide(state, Event.MERGE_VERIFIED,
+                           evidence=Evidence(pr=replace(merged, revision=Revision("other", REV.base))))
+                done = decide(decide(state, Event.CLAIM), Event.MERGE_VERIFIED, evidence=Evidence(pr=merged))
+                self.assertEqual((done.status, done.stage, done.target, done.final_output),
+                                 (Status.COMPLETED, Stage.CHECK_IN, Target.READY, merged))
+        development = result(start(Target.READY), Evidence(candidate=REV.head))
+        with self.assertRaises(ValueError):
+            decide(development, Event.MERGE_VERIFIED, evidence=Evidence(pr=merged))
+
     def test_closed_pr_requires_a_decision(self):
         state = result(ready(), Evidence(pr=replace(READY, closed=True)),
                        wait=Wait("PR closed without merge", "owner reply"))

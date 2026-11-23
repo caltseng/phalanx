@@ -126,6 +126,7 @@
    * Items contain string id, itemId?, version?, title (one line), goal?, target?, repo, stage, status,
    * createdAt?, lastAdvancedAt, lastProgressAt?, waitSince?, waitReason?, resumeTrigger?, retryAt? and
    * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
+   * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
    * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?} and
    * legacy?: {workerRef?, chatUrl?, slotNote?} for the old runner path.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
@@ -251,6 +252,16 @@
         if (previous !== undefined && previous !== signature) state.changed.add(item.id);
         state.seen.set(item.id, signature);
       }
+    }
+
+    function delivery(item, now) {
+      const merge = item.delivery;
+      if (!merge) return null;
+      const parts = ["Merged on GitHub"];
+      if (epoch(merge.mergedAt)) parts.push(ago(merge.mergedAt, now));
+      if (merge.method) parts.push(label(merge.method));
+      parts.push(h("code", { text: merge.mergeCommit.slice(0, 12), title: merge.mergeCommit }));
+      return h("span", {}, ...parts.flatMap((part, index) => index ? [" · ", part] : [part]));
     }
 
     function toggle(id) {
@@ -445,6 +456,7 @@
           sessionUrl ? h("span", {}, " · ", h("a", { href: sessionUrl, text: "session" })) : "")],
         ["Writer note", writer?.progressNote],
         ["PR", pr && h("a", { href: pr, text: prNumber(pr) + " ↗" })],
+        ["Delivery", delivery(item, now)],
         ["Output", item.output?.kind === "report" ? prCell(item) : null],
         ["IDs", h("code", { title: "item " + (item.itemId || "?") + " · execution " + item.id,
           text: short(item.itemId) + " / " + short(item.id) })],

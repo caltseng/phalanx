@@ -286,6 +286,13 @@ def pr_rework(request: Request, item_id: Identifier, execution_id: Identifier, b
     return attempt_event(request, pr_observations.submit_rework, item_id, execution_id, body, lease, key)
 
 
+@router.post("/items/{item_id}/executions/{execution_id}/pr-merged",
+             dependencies=[Depends(require_runner)])
+def pr_merged(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.ExternalMerge,
+              lease: Lease, key: Key = None):
+    return attempt_event(request, pr_observations.submit_merged, item_id, execution_id, body, lease, key)
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
              dependencies=[Depends(require_worker)])
 def pr_validation_claim(request: Request, item_id: Identifier, execution_id: Identifier,
