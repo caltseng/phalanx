@@ -85,7 +85,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         charter = root / "charter" / "charter.toml"
         charter.write_text(CHARTER + "[shift]\nmax_wakes = 2\n", encoding="utf-8")
         self.config = {"base_url": self.url, "runtime": "any-runtime", "worktrees": str(root / "worktrees"),
-                       "charter": str(charter),
+                       "charter": str(charter), "session_workspace": "ws-1",
                        "repositories": {"repo": {"checkout": str(checkout), "base_branch": "main"}}}
         for repository, remote in (("repo", bare.as_uri()), ("other", "https://github.com/e/o.git")):
             self.assertEqual(self.request("/v1/repositories", OWNER, {"id": repository, "remote": remote})[0], 200)
@@ -114,6 +114,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual((launched["status"], writer["state"], writer["captain_id"]), ("running", "launching", captain))
         self.assertEqual(launched["session_name"], f"phx {item['id'][:8]} {writer['nonce']}")
         self.assertLessEqual(len(launched["session_name"]), 40)
+        self.assertEqual(launched["session_workspace"], "ws-1")
         worktree = Path(launched["worktree"])
         self.assertTrue(worktree.is_relative_to(Path(self.config["worktrees"]).resolve()))
         for text in (str(worktree), writer["nonce"], "Write the report", "- Cite files", "python -m phalanx work"):

@@ -18,10 +18,6 @@ STATUS = RequiredCheck("ci", CheckKind.STATUS)
 PREVIEW = RequiredCheck("staging", CheckKind.PREVIEW)
 
 
-def tip(sha=BASE):
-    return response({"ref": "refs/heads/main", "object": {"sha": sha, "type": "commit"}})
-
-
 def run(run_id, *, sha=HEAD, app=42, status="completed", conclusion="success", prs=()):
     return {
         "id": run_id, "head_sha": sha, "app": {"id": app}, "name": "ci",
@@ -42,23 +38,17 @@ class GitHubCollectionTests(unittest.TestCase):
         return self.responses.popleft()
 
     def collect(self, policy, *pages, phase=Phase.DRAFT, draft=True,
-                merge=None, after=None, first_tip=None, last_tip=None, **kwargs):
+                merge=None, after=None, **kwargs):
         snapshot = pull(draft=draft)
         if merge:
             snapshot.update(mergeable=True, merge_commit_sha=merge)
         self.responses.append(response(snapshot))
         expected = self.client.get_pull_request(7)
         self.urls.clear()
-        # Only ready evidence reads the live target tip; draft evidence binds to the PR's base.
-        bind_tip = phase != Phase.DRAFT
         self.responses.append(response(snapshot))
-        if bind_tip:
-            self.responses.append(first_tip or tip())
         self.responses.extend(pages)
         if after is not False:
             self.responses.append(response(after if after is not None else snapshot))
-            if after is None and bind_tip:
-                self.responses.append(last_tip or tip())
         result = collect_github_checks(self.client, expected, phase, policy, **kwargs)
         self.assertFalse(self.responses)
         return result
@@ -169,24 +159,19 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual((result.gate.state, len(result.gate.skipped)), (GateState.SATISFIED, 1))
 
     def test_mid_collection_base_change_discards_passing_evidence(self):
-        result = self.collect((RUN,), response({"check_runs": [run(10)]}),
-                              phase=Phase.READY, draft=False, last_tip=tip(OTHER))
-        self.assertEqual(result.gate.state, GateState.BLOCKED)
-        self.assertEqual(result.observations, ())
         moved = pull()
         moved["base"]["sha"] = OTHER
         result = self.collect((RUN,), response({"check_runs": [run(10)]}), after=moved)
         self.assertEqual(result.gate.state, GateState.BLOCKED)
         self.assertEqual(result.observations, ())
 
-    def test_moved_target_tip_blocks_ready_but_not_draft_evidence(self):
-        ready = self.collect((RUN,), phase=Phase.READY, draft=False,
-                             first_tip=tip(OTHER), after=False)
-        self.assertEqual(ready.gate.state, GateState.BLOCKED)
-        self.assertIn("target branch tip", ready.gate.reasons[0])
-        draft = self.collect((RUN,), response({"check_runs": [run(10)]}))
-        self.assertEqual(draft.gate.state, GateState.SATISFIED)
-        self.assertFalse(any("/git/ref" in url for url in self.urls))
+    def test_moved_target_tip_does_not_block_ready_or_draft_evidence(self):
+        for phase, draft in ((Phase.READY, False), (Phase.DRAFT, True)):
+            with self.subTest(phase=phase):
+                result = self.collect((RUN,), response({"check_runs": [run(10)]}),
+                                      phase=phase, draft=draft)
+                self.assertEqual(result.gate.state, GateState.SATISFIED)
+                self.assertFalse(any("/git/ref" in url for url in self.urls))
 
     def test_page_budget_discards_partial_passing_evidence(self):
         pages = [

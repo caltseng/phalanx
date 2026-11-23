@@ -195,13 +195,13 @@ def _read_credential(path):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def kickoff(item, worktree, nonce, work_command):
+def kickoff(item, worktree, nonce, work_command, base):
     criteria = item.get("acceptance_criteria") or []
     template = Template(resources.files("phalanx").joinpath("prompts", "worker.md").read_text(encoding="utf-8"))
     return template.substitute(
         item_id=item["id"], execution_id=item["execution"]["id"], repository=item["repository_id"],
         target=item["target"], goal=item["goal"], worktree=worktree, nonce=nonce, work=work_command,
-        criteria="\n".join(f"- {entry}" for entry in criteria) or "- None beyond the goal",
+        base=base, criteria="\n".join(f"- {entry}" for entry in criteria) or "- None beyond the goal",
     )
 
 
@@ -261,8 +261,10 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
         "item_id": item_id, "execution_id": binding["id"], "version": binding["version"],
         "stage": binding["state"]["stage"], "status": binding["state"]["status"], "writer": binding["writer"],
         "worktree": str(workspace.path), "repository": {"id": repository, **mapping},
+        "session_workspace": config.get("session_workspace"),
         "session_name": f"phx {item_id[:8]} {nonce}",
-        "kickoff": kickoff(item, workspace.path, nonce, config.get("work_command", "python -m phalanx work")),
+        "kickoff": kickoff(item, workspace.path, nonce, config.get("work_command", "python -m phalanx work"),
+                           base),
     }
 
 

@@ -200,18 +200,19 @@ class Reconciler:
         branch = item_branch(item_id)
         pull = self.find_pull(github, owner, branch, execution.get("primary_pr_url"))
         body = {"observed_at": datetime.now(UTC).isoformat()}
+        base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
         checks = ()
         if pull is None:
             checkout = self.checkout(repo, remote, fetched)
             # With no remote branch there is nothing to flag, but posting keeps the observation fresh.
             if not git(checkout, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}",
                        check=False).returncode:
-                base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
                 body["merged_branch"] = git(
                     checkout, "merge-base", "--is-ancestor", f"refs/remotes/origin/{branch}",
                     f"refs/remotes/origin/{base}", check=False,
                 ).returncode == 0
         else:
+            body["target_base"] = base
             body["pr"] = {
                 "number": pull.number, "state": pull.state, "merged": bool(pull.merged), "draft": pull.draft,
                 "head_ref": pull.head_ref, "head_sha": pull.head_sha, "base_ref": pull.base_ref,

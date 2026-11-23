@@ -6,7 +6,7 @@ import unittest
 
 from phalanx.intake import record, steer
 from phalanx.intake_models import Steering
-from phalanx.operator_api import closed_page, open_page
+from phalanx.operator_api import closed_page, open_page, short_title
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target, Wait
 
@@ -120,6 +120,21 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         results = self.page(BOARD + "?kind=closed&limit=2")["items"]
         self.assertEqual([row["outcome"] for row in results], ["checked_in", "ready_for_check_in"])
         self.assertEqual(results[0]["output"], {"kind": "pr", "url": pr.url})
+
+    def test_rows_carry_short_title_full_goal_target_and_created_at(self):
+        goal = ("\n  Redesign the operator board for density. Then update DASHBOARD.md and the fixture.\n"
+                "Second line with more detail.")
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE work_items SET request_json=? WHERE id=?",
+                       (json.dumps({"goal": goal, "target": "merged"}), identifier(105000)))
+        row = self.page(BOARD + "?limit=1")["items"][0]
+        self.assertEqual(row["title"], "Redesign the operator board for density.")
+        self.assertEqual((row["goal"], row["target"], row["created_at"]), (goal, "merged", EARLY))
+        self.assertEqual(self.page(f"{BOARD}/{identifier(5000)}/timeline")["item"]["title"], row["title"])
+        self.assertIsNone(self.page(f"{BOARD}?limit=2")["items"][1]["target"])
+        self.assertEqual(short_title("word " * 40), ("word " * 15).strip() + "…")
+        self.assertEqual(short_title("x" * 100), "x" * 79 + "…")
+        self.assertEqual(short_title("  \n "), "Untitled")
 
     def test_timeline_pages_and_authentication(self):
         route = f"{BOARD}/{identifier(10)}/timeline"
