@@ -30,6 +30,7 @@ from phalanx.workspaces import WorkspaceManager, _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 from test_github import pull, response
+from timing import WAIT_SECONDS
 
 
 class FakeGitHub:
@@ -406,19 +407,19 @@ class AttendedTest(ServerFixture, unittest.TestCase):
 
         def slow_prepare(manager, *args, **kwargs):
             entered.set()
-            if not resume.wait(timeout=10):
+            if not resume.wait(timeout=WAIT_SECONDS):
                 raise AssertionError("Workspace preparation did not resume")
             return original(manager, *args, **kwargs)
 
         with patch.object(WorkspaceManager, "prepare", slow_prepare), ThreadPoolExecutor(2) as pool:
             preparing = pool.submit(self.runner().prepare)
             try:
-                self.assertTrue(entered.wait(timeout=10))
-                renewal = pool.submit(self.runner().renew).result(timeout=5)
+                self.assertTrue(entered.wait(timeout=WAIT_SECONDS))
+                renewal = pool.submit(self.runner().renew).result(timeout=WAIT_SECONDS)
                 self.assertEqual(renewal["lease_expires_at"], 901)
             finally:
                 resume.set()
-            self.assertEqual(preparing.result(timeout=15)["status"], "launch_intent")
+            self.assertEqual(preparing.result(timeout=WAIT_SECONDS)["status"], "launch_intent")
 
     def test_parallel_slots_use_distinct_worktrees_and_exact_receipts(self):
         self.config["capacity"] = 2
@@ -433,13 +434,13 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         def call(api, path, body=None, **kwargs):
             if path == "/dispatch/claim":
                 self.assertEqual(body["slots"], 2)
-                claims.wait(timeout=10)
+                claims.wait(timeout=WAIT_SECONDS)
             return original_call(api, path, body, **kwargs)
 
         with patch.object(StubAPI, "call", call), ThreadPoolExecutor(2) as pool:
             first_launch = pool.submit(first.prepare)
             second_launch = pool.submit(second.prepare)
-            launches = [first_launch.result(timeout=30), second_launch.result(timeout=30)]
+            launches = [first_launch.result(timeout=WAIT_SECONDS), second_launch.result(timeout=WAIT_SECONDS)]
         self.assertEqual([launch["slot"] for launch in launches], [1, 2])
         self.assertNotEqual(first.status()["packet"]["worktree"], second.status()["packet"]["worktree"])
         self.assertNotEqual(first.status()["packet"]["branch"], second.status()["packet"]["branch"])
@@ -460,19 +461,19 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         def slow_submit(api, path, body=None, **kwargs):
             if path.endswith("/result"):
                 entered.set()
-                if not resume.wait(timeout=10):
+                if not resume.wait(timeout=WAIT_SECONDS):
                     raise AssertionError("Submission did not resume")
             return original_call(api, path, body, **kwargs)
 
         with patch.object(StubAPI, "call", slow_submit), ThreadPoolExecutor(2) as pool:
             submitted = pool.submit(first.submit, marker, "local", native_id)
             try:
-                self.assertTrue(entered.wait(timeout=10))
+                self.assertTrue(entered.wait(timeout=WAIT_SECONDS))
                 heartbeat = pool.submit(second.renew)
-                self.assertEqual(heartbeat.result(timeout=5)["attempt_id"], second_api.attempt)
+                self.assertEqual(heartbeat.result(timeout=WAIT_SECONDS)["attempt_id"], second_api.attempt)
             finally:
                 resume.set()
-            self.assertEqual(submitted.result(timeout=15), {"version": 4})
+            self.assertEqual(submitted.result(timeout=WAIT_SECONDS), {"version": 4})
 
         self.assertEqual(first.status(), {"status": "idle"})
         self.assertEqual(second.status()["status"], "launch_uncertain")
@@ -738,7 +739,8 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.api = RunnerAPI(self.url, RUNNER)
         policy = self.root.parent / "validation-policy.json"
         policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
-            "local_checks": [{"name": "unit tests", "argv": [sys.executable, "-c", "print('ok')"]}],
+            "local_checks": [{"name": "unit tests", "argv": [sys.executable, "-c", "print('ok')"],
+                              "timeout_seconds": WAIT_SECONDS}],
             "draft_checks": [{"name": "draft", "kind": "check_run", "app_id": 15368}],
             "ready_checks": [{"name": "test", "kind": "check_run", "app_id": 15368}],
         }}}), encoding="utf-8")

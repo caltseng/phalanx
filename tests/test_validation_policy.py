@@ -3,13 +3,14 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from phalanx.candidate_local import CandidateLocal, LocalCheck
 from phalanx.github import PullRequest
 from phalanx.github_checks import collect_github_checks
-from phalanx.intake_models import Result
+from phalanx.intake_models import ExternalWait, Result
 from phalanx.published_validation_stage import PublishedValidationPolicy
 from phalanx.transitions import Revision
 from phalanx.validation import (
@@ -17,6 +18,8 @@ from phalanx.validation import (
     evaluate_published_checks,
 )
 from phalanx.validation_policy import ValidationPolicyError, load_validation_policy
+from phalanx.validation_stages import _pre_validation
+from phalanx.workspaces import any_file_lock
 
 
 class ValidationPolicyTests(unittest.TestCase):
@@ -233,3 +236,34 @@ class ValidationPolicyTests(unittest.TestCase):
                          GateState.WAITING)
         self.assertEqual(operation.pre_validate(None)["outcome"], "needs_input")
         self.assertEqual(operation.pre_validate(())["outcome"], "succeeded")
+
+    def test_busy_local_check_capacity_waits_before_running_checks(self):
+        self.repo.update(local_checks=[self.command()])
+        policy = self.load()
+        root = self.path.parent
+        runner = SimpleNamespace(root=root, config={"local_check_capacity": 1})
+        snapshot = {"claim": {"attempt_id": "attempt", "execution": {
+            "version": 3, "state": {"stage": "pre_pr_validation", "candidate": "a" * 40},
+        }}}
+        slot = [root / "local-check-0.lock"]
+
+        def validate(checks):
+            with any_file_lock(slot) as held:
+                self.assertIsNone(held)
+            return {"outcome": "succeeded"}
+
+        local = Mock()
+        local.pre_validate.side_effect = validate
+        with patch("phalanx.validation_stages._candidate", return_value=local), \
+                patch("phalanx.validation_stages._policy", return_value=policy):
+            with any_file_lock(slot) as held:
+                self.assertEqual(held, slot[0])
+                waiting = _pre_validation(runner, snapshot)
+            local.pre_validate.assert_not_called()
+            self.assertEqual(waiting["route"], "external-wait")
+            self.assertIn("local check capacity", waiting["reason"])
+            self.assertEqual(ExternalWait.model_validate(waiting["body"]).gate, "local_check_capacity")
+            self.assertEqual(_pre_validation(runner, snapshot), {"body": {"outcome": "succeeded"}})
+        local.pre_validate.assert_called_once_with(policy.local_checks)
+        with any_file_lock(slot) as held:
+            self.assertEqual(held, slot[0])

@@ -19,6 +19,7 @@ from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDe
 from phalanx.captain_loop import CaptainLoop
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
+from timing import WAIT_SECONDS
 
 
 class QueueAPI:
@@ -121,7 +122,7 @@ class NativeFixture:
         if operation == "observe":
             self.waits.append(arguments)
             if self.gate and any(ref["slot"] == self.gated_slot for ref in arguments["references"]):
-                self.gate.wait(5)
+                self.gate.wait(WAIT_SECONDS)
             rows = []
             for ref in arguments["references"]:
                 receipt = self.threads.get(ref["marker"])
@@ -172,7 +173,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.addCleanup(loop.close)
         return loop
 
-    def spin(self, loop, condition, timeout=30):
+    def spin(self, loop, condition, timeout=WAIT_SECONDS):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             loop.step()
@@ -197,7 +198,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         def prepare(manager, item, **kwargs):
             if item == "first":
                 entered.set()
-                git_gate.wait(5)
+                git_gate.wait(WAIT_SECONDS)
             return original(manager, item, **kwargs)
         self.native.gate = native_gate
         self.native.gated_slot = 3
@@ -874,7 +875,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         gate, entered = Event(), Event()
         def draft(runner, snapshot, token):
             entered.set()
-            gate.wait(5)
+            gate.wait(WAIT_SECONDS)
             runner._transaction(lambda record, db: record.clear())
             return {"status": "draft_submitted"}
         loop = self.loop()

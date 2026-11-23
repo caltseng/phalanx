@@ -105,7 +105,11 @@ worktree, `pr_promotion` verifies draft checks and marks the primary PR ready, a
 requests due rechecks each poll. Pending draft and ready checks are rechecked every
 `"check_recheck_seconds"` (optional runner config, 5 to 86400, default 30). After
 `"check_wait_limit_seconds"` (60 to 2592000, default 7200) pending on one head and base,
-the owner is asked; a reply starts a fresh window. A missing or
+the owner is asked; a reply starts a fresh window. At most `"local_check_capacity"`
+(1 to 64, default 1) validations run local checks at once on the runner host; the rest wait
+with the reason "Waiting for local check capacity" without using their check timeout. A local
+check that times out with no identified failure retries validation twice with backoff before
+returning to development. A missing or
 broken policy waits for an owner reply that
 names the problem, and startup preflight reports a malformed file before any claim.
 
@@ -522,7 +526,8 @@ An intake item can set `runner_affinity` to require a specific runner ID.
 For matching repositories and affinity, urgency rises one band per aging
 interval. Within the effective band, the server chooses the oldest eligible
 timestamp and breaks ties by item ID. Execution views report
-`ready_since_ms` and `retry_at_ms` as Unix milliseconds. A reconciled retry
+`ready_since_ms` and `retry_at_ms` as Unix milliseconds, and `retry_count`
+as the retries scheduled in the current stage. A reconciled retry
 starts accruing age when its delay elapses. A newly queued stage gets its
 own clock. The claim index excludes blocked stages. A stage begins to age
 once its last prerequisite clears and any retry delay elapses.

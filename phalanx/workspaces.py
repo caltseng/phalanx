@@ -100,6 +100,15 @@ def _item_branch(item_id: str) -> str:
     return item_branch(item_id)
 
 
+def _lock(handle) -> None:
+    """Take a nonblocking exclusive lock on an open file; raise OSError when held."""
+    if os.name == "nt":
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 @contextmanager
 def _file_lock(path: Path):
     """Serialize an operation across local processes and threads."""
@@ -111,11 +120,7 @@ def _file_lock(path: Path):
         deadline = time.monotonic() + 30
         while True:
             try:
-                if os.name == "nt":
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock(handle)
                 break
             except OSError as exc:
                 if time.monotonic() >= deadline:
@@ -123,6 +128,25 @@ def _file_lock(path: Path):
                 time.sleep(0.05)
         yield
         # Closing the file releases the lock, including on exceptions and process exit.
+
+
+@contextmanager
+def any_file_lock(paths):
+    """Hold the first free lock among `paths` and yield its path, or yield None if all are held."""
+    for path in paths:
+        try:
+            handle = path.open("a+b")
+        except OSError as exc:
+            raise WorkspaceError(f"Cannot open lock at {path}: {exc}") from exc
+        try:
+            _lock(handle)
+        except OSError:
+            handle.close()
+            continue
+        with handle:
+            yield path
+        return
+    yield None
 
 
 class WorkspaceManager:

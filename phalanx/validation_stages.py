@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .attended import RunnerError
 from .attended_drafts import github_repository
-from .candidate_local import CandidateLocal
+from .candidate_local import LOCAL_CHECK_CAPACITY, CandidateLocal
 from .check_in import MergeTarget, check_in
 from .git_publication import GitPublication, PublicationError
 from .github import GitHubClient, GitHubError
@@ -23,10 +23,12 @@ from .published_validation_stage import PublishedValidationAssignment, Published
 from .transitions import Outcome, Revision, Stage, Target
 from .validation import CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_SECONDS, DRAFT_SKIP_REASON, GateState, Phase
 from .validation_policy import ValidationPolicyError, load_validation_policy
-from .workspaces import WorkspaceError, _item_branch
+from .workspaces import WorkspaceError, _item_branch, any_file_lock
 
 # GitHub usually reflects a ready mutation or new base within seconds.
 _PROVIDER_RETRY_SECONDS = 30
+# Waiting for a local check slot starts no check, so it never counts against a check timeout.
+_LOCAL_CHECK_CAPACITY_RETRY_SECONDS = 30
 
 
 def _check_timing(runner):
@@ -134,7 +136,21 @@ def _pre_validation(runner, snapshot):
         checks = _policy(runner, snapshot).local_checks
     except ValidationPolicyError as error:
         return _question(snapshot, str(error), "Repair the runner's trusted validation policy, then reply.")
-    return {"body": local.pre_validate(checks)}
+    if not any(check.disposition is None for check in checks or ()):
+        return {"body": local.pre_validate(checks)}
+    # Concurrent suites on one host starve each other into timeouts, so cap local check runs.
+    capacity = runner.config.get("local_check_capacity", LOCAL_CHECK_CAPACITY)
+    with any_file_lock([runner.root / f"local-check-{index}.lock" for index in range(capacity)]) as slot:
+        if slot is not None:
+            return {"body": local.pre_validate(checks)}
+    candidate = snapshot["claim"]["execution"]["state"]["candidate"]
+    reason = (f"Waiting for local check capacity: all {capacity} local check "
+              f"slot{'s' if capacity != 1 else ''} on this runner host are busy")
+    return {"route": "external-wait", "reason": reason, "body": {
+        **_event(snapshot), "reason": reason, "gate": "local_check_capacity",
+        "revision": {"head": candidate, "base": candidate},
+        "retry_after_seconds": _LOCAL_CHECK_CAPACITY_RETRY_SECONDS,
+    }}
 
 
 def _promotion(runner, snapshot):

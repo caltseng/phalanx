@@ -109,6 +109,7 @@ def execution_view(row):
         "created_at": row["created_at"], "updated_at": row["updated_at"],
         "state": json.loads(row["state_json"]),
         "ready_since_ms": row["ready_since"], "retry_at_ms": row["retry_at"],
+        "retry_count": row["retry_count"],
         "unmet_dependencies": json.loads(row["dependency_wait_json"] or "[]"),
     }
 
