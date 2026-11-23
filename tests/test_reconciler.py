@@ -32,6 +32,8 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         self.post = f"{self.execution}/github-observation"
 
     def body(self, minute, **fields):
+        if "pr" in fields:
+            fields.setdefault("target_base", "main")
         return {"observed_at": (self.start + timedelta(minutes=minute)).isoformat(), **fields}
 
     def pull(self, **fields):
@@ -261,7 +263,7 @@ class ReconcilerPassTest(unittest.TestCase):
         return checkout, heads
 
     def test_a_rate_limited_repository_waits_while_others_are_observed(self):
-        self.config["repositories"] = {"repo": {}, "other": {}}
+        self.config["repositories"] = {"repo": {"base_branch": "main"}, "other": {"base_branch": "main"}}
         self.github["repo"] = FakeGitHub([pull_request(HEAD, item_branch("one"))])
         self.github["other"] = FakeGitHub(error=GitHubError("get pull request", "rate limited", 403,
                                                             retry_after_seconds=30))
@@ -284,7 +286,7 @@ class ReconcilerPassTest(unittest.TestCase):
         self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
 
     def test_an_incomplete_github_read_posts_nothing_and_backs_off(self):
-        self.config["repositories"] = {"repo": {}}
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
         self.config["validation_policy"] = "policy.json"
         primary = "https://github.com/example/repo/pull/7"
         api = FakeAPI([execution("one", primary=primary), execution("two", primary=primary)],

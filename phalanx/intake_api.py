@@ -142,7 +142,7 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
     if isinstance(body, Result):
         for field in (
             "failure_reason", "question", "retry_after_seconds", "review_notes", "local_checks",
-            "report_review_notes",
+            "report_review_notes", "pr_url",
         ):
             if payload[field] is None:
                 payload.pop(field)
@@ -239,7 +239,7 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
              dependencies=[Depends(require_runner)])
 def github_observation(request: Request, item_id: Identifier, execution_id: Identifier,
                        body: reconciliation.Observation):
-    """Record what the reconciler saw on GitHub; no lease, and the execution's version is unchanged."""
+    """Record what the reconciler saw on GitHub; no lease. It advances only a writer's PR stages."""
     return run(request, reconciliation.record, item_id, execution_id, body, write=True)
 
 
