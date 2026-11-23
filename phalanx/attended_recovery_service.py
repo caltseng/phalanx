@@ -88,7 +88,10 @@ def _verify_local(root, record, packet, thread_id):
             disposition = "retry_safe"
             summary = "Registered worktree is clean at the original revision, with no attempt result"
         elif result is None:
-            summary = "Preserve and reconcile local changes before allowing a replacement"
+            disposition = "local_changes"
+            state = "Uncommitted changes" if workspace.dirty else "No uncommitted changes"
+            summary = (f"{state} at HEAD {workspace.head} (packet revision {packet.expected_revision}) "
+                       "and no attempt result; preserve and reconcile them before allowing a replacement")
         elif (
             # Development alone commits to the checkout; every other worker stage leaves it unchanged.
             (unchanged and (packet.stage != "development" or result.outcome in {"needs_input", "failed"}))
@@ -315,4 +318,8 @@ def run_recovery_command(args):
         observations=observations, discovery_complete=complete, recheck=args.recheck,
         no_launch_proof=proof,
     )
+    if result.get("status") == "resume_writer":
+        # Without a bridge, the operator sends this prompt to the named writer.
+        runner = AttendedRunner(root, config, api, slot=args.slot)
+        result["resume"]["prompt"] = runner._handoff(runner._snapshot()).resume_prompt()
     print(json.dumps(result, ensure_ascii=False))

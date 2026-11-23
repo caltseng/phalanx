@@ -129,10 +129,11 @@ class CaptainLoop:
             row = db.execute("SELECT value FROM captain WHERE key=?", (key,)).fetchone()
             event = {"slot": slot, "status": status, "reason": reason}
             if row and all(json.loads(row[0]).get(field) == value for field, value in event.items()):
-                return
+                return False
             event["at"] = datetime.now(timezone.utc).isoformat()
             db.execute("INSERT OR REPLACE INTO captain VALUES (?, ?)", (key, json.dumps(event)))
         self.emit(event)
+        return True
 
     def _block(self, slot, reason):
         """Keep a slot's blocker until a pass learns something new; the next heartbeat publishes it."""
@@ -444,6 +445,10 @@ class CaptainLoop:
                 discovery_complete=observation.discovery_complete if observation else False,
                 no_launch_proof=unlaunched_proof(runner, snapshot) if unlaunched else None,
             )
+            if result["status"] == "resume_writer":
+                result = self._resume_writer(runner, result)
+            if "claim" in snapshot:
+                result["item_id"] = snapshot["claim"]["item_id"]
             self._publish_recovery_wait(slot, snapshot.get("claim", {}).get("attempt_id"), result)
             return result
         if "packet" not in snapshot or unlaunched:
@@ -471,8 +476,30 @@ class CaptainLoop:
             return {"status": "worker_overdue", "reason": reason, "blocker": reason}
         return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
 
+    def _resume_writer(self, runner, result):
+        """Continue the exact stopped writer through the bridge; its count was journaled first."""
+        resume = result.pop("resume")
+        prompt = runner._handoff(runner._snapshot()).resume_prompt()
+        try:
+            self.adapter.resume({**resume, "prompt": prompt})
+        except LaunchNotDelivered as error:
+            # The runtime provably never saw it, so this try does not count.
+            def refund(record, db):
+                if record.get("resume", {}).get("thread_id") == resume["thread_id"]:
+                    record["resume"]["count"] -= 1
+            runner._transaction(refund)
+            return {**result, "status": "resume_failed",
+                    "reason": f"{result['reason']}. The resume was not delivered ({error}); retrying after "
+                              "the resume grace period"}
+        except RunnerError as error:
+            return {**result, "status": "resume_failed",
+                    "reason": f"{result['reason']}. The resume may not have arrived ({error}); it counts "
+                              "toward the limit"}
+        return {**result, "status": "writer_resumed",
+                "next_action": "Observe the writer active, then adopt the same attempt under a fresh lease"}
+
     def _publish_recovery_wait(self, slot, attempt_id, result):
-        """Show an expired attempt's owner wait on the board, and clear it once recovery moves on."""
+        """Show an expired attempt's recovery wait on the board, and clear it once recovery moves on."""
         published = self.recovery_waits.get(slot)
         if not attempt_id or result["status"] in {"adopted", "recovered"}:
             self.recovery_waits.pop(slot, None)
@@ -483,6 +510,8 @@ class CaptainLoop:
             blocker = (f"Recovery is waiting on the owner: {result['reason']}. {action.rstrip('.')}, then run "
                        f"`python -m phalanx attended-recover --config <runner config> --state {self.root} "
                        f"--slot {slot} --recheck`")
+        elif result["status"] in {"writer_resumed", "resume_failed", "resume_pending"}:
+            blocker = result["reason"]
         # Clear only a wait this loop published for the same attempt.
         if blocker is None and not (published and published[0] == attempt_id):
             self.recovery_waits.pop(slot, None)
@@ -583,7 +612,14 @@ class CaptainLoop:
                     if result.get("unchanged") and slot in self.blocked:
                         continue
                     self._block(slot, result.get("blocker"))
-                    self._status(slot, result["status"], result.get("reason", "Operation recorded"))
+                    emitted = self._status(slot, result["status"], result.get("reason", "Operation recorded"))
+                    if emitted and result["status"] == "owner_wait" and self.notify is not None:
+                        self.notifications.append(self.notify_pool.submit(self.notify, {
+                            "event": "owner_wait", "slot": slot, "attempt_id": result.get("attempt_id"),
+                            "reason": result.get("reason"), "next_action": result.get("next_action"),
+                            "items": [result["item_id"]] if "item_id" in result else [],
+                            "runner_id": self.config["runner_id"], "at": datetime.now(timezone.utc).isoformat(),
+                        }))
         records = self._records()
         for slot in list(self.cursors):
             if slot not in records and not any(slot in slots for slots in self.observations):
