@@ -218,7 +218,14 @@ def renew(db, runner_id, attempt_id, lease_digest, worker=None, blocker=None):
         raise intake.Conflict("Lease expired. Check the runner's recovery candidates")
     expires = max(attempt["lease_expires_at"], int(now) + LEASE_SECONDS)
     # Each renewal reports the runner's current blocker; omitting it clears the last one.
-    db.execute("UPDATE attempts SET lease_expires_at=?, blocker=? WHERE id=?", (expires, blocker, attempt_id))
+    # The board shows how long the blocker has been reported, so a repeat report keeps its start.
+    db.execute(
+        """UPDATE attempts SET lease_expires_at=:expires, blocker=:blocker,
+               blocker_since=CASE WHEN :blocker IS NULL THEN NULL
+                                  WHEN blocker IS :blocker THEN blocker_since ELSE :now END
+           WHERE id=:id""",
+        {"expires": expires, "blocker": blocker, "now": intake.timestamp(), "id": attempt_id},
+    )
     if worker is not None:
         db.execute("INSERT OR REPLACE INTO attempt_workers VALUES (?, ?, ?)",
                    (attempt_id, worker.reference, worker.url))

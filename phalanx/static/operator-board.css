@@ -77,6 +77,11 @@ body { margin: 0; }
 }
 .phalanx-board p { margin: .35rem 0; }
 .phalanx-board .meta { color: var(--ink-muted); }
+.phalanx-board .scroll { overflow-x: auto; }
+.phalanx-board table { border-collapse: collapse; min-width: 100%; }
+.phalanx-board caption { text-align: start; color: var(--ink-muted); }
+.phalanx-board th, .phalanx-board td { padding: .25rem .6rem; border-bottom: 1px solid #d9c79f; text-align: start; white-space: nowrap; }
+.phalanx-board .visits > li { margin-block: .5rem; }
 .phalanx-board .attention { color: var(--crimson-bright); font-weight: 700; }
 .phalanx-board a { color: var(--tyrian); }
 .phalanx-board button {

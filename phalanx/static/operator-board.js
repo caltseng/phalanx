@@ -21,6 +21,27 @@
     return value && Number.isFinite(date.getTime()) ? timestamp.format(date) : "Unknown";
   }
 
+  // Durations arrive precomputed by the server, so they advance with each bounded refresh.
+  function duration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return "unavailable";
+    const units = [["d", 86400], ["h", 3600], ["m", 60], ["s", 1]];
+    const total = Math.floor(seconds);
+    const found = units.findIndex(([, size]) => total >= size);
+    const index = found === -1 ? units.length - 1 : found;
+    const [unit, size] = units[index];
+    let text = Math.floor(total / size) + unit;
+    const smaller = units[index + 1];
+    if (smaller) {
+      const rest = Math.floor((total % size) / smaller[1]);
+      if (rest) text += " " + rest + smaller[0];
+    }
+    return text;
+  }
+
+  function since(at, seconds) {
+    return at ? duration(seconds) + " (since " + when(at) + ")" : "unavailable";
+  }
+
   function addLink(parent, label, value) {
     if (!value) return;
     let url;
@@ -45,6 +66,10 @@
    * Items contain string id, title, repo, stage, status, lastAdvancedAt, waitReason?,
    * retryAt? and recheckAt? (epoch ms), workerRef? (opaque bridge reference), chatUrl?, draftUrl?,
    * primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}, and for replies itemId? and version?.
+   * Timing fields are server-computed seconds as of the read: ageSeconds? (since intake),
+   * pending?: {at, seconds} (current admission), wait?: {at, seconds} (current wait reason), and
+   * slot?: {occupiedSince, occupiedSeconds, attemptSeconds, handoffs, activity}. A null at or seconds
+   * shows as unavailable.
    * Use status "waiting_for_input" for items requiring operator attention.
    * outcome is a display label, including "Checked in" vs "Ready for check-in".
    * source.detail({id, cursor, limit, signal}) resolves to
@@ -52,6 +77,12 @@
    * question is {prompt, options, proposedDefault?} while the item waits for the owner.
    * attempt is a display reference. Dependencies are {title, milestone, status}.
    * Events are newest first and contain {at, fromStage?, stage, status, reason?}.
+   * lifecycle? is {coverage, note?, closedAt?, queuedSeconds, waitingSeconds, executingSeconds,
+   * stages: [{stage, visits, seconds, queuedSeconds, waitingSeconds, executingSeconds, partial}],
+   * visits: [{stage, enteredAt, exitedAt?, open, seconds, queuedSeconds, waitingSeconds, executingSeconds,
+   * attempts, retries, returned, outcome?, reason?, partial}] oldest first, visitsOmitted}.
+   * source.slots?({cursor, limit, signal}) resolves to {items, nextCursor}; items are
+   * {runner, title, stage, status, blocker?, ...slot fields}.
    * Dates are ISO timestamps. Status/stage values may use underscores.
    * source.openReport?(output) opens an authenticated report in the host.
    * Reject failed reads. Runner availability is independent of read availability.
@@ -94,6 +125,29 @@
       if (item.slotNote) parent.append(element("p", item.slotNote, { class: "meta" }));
     }
 
+    const ACTIVITY = {
+      executing: "Executing", resource_wait: "Waiting on a resource", external_wait: "Waiting on an external system",
+      lease_expired: "Lease expired"
+    };
+
+    function slotText(slot) {
+      const handoffs = slot.handoffs ? " · " + slot.handoffs + (slot.handoffs === 1 ? " handoff" : " handoffs") : "";
+      return "Slot occupied " + since(slot.occupiedSince, slot.occupiedSeconds) +
+        " · Current attempt " + duration(slot.attemptSeconds) + handoffs + " · " +
+        (ACTIVITY[slot.activity] || label(slot.activity));
+    }
+
+    function addTiming(parent, item) {
+      const parts = [];
+      if (item.pending) parts.push("Pending this admission " + since(item.pending.at, item.pending.seconds));
+      if (item.ageSeconds !== undefined) parts.push("Age since intake " + duration(item.ageSeconds));
+      if (parts.length) parent.append(element("p", parts.join(" · "), { class: "meta" }));
+      if (item.waitReason && item.wait) {
+        parent.append(element("p", "Wait elapsed " + since(item.wait.at, item.wait.seconds), { class: "meta" }));
+      }
+      if (item.slot) parent.append(element("p", slotText(item.slot), { class: "meta" }));
+    }
+
     function addSchedule(parent, item, attrs = {}) {
       if (item.retryAt) parent.append(element("p", "Retry scheduled: " + when(item.retryAt), attrs));
       if (item.recheckAt) parent.append(element("p", "Recheck scheduled: " + when(item.recheckAt), attrs));
@@ -122,6 +176,7 @@
         }));
         row.append(element("p", "Last advanced: " + when(item.lastAdvancedAt), { class: "meta" }));
         if (item.waitReason) row.append(element("p", item.waitReason));
+        addTiming(row, item);
         addSchedule(row, item, { class: "meta" });
         addWorker(row, item);
         if (item.primaryPrUrl) addLink(row, "Primary PR", item.primaryPrUrl);
@@ -130,11 +185,84 @@
       return row;
     }
 
+    function phases(entry) {
+      return "Queued " + duration(entry.queuedSeconds) + " · Waiting " + duration(entry.waitingSeconds) +
+        " · Executing " + duration(entry.executingSeconds);
+    }
+
+    function renderLifecycle(lifecycle) {
+      const content = document.createDocumentFragment();
+      content.append(element("h3", "Lifecycle"));
+      const final = lifecycle.closedAt ? " · Final values, closed " + when(lifecycle.closedAt) : "";
+      content.append(element("p", "Recorded time: " + phases(lifecycle) + final));
+      if (lifecycle.coverage !== "complete") {
+        content.append(element("p", "Partial history: " + (lifecycle.note || "some intervals are unavailable."), { class: "meta" }));
+      }
+      if (lifecycle.stages.length) {
+        const table = element("table");
+        table.append(element("caption", "Time per stage, including repeat visits"));
+        const head = element("tr");
+        for (const name of ["Stage", "Visits", "Total", "Queued", "Waiting", "Executing"]) {
+          head.append(element("th", name, { scope: "col" }));
+        }
+        const thead = element("thead");
+        thead.append(head);
+        table.append(thead);
+        const body = element("tbody");
+        for (const stage of lifecycle.stages) {
+          const row = element("tr");
+          row.append(element("th", label(stage.stage) + (stage.partial ? " (partial)" : ""), { scope: "row" }));
+          for (const value of [String(stage.visits), duration(stage.seconds), duration(stage.queuedSeconds),
+            duration(stage.waitingSeconds), duration(stage.executingSeconds)]) {
+            row.append(element("td", value));
+          }
+          body.append(row);
+        }
+        table.append(body);
+        const scroll = element("div", null, { class: "scroll", role: "region", tabindex: "0", "aria-label": "Time per stage" });
+        scroll.append(table);
+        content.append(scroll);
+      }
+      const visits = element("ol", null, { class: "visits", "aria-label": "Stage visits, oldest first" });
+      for (const visit of lifecycle.visits) {
+        const end = visit.open ? "now (current)" : visit.exitedAt ? when(visit.exitedAt) : "unavailable";
+        const entry = element("li", label(visit.stage) + " · " + when(visit.enteredAt) + " → " + end + " · " +
+          duration(visit.seconds) + (visit.partial ? " (partial)" : ""));
+        const facts = [phases(visit), "Attempts " + visit.attempts];
+        if (visit.retries) facts.push("Retries " + visit.retries);
+        if (visit.returned) facts.push("Returned to this stage");
+        entry.append(element("p", facts.join(" · "), { class: "meta" }));
+        if (visit.outcome) {
+          entry.append(element("p", "Exit: " + label(visit.outcome) + (visit.reason ? " · " + visit.reason : ""), { class: "meta" }));
+        }
+        visits.append(entry);
+      }
+      if (lifecycle.visitsOmitted) {
+        content.append(element("p", lifecycle.visitsOmitted + " earlier visits omitted; stage totals include them.", { class: "meta" }));
+      }
+      content.append(visits);
+      return content;
+    }
+
+    function renderSlots(data) {
+      if (!data.items.length) return element("p", "No runner slots are occupied.");
+      const rows = element("ul", null, { class: "records" });
+      for (const slot of data.items) {
+        const row = element("li");
+        row.append(element("p", slot.title), element("p", slot.runner + " · Stage: " + label(slot.stage) +
+          " · Status: " + label(slot.status), { class: "meta" }), element("p", slotText(slot)));
+        if (slot.blocker) row.append(element("p", slot.blocker, { class: "meta" }));
+        rows.append(row);
+      }
+      return rows;
+    }
+
     function renderDetail(data) {
       const content = document.createDocumentFragment();
       const item = data.item;
       content.append(element("p", item.repo + " · Stage: " + label(item.stage) + " · Status: " + label(item.status)));
       if (item.waitReason) content.append(element("p", item.waitReason));
+      addTiming(content, item);
       content.append(element("p", "Attempt: " + (data.attempt || "None recorded")));
       addWorker(content, item);
       if (data.nextAction) content.append(element("p", "Next action: " + data.nextAction));
@@ -167,6 +295,7 @@
         }
         content.append(element("h3", "Prerequisites"), list);
       }
+      if (data.lifecycle) content.append(renderLifecycle(data.lifecycle));
       content.append(element("h3", "Transition history"));
       if (data.events.length) {
         const timeline = element("ol");
@@ -324,6 +453,9 @@
     }
 
     list("Work in progress", "open", "No open work on this page. The line holds.");
+    createPanel("Runner slots", "runner slots", () => Boolean(source.slots),
+      (cursor, signal) => source.slots({ cursor, limit: PAGE_SIZE, signal }),
+      renderSlots, "Runner slot occupancy is unavailable from this source.");
     const detail = createPanel("Selected item", "history", () => Boolean(selected),
       (cursor, signal) => source.detail({ id: selected.id, cursor, limit: PAGE_SIZE, signal }),
       renderDetail, "Select an item from the muster to inspect its recorded history.");

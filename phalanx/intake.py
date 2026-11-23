@@ -318,7 +318,7 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         retry_count += 1
     db.execute(
         """UPDATE executions SET version=?, state_json=?, updated_at=?, ready_since=?,
-           retry_at=?, retry_count=?, dependency_wait_json=NULL WHERE id=?""",
+           retry_at=?, retry_count=?, dependency_wait_json=NULL, dependency_wait_since=NULL WHERE id=?""",
         (version, state_json, now, ready_since, retry_at, retry_count, row["id"]),
     )
     record(db, row["id"], version, event, details, state_json, now, attempt_id)

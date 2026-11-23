@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 import json
 import logging
 import sqlite3
@@ -182,12 +183,16 @@ def resolve_dependencies(
 def update_wait(db, execution_id, unmet, now_ms):
     """Start eligibility aging when the last prerequisite clears."""
     wait = json.dumps([asdict(link) for link in unmet], separators=(",", ":")) if unmet else None
+    since = datetime.fromtimestamp(now_ms / 1000, UTC).isoformat(timespec="microseconds")
     db.execute(
-        """UPDATE executions SET dependency_wait_json = ?,
-                  ready_since = CASE WHEN ? IS NULL AND dependency_wait_json IS NOT NULL
-                                     THEN max(?, coalesce(retry_at, 0)) ELSE ready_since END
-           WHERE id = ? AND status = 'queued' AND dependency_wait_json IS NOT ?""",
-        (wait, wait, now_ms, execution_id, wait),
+        """UPDATE executions SET dependency_wait_json = :wait,
+                  ready_since = CASE WHEN :wait IS NULL AND dependency_wait_json IS NOT NULL
+                                     THEN max(:now_ms, coalesce(retry_at, 0)) ELSE ready_since END,
+                  dependency_wait_since = CASE WHEN :wait IS NULL THEN NULL
+                                               WHEN dependency_wait_json IS NULL THEN :since
+                                               ELSE dependency_wait_since END
+           WHERE id = :id AND status = 'queued' AND dependency_wait_json IS NOT :wait""",
+        {"wait": wait, "now_ms": now_ms, "since": since, "id": execution_id},
     )
 
 

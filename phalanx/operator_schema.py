@@ -74,3 +74,10 @@ WORKER_SCHEMA = (
 
 # The latest blocker a runner reported for its open attempt, shown as the item's wait reason.
 BLOCKER_SCHEMA = ("ALTER TABLE attempts ADD COLUMN blocker TEXT",)
+
+# When the current blocker was first reported and when the current prerequisite wait began.
+# Rows from before this migration keep NULL, which the board shows as unavailable.
+WAIT_START_SCHEMA = (
+    "ALTER TABLE attempts ADD COLUMN blocker_since TEXT",
+    "ALTER TABLE executions ADD COLUMN dependency_wait_since TEXT",
+)

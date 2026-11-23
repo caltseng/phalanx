@@ -98,6 +98,9 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(waiting["last_progress_at"], LATEST)
         self.assertGreater(waiting["wait_age_seconds"], 0)
         self.assertIsNone(queued["wait_age_seconds"])
+        self.assertEqual((waiting["pending_since"], waiting["item_created_at"]), (EARLY, EARLY))
+        self.assertGreater(waiting["pending_seconds"], 0)
+        self.assertIsNone(waiting["slot"])
 
         closed_first = self.page(BOARD + "?kind=closed&limit=2")
         self.assertEqual([row["id"] for row in closed_first["items"]], list(map(identifier, [7999, 7998])))
@@ -120,6 +123,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         newest = self.page(BOARD + "?kind=closed&limit=1")["items"][0]
         self.assertEqual((newest["id"], newest["closed_at"], newest["outcome"], newest["output"]["kind"]),
                          (identifier(3), LATER, "cancelled", "report"))
+        # A closed item's age stops at closure.
+        self.assertEqual((newest["age_seconds"], newest["pending_since"]), (86400, None))
         self.assertEqual(self.get(newest["output"]["url"], OWNER), (200, "Cancellation report"))
 
         pr = PullRequest("https://github.com/example/project/pull/123", Revision("head", "base"))
@@ -146,7 +151,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         first = self.page(route + "?limit=2")
         self.assertEqual([row["version"] for row in first["events"]], [5000, 4999])
         with write_transaction(self.path) as db:
-            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)",
                        ("attempt", identifier(10), QUEUED.stage, "runner-secret", "lease-digest", 9999, LATEST))
             transition(db, 10, 5001, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
             db.execute("INSERT INTO external_rechecks VALUES (?, 5001, 1700000000000)", (identifier(10),))
@@ -156,6 +161,21 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual([row["version"] for row in later["events"]], [4998, 4997])
         self.assertNotIn("lease-digest", json.dumps(later))
         self.assertNotIn("runner-secret", json.dumps(later))
+        lifecycle = later["lifecycle"]
+        self.assertEqual((lifecycle["coverage"], lifecycle["visits_omitted"]), ("complete", 0))
+        self.assertEqual([visit["stage"] for visit in lifecycle["visits"]], ["report_drafting"])
+        self.assertEqual(lifecycle["visits"][0]["attempt_ids"], [])
+        self.assertEqual((lifecycle["visits"][0]["entered_at"], lifecycle["item_created_at"]), (EARLY, EARLY))
+        self.assertTrue(lifecycle["visits"][0]["open"])
+        self.assertEqual(later["item"]["slot"]["occupied_since"], LATEST)
+        self.assertEqual(self.get("/v1/operator/slots")[0], 401)
+        slots = self.page("/v1/operator/slots?limit=1")
+        self.assertEqual([(slot["attempt_id"], slot["execution_id"]) for slot in slots["items"]],
+                         [("attempt", identifier(10))])
+        self.assertTrue(slots["items"][0]["runner"].startswith("runner "))
+        self.assertEqual(slots["items"][0]["activity"], "lease_expired")
+        self.assertNotIn("runner-secret", json.dumps(slots))
+        self.assertIsNone(slots["next_cursor"])
         self.assertEqual(self.get(f"{BOARD}/{identifier(11)}/timeline?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])
@@ -183,6 +203,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(blocked["item"]["status"], "queued")
         self.assertEqual(blocked["item"]["blocked_prerequisite_count"], 1)
         self.assertEqual(blocked["item"]["wait_reason"], "Waiting for 1 prerequisite")
+        self.assertIsNotNone(blocked["item"]["wait_since"])
+        self.assertEqual(blocked["item"]["pending_since"], execution["created_at"])
         self.assertEqual(blocked["prerequisites"], [{
             "item_id": upstream, "title": "Work 1", "milestone": "report",
             "reason": "Waiting for prerequisite milestone report",
@@ -193,4 +215,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         ready = self.page(route)
         self.assertEqual(ready["item"]["blocked_prerequisite_count"], 0)
         self.assertIsNone(ready["item"]["wait_reason"])
+        self.assertIsNone(ready["item"]["wait_since"])
         self.assertEqual(ready["prerequisites"], [])
+        with connect(self.path, mode="ro") as db:
+            self.assertIsNone(db.execute("SELECT dependency_wait_since FROM executions WHERE id = ?",
+                                         (execution["id"],)).fetchone()[0])

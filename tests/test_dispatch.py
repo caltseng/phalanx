@@ -206,9 +206,20 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         timeline = f"/v1/operator/executions/{assigned['execution']['id']}/timeline"
         blocker = "RunnerError: Native discovery has not established one exact writer; reconcile this reservation"
         self.assertEqual(self.request(renew_path, RUNNER, {"worker": worker, "blocker": blocker}, headers)[0], 200)
-        self.assertEqual(self.get(timeline, OWNER)[1]["item"]["wait_reason"], blocker)
+        blocked = self.get(timeline, OWNER)[1]["item"]
+        self.assertEqual(blocked["wait_reason"], blocker)
+        self.assertIsNotNone(blocked["wait_since"])
+        self.assertEqual(blocked["slot"]["activity"], "resource_wait")
+        # Renewal with the same blocker keeps its first-report time.
+        self.assertEqual(self.request(renew_path, RUNNER, {"worker": worker, "blocker": blocker}, headers)[0], 200)
+        self.assertEqual(self.get(timeline, OWNER)[1]["item"]["wait_since"], blocked["wait_since"])
         self.assertEqual(self.request(renew_path, RUNNER, {"worker": worker}, headers)[0], 200)
-        self.assertIsNone(self.get(timeline, OWNER)[1]["item"]["wait_reason"])
+        cleared = self.get(timeline, OWNER)[1]["item"]
+        self.assertIsNone(cleared["wait_reason"])
+        self.assertEqual(cleared["slot"]["activity"], "executing")
+        with write_transaction(self.path) as db:
+            self.assertIsNone(db.execute("SELECT blocker_since FROM attempts WHERE id = ?",
+                                         (assigned["attempt_id"],)).fetchone()[0])
         with write_transaction(self.path) as db:
             db.execute("UPDATE attempts SET lease_expires_at = 0 WHERE id = ?", (assigned["attempt_id"],))
         expired = self.get(timeline, OWNER)[1]["item"]

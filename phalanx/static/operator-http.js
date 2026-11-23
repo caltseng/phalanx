@@ -71,6 +71,42 @@
       return value;
     }
 
+    function seconds(value) {
+      return Number.isSafeInteger(value) && value >= 0 ? value : null;
+    }
+
+    function slot(row) {
+      return {
+        occupiedSince: row.occupied_since, occupiedSeconds: seconds(row.occupied_seconds),
+        attemptSeconds: seconds(row.attempt_age_seconds),
+        handoffs: seconds(row.handoffs) ?? 0, activity: row.activity
+      };
+    }
+
+    function phases(row) {
+      return {
+        seconds: seconds(row.seconds), queuedSeconds: seconds(row.queued_seconds),
+        waitingSeconds: seconds(row.waiting_seconds), executingSeconds: seconds(row.executing_seconds)
+      };
+    }
+
+    function lifecycle(data) {
+      if (!data) return null;
+      return {
+        coverage: data.coverage, note: data.coverage_note, closedAt: data.closed_at, ...phases(data),
+        stages: pageRows(data.stages, 100).map(stage => ({
+          stage: stage.stage, visits: stage.visits, partial: Boolean(stage.partial), ...phases(stage)
+        })),
+        visits: pageRows(data.visits, 100).map(visit => ({
+          stage: visit.stage, enteredAt: visit.entered_at, exitedAt: visit.exited_at, open: Boolean(visit.open),
+          attempts: Array.isArray(visit.attempt_ids) ? visit.attempt_ids.length : 0,
+          retries: seconds(visit.retries) ?? 0, returned: Boolean(visit.returned),
+          outcome: visit.outcome, reason: visit.reason, partial: Boolean(visit.partial), ...phases(visit)
+        })),
+        visitsOmitted: seconds(data.visits_omitted) ?? 0
+      };
+    }
+
     function item(row) {
       const id = identifier(row.id);
       const itemId = identifier(row.item_id);
@@ -99,7 +135,12 @@
           : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null,
         primaryPrUrl: httpsUrl(row.primary_pr_url),
         closedAt: row.closed_at,
-        outcome: row.outcome
+        outcome: row.outcome,
+        ageSeconds: seconds(row.age_seconds),
+        pending: row.status !== "running" && !row.closed_at
+          ? { at: row.pending_since, seconds: seconds(row.pending_seconds) } : null,
+        wait: row.wait_reason ? { at: row.wait_since, seconds: seconds(row.wait_age_seconds) } : null,
+        slot: row.slot ? slot(row.slot) : null
       };
     }
 
@@ -133,6 +174,17 @@
           events: pageRows(page.events, limit).map(event => ({
             at: event.created_at, fromStage: event.from_stage,
             stage: event.stage, status: event.status, reason: event.reason
+          })),
+          nextCursor: nextCursor(page.next_cursor),
+          lifecycle: lifecycle(page.lifecycle)
+        };
+      },
+      async slots({ cursor, limit, signal }) {
+        const page = await read("/v1/operator/slots?" + query(limit, cursor), signal);
+        return {
+          items: pageRows(page.items, limit).map(row => ({
+            runner: row.runner, title: row.title, stage: row.stage, status: row.status,
+            blocker: row.blocker, ...slot(row)
           })),
           nextCursor: nextCursor(page.next_cursor)
         };

@@ -9,6 +9,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
+from . import operator_durations as durations
 from .auth import authenticate_board_read
 from .intake import report as stored_report
 from .intake_api import run
@@ -29,12 +30,15 @@ SUMMARY = """
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
-           (SELECT attempt.blocker FROM attempts AS attempt
-            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
-           (SELECT attempt.lease_expires_at FROM attempts AS attempt
-            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at,
-           (SELECT attempt.id FROM attempts AS attempt
-            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS stage_owner,
+           item.created_at AS item_created_at, execution.dependency_wait_since,
+           attempt.blocker AS runner_blocker, attempt.blocker_since, attempt.lease_expires_at,
+           attempt.id AS stage_owner, attempt.started_at AS attempt_started_at,
+           -- Current admission began at the first version after the execution last ran.
+           (SELECT entered.created_at FROM transition_history AS entered
+            WHERE entered.execution_id = execution.id AND entered.version = 1 + coalesce(
+                (SELECT max(ran.version) FROM transition_history AS ran
+                 WHERE ran.execution_id = execution.id
+                   AND json_extract(ran.state_json, '$.status') = 'running'), 0)) AS pending_since,
            (SELECT json_extract(history.details_json, '$.continued_from') IS NOT NULL
             FROM transition_history AS history
             WHERE history.execution_id = execution.id AND history.event = 'claim'
@@ -47,6 +51,7 @@ SUMMARY = """
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
+    LEFT JOIN attempts AS attempt ON attempt.execution_id = execution.id AND attempt.ended_at IS NULL
     LEFT JOIN external_rechecks AS recheck
         ON recheck.execution_id = execution.id AND recheck.version = execution.version
     LEFT JOIN attempt_workers AS worker ON worker.attempt_id = (
@@ -100,9 +105,10 @@ def page_cursor(rows, limit, scope, key):
     return encode_cursor(scope, key(rows[limit - 1])) if len(rows) > limit else None
 
 
-def summary(row, now):
+def summary(row, now, occupied=None):
     state = json.loads(row["state_json"])
     wait = state.get("wait") or {}
+    wait_since = row["wait_since"] if wait else None
     output = state["final_output"]
     outcome = None
     if output is not None:
@@ -116,19 +122,25 @@ def summary(row, now):
             {"kind": "report", "url": output["reference"]} if "reference" in output
             else {"kind": "pr", "url": output["url"]}
         )
-    wait_since = row["wait_since"]
+    # Each wait reason keeps the start time recorded for that same source, if any.
     blocked_count = row["blocked_count"]
     if blocked_count and not wait:
         noun = "prerequisite" if blocked_count == 1 else "prerequisites"
         wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
+        wait_since = row["dependency_wait_since"]
     if row["runner_blocker"] and not wait:
         wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
+        wait_since = row["blocker_since"]
     expires = row["lease_expires_at"]
     if expires is not None and expires <= now.timestamp() and not wait:
         # Runners publish blockers only while renewing, so an expired lease needs its own reason.
         at = datetime.fromtimestamp(expires, UTC).isoformat()
         wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
                 "trigger": "The runner recovers the expired attempt on its next pass"}
+        wait_since = datetime.fromtimestamp(expires, UTC).isoformat(timespec="microseconds")
+    closed_at = row["updated_at"] if output is not None else None
+    pending_since = row["pending_since"] if output is None and row["status"] != "running" else None
+    owner = row["stage_owner"]
     return {
         "id": row["id"],
         "item_id": row["item_id"],
@@ -148,16 +160,21 @@ def summary(row, now):
         "worker_url": row["worker_url"],
         # Who runs the current stage, whether it kept its slot from the previous
         # stage, and otherwise why the item last gave its runner slot back.
-        "stage_owner": row["stage_owner"],
-        "slot_retained": bool(row["stage_owner"] and row["slot_retained"]),
-        "capacity_release": None if row["stage_owner"] else row["capacity_release"],
+        "stage_owner": owner,
+        "slot_retained": bool(owner and row["slot_retained"]),
+        "capacity_release": None if owner else row["capacity_release"],
+        "slot": durations.slot(
+            {"id": owner, "started_at": row["attempt_started_at"]}, occupied or {},
+            row["status"], row["runner_blocker"], expires, now,
+        ) if owner else None,
         "wait_since": wait_since,
-        "wait_age_seconds": (
-            max(0, int((now - datetime.fromisoformat(wait_since)).total_seconds()))
-            if wait_since else None
-        ),
+        "wait_age_seconds": durations.elapsed(wait_since, now),
+        "item_created_at": row["item_created_at"],
+        "age_seconds": durations.elapsed(row["item_created_at"], closed_at or now),
+        "pending_since": pending_since,
+        "pending_seconds": durations.elapsed(pending_since, now),
         "primary_pr_url": state.get("primary_pr"),
-        "closed_at": row["updated_at"] if output is not None else None,
+        "closed_at": closed_at,
         "outcome": outcome,
         "output": output,
     }
@@ -207,10 +224,50 @@ def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
             after = decode_cursor(cursor, kind, (is_stamp, is_id))
             rows = closed_page(db, after, limit + 1)
             key = lambda row: [row["updated_at"], row["id"]]
+        occupied = durations.occupancy(db, [row["stage_owner"] for row in rows[:limit]])
     now = datetime.now(UTC)
     return {
-        "items": [summary(row, now) for row in rows[:limit]],
+        "items": [summary(row, now, occupied) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, kind, key),
+    }
+
+
+@router.get("/operator/slots")
+def list_slots(request: Request, limit: Limit = 25, cursor: Cursor = None):
+    """Occupied runner slots, ordered by current attempt start."""
+    after = decode_cursor(cursor, "slots", (is_stamp, is_id))
+    boundary = "AND (attempt.started_at, attempt.id) > (?, ?)" if after else ""
+    with read_transaction(request.app.state.database_path) as db:
+        rows = db.execute(
+            f"""SELECT attempt.id, attempt.started_at, attempt.runner_id, attempt.blocker,
+                       attempt.lease_expires_at, execution.id AS execution_id, execution.item_id,
+                       execution.stage, execution.status,
+                       json_extract(item.request_json, '$.goal') AS title
+                FROM attempts AS attempt
+                JOIN executions AS execution ON execution.id = attempt.execution_id
+                JOIN work_items AS item ON item.id = execution.item_id
+                WHERE attempt.ended_at IS NULL {boundary}
+                ORDER BY attempt.started_at, attempt.id LIMIT ?""",
+            (*(after or ()), limit + 1),
+        ).fetchall()
+        occupied = durations.occupancy(db, [row["id"] for row in rows[:limit]])
+    now = datetime.now(UTC)
+    return {
+        "items": [
+            {
+                "runner": durations.runner_label(row["runner_id"]),
+                "execution_id": row["execution_id"],
+                "item_id": row["item_id"],
+                "title": row["title"],
+                "stage": row["stage"],
+                "status": row["status"],
+                "blocker": row["blocker"],
+                **durations.slot(row, occupied, row["status"], row["blocker"],
+                                 row["lease_expires_at"], now),
+            }
+            for row in rows[:limit]
+        ],
+        "next_cursor": page_cursor(rows, limit, "slots", lambda row: [row["started_at"], row["id"]]),
     }
 
 
@@ -287,11 +344,15 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             ORDER BY version DESC, created_at DESC LIMIT ?""",
             (execution_id, execution_id, *params, limit + 1),
         ).fetchall()
+        occupied = durations.occupancy(db, [execution["stage_owner"]])
+        history = db.execute(durations.LIFECYCLE, (execution["item_id"],)).fetchall()
+    now = datetime.now(UTC)
     return {
-        "item": summary(execution, datetime.now(UTC)),
+        "item": summary(execution, now, occupied),
         "attempt": attempt["id"] if attempt else None,
         "prerequisites": [dict(row) for row in prerequisites],
         "question": question,
+        "lifecycle": durations.lifecycle(history, execution["item_created_at"], now),
         "events": [dict(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
     }
