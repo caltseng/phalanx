@@ -42,6 +42,7 @@ class FakeGitHub:
         self.comments = []
         self.threads = []
         self.lose_merge = False
+        self.tip = None
 
     def __call__(self, request, _timeout):
         path = urlsplit(request.full_url).path
@@ -80,7 +81,7 @@ class FakeGitHub:
         if path.endswith("/pulls"):
             return response([self.pull] if self.pull else [])
         if "/git/ref/" in path:
-            return response({"ref": "refs/heads/main", "object": {"sha": self.base, "type": "commit"}})
+            return response({"ref": "refs/heads/main", "object": {"sha": self.tip or self.base, "type": "commit"}})
         if path.endswith("/check-runs"):
             return response({"check_runs": self.runs})
         if path.endswith("/statuses"):
@@ -864,12 +865,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             routed = self.runner().submit(launch["marker"], "local", reviewer)
             self.assertEqual(routed["state"]["stage"], "pr_reconciliation", routed)
             if conflict:
+                # main moved past the PR's REST base.sha, which GitHub does not advance.
+                github.tip = "c" * 40
                 github.pull["mergeable"] = False
                 routed = self.runner().prepare(stages=["pr_reconciliation"])
                 self.assertEqual(routed["execution"]["state"]["stage"], "pr_revision", routed)
                 self.runner().prepare()
                 context = json.loads(self.runner().status()["packet"]["context"])
-                self.assertIn(f"conflicts with main at {base}", context["review_findings"])
+                self.assertIn(f"conflicts with main at {github.tip}", context["review_findings"])
                 return
             if feedback:
                 github.threads = [{"id": "PRRT_1", "isResolved": False, "isOutdated": False, "path": "app.py",

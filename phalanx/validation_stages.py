@@ -190,7 +190,7 @@ def _promotion(runner, snapshot):
         if pull.head_sha != candidate:
             return _retry(snapshot, "GitHub has not shown the pushed candidate on the PR yet")
     if pull.head_sha == candidate and pull.mergeable is False:
-        return _rework(snapshot, pull, base_ref, "merge_conflict")
+        return _conflict(github, snapshot, pull, base_ref)
     if pull.draft and not _may_mark_ready(runner, snapshot, url):
         return _question(snapshot, _REPROMOTE_PROMPT, handoff)
     result = promote(
@@ -388,7 +388,7 @@ def _disposition(runner, snapshot):
     if pull.mergeable is None:
         return _retry(snapshot, "GitHub is still computing mergeability")
     if not pull.mergeable:
-        return _rework(snapshot, pull, base_ref, "merge_conflict")
+        return _conflict(github, snapshot, pull, base_ref)
     try:
         feedback = github.get_actionable_feedback(pull.number)
     except GitHubError as error:
@@ -451,7 +451,8 @@ def _check_in(runner, snapshot):
     base_ref = claim["request"].get("target_branch") or mapping["base_branch"]
     target = MergeTarget(int(number), url, _item_branch(claim["item_id"]), base_ref,
                          Revision(ready["head"], ready["base"]))
-    result = check_in(_github(snapshot), target, assert_claim=_candidate(runner, snapshot)._authorize)
+    github = _github(snapshot)
+    result = check_in(github, target, assert_claim=_candidate(runner, snapshot)._authorize)
     pull = result.pull
     if result.status == "merged":
         return {"route": "pr-observation", "body": VerifiedMerge(
@@ -463,8 +464,10 @@ def _check_in(runner, snapshot):
         ).model_dump(mode="json")}
     if result.status == "pending":
         return _retry(snapshot, result.reason, result.retry_after_seconds)
-    if result.status in ("moved", "conflict"):
-        return _rework(snapshot, pull, base_ref, "unexpected_head" if result.status == "moved" else "merge_conflict")
+    if result.status == "moved":
+        return _rework(snapshot, pull, base_ref, "unexpected_head")
+    if result.status == "conflict":
+        return _conflict(github, snapshot, pull, base_ref)
     if result.status == "refused":
         interval, limit = _check_timing(runner)
         return {"route": "external-wait", "reason": result.reason[:16000], "body": {
@@ -506,7 +509,16 @@ def _handed_off_feedback(runner, snapshot):
     return {node for entry in timeline for node in (entry.get("details") or {}).get("feedback_ids") or ()}
 
 
-def _rework(snapshot, pull, base_ref, issue, feedback=()):
+def _conflict(github, snapshot, pull, base_ref):
+    """Send a merge conflict to rework against the target branch tip, which pull.base_sha can lag."""
+    try:
+        tip = github.get_branch_tip(base_ref)
+    except GitHubError as error:
+        return _retry(snapshot, str(error), error.retry_after_seconds)
+    return _rework(snapshot, pull, base_ref, "merge_conflict", base_tip=tip)
+
+
+def _rework(snapshot, pull, base_ref, issue, feedback=(), *, base_tip=None):
     reasons = {"merge_conflict": f"The PR conflicts with {base_ref}",
                "unexpected_head": f"The PR head {pull.head_sha} is not the candidate",
                "feedback": "The PR has new actionable GitHub feedback"}
@@ -514,7 +526,7 @@ def _rework(snapshot, pull, base_ref, issue, feedback=()):
         else "sending it to pr_revision"
     return {"route": "pr-rework", "reason": f"{reasons[issue]}; {fixer}",
             "body": Rework(
-                **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue,
+                **_event(snapshot), **_refs(snapshot, pull, base_ref), issue=issue, base_tip=base_tip,
                 findings=[text[:16000] for _, text in feedback], feedback_ids=[node for node, _ in feedback],
             ).model_dump(mode="json")}
 
