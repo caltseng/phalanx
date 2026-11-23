@@ -24,6 +24,8 @@ missing or invalid, stop and tell the owner.
    from `phx shift status`.
 3. If you have a predecessor, archive its chat once its `state` is `ended`, or once it is stale. If your
    runtime refuses because only a session's creator may archive it, ask the owner once to archive it.
+4. If you have a predecessor, message each of its writers' sessions once with your session ID, so their
+   reports reach you instead of its chat.
 
 ## Every wake
 
