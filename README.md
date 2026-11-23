@@ -528,6 +528,94 @@ checkout whose configured `origin` URL isn't the registered remote is refused.
 Owner-notify flags are sent once each to `notify_command`. Each pass prints one
 JSON line; `--once` runs a single pass and exits nonzero on any error.
 
+### Run a Captain on the direct path
+
+A Captain is an agent chat in any runtime that can start visible sessions. It
+launches one native worker session per item, registers it as the item's writer
+and coordinates it. It never does item work. The worker posts its own stage
+results with `phx work`, and the reconciler observes GitHub. See
+[docs/direct-sessions.md](docs/direct-sessions.md).
+
+The Captain's commands are `python -m phalanx shift ...`. They need
+`PHALANX_RUNNER_TOKEN` and a shift config, passed with `--config` (before or
+after the action) or set in `PHALANX_SHIFT_CONFIG`:
+
+```json
+{
+  "base_url": "http://127.0.0.1:8000",
+  "runtime": "copilot-app",
+  "charter": "C:\\phalanx\\charter\\charter.toml",
+  "worktrees": "C:\\phalanx\\direct\\worktrees",
+  "work_command": "python -m phalanx work",
+  "repositories": {
+    "phalanx-pilot-py": {"checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py", "base_branch": "main",
+                         "project_id": "<runtime project ID>"}
+  }
+}
+```
+
+`repositories` uses the runner configuration's mapping. `worktrees` is the root
+for item worktrees, and must be separate from any runner's. `work_command` is
+how a worker session runs `phx work` from its worktree. The default is
+`python -m phalanx work`.
+
+The charter is the Captain's standing authority. It is a TOML file on the
+runner host, outside every checkout, worktree and Git repository, so workers
+can't edit it:
+
+```toml
+goal = "Deliver the queued phalanx-pilot-py items"
+repositories = ["phalanx-pilot-py"]
+allowed_actions = ["launch, confirm, replace and withdraw writer sessions", "answer routine questions"]
+escalate = ["scope changes", "destructive actions", "missing credentials or authority"]
+stop_when = ["the owner ends the pilot"]
+notes = "Optional context for every Captain."
+
+[shift]
+max_hours = 4
+max_wakes = 48
+```
+
+`[shift]` is optional and defaults to 4 hours and 48 wakes (D7). `shift
+charter` validates the file and prints its revision, the SHA-256 of its bytes.
+Each heartbeat re-reads the charter and records that revision.
+
+| Command | Does |
+| --- | --- |
+| `shift prompt captain` | Prints the Captain prompt, the fixed wake loop. Needs no config |
+| `shift charter` | Validates the charter and prints it with its revision |
+| `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
+| `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session] [--handoff-note]` | Re-reads the charter and heartbeats. Omitted fields keep their last value. Prints `shift.handoff_due` once a shift bound is reached |
+| `shift status` | Flags, Captains and the charter's open items with their writers |
+| `shift launch --captain ID --item ITEM [--replaces WRITER]` | Prepares the item worktree, saves the writer credential in its Git directory and registers the writer intent. Prints `session_name`, which holds the nonce, and the worker's `kickoff` prompt. A rerun reuses the saved nonce, so a lost reply never launches twice |
+| `shift writer --captain --item --execution --writer [--session-id] [--session-url] [--state] [--abandon]` | Confirms a launched session or reports its state |
+| `shift withdraw --captain --item --execution --writer --reason [--stopped]` | Ends a writer whose session is stopped or never launched |
+
+#### In the GitHub Copilot app
+
+1. Start a new chat. Ask it to run `python -m phalanx shift prompt captain
+   --config <shift config>` and follow the printed prompt. Its first wake
+   registers it with `shift start --session-ref <its session ID>`.
+2. Have the Captain wake every 5 minutes (D5) with a session automation on its
+   own chat (`save_session_automation`, interval `minutes`, `every_minutes` 5).
+   Use the prompt "Wake: run `python -m phalanx shift prompt captain --config
+   <shift config>` and follow its Every wake steps." Idle notifications from
+   its worker sessions wake it sooner.
+3. To launch a worker, the Captain runs `shift launch`, then creates one
+   session with `create_session`:
+   - the `project_id` from `add_repository` with the returned `worktree` path;
+   - `workspace_type` `branch`, so the session uses that worktree;
+   - `name` set to `session_name`;
+   - kickoff `prompt` set to `kickoff`, with mode `autopilot`.
+
+   It confirms the session with `shift writer --session-id <session ID>`.
+   `list_sessions_and_chats` finds a lost launch by its name, which holds the
+   nonce.
+
+Watch the run on the [operator board](#operator-work-board), which shows each
+item's writer, the live Captains and the flags. `GET /v1/captains` and `GET
+/v1/flags` return the same data.
+
 ### Reconcile an attended reservation
 
 From a fresh Captain chat, inspect the runner's original configuration and state directory. Run one recovery step with the runner token.
