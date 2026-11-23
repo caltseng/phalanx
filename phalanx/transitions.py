@@ -26,6 +26,16 @@ class Stage(StrEnum):
     REPORT_STORAGE = "report_storage"
 
 
+# Stages the runner completes itself, without an agent worker session.
+RUNNER_ONLY_STAGES = frozenset({
+    Stage.PR_CREATION, Stage.REPORT_STORAGE, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION,
+    Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.CHECK_IN,
+})
+# Per-runner attempts beyond its capacity that only runner-only stages may use, so a
+# short GitHub or check stage never waits behind long agent workers.
+RUNNER_ONLY_SLOTS = 2
+
+
 class Status(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"

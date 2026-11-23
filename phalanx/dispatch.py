@@ -6,7 +6,7 @@ from time import time
 
 from . import intake
 from .config import DEFAULT_LEASE_SECONDS
-from .transitions import Event, Status, Wait
+from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES, TERMINAL, Event, Stage, Status, Wait
 
 
 # The server sets this once at startup from PHALANX_LEASE_SECONDS.
@@ -91,21 +91,23 @@ def admit(db, request, lease_digest):
     settings = db.execute("SELECT * FROM dispatch_settings WHERE id=1").fetchone()
     if settings["paused"]:
         return {"status": "paused"}
-    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?",
-                       (request.runner_id,)).fetchone()
-    capacity = limit["capacity"] if limit else DEFAULT_CAPACITY
+    capacity = _capacity(db, request.runner_id)
     if request.slots is not None:
         capacity = min(capacity, request.slots)
-    reserved = db.execute(
-        "SELECT count(*) FROM attempts WHERE runner_id=? AND ended_at IS NULL",
-        (request.runner_id,),
-    ).fetchone()[0]
-    if reserved >= capacity:
-        return {"status": "at_capacity", "reserved": reserved, "capacity": capacity}
+    reserved, agents = _reserved(db, request.runner_id)
+    full = {"status": "at_capacity", "reserved": reserved, "capacity": capacity}
+    if reserved >= capacity + RUNNER_ONLY_SLOTS:
+        return full
 
     now = time()
     repository_ids = sorted(set(request.repository_ids))
     stages = sorted(set(request.stages or ()))
+    restricted = agents >= capacity
+    if restricted:
+        # Agent workers hold the whole capacity; only runner-only stages may use the extra slots.
+        stages = sorted(str(stage) for stage in set(stages or Stage) & RUNNER_ONLY_STAGES)
+        if not stages:
+            return full
     expires = int(now) + LEASE_SECONDS
     # Each stale head is removed from the index by claim_attempt. Bound the
     # repair work in one poll so other writers can acquire the transaction.
@@ -127,7 +129,95 @@ def admit(db, request, lease_digest):
                 "lease_expires_at": expires, "item_id": row["item_id"],
                 "request": json.loads(work_item["request_json"]),
             }
-    return {"status": "no_eligible_work"}
+    return full if restricted else {"status": "no_eligible_work"}
+
+
+def _capacity(db, runner_id):
+    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?", (runner_id,)).fetchone()
+    return limit["capacity"] if limit else DEFAULT_CAPACITY
+
+
+def _reserved(db, runner_id):
+    """Count the runner's open attempts, and those at stages that run an agent worker."""
+    runner_only = sorted(map(str, RUNNER_ONLY_STAGES))
+    row = db.execute(
+        f"""SELECT count(*), coalesce(sum(stage NOT IN ({",".join("?" * len(runner_only))})), 0)
+            FROM attempts WHERE runner_id=? AND ended_at IS NULL""",
+        (*runner_only, runner_id),
+    ).fetchone()
+    return row[0], row[1]
+
+
+def hand_off(db, item_id, attempt_id, view, continuation):
+    """Keep the ended attempt's slot for the next stage, or record why it was released.
+
+    Runs in the transaction that ended the attempt, so no other claim can take
+    the slot in between. The next stage still gets its own attempt and lease.
+    """
+    attempt = db.execute("SELECT runner_id, ended_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if attempt is None or attempt["ended_at"] is None:
+        return view
+    runner_id = attempt["runner_id"]
+    row = intake.execution_row(db, item_id, view["id"])
+    state = intake.STATE.validate_json(row["state_json"])
+    now = time()
+    reason = _release_reason(db, row, state, runner_id, continuation, now)
+    assignment = None
+    expires = int(now) + LEASE_SECONDS
+    if reason is None:
+        assignment = intake.claim_attempt(
+            db, row, state, runner_id=runner_id, lease_digest=intake.digest(continuation["lease"]),
+            lease_expires_at=expires, now=now, continued_from=attempt_id,
+        )
+        reason = None if assignment is not None else "dependency wait"
+    if assignment is None:
+        db.execute(
+            """UPDATE transition_history SET details_json=json_set(details_json, '$.capacity_release', ?)
+               WHERE execution_id=? AND attempt_id=? AND event != ? AND version=(
+                   SELECT max(version) FROM transition_history
+                   WHERE execution_id=? AND attempt_id=? AND event != ?)""",
+            (reason, row["id"], attempt_id, Event.CLAIM, row["id"], attempt_id, Event.CLAIM),
+        )
+        return view
+    work_item = intake.item_row(db, row["item_id"])
+    return {**view, "continuation": {
+        "status": "claimed", **assignment, "runner_id": runner_id, "lease_expires_at": expires,
+        "item_id": row["item_id"], "request": json.loads(work_item["request_json"]),
+    }}
+
+
+def _release_reason(db, row, state, runner_id, continuation, now):
+    if state.status in TERMINAL:
+        return f"closed as {state.status}"
+    if state.pending_output is not None:
+        return "finalizing output"
+    if state.stopping is not None:
+        return "stop requested"
+    if state.status == Status.WAITING_FOR_INPUT:
+        return "input wait"
+    if state.status == Status.WAITING_FOR_EXTERNAL:
+        return "external wait"
+    if state.status != Status.QUEUED:
+        return str(state.status)
+    if row["retry_at"] is not None or row["ready_since"] > int(now * 1000):
+        return "retry backoff"
+    if row["dependency_wait_json"] is not None:
+        return "dependency wait"
+    if continuation is None:
+        return "runner did not offer a continuation"
+    if state.stage not in continuation["stages"]:
+        return f"runner cannot run {state.stage}"
+    if row["queue_affinity"] not in ("", runner_id):
+        return "pinned to another runner"
+    if db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]:
+        return "dispatch paused"
+    capacity = _capacity(db, runner_id)
+    reserved, agents = _reserved(db, runner_id)
+    if reserved >= capacity + RUNNER_ONLY_SLOTS or (
+        state.stage not in RUNNER_ONLY_STAGES and agents >= capacity
+    ):
+        return "runner at capacity"
+    return None
 
 
 def open_attempt(db, runner_id, attempt_id):
@@ -156,6 +246,15 @@ def renew(db, runner_id, attempt_id, lease_digest, worker=None, blocker=None):
     return {"attempt_id": attempt_id, "lease_expires_at": expires}
 
 
+def report_recovery_wait(db, runner_id, attempt_id, blocker):
+    # An expired lease cannot renew, so recovery reports its owner wait here; None clears it.
+    attempt = open_attempt(db, runner_id, attempt_id)
+    if attempt["lease_expires_at"] > time():
+        raise intake.Conflict("The lease is live. Report blockers on renewal")
+    db.execute("UPDATE attempts SET blocker=? WHERE id=?", (blocker, attempt_id))
+    return {"attempt_id": attempt_id, "blocker": blocker}
+
+
 def recovery_candidates(db, runner_id):
     return [
         {**dict(row), "reason": "lease_expired",
@@ -170,7 +269,8 @@ def recover_stopped(db, runner_id, attempt_id, body):
     if attempt["lease_expires_at"] > now:
         raise intake.Conflict("The existing lease is still live")
     row, state = intake.check_current(db, body.item_id, attempt["execution_id"], body.expected_version)
-    details = {"runner_id": runner_id, "reconciliation": body.reconciliation}
+    details = {"runner_id": runner_id, "reconciliation": body.reconciliation,
+               "capacity_release": "lease expired"}
     if state.stopping in {Status.CANCELLED, Status.FAILED}:
         return intake.confirm_stop(db, row, state, attempt_id, details=details)
     if state.status != Status.RUNNING or state.stage != attempt["stage"]:

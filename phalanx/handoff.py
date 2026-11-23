@@ -76,6 +76,8 @@ class WorkPacket:
     context: str = ""
     handoff: str = ""
     base_branch: str | None = None
+    # The exact base commit pinned at claim, which a development candidate must contain.
+    base_revision: str | None = None
     report_checkpoint: dict[str, str] | None = None
     dependencies: tuple[dict, ...] = ()
 
@@ -154,6 +156,7 @@ class WorkerHandoff:
             "result_identity": packet.result_identity(),
             "output_type": packet.output_type,
             "base_branch": packet.base_branch,
+            **({"base_revision": packet.base_revision} if packet.base_revision else {}),
             "goal": packet.goal,
             "evidence_requirements": packet.evidence_requirements,
             "context": packet.context,
@@ -204,6 +207,20 @@ Temporary path: {self.temporary_path}
 Final path: {self.result_path}
 """,
         }
+
+    def resume_prompt(self) -> str:
+        """Ask the same writer to finish its stopped assignment without losing its local work."""
+        return f"""Phalanx attempt marker: {self.packet.marker}
+
+You stopped before writing this attempt's result. Continue the same assignment
+from your earlier instructions in worktree {self.packet.worktree}. Keep its
+existing commits and uncommitted changes: never reset, stash, clean or discard
+them. Finish the stage, then write the result JSON exactly as instructed before,
+to the temporary path and then renamed to the final path.
+
+Temporary path: {self.temporary_path}
+Final path: {self.result_path}
+"""
 
     def read_result(self) -> WorkerResult | None:
         """Read evidence without confirming chat stop, admission, or persistence."""

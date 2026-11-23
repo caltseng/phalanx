@@ -7,10 +7,10 @@ from typing import Annotated, Literal
 
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError, field_validator, model_validator
 
-from .candidate_local import LocalCheck
+from .github_checks import PreviewReader
+from .local_checks import LocalCheck
 from .intake_models import Identifier, Payload, Text
 from .pr_models import RequiredCheck as CheckConfig
-from .published_validation_stage import PublishedValidationPolicy
 from .validation import CheckKind, PreCheck, PreOutcome, RequiredCheck
 
 _IDENTIFIER = TypeAdapter(Identifier)
@@ -21,6 +21,17 @@ _ARGUMENT = Annotated[str, StringConstraints(strict=True, pattern=r"^[^\x00]*$")
 
 class ValidationPolicyError(ValueError):
     """Repair the trusted configuration before dispatching validation."""
+
+
+@dataclass(frozen=True)
+class PublishedValidationPolicy:
+    """Complete ready-phase policy from trusted runner configuration."""
+
+    required: tuple[RequiredCheck, ...] | None
+    read_preview: PreviewReader | None = None
+    # Pending ready checks; None leaves the server defaults.
+    recheck_seconds: int | None = None
+    wait_limit_seconds: int | None = None
 
 
 @dataclass(frozen=True)

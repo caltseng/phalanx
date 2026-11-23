@@ -38,6 +38,8 @@ class DraftAssignment:
     attempt_id: str
     state_version: int
     lease: str = field(repr=False)
+    # Optional next-stage offer headers for the attempt-ending submission.
+    offer: dict = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ class DraftStageRunner:
                 route, "draft-observation")
             return self.api.call(
                 f"{path}/{route}", body, lease=assignment.lease,
-                key=f"{prefix}:{assignment.attempt_id}:{assignment.state_version}",
+                key=f"{prefix}:{assignment.attempt_id}:{assignment.state_version}", **assignment.offer,
             )
 
         # Replay a previously sealed body before asking for a live claim. The

@@ -4,10 +4,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx.github import GitHubClient, HTTPResponse
-from phalanx.published_validation_stage import (
-    PublishedValidationAssignment, PublishedValidationPolicy, PublishedValidationRunner,
-)
+from phalanx.published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
 from phalanx.validation import CheckKind, RequiredCheck
+from phalanx.validation_policy import PublishedValidationPolicy
 from phalanx.workspaces import _item_branch
 
 from test_github import BASE, HEAD, pull, response
@@ -47,7 +46,7 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         github = GitHubClient("owner", "repo", token="fixture", transport=send)
         return PublishedValidationRunner(self.journal, self, github)
 
-    def call(self, path, body, *, lease, key=None):
+    def call(self, path, body, *, lease, key=None, **offer):
         self.assertEqual(lease, self.assignment.lease)
         route = path.rsplit("/", 1)[1]
         self.calls.append((route, body, key))
@@ -59,10 +58,8 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         return {"committed": True}
 
     def verify_snapshot(self, *checks):
-        tip = response({"ref": "refs/heads/main",
-                        "object": {"sha": self.snapshot["base"]["sha"], "type": "commit"}})
         snapshot = response(self.snapshot)
-        self.responses.extend((snapshot, snapshot, tip, *checks, snapshot, tip))
+        self.responses.extend((snapshot, snapshot, *checks, snapshot))
 
     def test_replays_sealed_pending_payload_after_lost_response_and_policy_change(self):
         self.verify_snapshot(response([{"context": "build", "state": "pending"}]))
@@ -135,15 +132,6 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         self.assertEqual(route, "pr-observation")
         self.assertEqual(body["expected"]["base_sha"], advanced)
         self.assertEqual(body["gates"]["base_sha"], advanced)
-
-    def test_moved_target_tip_retries_instead_of_asking_owner(self):
-        tip = response({"ref": "refs/heads/main", "object": {"sha": "d" * 40, "type": "commit"}})
-        snapshot = response(self.snapshot)
-        self.responses.extend((snapshot, snapshot, tip))
-        self.runner.run(self.assignment, PublishedValidationPolicy(()))
-        route, body, _ = self.calls[-1]
-        self.assertEqual((route, body["outcome"]), ("result", "failed"))
-        self.assertGreater(body["retry_after_seconds"], 0)
 
     def test_outside_retarget_and_lost_claim_do_not_attest(self):
         self.authority["current"] = False

@@ -13,10 +13,11 @@ from urllib.request import Request, urlopen
 
 from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest
-from phalanx.store import APPLICATION_ID, connect, write_transaction
+from phalanx.store import connect, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
+from timing import WAIT_SECONDS
 
 
 LEASE = "x" * 32
@@ -28,10 +29,6 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        # Start from a genuine migration-1 store.
-        with connect(self.path, mode="rwc") as db:
-            db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-            db.execute("PRAGMA user_version = 1")
         self.server = self.start_server(self.path)
 
     def submit(self, path, body, *, token=OWNER, key=None, lease=None):
@@ -110,6 +107,29 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             )
             self.assertEqual(cli.returncode, 0, cli.stderr)
             self.assertEqual(json.loads(cli.stdout), item)
+
+    def test_cli_cancel_uses_current_execution_and_version(self):
+        item, _, base, execution = self.create()
+
+        def cancel():
+            return subprocess.run(
+                [sys.executable, "-m", "phalanx", "--api-url", self.url, "cancel", item["id"],
+                 "--reason", "Stale item"],
+                env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True, timeout=10,
+            )
+
+        cli = cancel()
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        cancelled = json.loads(cli.stdout)
+        self.assertEqual(cancelled["id"], item["execution"]["id"])
+        self.assertGreater(cancelled["version"], item["execution"]["version"])
+        events = self.get(execution + "/timeline", OWNER)[1]
+        self.assertEqual(sum(event["event"] == "cancel" for event in events), 1)
+        self.assertEqual(next(event for event in events if event["event"] == "cancel")["details"]["reason"],
+                         "Stale item")
+        again = cancel()
+        self.assertEqual(again.returncode, 1)
+        self.assertIn("HTTP 409", again.stderr)
 
     def test_report_review_loop_and_verified_output_survive_restart(self):
         item, _, base, route = self.create()
@@ -491,7 +511,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             db.execute("UPDATE report_finalizations SET due_at=0 WHERE execution_id=?", (execution_id,))
         self.server = self.start_server(self.path)
         # Background finalization runs on the server's schedule; poll generously.
-        deadline = monotonic() + 30
+        deadline = monotonic() + WAIT_SECONDS
         while monotonic() < deadline:
             closed = self.get(base, OWNER)[1]["execution"]
             if closed["state"]["status"] == "cancelled":

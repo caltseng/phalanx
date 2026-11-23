@@ -258,6 +258,43 @@ class RelayQueueTests(unittest.TestCase):
         waiters[0].join(10)
         self.assertEqual(results[1], {"threads": []})
 
+    def test_stall_survives_requeue_and_clears_once_a_server_polls(self):
+        transport = RelayTransport(self.root, timeout=0.1, poll=0.01)
+        self.assertIsNone(transport.stall(0))
+        with self.assertRaises(LaunchNotDelivered):
+            transport("observe", {"references": []})
+        with self.assertRaises(LaunchNotDelivered):
+            transport("observe", {"references": [{"marker": "m"}]})
+        stall = transport.stall(0.15)
+        self.assertRegex(stall, "taken no request since .*Z; start or wake the relay server")
+        self.assertIsNone(transport.stall(60))
+        take_next(self.root, wait=0)
+        self.assertIsNone(transport.stall(0))
+
+    def test_overlapping_servers_take_each_request_exactly_once(self):
+        transport = RelayTransport(self.root, timeout=30, poll=0.01)
+        results, taken, stop = [], [], Event()
+        def server():
+            while not stop.is_set():
+                request = take_next(self.root, wait=0.05, poll=0.001)
+                if "id" in request:
+                    taken.append(request["id"])
+                    respond(self.root, request["id"], response=request["arguments"])
+        servers = [Thread(target=server) for _ in range(2)]
+        waiters = [Thread(target=self.call, args=(transport, results, "observe", {"references": [{"marker": str(n)}]}))
+                   for n in range(20)]
+        for thread in servers + waiters:
+            thread.start()
+        for waiter in waiters:
+            waiter.join(30)
+        stop.set()
+        for thread in servers:
+            thread.join(30)
+        self.assertEqual(len(taken), 20)
+        self.assertEqual(len(set(taken)), 20)
+        self.assertEqual(sorted(result["references"][0]["marker"] for result in results),
+                         sorted(str(n) for n in range(20)))
+
 
 def worker_prompt(marker, identity):
     packet = json.dumps({"result_identity": identity, "goal": "Fix it"}, indent=2)

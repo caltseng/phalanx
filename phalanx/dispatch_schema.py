@@ -7,14 +7,6 @@ DISPATCH_SCHEMA = (
     "ALTER TABLE executions ADD COLUMN ready_since INTEGER",
     "ALTER TABLE executions ADD COLUMN retry_at INTEGER",
     "ALTER TABLE executions ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0",
-    """UPDATE executions SET
-        queue_repository = (SELECT repository_id FROM work_items WHERE id = executions.item_id),
-        queue_priority = (SELECT CASE json_extract(request_json, '$.priority')
-            WHEN 'urgent' THEN 2 WHEN 'low' THEN 0 ELSE 1 END
-            FROM work_items WHERE id = executions.item_id),
-        ready_since = CASE WHEN status = 'queued' THEN CAST(
-            round((unixepoch(updated_at, 'subsec')) * 1000) AS INTEGER) END
-        WHERE status NOT IN ('completed', 'failed', 'cancelled')""",
     """CREATE INDEX queue_heads ON executions
         (queue_repository, queue_affinity, queue_priority, ready_since, item_id, id)
         WHERE status = 'queued' AND ready_since IS NOT NULL""",
