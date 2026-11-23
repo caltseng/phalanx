@@ -12,6 +12,9 @@ from .transitions import Event, Status, Wait
 # The server sets this once at startup from PHALANX_LEASE_SECONDS.
 LEASE_SECONDS = DEFAULT_LEASE_SECONDS
 DEFAULT_CAPACITY = 4
+# Aged work outranks fresh urgent work only after waiting more than one
+# interval per band of difference, so urgent stays meaningful under intake.
+DEFAULT_AGING_SECONDS = 3600
 PRIORITIES = range(3)
 QUEUE_BUCKET = """
     SELECT id, item_id, ready_since FROM executions {index}
@@ -49,6 +52,9 @@ def set_capacity(db, runner_id, capacity):
 
 
 def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
+    # Each aging interval adds one band without a cap, so every eligible item
+    # eventually outranks newer arrivals. Ties go to the higher base priority,
+    # which keeps fresh urgent work ahead of normal work aged one interval.
     # Within each bucket an older item can only gain as much or more priority.
     best_rank = None
     best = None
@@ -62,8 +68,8 @@ def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
                     if row is None:
                         continue
                     ready_since = row["ready_since"]
-                    effective = min(2, priority + (now_ms - ready_since) // aging_ms)
-                    rank = (-effective, ready_since, row["item_id"], row["id"])
+                    effective = priority + (now_ms - ready_since) // aging_ms
+                    rank = (-effective, -priority, ready_since, row["item_id"], row["id"])
                     if best_rank is None or rank < best_rank:
                         best_rank, best = rank, row
     return best

@@ -48,6 +48,12 @@ ADOPTION_SCHEMA = (
 )
 
 
+# Raise the original 5 minute default unless the owner already changed it.
+AGING_DEFAULT_SCHEMA = (
+    "UPDATE dispatch_settings SET aging_seconds = 3600 WHERE aging_seconds = 300",
+)
+
+
 STAGE_QUEUE_SCHEMA = (
     """CREATE INDEX queue_stage_heads ON executions
         (queue_repository, queue_affinity, queue_priority, stage, ready_since, item_id, id)

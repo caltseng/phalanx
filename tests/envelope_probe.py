@@ -955,7 +955,7 @@ class Probe:
                 continue
             band = PRIORITY_NAMES[row["queue_priority"]]
             bands[band].append(wait)
-            if min(2, row["queue_priority"] + wait // aging) > row["queue_priority"]:
+            if wait >= aging:
                 promoted[band] += 1
         return {
             "eligible_to_claim_seconds_by_base_priority": {

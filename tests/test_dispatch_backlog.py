@@ -36,7 +36,7 @@ class BacklogAdmissionTest(TestCase):
                     intake.apply(db, *self.current(db, item), Event.CLAIM, details={})
                     claimed = dict(item, execution=dict(item["execution"], version=item["execution"]["version"] + 1))
                     self.ask(db, *self.current(db, claimed))
-                aged = [self.enqueue(db, "low", NOW - 2 * AGE_STEP - offset)
+                aged = [self.enqueue(db, "low", NOW - 3 * AGE_STEP - offset)
                         for offset in reversed(range(CAPACITY + 2))]
                 for _ in range(4 * CAPACITY):
                     self.enqueue(db, "urgent", NOW - 1)

@@ -18,7 +18,7 @@ Slots = Annotated[int, Field(strict=True, ge=1, le=256)]
 
 class DispatchSettings(Payload):
     paused: Annotated[bool, Field(strict=True)]
-    aging_seconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = 300
+    aging_seconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = dispatch.DEFAULT_AGING_SECONDS
 
 
 class Capacity(Payload):

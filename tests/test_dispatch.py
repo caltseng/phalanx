@@ -47,13 +47,14 @@ class DispatchTest(ServerFixture, unittest.TestCase):
 
     def test_aging_stable_fifo_and_capability_filters(self):
         low, normal, urgent_a, urgent_b, other, future, pinned = self.seed("repo", [
-            ("low", -600, None), ("normal", -300, None), ("urgent", -10, None),
+            ("low", -1200, None), ("normal", -600, None), ("urgent", -10, None),
             ("urgent", -10, None), ("urgent", -700, "other"), ("urgent", 1, None),
             ("urgent", -20, "local"),
         ])
         self.seed("elsewhere", [("urgent", -800, None)])
         with write_transaction(self.path) as db:
             dispatch.set_capacity(db, "local", 10)
+            dispatch.set_dispatch(db, DispatchSettings(paused=False, aging_seconds=300))
         with patch.object(dispatch, "time", return_value=NOW):
             actual = [self.claim("local", ["repo"])["item_id"] for _ in range(5)]
             self.assertEqual(actual, [low, normal, pinned, *sorted((urgent_a, urgent_b))])
@@ -61,6 +62,19 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             self.assertEqual(self.claim("other", ["repo"])["item_id"], other)
         with patch.object(dispatch, "time", return_value=NOW + 1):
             self.assertEqual(self.claim("local", ["repo"])["item_id"], future)
+
+    def test_fresh_urgent_beats_aged_normal_while_old_work_still_runs(self):
+        hour = 3600
+        aged, urgent, stale, oldest_low = self.seed("repo", [
+            ("normal", -hour - 1800, None), ("urgent", 0, None),
+            ("normal", -2 * hour - 1, None), ("low", -4 * hour - 1, None),
+        ])
+        with connect(self.path) as db:
+            settings = db.execute("SELECT aging_seconds FROM dispatch_settings").fetchone()
+            self.assertEqual(settings["aging_seconds"], dispatch.DEFAULT_AGING_SECONDS)
+        with patch.object(dispatch, "time", return_value=NOW):
+            actual = [self.claim("local", ["repo"])["item_id"] for _ in range(4)]
+        self.assertEqual(actual, [oldest_low, stale, urgent, aged])
 
     def test_attended_stage_filter_skips_later_work_and_preserves_it_for_other_runners(self):
         supported = ["development", "report_drafting"]

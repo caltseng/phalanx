@@ -59,7 +59,7 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             older = self.file(db, priority="low")
             urgent = self.file(db, priority="urgent")
             db.execute("UPDATE executions SET ready_since=? WHERE item_id=?",
-                       (int(time() * 1000) - 900_000, older["id"]))
+                       (int(time() * 1000) - 3 * dispatch.DEFAULT_AGING_SECONDS * 1000 - 1000, older["id"]))
 
             first_revision = self.complete_report(db, first)
             waiting = intake.inspect(db, dependent["id"])["execution"]["unmet_dependencies"]
