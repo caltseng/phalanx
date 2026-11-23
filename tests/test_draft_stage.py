@@ -99,7 +99,7 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
         return DraftAssignment(self.item, self.execution, result["runner_id"],
                                result["attempt_id"], result["execution"]["version"], lease)
 
-    def call(self, path, body, *, lease, key=None):
+    def call(self, path, body, *, lease, key=None, **offer):
         self.calls.append((path, body, key))
         headers = {"Phalanx-Lease": lease}
         if key:
