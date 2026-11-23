@@ -28,7 +28,7 @@ from phalanx.github import ATTRIBUTION, GitHubClient
 from phalanx.store import connect, write_transaction
 from phalanx.workspaces import WorkspaceManager, _item_branch
 
-from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_bootstrap import OWNER, REQUEST_TIMEOUT, RUNNER, ServerFixture
 from test_github import pull, response
 from timing import WAIT_SECONDS
 
@@ -239,7 +239,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "repository_id": "repo", "goal": "Document the test suite", "target": "report",
         })
         self.assertEqual(status, 201, item)
-        api, paths = RunnerAPI(self.url, RUNNER), []
+        api, paths = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT), []
         call = api.call
         api.call = lambda path, *args, **kwargs: paths.append(path) or call(path, *args, **kwargs)
         self.api = api
@@ -279,7 +279,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 201, item)
         execution = item["execution"]["id"]
         route = f"/v1/items/{item['id']}/executions/{execution}"
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
 
         def submit(launch, details, outcome="succeeded"):
             self.assertEqual(launch["status"], "launch_intent")
@@ -377,7 +377,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 201, item)
         execution = item["execution"]["id"]
         route = f"/v1/items/{item['id']}/executions/{execution}"
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         call = self.api.call
 
         def unsent(path, body=None, **kwargs):
@@ -578,7 +578,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
 
     def test_owner_reply_reaches_the_next_attended_launch(self):
         self.start_server(self.checkout.parent / "queue.sqlite3")
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         status, registration = self.request(
             "/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)},
         )
@@ -843,7 +843,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "target_branch": "main",
         })
         self.assertEqual(status, 201, item)
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         policy = self.root.parent / "validation-policy.json"
         policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
             "local_checks": [{"name": "unit tests", "argv": [sys.executable, "-c", "print('ok')"],
@@ -1035,7 +1035,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Fix tests", "target": "ready_for_check_in",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         policy = self.root.parent / "validation-policy.json"
         policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
             "local_checks": [{"name": "platform", "allow_skip": True, "bypass": {

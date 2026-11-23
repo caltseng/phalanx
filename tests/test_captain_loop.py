@@ -19,7 +19,7 @@ from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDe
 from phalanx.captain_loop import CaptainLoop, command_notifier
 from phalanx.captain_relay import RelayTransport, respond, take_next
 from phalanx.workspaces import WorkspaceManager
-from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_bootstrap import OWNER, REQUEST_TIMEOUT, RUNNER, ServerFixture
 from timing import WAIT_SECONDS
 
 
@@ -406,7 +406,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         AttendedRunner(self.root, self.config, self.api).prepare()
         execution_route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
         native, call = self.native.__call__, self.api.call
@@ -639,7 +639,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.config["capacity"] = 1
         self.start_server(self.directory / "runner-only-cancel.sqlite3")
         self.request("/v1/repositories", OWNER, {"id": "repo", "remote": str(self.checkout)})
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         loop = self.loop()
         runner = loop.runner
         for stage, target, worker_stages, method in (
@@ -900,7 +900,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             "repository_id": "repo", "goal": "Write a test report", "target": "report",
         })
         self.assertEqual(status, 201)
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         original = self.native.__call__
         def native(operation, arguments):
             reply = original(operation, arguments)
@@ -997,7 +997,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         execution_route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
         original_prepare, original_call = WorkspaceManager.prepare, self.api.call
         stop_posts = []
@@ -1037,7 +1037,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         loop = self.loop()
         self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
         packet = self.write_result(1)
@@ -1081,7 +1081,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         loop = self.loop()
         loop._prepare(1)
         packet = self.write_result(1)
@@ -1132,7 +1132,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         runner = AttendedRunner(self.root, self.config, self.api)
         runner.prepare()
         snapshot = runner._snapshot()
@@ -1168,7 +1168,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         self.native.fail_launch = before_receipt
         loop = self.loop()
         self.spin(loop, lambda: len(self.native.launches) == 1 and (
@@ -1210,7 +1210,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         _, item = self.request("/v1/items", OWNER, {
             "repository_id": "repo", "goal": "Write a report", "target": "report",
         })
-        self.api = RunnerAPI(self.url, RUNNER)
+        self.api = RunnerAPI(self.url, RUNNER, timeout=REQUEST_TIMEOUT)
         runner = AttendedRunner(self.root, self.config, self.api)
         runner.prepare()
         snapshot = runner._snapshot()

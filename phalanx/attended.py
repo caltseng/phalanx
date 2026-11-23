@@ -28,7 +28,7 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 class RunnerAPI:
-    def __init__(self, base_url, token):
+    def __init__(self, base_url, token, *, timeout=10):
         url = urlsplit(base_url)
         if (
             not url.hostname or url.username or url.password or url.query or url.fragment
@@ -39,6 +39,7 @@ class RunnerAPI:
             raise RunnerError("Use HTTPS or a loopback HTTP API URL without credentials")
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.timeout = timeout
         self.opener = build_opener(NoRedirect())
 
     def call(self, path, body=None, *, lease=None, key=None, plain_text=False,
@@ -57,7 +58,7 @@ class RunnerAPI:
         request = Request(self.base_url + "/v1" + path, headers=headers,
                           data=None if body is None else json.dumps(body).encode())
         try:
-            with self.opener.open(request, timeout=10) as response:
+            with self.opener.open(request, timeout=self.timeout) as response:
                 return response.read().decode("utf-8") if plain_text else json.load(response)
         except HTTPError as exc:
             raise RunnerError(f"Runner API returned HTTP {exc.code} for {path}") from None
