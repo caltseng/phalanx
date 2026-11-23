@@ -723,7 +723,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_check_in_merges_and_reconciles_a_lost_merge_response_over_http(self):
         self.live_review_path(blocking=False, merge=True)
 
-    def live_review_path(self, *, blocking, conflict=False, feedback=False, merge=False):
+    def test_advanced_main_still_promotes_on_green_draft_checks_and_merges(self):
+        self.live_review_path(blocking=False, merge=True, moved_base=True)
+
+    def test_advanced_main_with_failed_draft_check_returns_to_development(self):
+        self.live_review_path(blocking=False, moved_base=True, draft_conclusion="failure")
+
+    def live_review_path(self, *, blocking, conflict=False, feedback=False, merge=False, moved_base=False,
+                         draft_conclusion="success"):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -802,6 +809,9 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.assertEqual(reviewed["state"]["stage"], "pre_pr_validation")
             result = self.runner().prepare(stages=["pre_pr_validation"])
             self.assertEqual(result["execution"]["state"]["stage"], "pr_promotion", result)
+            if moved_base:
+                # main advanced past the draft's REST base.sha, which GitHub does not advance.
+                github.tip = "c" * 40
 
             def recheck():
                 with write_transaction(self.root.parent / "queue.sqlite3") as db:
@@ -823,10 +833,25 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.assertLess(due_at, started + 30_000)
             self.assertTrue(github.pull["draft"])
             recheck()
-            draft_run.update(status="completed", conclusion="success")
+            draft_run.update(status="completed", conclusion=draft_conclusion)
             result = self.runner().prepare(stages=["pr_promotion"])
+            if draft_conclusion != "success":
+                state = result["execution"]["state"]
+                self.assertEqual(state["stage"], "development", result)
+                self.assertIn("draft", state["findings"])
+                self.assertTrue(github.pull["draft"])
+                return
             self.assertEqual(result["execution"]["state"]["stage"], "pr_validation", result)
             self.assertFalse(github.pull["draft"])
+            if moved_base:
+                # Ready evidence still binds to the live target tip, so a stale PR base is re-queued
+                # for a fresh observation rather than validated.
+                stale = self.runner().prepare(stages=["pr_validation"])
+                state = stale["execution"]["state"]
+                self.assertEqual((state["stage"], state["status"]), ("pr_validation", "queued"), stale)
+                with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                    db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
+                github.base = github.pull["base"]["sha"] = github.tip
             run = {"id": 1, "name": "test", "head_sha": candidate, "status": "in_progress",
                    "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
             github.runs = [run]
@@ -1021,7 +1046,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                         "authorization": "Policy 3"}],
                       [entry["details"].get("local_checks") for entry in timeline])
 
-    def _promotion_fixture(self, draft, timeline, gates):
+    def _promotion_fixture(self, draft, timeline, gates, result=None):
         from phalanx import validation_stages
         from phalanx.promotion import Promotion
 
@@ -1033,14 +1058,14 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 "stage": "pr_promotion", "candidate": candidate,
                 "primary_pr": "https://github.com/o/r/pull/7"}}}}
         pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=draft, node_id="PR_7", mergeable=True)
-        github = SimpleNamespace(get_pull_request=lambda number: pull)
+        github = SimpleNamespace(get_pull_request=lambda number: pull, get_branch_tip=lambda ref: "d" * 40)
         runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root,
                                  api=SimpleNamespace(call=lambda path: timeline))
         promoted = []
 
         def promote(*_, **__):
             promoted.append(True)
-            return Promotion("verified", "Verified the ready primary PR", pull, gates)
+            return result(pull) if result else Promotion("verified", "Verified the ready primary PR", pull, gates)
 
         def run():
             with patch.object(validation_stages, "_policy", lambda *_: SimpleNamespace(draft_checks=("lint",))), \
@@ -1080,6 +1105,28 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         timeline.append({"event": "reply", "details": {"answered_by": "owner", "question": question}})
         self.assertEqual(run()["route"], "pr-observation")
         self.assertEqual(len(promoted), 2)
+
+    def test_changed_pr_during_promotion_reobserves_reworks_or_asks(self):
+        from phalanx import validation_stages
+        from phalanx.promotion import Promotion
+
+        def changed(**fields):
+            return lambda pull: Promotion("revision_changed", "The primary PR changed; reconcile before advancing",
+                                          SimpleNamespace(**{**vars(pull), "state": "open", "merged": False,
+                                                             "head_ref": _item_branch("item-1"),
+                                                             "base_ref": "main", **fields}))
+
+        # A foreign push names observed and expected revisions, then the next pass reworks it.
+        _, _, run = self._promotion_fixture(True, [], None, changed(head_sha="f" * 40))
+        body = run()["body"]
+        self.assertEqual((body["outcome"], body["retry_after_seconds"]), ("failed", 30))
+        self.assertIn(f"Observed head {'f' * 40}, base {'c' * 40}; expected head {'b' * 40}, base {'c' * 40}",
+                      body["failure_reason"])
+        _, _, run = self._promotion_fixture(True, [], None, changed(base_ref="release"))
+        self.assertEqual(run()["body"]["outcome"], "needs_input")
+        _, _, run = self._promotion_fixture(True, [], None, changed(mergeable=False))
+        with patch.object(validation_stages, "_rework", lambda *args, **kwargs: (args[3], kwargs)):
+            self.assertEqual(run(), ("merge_conflict", {"base_tip": "d" * 40}))
     def test_reviewed_update_retries_transient_errors_and_reworks_unexpected_heads(self):
         from phalanx import validation_stages
         from phalanx.git_publication import PublicationError

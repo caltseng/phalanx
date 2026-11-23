@@ -158,7 +158,12 @@ when the observed head is the last head Phalanx verified for that PR; an
 unverified head, or a PR that has left its item branch or target, becomes an
 owner question. Failed draft checks return the item to `development` with the
 failing reasons as findings. A target tip or PR head that moves during check
-collection is retried on the new revision rather than escalated. A configured local bypass is recorded as
+collection is retried on the new revision rather than escalated. Draft
+evidence binds to the PR's head and the base GitHub records for it, not the
+live target tip, because GitHub doesn't advance a PR's `base.sha` when the
+target branch moves. An ordinary target advance therefore doesn't block
+promotion; a conflict goes through the merge-conflict path. Ready evidence
+still binds to the live target tip. A configured local bypass is recorded as
 the check's disposition and as the pre-validation bypass evidence; draft and
 ready checks still apply.
 
