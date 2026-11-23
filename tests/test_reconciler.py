@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from phalanx.github import CommitChecks, GitHubError, PullRequest
 from phalanx.github_checks import CheckCollection
+from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.reconciler import API, Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
 from phalanx.validation import GateResult, GateState
@@ -181,6 +182,7 @@ class FakeAPI:
         self.flags = []
         self.checked = False
         self.local_checks = []
+        self.heartbeats = []
 
     def call(self, path, body=None):
         self.calls.append(path)
@@ -189,6 +191,7 @@ class FakeAPI:
         if path.startswith("/operator/executions?"):
             return {"items": self.closed if "kind=closed" in path else self.executions, "next_cursor": None}
         if path.endswith("/heartbeat"):
+            self.heartbeats.append(body)
             return {}
         if path == "/flags":
             return {"flags": self.flags}
@@ -232,7 +235,8 @@ class FakeGitHub:
 
 
 def execution(item_id, repo="repo", primary=None):
-    return {"id": uuid4().hex, "item_id": item_id, "repository_id": repo, "primary_pr_url": primary}
+    return {"id": uuid4().hex, "item_id": item_id, "repository_id": repo, "primary_pr_url": primary,
+            "closed_at": datetime.now(UTC).isoformat()}
 
 
 class ReconcilerPassTest(unittest.TestCase):
@@ -413,6 +417,31 @@ class ReconcilerPassTest(unittest.TestCase):
         api.call = call
         result = self.reconciler(api).run_pass()
         self.assertEqual((result["observed"], result["errors"], api.posts), (0, [], []))
+
+    def test_deployed_and_expired_executions_stop_before_github_or_older_pages(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main", "post_merge_check": "deploy"}}
+        deployed = dict(execution("deployed"), outcome="checked_in",
+                        deployment={"state": "deployed", "check_name": "deploy"})
+        expired = dict(execution("expired"), outcome="checked_in",
+                       closed_at=(datetime.now(UTC) - DEPLOYMENT_WINDOW).isoformat())
+        api = FakeAPI([], {"repo": "https://github.com/example/repo"}, closed=[deployed, expired])
+        original_call = api.call
+
+        def call(path, body=None):
+            page = original_call(path, body)
+            if "kind=closed" in path:
+                # Reading this cursor would walk history beyond the bounded window.
+                self.assertNotIn("cursor=", path)
+                page["next_cursor"] = "older"
+            return page
+
+        api.call = call
+        self.assertEqual(self.reconciler(api).run_pass(), {"observed": 0, "checked": 0, "errors": []})
+        self.assertNotIn("/items/deployed", api.calls)
+        self.assertNotIn("/items/expired", api.calls)
+        self.config["repositories"]["repo"].pop("post_merge_check")
+        self.reconciler(api).run_pass()
+        self.assertEqual(api.heartbeats[-1]["deployment_checks"], {"repo": None})
 
     def test_a_second_reconciler_cannot_share_the_state_directory(self):
         state = self.root / "state"

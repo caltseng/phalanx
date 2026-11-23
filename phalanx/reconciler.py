@@ -22,7 +22,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .github import GitHubClient, GitHubError, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
-from .pr_models import GITHUB_REMOTE
+from .pr_models import DEPLOYMENT_WINDOW, GITHUB_REMOTE
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy
@@ -158,7 +158,10 @@ class Reconciler:
     def heartbeat(self, force=False):
         now = self.clock()
         if force or self.last_heartbeat is None or now - self.last_heartbeat >= HEARTBEAT_SECONDS:
-            self.api.call(f"/reconcilers/{quote(self.config['runner_id'], safe='')}/heartbeat", {})
+            self.api.call(f"/reconcilers/{quote(self.config['runner_id'], safe='')}/heartbeat", {
+                "deployment_checks": {repo: mapping.get("post_merge_check")
+                                      for repo, mapping in self.config.get("repositories", {}).items()},
+            })
             self.last_heartbeat = now
 
     @contextmanager
@@ -183,9 +186,16 @@ class Reconciler:
     def executions(self):
         yield from self.execution_pages("open")
         if any(mapping.get("post_merge_check") for mapping in self.config.get("repositories", {}).values()):
+            cutoff = datetime.now(UTC) - DEPLOYMENT_WINDOW
             for execution in self.execution_pages("closed"):
+                # Closed pages are newest first; don't walk historical pages.
+                if datetime.fromisoformat(execution["closed_at"]) <= cutoff:
+                    break
                 mapping = self.config["repositories"].get(execution["repository_id"], {})
-                if execution.get("outcome") == "checked_in" and mapping.get("post_merge_check"):
+                deployment = execution.get("deployment") or {}
+                if (execution.get("outcome") == "checked_in" and mapping.get("post_merge_check")
+                        and not (deployment.get("state") == "deployed"
+                                 and deployment.get("check_name") == mapping["post_merge_check"])):
                     yield execution
 
     def execution_pages(self, kind):

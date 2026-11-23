@@ -12,6 +12,7 @@ from phalanx import captains, dispatch, flags, intake, store
 from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
+from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import item_branch
 
@@ -311,6 +312,16 @@ class WriterTest(ServerFixture, unittest.TestCase):
             page = self.ok("/v1/operator/executions?kind=closed", OWNER)
             self.assertEqual((page["items"][0]["outcome"], page["items"][0]["delivery"]["merge_commit"]),
                              ("checked_in", MERGE))
+            self.assertEqual(page["items"][0]["deployment"]["state"], state)
+            with connect(self.path, mode="ro") as db:
+                later = flags.all_flags(db, datetime.now(UTC) + DEPLOYMENT_WINDOW)["flags"]
+            kinds = {flag["kind"] for flag in later if flag["execution_id"] == binding["id"]}
+            self.assertNotIn("observation_stale", kinds)
+            self.assertEqual(kinds, {"deployment_missing"} if state == "pending"
+                             else {"deployment_failed"} if state == "failed" else set())
+            if state == "pending":
+                missing, = [flag for flag in later if flag["kind"] == "deployment_missing"]
+                self.assertTrue(missing["notify_owner"])
         # A delayed older snapshot cannot restore a previous failed state.
         stale = dict(body, deployment=dict(body["deployment"], state="failed"),
                      observed_at=(datetime.now(UTC) - timedelta(minutes=5)).isoformat())
@@ -328,6 +339,16 @@ class WriterTest(ServerFixture, unittest.TestCase):
         ):
             self.ok(path + "/github-observation", RUNNER,
                     dict(body, observed_at=datetime.now(UTC).isoformat(), **fields), code)
+        self.ok("/v1/reconcilers/local/heartbeat", RUNNER, {"deployment_checks": {"repo": None}})
+        self.assertFalse([flag for flag in self.ok("/v1/flags", OWNER)["flags"]
+                          if flag["execution_id"] == binding["id"]])
+        self.assertEqual(self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"], completed)
+        self.ok("/v1/reconcilers/local/heartbeat", RUNNER, {"deployment_checks": {"repo": None}})
+        self.assertEqual(self.ok("/v1/operator/executions?kind=closed", OWNER)["items"][0]["deployment"]["state"],
+                         "disabled")
+        with connect(self.path, mode="ro") as db:
+            later = flags.all_flags(db, datetime.now(UTC) + DEPLOYMENT_WINDOW)["flags"]
+        self.assertFalse([flag for flag in later if flag["execution_id"] == binding["id"]])
 
     def test_a_pr_into_another_base_never_delivers(self):
         binding, token = self.publish("ready_for_check_in")

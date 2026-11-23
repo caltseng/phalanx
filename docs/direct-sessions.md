@@ -90,11 +90,18 @@ GitHub rate limits back off and never block other items.
 Post-merge deployment is an optional observation, not a lifecycle stage or
 completion gate. A repository mapping's `post_merge_check` names its
 post-merge deployment check run. For configured repositories the reconciler
-continues observing executions checked into the mapping's `base_branch`, reading that check on the exact
-delivered merge commit. The latest run derives a board flag: missing or
+observes executions checked into the mapping's `base_branch` for at most 24 hours
+after check-in, stopping earlier on success and never enumerating older closed pages.
+It reads that check on the exact delivered merge commit. The latest run derives a board flag: missing or
 unfinished is `deployment_pending`, completed success is `deployed`, and
 any other completed conclusion is `deployment_failed`. Rechecks replace the
-flag after retries, with the usual observation timestamp and stale warning.
+flag after retries before success. After the window, successes have no flag,
+failures remain visible, and still-pending signals become one owner-notifying
+`deployment_missing` flag with the deadline as its stable first-seen time.
+Closed executions never raise `observation_stale`. Heartbeats carry each mapped
+repository's current check name (or none); removing or changing it records a
+disabled signal for previously observed deployments without GitHub reads, even
+outside the polling window.
 Closed executions accept only deployment observations matching their
 delivered PR, head and merge commit; their state, output and version do not
 change. Repositories without this setting have no deployment signal or

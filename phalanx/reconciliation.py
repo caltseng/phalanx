@@ -13,9 +13,9 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from . import intake
-from .intake_models import Payload
+from .intake_models import Identifier, Payload
 from .operator_schema import OPEN
-from .pr_models import GITHUB_REMOTE, SHA
+from .pr_models import DEPLOYMENT_WINDOW, GITHUB_REMOTE, Name, SHA
 from .transitions import (
     TERMINAL, Event, Evidence, PullRequest, Revision, Stage, Status, decide, item_branch,
 )
@@ -65,7 +65,11 @@ class Deployment(Payload):
 
     commit: SHA
     check_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
-    state: Literal["pending", "failed", "deployed"]
+    state: Literal["pending", "failed", "deployed", "disabled"]
+
+
+class Heartbeat(Payload):
+    deployment_checks: dict[Identifier, Name | None] = Field(default_factory=dict)
 
 
 class Observation(Payload):
@@ -214,10 +218,35 @@ def record_local_checks(db, item_id, execution_id, body: LocalChecks):
     return {"recorded": recorded is not None}
 
 
-def heartbeat(db, runner_id):
+def heartbeat(db, runner_id, body: Heartbeat | None = None):
     now = intake.timestamp()
     db.execute("""INSERT INTO reconciler_heartbeats VALUES (?, ?)
                   ON CONFLICT DO UPDATE SET last_seen = excluded.last_seen""", (runner_id, now))
+    if body is not None:
+        for repo, name in body.deployment_checks.items():
+            # Configuration removal is an observation too. Preserve history and terminal state,
+            # but retire that signal even when the execution is older than the polling window.
+            rows = db.execute(
+                """SELECT execution.id, execution.item_id, observation.observation_json
+                   FROM executions AS execution
+                   JOIN work_items AS item ON item.id = execution.item_id
+                   JOIN github_observations AS observation ON observation.execution_id = execution.id
+                   WHERE item.repository_id = ? AND execution.status = 'completed'
+                     AND json_extract(execution.state_json, '$.final_output.merge_commit') IS NOT NULL
+                     AND observation.digest = (
+                         SELECT latest.digest FROM github_observations AS latest
+                         WHERE latest.execution_id = execution.id
+                         ORDER BY latest.last_observed_at DESC, latest.observed_at DESC LIMIT 1)
+                     AND json_extract(observation.observation_json, '$.deployment.state') != 'disabled'
+                     AND (? IS NULL OR json_extract(
+                         observation.observation_json, '$.deployment.check_name') != ?)""",
+                (repo, name, name),
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(row["observation_json"])
+                payload["pr"].pop("url")
+                payload["deployment"]["state"] = "disabled"
+                record(db, row["item_id"], row["id"], Observation(observed_at=now, **payload))
     return {"runner_id": runner_id, "last_seen": now}
 
 
@@ -243,13 +272,14 @@ def observation_flags(db, now):
     flags = []
     for row in db.execute(
         f"""WITH latest AS (
-                SELECT observation.*, execution.item_id, execution.state_json,
+                SELECT observation.*, execution.item_id, execution.state_json, execution.updated_at AS closed_at,
                        row_number() OVER (PARTITION BY observation.execution_id
                            ORDER BY observation.last_observed_at DESC, observation.observed_at DESC) AS rank
                 FROM github_observations AS observation
                 JOIN executions AS execution ON execution.id = observation.execution_id
                 WHERE ({OPEN}) OR (execution.status = 'completed'
-                    AND json_extract(execution.state_json, '$.final_output.merge_commit') IS NOT NULL)
+                    AND json_extract(execution.state_json, '$.final_output.merge_commit') IS NOT NULL
+                    AND json_type(observation.observation_json, '$.deployment') = 'object')
             )
             SELECT latest.*, checked.checked_at, checked.failures_json
             FROM latest
@@ -259,8 +289,11 @@ def observation_flags(db, now):
     ):
         observation = json.loads(row["observation_json"])
         closed = json.loads(row["state_json"])["final_output"] is not None
-        found = _deployment_flags(row, observation) if closed else _observed(row, observation)
+        found = _deployment_flags(row, observation, now=now) if closed else _observed(row, observation)
         if closed and not observation.get("deployment"):
+            continue
+        if closed:
+            flags += found
             continue
         last = datetime.fromisoformat(row["last_observed_at"])
         if now - last >= RECONCILER_STALE:
@@ -275,13 +308,27 @@ def observation_flags(db, now):
     return flags
 
 
-def _deployment_flags(row, observation):
+def _deployment_flags(row, observation, *, now=None):
     deployment = observation.get("deployment")
-    if not deployment:
+    if not deployment or deployment["state"] == "disabled":
         return []
     state = deployment["state"]
+    deadline = datetime.fromisoformat(row["closed_at"]) + DEPLOYMENT_WINDOW if now is not None else None
+    expired = deadline is not None and now >= deadline
+    if expired and state == "deployed":
+        return []
+    if expired and state == "pending":
+        return [_flag(
+            "deployment_missing", row,
+            f"{deployment['check_name']} did not complete successfully within 24 hours of check-in "
+            f"on merge commit {deployment['commit']}",
+            "The owner checks the deployment workflow on GitHub; automatic deployment polling has ended",
+            deadline.isoformat(timespec="microseconds"), notify_owner=True,
+        )]
     recovery = ("Informational: GitHub reported a successful deployment check" if state == "deployed"
                 else "Check the post-merge workflow on GitHub and rerun or repair it; reconciliation refreshes this flag")
+    if expired:
+        recovery = "The owner checks the failed deployment on GitHub; automatic deployment polling has ended"
     return [_flag(
         "deployed" if state == "deployed" else f"deployment_{state}", row,
         f"{deployment['check_name']} on merge commit {deployment['commit']}: {state}",
