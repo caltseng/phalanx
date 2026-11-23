@@ -17,6 +17,7 @@ from phalanx.store import APPLICATION_ID, connect, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
+from timing import WAIT_SECONDS
 
 
 LEASE = "x" * 32
@@ -491,7 +492,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             db.execute("UPDATE report_finalizations SET due_at=0 WHERE execution_id=?", (execution_id,))
         self.server = self.start_server(self.path)
         # Background finalization runs on the server's schedule; poll generously.
-        deadline = monotonic() + 30
+        deadline = monotonic() + WAIT_SECONDS
         while monotonic() < deadline:
             closed = self.get(base, OWNER)[1]["execution"]
             if closed["state"]["status"] == "cancelled":

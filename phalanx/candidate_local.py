@@ -1,6 +1,7 @@
 """Runner operations for candidate-local stages under a reserved item claim."""
 
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -15,6 +16,17 @@ from .validation import GateState, PreCheck, PreEvidence, PreOutcome, evaluate_p
 from .workspaces import Workspace, WorkspaceError, WorkspaceManager
 
 OUTPUT_TAIL_BYTES = 4096
+# Default host limit on concurrent local check runs; configurable as local_check_capacity.
+LOCAL_CHECK_CAPACITY = 1
+LOCAL_CHECK_CAPACITY_RANGE = (1, 64)
+# A timeout with no identified failure may be host contention, so validation retries it first.
+TIMEOUT_RETRIES = 2
+TIMEOUT_RETRY_SECONDS = 60
+# unittest/pytest failure lines, tracebacks, and progress lines with F or E markers.
+_FAILURE = re.compile(
+    rb"^(?:FAIL:|ERROR:|FAILED |Traceback \(most recent call last\))"
+    rb"|^(?:\S+ )?[.sxXu]*[FE][.sxXuFE]*(?: +\[ *\d+%\])?\s*$"
+)
 
 
 @dataclass(frozen=True)
@@ -46,7 +58,9 @@ class CandidateLocal:
 
     Journal the returned body before submission so an uncertain response can be replayed.
     Self-review collection requires a reconciled, stopped worker with validated handoff evidence.
-    A check timeout stops the check's process tree and records a failed check.
+    A check timeout stops the check's process tree and records a failed check. When every
+    failed check only timed out with no failure in its output, validation retries with
+    backoff up to TIMEOUT_RETRIES times before returning the candidate to development.
     """
 
     def __init__(self, api: RunnerAPI, workspace: WorkspaceManager, claim: dict,
@@ -140,6 +154,7 @@ class CandidateLocal:
                                    or len({check.policy.name.strip() for check in checks}) != len(checks)):
             raise RunnerError("Local check policy requires at most 50 uniquely named checks")
         observations = []
+        inconclusive = set()
         body["local_checks"] = records = []
         try:
             self._authorize()
@@ -150,7 +165,9 @@ class CandidateLocal:
                     self._authorize()
                     workspace = self._inspect()
                     try:
-                        outcome, reason = _run_check(check, workspace.path)
+                        outcome, reason, timed_out = _run_check(check, workspace.path)
+                        if timed_out:
+                            inconclusive.add(check.policy.name)
                         self._inspect()
                     except WorkspaceError as exc:
                         problem = f"{check.policy.name}: {exc}"
@@ -174,6 +191,15 @@ class CandidateLocal:
         if gate.state in (GateState.SATISFIED, GateState.NOT_CONFIGURED):
             return dict(body, outcome=Outcome.SUCCEEDED, prevalidated_candidate=self.candidate)
         if gate.state == GateState.FAILED:
+            failed = [record["name"] for record in records if record["outcome"] == PreOutcome.FAILED]
+            retries = self.execution.get("retry_count", 0)
+            if failed and inconclusive.issuperset(failed) and retries < TIMEOUT_RETRIES:
+                delay = TIMEOUT_RETRY_SECONDS * 2 ** retries
+                return dict(body, outcome=Outcome.FAILED, candidate=self.candidate,
+                            retry_after_seconds=delay, failure_reason=(
+                                f"Local check {', '.join(failed)} timed out with no failure identified; "
+                                f"retrying validation in {delay} seconds "
+                                f"(retry {retries + 1} of {TIMEOUT_RETRIES})."))
             return dict(body, outcome=Outcome.CHANGES_REQUIRED, candidate=self.candidate)
         return self._wait(body, "\n".join(gate.reasons),
                           handoff="Verify repository check policy and any proposed bypass.")
@@ -195,7 +221,8 @@ class CandidateLocal:
                              body, lease=self.lease, key=f"candidate-local-{self.attempt}")
 
 
-def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
+def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str, bool]:
+    """Return the outcome, reason, and whether it only timed out with no failure identified."""
     env = {key: value for key, value in os.environ.items()
            if not key.upper().startswith(("GIT_", "PHALANX_"))}
     # A file, unlike a pipe, cannot fill up and block the check or its children.
@@ -206,17 +233,22 @@ def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
                                        start_new_session=os.name != "nt")
         except OSError as exc:
             raise WorkspaceError(f"Repair the configured check command (OS error {exc.errno})") from None
+        timed_out = False
         try:
             returncode = process.wait(timeout=check.timeout_seconds)
             reason = f"Exited with status {returncode}" if returncode else ""
         except subprocess.TimeoutExpired:
             _kill_tree(process)
-            returncode, reason = None, f"Timed out after {check.timeout_seconds} seconds"
+            output.seek(0)
+            timed_out = not any(_FAILURE.match(line) for line in output)
+            returncode = None
+            reason = (f"Timed out after {check.timeout_seconds} seconds"
+                      + (", no failure identified" if timed_out else " with failures"))
         if returncode == 0:
-            return PreOutcome.PASSED, ""
+            return PreOutcome.PASSED, "", False
         output.seek(max(0, output.seek(0, os.SEEK_END) - OUTPUT_TAIL_BYTES))
         tail = output.read().decode("utf-8", errors="replace").strip()
-    return PreOutcome.FAILED, f"{reason}\n\nOutput tail:\n{tail}" if tail else reason
+    return PreOutcome.FAILED, f"{reason}\n\nOutput tail:\n{tail}" if tail else reason, timed_out
 
 
 def _kill_tree(process: subprocess.Popen) -> None:
