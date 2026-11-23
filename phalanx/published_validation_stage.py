@@ -29,6 +29,8 @@ class PublishedValidationAssignment:
     attempt_id: str
     state_version: int
     lease: str = field(repr=False)
+    # Optional next-stage offer headers for the attempt-ending submission.
+    offer: dict = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)
@@ -68,7 +70,7 @@ class PublishedValidationRunner:
             event = claim.model_dump(mode="json", exclude={"runner_id"})
             saved = self._receipt(assignment, self._observe(authority, event, policy))
         route, body = saved
-        return self.api.call(f"{path}/{route}", body, lease=assignment.lease, key=key)
+        return self.api.call(f"{path}/{route}", body, lease=assignment.lease, key=key, **assignment.offer)
 
     def _observe(self, authority, event, policy):
         promotion = authority["promotion"]

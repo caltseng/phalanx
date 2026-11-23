@@ -41,12 +41,17 @@ class RunnerAPI:
         self.token = token
         self.opener = build_opener(NoRedirect())
 
-    def call(self, path, body=None, *, lease=None, key=None, plain_text=False):
+    def call(self, path, body=None, *, lease=None, key=None, plain_text=False,
+             next_lease=None, next_stages=()):
         headers = {"Authorization": f"Bearer {self.token}"}
         if body is not None:
             headers["Content-Type"] = "application/json"
         if lease:
             headers["Phalanx-Lease"] = lease
+        if next_lease and next_stages:
+            # Offer to keep this slot for the next stage under a fresh lease.
+            headers["Phalanx-Next-Lease"] = next_lease
+            headers["Phalanx-Next-Stages"] = ",".join(next_stages)
         if key:
             headers["Idempotency-Key"] = key
         request = Request(self.base_url + "/v1" + path, headers=headers,
@@ -136,8 +141,12 @@ class AttendedRunner:
             record = json.loads(row[0]) if row else {}
             archived = record.copy() if "submission" in record and "cancel_stop" not in record else None
             result = action(record, db)
-            if archived is not None and not record:
+            # A continuation replaces the record with the next stage's claim.
+            continued = bool(archived and record
+                             and record.get("claim", {}).get("attempt_id") != archived["claim"]["attempt_id"])
+            if archived is not None and (not record or continued):
                 archived.pop("lease")
+                archived.pop("next_lease", None)
                 db.execute("CREATE TABLE IF NOT EXISTS completed (attempt_id TEXT PRIMARY KEY, record TEXT)")
                 db.execute("INSERT INTO completed VALUES (?, ?)",
                            (archived["claim"]["attempt_id"], json.dumps(archived)))
@@ -178,15 +187,16 @@ class AttendedRunner:
             raise RunnerError("No registered checkout passed verification; check local mappings and origins")
         return eligible, blocked
 
-    def prepare(self, *, draft=False, report_storage=False, stages=None):
+    def prepare(self, *, draft=False, report_storage=False, stages=None, continue_stages=None):
         # Only competing preparations of this slot wait here. Heartbeats and
         # other slots can still use the journal during HTTP and Git operations.
         with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
-            result = self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages)
+            result = self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages,
+                                        continue_stages=continue_stages)
         notes = PRNotes(self.root).flush(os.environ.get("PHALANX_GITHUB_TOKEN"))
         return {**result, "pr_notes": notes} if notes else result
 
-    def _prepare_slot(self, *, draft, report_storage, stages=None):
+    def _prepare_slot(self, *, draft, report_storage, stages=None, continue_stages=None):
         runner_stage = "pr_creation" if draft else reports.STORAGE if report_storage else None
         if stages is not None and (
             runner_stage or not stages or set(stages) - (set(STAGES) | set(RUNNER_STAGES))
@@ -211,6 +221,9 @@ class AttendedRunner:
                               stages=sorted(stages) if stages is not None else
                               [runner_stage] if runner_stage else sorted(STAGES),
                               slots=self.capacity)
+                if continue_stages:
+                    record.update(next_lease=secrets.token_urlsafe(32),
+                                  continue_stages=sorted(continue_stages))
                 return record
 
             snapshot = self._transaction(reserve)
@@ -295,7 +308,7 @@ class AttendedRunner:
         def finish(record, db):
             if record.get("lease") == snapshot["lease"]:
                 if status["status"] == "draft_submitted":
-                    record.clear()
+                    self._settle(record, status["execution"])
                 else:
                     record["draft_status"] = status
 
@@ -684,15 +697,38 @@ class AttendedRunner:
         claim = snapshot["claim"]
         route = submission.get("route", "result")
         path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/{route}"
-        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=key)
+        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=key,
+                                 **self.offer(snapshot))
 
         def finish(record, db):
             # A concurrent idempotent submit may already have archived this attempt.
             if record.get("lease") == snapshot["lease"]:
-                record.clear()
+                self._settle(record, response)
 
         self._transaction(finish)
         return response
+
+    @staticmethod
+    def offer(record):
+        """Headers that let the server keep this slot for the item's next runnable stage."""
+        if not record.get("next_lease") or not record.get("continue_stages"):
+            return {}
+        return {"next_lease": record["next_lease"], "next_stages": record["continue_stages"]}
+
+    @staticmethod
+    def _settle(record, response):
+        """End this attempt's record, or install the server's continuation in the same slot."""
+        continuation = response.get("continuation") if isinstance(response, dict) else None
+        if not continuation or continuation.get("status") != "claimed" or not record.get("next_lease"):
+            record.clear()
+            return
+        kept = {field: record[field] for field in (
+            "runner_id", "repositories", "blocked", "stages", "slots", "continue_stages") if field in record}
+        lease = record["next_lease"]
+        record.clear()
+        record.update(kept, lease=lease, claim=continuation,
+                      lease_expires_at=continuation["lease_expires_at"],
+                      next_lease=secrets.token_urlsafe(32))
 
 
 def add_attended_command(commands):

@@ -104,7 +104,7 @@ class StubAPI:
         self.dependencies = []
         self.current_version = 3
 
-    def call(self, path, body=None, *, lease=None, key=None):
+    def call(self, path, body=None, *, lease=None, key=None, **offer):
         if path == "/repositories":
             return [{"id": "repo", "remote": self.remote}]
         if path == f"/items/{self.item_id}":
@@ -228,6 +228,42 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.api.drop_result = False
         runner.submit(launch["marker"], "local", native)
         self.assertEqual(runner.status(), {"status": "idle"})
+
+    def test_continuation_runs_the_next_stage_in_the_same_slot_without_a_claim(self):
+        self.start_server(self.root.parent / "queue.sqlite3")
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "repo", "remote": str(self.checkout),
+        })[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Document the test suite", "target": "report",
+        })
+        self.assertEqual(status, 201, item)
+        api, paths = RunnerAPI(self.url, RUNNER), []
+        call = api.call
+        api.call = lambda path, *args, **kwargs: paths.append(path) or call(path, *args, **kwargs)
+        self.api = api
+
+        def work(launch, details):
+            self.assertEqual(launch["status"], "launch_intent", launch)
+            thread_id = str(uuid4())
+            self.runner().receipt(launch["marker"], "local", thread_id=thread_id)
+            self.write_result(self.runner(), launch["marker"], details)
+            return self.runner().submit(launch["marker"], "local", thread_id)
+
+        drafted = work(self.runner().prepare(continue_stages=["report_review"]), "# Tests\n")
+        continuation = drafted["continuation"]
+        self.assertEqual(continuation["execution"]["state"]["stage"], "report_review")
+        held = self.runner()._transaction(lambda record, db: dict(record))
+        self.assertEqual(held["claim"]["attempt_id"], continuation["attempt_id"])
+        archived = self.runner()._transaction(
+            lambda record, db: [row[0] for row in db.execute("SELECT attempt_id FROM completed")])
+        self.assertNotIn(continuation["attempt_id"], archived)
+        self.assertEqual(len(archived), 1)
+        reviewed = work(self.runner().prepare(), "Looks complete")
+        self.assertEqual(reviewed["state"]["stage"], "report_storage")
+        self.assertNotIn("continuation", reviewed)
+        self.assertEqual(paths.count("/dispatch/claim"), 1)
+        self.assertEqual(self.runner().status(), {"status": "idle"})
 
     def test_report_review_and_storage_recovery_over_http(self):
         database = self.root.parent / "queue.sqlite3"

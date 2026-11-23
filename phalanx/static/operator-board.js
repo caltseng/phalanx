@@ -91,6 +91,7 @@
     function addWorker(parent, item) {
       addLink(parent, "Worker chat", item.chatUrl);
       if (item.workerRef) parent.append(element("p", "Worker reference: " + item.workerRef, { class: "meta" }));
+      if (item.slotNote) parent.append(element("p", item.slotNote, { class: "meta" }));
     }
 
     function addSchedule(parent, item, attrs = {}) {

@@ -35,7 +35,7 @@ class QueueAPI:
         self.drop_result = False
         self.lock = Lock()
 
-    def call(self, route, body=None, *, lease=None, key=None):
+    def call(self, route, body=None, *, lease=None, key=None, **offer):
         with self.lock:
             if route == "/repositories":
                 return [{"id": "repo", "remote": str(self.checkout)}]
@@ -1121,7 +1121,8 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(runner.renew()["attempt_id"], snapshot["claim"]["attempt_id"])
         packet = self.write_result(1)
         self.native.stopped.add(packet.marker)
-        self.spin(restarted, lambda: not runner._snapshot())
+        self.spin(restarted, lambda: ((runner._snapshot().get("claim") or {}).get("execution") or {})
+                  .get("state", {}).get("stage") == "report_review")
         restarted.close()
         execution = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
         self.assertEqual(execution["state"]["stage"], "report_review")

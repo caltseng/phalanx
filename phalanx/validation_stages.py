@@ -566,7 +566,7 @@ def _published_validation(runner, snapshot):
     execution = claim["execution"]
     assignment = PublishedValidationAssignment(
         claim["item_id"], execution["id"], snapshot["runner_id"], claim["attempt_id"],
-        execution["version"], snapshot["lease"],
+        execution["version"], snapshot["lease"], runner.offer(snapshot),
     )
     result = PublishedValidationRunner(runner.root / "publication", runner.api, _github(snapshot)).run(
         assignment, policy,
@@ -576,7 +576,7 @@ def _published_validation(runner, snapshot):
 
     def finish(record, db):
         if record.get("lease") == snapshot["lease"]:
-            record.clear()
+            runner._settle(record, result)
 
     runner._transaction(finish)
     return result

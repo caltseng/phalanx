@@ -277,7 +277,10 @@ class CaptainLoop:
                 if not mappings:
                     continue
             runner = AttendedRunner(self.root, {**self.config, "repositories": mappings}, self.api, slot=slot)
-            result = runner.prepare(stages=stages)
+            # Keep this slot through the item's next runnable stages. Worker stages
+            # need verified runtime mappings, so skip them while any mapping is blocked.
+            continuing = [stage for stage in available if stage not in STAGES or not self.blocked_mappings]
+            result = runner.prepare(stages=stages, continue_stages=continuing)
             if result["status"] != "no_eligible_work":
                 return runner, result
         if blocked:
@@ -413,9 +416,9 @@ class CaptainLoop:
             packet = snapshot.get("packet")
             if packet:
                 receipt = snapshot["receipt"]
-                return {"status": "submitted", "execution": runner.submit(
+                return _submitted(runner.submit(
                     runner._handoff(snapshot).packet.marker, snapshot["host_id"], receipt["thread_id"],
-                )}
+                ))
             return self._prepare(slot, discovery)
         if snapshot.get("recover_stop") or snapshot.get("recover_claim") or expired:
             if ("packet" in snapshot and not unlaunched and observation is None
@@ -447,9 +450,7 @@ class CaptainLoop:
                 return {"status": "stopped_without_result",
                         "reason": "Exact native writer stopped without a result; the lease will lapse "
                                   "and stopped-attempt recovery will reconcile it"}
-            return {"status": "submitted", "execution": runner.submit(
-                packet.marker, snapshot["host_id"], str(native.thread_id),
-            )}
+            return _submitted(runner.submit(packet.marker, snapshot["host_id"], str(native.thread_id)))
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot["started_at"])).total_seconds()
         if age >= self.overdue_seconds:
             reason = (f"Worker has run over {self.overdue_seconds / 3600:g}h with no result and keeps its "
@@ -670,6 +671,15 @@ class CaptainLoop:
             self.closed = True
             for pool in (self.slot_pool, self.lease_pool, self.native_pool, self.control_pool):
                 pool.shutdown(wait=True, cancel_futures=True)
+
+
+def _submitted(execution):
+    continuation = execution.get("continuation")
+    if continuation:
+        stage = continuation["execution"]["state"]["stage"]
+        return {"status": "continuing", "execution": execution,
+                "reason": f"Result accepted; this slot continues the item with {stage}"}
+    return {"status": "submitted", "execution": execution}
 
 
 def add_captain_command(commands):

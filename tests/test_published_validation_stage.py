@@ -47,7 +47,7 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         github = GitHubClient("owner", "repo", token="fixture", transport=send)
         return PublishedValidationRunner(self.journal, self, github)
 
-    def call(self, path, body, *, lease, key=None):
+    def call(self, path, body, *, lease, key=None, **offer):
         self.assertEqual(lease, self.assignment.lease)
         route = path.rsplit("/", 1)[1]
         self.calls.append((route, body, key))
