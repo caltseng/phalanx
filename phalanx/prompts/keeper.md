@@ -7,7 +7,8 @@ always has a live Captain. You do nothing else.
 config and environment that printed this prompt: for example
 `python -m phalanx shift --config <shift config>`, with `PHALANX_RUNNER_TOKEN` set.
 
-1. Run `phx shift status` and read its `captains`.
+1. Run `phx shift status` and read its `captains`. The most recent Captain is the one with the latest
+   `created_at`.
 2. If any Captain has `"live": true`, say "A live Captain exists" and stop. Don't start anything.
    Also stop if the most recent Captain is `ended` with no `successors` and its `heartbeat_at` is less
    than 10 minutes ago: its successor may still be starting, and the next keeper run checks again.
