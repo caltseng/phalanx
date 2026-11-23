@@ -57,7 +57,10 @@ the policy file as part of a worker's task.
 ```
 
 This is separate from the attended runner's checkout/capacity config. The
-loader does not modify that config or add a CLI option.
+loader does not modify that config or add a CLI option. `python -m phalanx onboard`
+(see the README) adds a starter entry for a new repository: `ready_checks` from
+the CI on its base branch tip, `draft_checks: []`, and `local_checks: null` for
+the operator to complete.
 
 All three phase lists are mandatory for each configured repository. `null`
 means that phase's policy is **unavailable**; `[]` explicitly confirms there

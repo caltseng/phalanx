@@ -78,6 +78,27 @@ Save a local JSON config such as:
 }
 ```
 
+**Onboard a repository in one step.** Once the config has `base_url` (and
+`validation_policy`, described below), run:
+
+```powershell
+python -m phalanx onboard registered-repo-id --config runner.json --state C:\phalanx-runner `
+  --remote https://github.com/owner/example --checkout C:/enlistments/example --project-id PROJECT
+```
+
+It registers the remote with the server (with `PHALANX_OWNER_TOKEN`; otherwise
+it verifies the registration), clones the checkout when it is absent or empty
+and verifies its origin and base branch (default: origin's HEAD), writes the
+complete mapping into the config, and adds a validation policy entry whose
+`ready_checks` list the CI that reported on the base branch tip (with
+`PHALANX_GITHUB_TOKEN`). `--host-id` defaults to the host the other mappings
+share. The new entry leaves `local_checks` unset for you to fill in or set to
+`[]`. The command never overwrites an existing registration, validation entry,
+or mapping field you did not pass. It prints each step as `done`, `ok`,
+`missing` (with the action) or `manual`, and exits 1 until nothing is missing.
+Rerun it to verify. Owner trust in the worker runtime (below) stays manual,
+and the Captain loop still verifies the runtime project before launching workers.
+
 Local capacity defaults to 1. Use numbered slots from 1 through the configured
 capacity. The server still applies dispatch pause, stage and item eligibility,
 and its per-runner capacity. A local capacity reduction applies to new
