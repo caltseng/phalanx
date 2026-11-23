@@ -43,5 +43,14 @@
 
 - Verify the checkout and its working-tree state before editing. Preserve existing changes. For work dispatched to another repo, follow that repo’s applicable instructions and keep the work scoped to the item.
 - Use `phalanx/` for new topic branches unless Caleb or the target repo specifies otherwise. Run checks appropriate to the change and report any gaps.
+- Before you open or update a Phalanx PR, run only the tests that cover the change, one module at a time with `python -m unittest discover -s tests -p test_x.py`. The full suite runs in GitHub CI and gates the merge. Run:
+  - every changed test module;
+  - every test module that imports a changed `phalanx/` module;
+  - for a server-side change (`store`, `transitions`, `dispatch_api`, `intake*`, `operator_api` or the app), also the modules that start a server and drive the affected routes.
+  - Some changes always need their safety tests as well:
+    - store, claims, leases, fencing or dispatch: `test_dispatch`, `test_stage_continuation`, `test_transitions` and `test_bootstrap`
+    - runner, Captain loop, relay or recovery: `test_captain_loop`, `test_bridge_contract` and `test_attended_recovery_service`
+    - workspaces, Git publication or check-in: `test_workspaces`, `test_git_publication`, `test_draft_publication` and `test_check_in`
+  - Run the full suite locally when you change shared test fixtures (`tests/test_bootstrap.py`, `tests/timing.py`, `tests/shard.py`, `tests/envelope_probe.py`), dependencies or the CI workflow.
 - For Phalanx work items, record the report or PR and its verification. Check in only when authorized by the work item or repository policy and after the current PR head satisfies the required checks and approvals.
 - End PR descriptions that Phalanx creates with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Preserve the footer across updates and retries.
