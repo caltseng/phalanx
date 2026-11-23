@@ -239,15 +239,14 @@ class AttendedRunner:
 
         lease = snapshot["lease"]
         if "claim" not in snapshot:
-            if runner_stage and snapshot.get("stages") != [runner_stage]:
+            if runner_stage and snapshot["stages"] != [runner_stage]:
                 raise RunnerError("Resume the existing reservation in its original prepare mode")
             request = {
                 "runner_id": snapshot["runner_id"],
                 "repository_ids": sorted(snapshot["repositories"]),
-                "slots": snapshot.get("slots", 1),
+                "slots": snapshot["slots"],
+                "stages": snapshot["stages"],
             }
-            if "stages" in snapshot:
-                request["stages"] = snapshot["stages"]
             result = self.api.call("/dispatch/claim", request, lease=lease)
 
             def save_claim(record, db):
@@ -614,20 +613,19 @@ class AttendedRunner:
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
-                    base = record.get("development_base")
-                    merged = (base is not None and evidence != workspace.head and not workspace.dirty
+                    base = record["development_base"]
+                    merged = (evidence != workspace.head and not workspace.dirty
                               and manager.merged_base(workspace, evidence, base["sha"]))
                     worker = replace(workspace, head=evidence) if merged else workspace
                     if not development_candidate(record, packet, worker, evidence):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
                     conflict = None
-                    if base is not None and not manager.contains_base(workspace, base["sha"]):
+                    if not manager.contains_base(workspace, base["sha"]):
                         conflict = manager.integrate_base(
                             workspace, base["sha"], f"Merge pinned {base['ref']} {base['sha']} into the candidate")
                         workspace = manager.inspect(packet.item_id)
                     if conflict is None:
-                        if base is not None:
-                            manager.verify_base_ancestry(workspace, base["sha"])
+                        manager.verify_base_ancestry(workspace, base["sha"])
                         body["candidate"] = workspace.head
                     else:
                         # Return the attempt to development through the bounded retry with a visible reason.
@@ -664,7 +662,7 @@ class AttendedRunner:
                 "details": result.details,
                 "stop_confirmed_at": datetime.now(timezone.utc).isoformat(),
             }
-            if packet.stage == "development" and "development_base" in record:
+            if packet.stage == "development":
                 submission["checkpoint"]["base"] = record["development_base"]
             return submission
 
