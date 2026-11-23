@@ -17,7 +17,7 @@ from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
 from phalanx.attended_recovery_service import unlaunched_proof
 from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_loop import CaptainLoop, command_notifier
-from phalanx.captain_relay import RelayTransport, respond, take_next
+from phalanx.captain_relay import RelayTransport, _queue, respond, take_next
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 from timing import WAIT_SECONDS
@@ -168,7 +168,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
     def loop(self, **options):
         loop = CaptainLoop(
             self.root, self.config, self.api, BridgeAdapter(self.native),
-            poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1,
+            poll_seconds=0.01, heartbeat_seconds=0.02,
             emit=self.events.append, **options,
         )
         self.addCleanup(loop.close)
@@ -212,7 +212,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 self.spin(loop, lambda: len(self.native.launches) == 2)
                 second_slot = next(slot for slot, row in loop._records().items()
                                    if row["claim"]["item_id"] == "second")
-                self.native.gated_slot = 3 - second_slot
+                self.native.gated_slot = second_slot
                 packet = self.write_result(second_slot)
                 receipt = self.native.threads[packet.marker]
                 original_native = self.native.__call__
@@ -224,9 +224,13 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                                 row.update(state="stopped", writers_stopped=True)
                     return reply
                 loop.adapter = BridgeAdapter(stopped)
+                # A held native wait delays only observation; heartbeats keep running.
+                renewed = len(self.api.renewed)
+                self.spin(loop, lambda: len(self.api.renewed) >= renewed + 6)
+                self.assertFalse(self.api.submissions)
+                native_gate.set()
                 self.spin(loop, lambda: bool(self.api.submissions))
-                self.assertFalse(native_gate.is_set())
-                self.assertLessEqual(max(len(wait["references"]) for wait in self.native.waits), 1)
+                self.assertEqual(max(len(wait["references"]) for wait in self.native.waits), 2)
             finally:
                 git_gate.set()
                 native_gate.set()
@@ -259,7 +263,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
                 raise LaunchNotDelivered("Captain relay never took launch")
             return original(operation, arguments)
         loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(native),
-                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, emit=self.events.append)
+                           poll_seconds=0.01, heartbeat_seconds=0.02, emit=self.events.append)
         self.addCleanup(loop.close)
         self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
         for _ in range(5):
@@ -295,7 +299,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             self.addCleanup(halt)
             return halt
         loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(RelayTransport(relay, timeout=30, poll=0.01)),
-                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=0.3,
+                           poll_seconds=0.01, heartbeat_seconds=0.02, relay_stall_seconds=0.3,
                            emit=self.events.append, notify=notes.append)
         self.addCleanup(loop.close)
         def first_slot():
@@ -322,6 +326,83 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(taken), len(set(taken)))
         self.assertEqual(len({launch["marker"] for launch in self.native.launches}), 2)
         self.spin(loop, lambda: self.api.blockers[-1] is None)
+
+    def test_slow_taken_launch_never_starves_one_coalesced_observation_for_ten_slots(self):
+        self.config["capacity"] = 10
+        self.api.waiting = [f"item{n}" for n in range(10)]
+        relay = self.directory / "relay"
+        timeout, hold = 1.5, 3.5
+        held, during, outstanding, stop, released = [], [], [], Event(), Event()
+        def observes(*statuses):
+            with _queue(relay) as db:
+                return db.execute("SELECT COUNT(*) FROM request WHERE operation='observe' AND status IN (%s)"
+                                  % ", ".join("?" * len(statuses)), statuses).fetchone()[0]
+        def answer(request):
+            outstanding.append(observes("pending", "taken"))
+            try:
+                respond(relay, request["id"], response=self.native(request["operation"], request["arguments"]))
+            except RunnerError as error:
+                respond(relay, request["id"], error=str(error))
+        def serve():
+            while not stop.is_set():
+                request = take_next(relay, wait=0.05, poll=0.005)
+                if "id" not in request:
+                    continue
+                if request["operation"] != "launch" or len(self.native.launches) < 9:
+                    answer(request)
+                    continue
+                # The last launch is slow: it is taken and held past the answer deadline while
+                # this server keeps answering observations between its launch steps.
+                receipt = self.native("launch", request["arguments"])
+                held.append((receipt, len(self.api.renewed)))
+                deadline = time.monotonic() + hold
+                while time.monotonic() < deadline:
+                    observe = take_next(relay, wait=0, operations={"observe"})
+                    if "id" in observe:
+                        answer(observe)
+                        during.append(observe["arguments"])
+                    time.sleep(0.01)
+                with self.assertRaisesRegex(RunnerError, "settled"):
+                    respond(relay, request["id"], response=receipt)
+                released.set()
+        server = Thread(target=serve)
+        server.start()
+        self.addCleanup(lambda: (stop.set(), server.join(30)))
+        loop = CaptainLoop(self.root, self.config, self.api,
+                           BridgeAdapter(RelayTransport(relay, timeout=timeout, poll=0.01)),
+                           poll_seconds=0.01, heartbeat_seconds=0.02, relay_stall_seconds=1,
+                           emit=self.events.append)
+        self.addCleanup(loop.close)
+        self.spin(loop, released.is_set)
+        # Observations kept flowing for every slot while the launch was held past the deadline.
+        self.assertGreaterEqual(len(during), 3)
+        self.assertEqual({len(wait["references"]) for wait in during}, {10})
+        self.assertEqual(observes("expired", "lost"), 0)
+        self.assertLessEqual(max(outstanding), 1)
+        self.assertGreater(len(self.api.renewed), held[0][1])
+        self.assertFalse(any(event["status"] == "relay_stalled" for event in self.events))
+        # The lost launch is never reissued; discovery recovers its exact receipt instead.
+        slot = next(slot for slot, row in loop._records().items()
+                    if row.get("relay", {}).get("marker") == held[0][0]["marker"])
+        self.spin(loop, lambda: loop._records()[slot].get("receipt", {}).get("thread_id") == held[0][0]["thread_id"])
+        self.spin(loop, lambda: len(self.native.waits[-1]["references"]) == 10)
+        self.assertEqual(len({launch["marker"] for launch in self.native.launches}), 10)
+        self.assertEqual(len(self.native.launches), 10)
+        self.assertFalse(self.api.submissions)
+
+    def test_missing_thread_in_coalesced_reply_blocks_only_its_slot(self):
+        self.api.waiting = ["first", "second"]
+        loop = self.loop()
+        self.spin(loop, lambda: len(self.native.launches) == 2
+                  and all(row.get("receipt") for row in loop._records().values()))
+        missing = self.native.launches[0]["marker"]
+        self.native.threads.pop(missing)
+        self.spin(loop, lambda: any(event.get("status") == "slot_blocked" for event in self.events))
+        blocked = {event["slot"] for event in self.events if event.get("status") == "slot_blocked"}
+        slot = next(slot for slot, row in loop._records().items() if row["relay"]["marker"] == missing)
+        self.assertEqual(blocked, {slot})
+        self.assertFalse(self.api.submissions)
+        self.assertEqual(len(self.native.launches), 2)
 
     def test_notify_command_gets_the_event_without_runner_secrets(self):
         output = self.directory / "event.json"
@@ -583,7 +664,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertFalse(warned())
         fast.close()
         slow = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(self.native), poll_seconds=0.01,
-                           heartbeat_seconds=60, batch_size=1, emit=self.events.append)
+                           heartbeat_seconds=60, emit=self.events.append)
         self.addCleanup(slow.close)
         self.spin(slow, warned)
 

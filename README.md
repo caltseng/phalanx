@@ -229,12 +229,16 @@ each distinct host/project/checkout mapping once and shares the results across
 slot admission and launch checks. Failed discovery is retried on the next poll.
 
 Each slot has one work lane. Lease renewals have separate lanes (60 seconds
-by default), as do bounded native observation batches (eight slots, two-second
-wait by default). Git, provider requests, a slow native batch, or an ambiguous
-slot cannot occupy the heartbeat or another slot's work lane. Configure
-`--batch-size 1` to isolate individual native waits. `--poll-seconds`,
-`--heartbeat-seconds`, `--batch-size`, and `--wait-seconds` tune the bounded
-scheduler. If a renewed lease has less than two heartbeat intervals left, the
+by default), as does native observation. The loop keeps at most one
+observation outstanding per runner: one request covers every slot with a
+launch intent or receipt (two-second native wait by default), and the next one
+is sent only after its answer, so relay requests don't grow with slot count.
+Each slot uses only rows matching its own attempt marker and assignment; a
+reply requested for an earlier attempt in that slot is ignored, and a missing
+or stale row leaves only that slot uncertain. Git, provider requests, a slow
+native observation, or an ambiguous slot cannot occupy the heartbeat or another
+slot's work lane. `--poll-seconds`, `--heartbeat-seconds` and `--wait-seconds`
+tune the bounded scheduler. If a renewed lease has less than two heartbeat intervals left, the
 slot reports `renewal_interval_too_long`. Per-attempt cursors and admission rotation stay in memory as
 optimizations; they reset on restart and never prove stop or authorize replacement.
 
@@ -321,7 +325,7 @@ variables are removed from its subprocess environment; keep the bridge trusted.
 | --- | --- |
 | `resolve_project` | Receives `host_id`, `project_id`, `checkout`. Discover the exact project on that host and return those verified fields; do not echo unverified input. The checkout must resolve to the configured root. |
 | `launch` | Receives `host_id`, original `marker`, and the prepared `session`: `project_id`, `title` and `prompt`. Start **one** visible worker session in that project on that exact host whose first prompt is exactly `prompt`, which contains the marker. Use `title` as the session name where the runtime allows it; otherwise use a name that fits, such as the attempt UUID from the marker. Return the same host and marker and exactly one UUID: the session's `thread_id`, or a queued `client_thread_id` when the runtime returns a provisional ID first. You can also return a `worker_url`, an HTTPS link to that session with no credentials in it, which the operator board shows. The runner ignores an invalid link and reports a warning; the launch still succeeds. |
-| `observe` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). |
+| `observe` | Receives `references` for every observed slot of the runner (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). A reference with no matching row leaves only that slot uncertain. |
 
 Session rows use the recovery observation fields documented below. A `stopped`
 row additionally requires `writers_stopped: true`. Observation timestamps must
@@ -338,7 +342,8 @@ projects. The chat needs a shell with write access to the runner state
 directory. Repeat this cycle while the loop runs:
 
 1. `python -m phalanx relay --state C:\phalanx-runner next --wait 30` hands out
-   the oldest request exactly once, or `{"status": "idle"}`. Output is
+   the next request exactly once, or `{"status": "idle"}`. Pending `observe`
+   requests go first, then the oldest request. Output is
    ASCII-escaped JSON, so a non-ASCII prompt survives any pipe code page;
    decode it with a JSON parser before passing it on.
 2. Serve the request with the runtime's tools, following the contract table
@@ -349,6 +354,10 @@ directory. Repeat this cycle while the loop runs:
      the one-time setup action instead, and tell Caleb once.
    - `launch`: start the worker session **once**; reply with the host, marker
      and session UUID as `thread_id` (or a provisional ID as `client_thread_id`).
+     While a launch takes long, run
+     `relay next --operation observe --wait 0` at least every 30 seconds
+     between its steps and answer any observation it hands out before
+     finishing the launch. This keeps observation and stall detection current.
    - `observe`: read each receipt's session, or find the marker in session
      first prompts or history; reply with fresh rows. Set `writers_stopped` only after verifying
      the session's turn stopped. When the runtime's tools cannot read a
@@ -374,8 +383,11 @@ directory. Repeat this cycle while the loop runs:
 
 Identical requests waiting to be taken share one entry. Verified project resolutions
 are cached for ten minutes and failed ones for one minute, so an untrusted
-repository costs the Captain one answer a minute. The loop waits up to five minutes for a request to
-be taken and five more for its reply. A launch the Captain never took expires
+repository costs the Captain one answer a minute. The loop waits up to five minutes,
+counted from when the request was queued, for it to be taken, and five more
+from the take for its reply. A serving relay takes a pending observation within
+30 seconds even while it holds a slow launch. A launch waits behind at most one
+observation per runner. A launch the Captain never took expires
 and is retracted, so the same packet can launch again. A taken request is never
 handed out again, even after a Captain restart. An unanswered one is settled as
 lost: a later observation or resolution queues afresh, while an unanswered launch

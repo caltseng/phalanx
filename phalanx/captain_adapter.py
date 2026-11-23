@@ -102,6 +102,8 @@ class ObservationBatch:
     cursors: dict[str, str | None]
     observed_at: datetime
     errors: dict[str, str] = field(default_factory=dict)
+    # The markers this reply was requested for; it says nothing about any other attempt.
+    markers: frozenset[str] = frozenset()
 
 
 class BridgeAdapter:
@@ -185,4 +187,4 @@ class BridgeAdapter:
                 errors[marker] = f"Malformed native observation for {marker or 'unidentified writer'}: {error}"
                 if not marker:
                     complete = False
-        return ObservationBatch(tuple(threads), complete, next_cursors, observed, errors)
+        return ObservationBatch(tuple(threads), complete, next_cursors, observed, errors, frozenset(markers))

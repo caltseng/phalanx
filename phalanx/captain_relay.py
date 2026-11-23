@@ -54,7 +54,7 @@ class RelayTransport:
         self.unresolved: dict[str, tuple[float, str]] = {}
         # Waiters from a previous loop are gone; never let their requests launch late.
         with _queue(self.root) as db:
-            db.execute("UPDATE request SET status='expired', updated_at=? WHERE status='pending' AND updated_at < ?",
+            db.execute("UPDATE request SET status='expired', updated_at=? WHERE status='pending' AND created_at < ?",
                        (time(), time() - timeout))
 
     def __call__(self, operation: str, arguments: dict) -> dict:
@@ -78,10 +78,12 @@ class RelayTransport:
                            (request_id, key, operation, body, now, now))
         while True:
             with _queue(self.root) as db:
-                status, response, error, updated = db.execute(
-                    "SELECT status, response, error, updated_at FROM request WHERE id=?", (request_id,),
+                status, response, error, created, updated = db.execute(
+                    "SELECT status, response, error, created_at, updated_at FROM request WHERE id=?", (request_id,),
                 ).fetchone()
-                if status in {"pending", "taken"} and time() >= updated + self.timeout:
+                # A pending request ages from creation; a taken one has its own answer deadline from the take.
+                if ((status == "pending" and time() >= created + self.timeout)
+                        or (status == "taken" and time() >= updated + self.timeout)):
                     # Settle it so an identical retry queues afresh for a live Captain.
                     status = "expired" if status == "pending" else "lost"
                     db.execute("UPDATE request SET status=?, updated_at=? WHERE id=?", (status, time(), request_id))
@@ -96,7 +98,8 @@ class RelayTransport:
                     self.resolved[key] = (time(), reply)
                 return reply
             if status == "expired":
-                raise LaunchNotDelivered(f"Captain relay never took {operation}; start or resume the Captain chat relay")
+                raise LaunchNotDelivered(f"Captain relay never took {operation} within {self.timeout:g}s of queueing; "
+                                         "start or resume the Captain chat relay")
             if status == "retracted":
                 raise RequestRetracted(f"Captain relay {operation} was retracted before the Captain took it")
             if status == "lost":
@@ -137,14 +140,20 @@ def read_request(root: Path, request_id: str) -> dict:
     return {"id": request_id, **json.loads(row[1])}
 
 
-def take_next(root: Path, wait: float = 30, poll: float = 0.2) -> dict:
-    """Hand out the oldest pending request exactly once, even across Captain restarts."""
+def take_next(root: Path, wait: float = 30, poll: float = 0.2, operations: set[str] | None = None) -> dict:
+    """Hand out the next pending request exactly once, even across Captain restarts.
+
+    Observations go first, so a queued launch never delays one. A server holding a
+    slow launch passes operations={"observe"} to answer observations in between.
+    """
     deadline = time() + wait
+    only = sorted(operations or ())
+    where = f" AND operation IN ({', '.join('?' * len(only))})" if only else ""
     while True:
         with _queue(Path(root).resolve()) as db:
             _seen(db)
-            row = db.execute("SELECT id, body FROM request WHERE status='pending' "
-                             "ORDER BY created_at LIMIT 1").fetchone()
+            row = db.execute(f"SELECT id, body FROM request WHERE status='pending'{where} "
+                             "ORDER BY operation != 'observe', created_at LIMIT 1", only).fetchone()
             if row:
                 db.execute("UPDATE request SET status='taken', updated_at=? WHERE id=?", (time(), row[0]))
                 return {"id": row[0], **json.loads(row[1])}
@@ -172,7 +181,10 @@ def add_relay_command(commands):
     parser = commands.add_parser("relay", help="run Captain chat relay requests for the captain loop")
     parser.add_argument("--state", required=True, type=Path)
     actions = parser.add_subparsers(dest="action", required=True)
-    actions.add_parser("next", help="take the next request").add_argument("--wait", type=float, default=30)
+    take = actions.add_parser("next", help="take the next request")
+    take.add_argument("--wait", type=float, default=30)
+    take.add_argument("--operation", action="append", choices=("resolve_project", "launch", "observe"),
+                      help="take only this operation; repeatable. Use observe while holding a slow launch")
     answer = actions.add_parser("respond", help="record the runtime's reply to a taken request")
     answer.add_argument("id")
     source = answer.add_mutually_exclusive_group()
@@ -207,7 +219,7 @@ def run_relay(args):
         args.out.write_text(reply + "\n", encoding="utf-8")
         result = {"status": "written", "id": args.id, "file": str(args.out)}
     elif args.action == "next":
-        result = take_next(args.state, args.wait)
+        result = take_next(args.state, args.wait, operations=set(args.operation or ()))
     elif args.error is not None:
         result = respond(args.state, args.id, error=args.error)
     else:

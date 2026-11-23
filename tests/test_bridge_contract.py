@@ -8,7 +8,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event, Thread, get_ident
-from time import sleep
+from time import sleep, time
 import unittest
 from unittest.mock import patch
 from uuid import UUID, uuid4
@@ -294,6 +294,32 @@ class RelayQueueTests(unittest.TestCase):
         self.assertEqual(len(set(taken)), 20)
         self.assertEqual(sorted(result["references"][0]["marker"] for result in results),
                          sorted(str(n) for n in range(20)))
+
+    def test_observation_goes_ahead_of_queued_launches_and_between_launch_steps(self):
+        now = time()
+        with _queue(self.root) as db:
+            for id, operation, created in (("l1", "launch", now - 3), ("l2", "launch", now - 2),
+                                           ("o1", "observe", now - 1)):
+                db.execute("INSERT INTO request VALUES (?, ?, ?, '{}', 'pending', NULL, NULL, ?, ?)",
+                           (id, id, operation, created, created))
+        self.assertEqual(take_next(self.root, wait=0)["id"], "o1")
+        launch = take_next(self.root, wait=0)
+        self.assertEqual(launch["id"], "l1")
+        # While l1 is held, a server takes only observations; the other launch waits.
+        self.assertEqual(take_next(self.root, wait=0, operations={"observe"}), {"status": "idle"})
+        with _queue(self.root) as db:
+            db.execute("INSERT INTO request VALUES ('o2', 'o2', 'observe', '{}', 'pending', NULL, NULL, ?, ?)",
+                       (time(), time()))
+        self.assertEqual(take_next(self.root, wait=0, operations={"observe"})["id"], "o2")
+        taken = json.loads(relay("--state", str(self.root), "next", "--wait", "0", "--operation", "launch").stdout)
+        self.assertEqual(taken["id"], "l2")
+
+    def test_queue_age_counts_from_creation_not_last_update(self):
+        with _queue(self.root) as db:
+            db.execute("INSERT INTO request VALUES ('old', 'k', 'launch', '{}', 'pending', NULL, NULL, 0, ?)",
+                       (time(),))
+        RelayTransport(self.root, timeout=60)
+        self.assertEqual(take_next(self.root, wait=0), {"status": "idle"})
 
 
 def worker_prompt(marker, identity):

@@ -33,12 +33,12 @@ _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reco
 class CaptainLoop:
     def __init__(self, root: Path, config: dict, api, adapter: BridgeAdapter, *,
                  poll_seconds: float = 2, heartbeat_seconds: float = 60,
-                 batch_size: int = 8, wait_seconds: float = 2, overdue_seconds: float = 3 * 3600,
+                 wait_seconds: float = 2, overdue_seconds: float = 3 * 3600,
                  relay_stall_seconds: float = 180, emit=None, notify=None):
         if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds:
             raise RunnerError("Poll interval must be at most 30s and heartbeat interval must be positive")
-        if type(batch_size) is not int or not 1 <= batch_size <= 32 or not 0 < wait_seconds <= 5:
-            raise RunnerError("Native batches need 1-32 slots and a wait of at most 5s")
+        if not 0 < wait_seconds <= 5:
+            raise RunnerError("Native observation needs a wait of at most 5s")
         if not isinstance(config.get("runner_id"), str) or not config["runner_id"]:
             raise RunnerError("Use one nonempty stable runner ID")
         self.runner = AttendedRunner(root, config, api)
@@ -47,7 +47,7 @@ class CaptainLoop:
             if self.root.is_relative_to(Path(mapping["checkout"]).resolve()):
                 raise RunnerError("The private runner state must be outside mapped checkouts")
         self.poll_seconds, self.heartbeat_seconds = poll_seconds, heartbeat_seconds
-        self.batch_size, self.wait_seconds = batch_size, wait_seconds
+        self.wait_seconds = wait_seconds
         self.overdue_seconds = overdue_seconds
         self.relay_stall_seconds = relay_stall_seconds
         self.emit = emit or (lambda event: print(json.dumps(event), flush=True))
@@ -61,15 +61,16 @@ class CaptainLoop:
         self.relay_future, self.relay_due = None, 0
         self.work: dict[int, Future] = {}
         self.renewals: dict[int, tuple[Future, str]] = {}
+        # At most one outstanding observation per runner; its reply fans out to every slot it names.
         self.observations: dict[tuple[int, ...], Future] = {}
         self.pending_observations: dict[int, ObservationBatch] = {}
-        self.work_due, self.lease_due, self.observe_due = {}, {}, {}
+        self.work_due, self.lease_due = {}, {}
+        self.observe_due = 0
         self.recovery_future = None
         self.recovery_due = 0
         self.recovery_ready = False
         self.expired, self.unmatched = {}, []
         self.last_unmatched = None
-        self.rotation = 0
         self.admission, self.cursors = {}, {}
         self.discovery_future = None
         self.discovery_due = 0
@@ -406,6 +407,10 @@ class CaptainLoop:
         runner = self._runner(slot)
         if not snapshot:
             return self._prepare(slot, discovery)
+        if observation is not None and ("packet" not in snapshot
+                                        or runner._handoff(snapshot).packet.marker not in observation.markers):
+            # A coalesced reply requested for an earlier attempt in this slot never speaks for this one.
+            observation = None
         if "cancel_stop" in snapshot:
             native = None
             if observation is not None and "thread_id" in snapshot["cancel_stop"]:
@@ -629,20 +634,13 @@ class CaptainLoop:
                 self.work[slot] = self.slot_pool.submit(self._advance, slot, record, observation,
                                                        self.discovery_future)
                 self.work_due[slot] = now + self.poll_seconds
-        observed_slots = {slot for slots in self.observations for slot in slots}
-        candidates = [slot for slot, record in records.items()
-                      if "packet" in record and slot not in observed_slots
-                      and any(field in record for field in ("relay", "receipt"))
-                      and now >= self.observe_due.get(slot, 0)]
-        if candidates:
-            offset = self.rotation % len(candidates)
-            candidates = candidates[offset:] + candidates[:offset]
-            self.rotation += self.batch_size
-            for start in range(0, len(candidates), self.batch_size):
-                slots = tuple(candidates[start:start + self.batch_size])
-                self.observations[slots] = self.native_pool.submit(self._wait, slots, records)
-                for slot in slots:
-                    self.observe_due[slot] = now + self.poll_seconds
+        # One request covers every observing slot, so relay load does not grow with slot count.
+        # A slot that starts observing while it is outstanding joins the next request.
+        slots = tuple(sorted(slot for slot, record in records.items()
+                             if "packet" in record and any(field in record for field in ("relay", "receipt"))))
+        if slots and not self.observations and now >= self.observe_due:
+            self.observations[slots] = self.native_pool.submit(self._wait, slots, records)
+            self.observe_due = now + self.poll_seconds
         if self.recovery_ready:
             occupied = set(records) | set(self.work)
             room = max(0, self.runner.capacity - len(occupied) - len(self.unmatched))
@@ -759,7 +757,6 @@ def add_captain_command(commands):
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--poll-seconds", type=float, default=2)
     parser.add_argument("--heartbeat-seconds", type=float, default=60)
-    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--wait-seconds", type=float, default=2)
     parser.add_argument("--adapter-command", nargs=argparse.REMAINDER,
                         help="trusted JSON bridge executable and arguments instead of the Captain chat relay; "
@@ -775,7 +772,7 @@ def run_captain(args):
     loop = CaptainLoop(
         args.state, config, RunnerAPI(config["base_url"], token), BridgeAdapter(transport),
         poll_seconds=args.poll_seconds, heartbeat_seconds=args.heartbeat_seconds,
-        batch_size=args.batch_size, wait_seconds=args.wait_seconds,
+        wait_seconds=args.wait_seconds,
     )
     try:
         loop.run(Event())
