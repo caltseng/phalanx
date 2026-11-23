@@ -57,6 +57,11 @@ def capacity(request: Request, runner_id: Identifier, body: Capacity):
     return run(request, dispatch.set_capacity, runner_id, body.capacity, write=True)
 
 
+@router.get("/dispatch/runners/{runner_id}", dependencies=[Depends(require_runner)])
+def runner_view(request: Request, runner_id: Identifier):
+    return run(request, dispatch.runner_view, runner_id)
+
+
 @router.post("/dispatch/claim", dependencies=[Depends(require_runner)])
 def claim(request: Request, body: Claim, lease: Lease):
     return run(request, dispatch.claim, body, intake.digest(lease), write=True)

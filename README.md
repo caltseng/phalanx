@@ -48,7 +48,43 @@ Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlit
 
 Set `PHALANX_LEASE_SECONDS` to change how long a claim or renewal keeps an attempt leased. It defaults to 300 and accepts whole seconds from 30 to 3600; the server refuses to start otherwise. Keep each runner's renewal interval well under it.
 
-From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health` (or `curl http://127.0.0.1:8000/health`). This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
+From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health` (or `curl http://127.0.0.1:8000/health`). This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. `GET /v1/runner/status` also returns `store`, a digest of the server's resolved database path, so a runner can tell its own API from another process on the port. `GET /v1/dispatch/runners/{runner_id}` (runner token) returns the dispatch pause, aging, and that runner's server-side capacity and open attempts. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
+
+### Start or resume a muster
+
+A muster directory keeps one runner's existing config and state together, so a fresh shell or chat can resume it without knowing where it lives:
+
+```text
+runner.json          runner config: runner_id, base_url, capacity, repositories, ...
+runner/              private runner state: slot journals, relay queue, captain-loop.lock
+private/env.json     private environment as {"NAME": "value"}: PHALANX_RUNNER_TOKEN,
+                     PHALANX_OWNER_TOKEN (local API), PHALANX_GITHUB_TOKEN, optional PHALANX_DB
+db/phalanx.sqlite3   the API database, unless PHALANX_DB names another (relative to the muster)
+logs/                server.log and captain-loop.log written by `muster start`
+```
+
+Record it once per user, then start or inspect it from anywhere:
+
+```powershell
+python -m phalanx muster use C:\phalanx-muster
+python -m phalanx muster start
+python -m phalanx muster status
+```
+
+`start` and `status` find the muster in this order: `--home DIR`, then the `PHALANX_HOME` environment variable (an absolute path), then the per-user locator file `~/.phalanx/muster.json` (`%USERPROFILE%\.phalanx\muster.json` on Windows), which holds exactly `{"home": "<absolute muster directory>"}`. `muster use DIR` validates the muster and writes that file. A missing, invalid or ambiguous locator or muster fails with a message naming what's missing: for example a missing `runner/` directory, token or database, or a `PHALANX_API_URL` in `private/env.json` that disagrees with `base_url`. Muster commands never create, migrate, move or delete runner state or the database.
+
+`muster start` is idempotent. It asks the API at `base_url` for `GET /v1/runner/status` with the muster's runner token and checks that the returned `store` matches the muster's database. When that API is verified, it leaves it running. When nothing is listening and `base_url` is loopback `http`, it starts the API with the muster's database. Anything else on the port, including a Phalanx server for another database or one too old to report `store`, makes it refuse to start anything. It then starts `phalanx captain` with the muster's config and state unless a loop already holds `captain-loop.lock`. Another concurrent `muster start` for the same muster is refused. Services are detached and log to `logs/`. Tokens reach them only through the environment, and the server and loop each get only the tokens they use. Repeating `start` launches nothing and reports `already_running`. There is no OS autostart, service or scheduled task.
+
+`start` never restores the Captain relay. The relay serves only while the runtime's standing relay chat runs `relay next` (see [Standing relay serve](#standing-relay-serve)) against the muster's `runner/` state directory.
+
+`muster status` reports, as JSON without tokens:
+
+- `api`: `absent`, `verified` (this muster's API, with `/health`), or `unverified` with the reason.
+- `captain_loop`: whether a loop holds the muster's lock.
+- `relay`: `serving`, `stalled`, `not_observed` or `unreadable`, read only from the relay queue's poll and request times, never inferred from the API or loop being up.
+- `capacity`: the local config capacity, the server capacity and open attempts, and the effective minimum.
+- `dispatch`: whether dispatch is paused, and its aging.
+- `blockers` and `loop_status`: the Captain loop's recorded statuses, with blockers such as `unmatched_attempts`, `mapping_blocked` and `relay_stalled`.
 
 ### Run attended assignments
 

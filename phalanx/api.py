@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from . import dependencies, dispatch, finalization
 from .auth import require_owner, require_runner
-from .config import Credentials, database_path, lease_seconds, local_board
+from .config import Credentials, database_path, lease_seconds, local_board, store_identity
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
 from .operator_api import router as operator_router
@@ -75,8 +75,9 @@ def owner_status():
 
 
 @app.get("/v1/runner/status", dependencies=[Depends(require_runner)])
-def runner_status():
-    return {"role": "runner"}
+def runner_status(request: Request):
+    # `muster start` and `muster status` compare the store to tell their API from another process on the port.
+    return {"role": "runner", "store": store_identity(request.app.state.database_path)}
 
 app.include_router(intake_router)
 app.include_router(dispatch_router)

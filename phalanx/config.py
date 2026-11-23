@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -26,6 +27,11 @@ class Credentials:
 
 def database_path() -> Path:
     return Path(os.environ.get("PHALANX_DB", ".phalanx/phalanx.sqlite3")).resolve()
+
+
+def store_identity(path: Path) -> str:
+    """Name a database file without revealing its path, so a client can tell which store a server opened."""
+    return hashlib.sha256(os.path.normcase(str(Path(path).resolve())).encode("utf-8")).hexdigest()[:16]
 
 
 def lease_seconds() -> int:

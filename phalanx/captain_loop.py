@@ -19,7 +19,7 @@ from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery, unlaunched_proof
 from .captain_adapter import (BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch,
                               RequestRetracted)
-from .captain_relay import RelayTransport
+from .captain_relay import RELAY_STALL_SECONDS, RelayTransport
 from .runner_preflight import preflight
 from .workspaces import _file_lock, _item_branch
 
@@ -34,7 +34,7 @@ class CaptainLoop:
     def __init__(self, root: Path, config: dict, api, adapter: BridgeAdapter, *,
                  poll_seconds: float = 2, heartbeat_seconds: float = 60,
                  batch_size: int = 8, wait_seconds: float = 2, overdue_seconds: float = 3 * 3600,
-                 relay_stall_seconds: float = 180, emit=None, notify=None):
+                 relay_stall_seconds: float = RELAY_STALL_SECONDS, emit=None, notify=None):
         if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds:
             raise RunnerError("Poll interval must be at most 30s and heartbeat interval must be positive")
         if type(batch_size) is not int or not 1 <= batch_size <= 32 or not 0 < wait_seconds <= 5:

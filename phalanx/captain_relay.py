@@ -26,6 +26,8 @@ RESOLVE_CACHE_SECONDS = 600
 # An unverified project, such as an untrusted repository, costs the Captain one answer a minute.
 RESOLVE_FAILURE_CACHE_SECONDS = 60
 RETAIN_SECONDS = 86400
+# A request untaken this long, with no relay poll or answer since, is a stalled relay.
+RELAY_STALL_SECONDS = 180
 
 
 @contextmanager

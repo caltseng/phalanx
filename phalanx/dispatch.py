@@ -48,6 +48,17 @@ def set_capacity(db, runner_id, capacity):
     return {"runner_id": runner_id, "capacity": capacity}
 
 
+def runner_view(db, runner_id):
+    """The dispatch pause and this runner's server-side capacity and open attempts."""
+    settings = db.execute("SELECT paused, aging_seconds FROM dispatch_settings WHERE id=1").fetchone()
+    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?", (runner_id,)).fetchone()
+    reserved = db.execute("SELECT count(*) FROM attempts WHERE runner_id=? AND ended_at IS NULL",
+                          (runner_id,)).fetchone()[0]
+    return {"runner_id": runner_id, "paused": bool(settings["paused"]),
+            "aging_seconds": settings["aging_seconds"],
+            "capacity": limit["capacity"] if limit else DEFAULT_CAPACITY, "reserved": reserved}
+
+
 def queue_head(db, runner_id, repository_ids, now_ms, aging_ms, stages=()):
     # Within each bucket an older item can only gain as much or more priority.
     best_rank = None

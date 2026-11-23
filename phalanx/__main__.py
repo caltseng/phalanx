@@ -13,6 +13,7 @@ from .captain_loop import add_captain_command, run_captain
 from .captain_relay import add_relay_command, run_relay
 from .github import GitHubError
 from .issue_intake import ingest_issue
+from .muster import add_muster_command, run_muster
 from .workspaces import WorkspaceError
 
 
@@ -79,6 +80,7 @@ def main() -> None:
     add_recovery_command(commands)
     add_captain_command(commands)
     add_relay_command(commands)
+    add_muster_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "server":
@@ -93,6 +95,8 @@ def main() -> None:
             run_captain(args)
         elif args.command == "relay":
             run_relay(args)
+        elif args.command == "muster":
+            run_muster(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
