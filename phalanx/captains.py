@@ -108,3 +108,8 @@ def update(request: Request, captain_id: Identifier, body: Heartbeat):
 @router.get("/captains", dependencies=[Depends(authenticate_board_read)])
 def list_captains(request: Request, limit: Annotated[int, Query(ge=1, le=100)] = 25):
     return run(request, captains, limit)
+
+
+@router.get("/captains/{captain_id}", dependencies=[Depends(authenticate_board_read)])
+def get_captain(request: Request, captain_id: Identifier):
+    return run(request, lambda db: view(captain_row(db, captain_id)))
