@@ -141,25 +141,47 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((ended["state"]["status"], ended["writer"]["state"]), ("queued", "ended"))
         self.assertEqual(self.old_loop_claim()["item_id"], item_id)
 
-    def test_work_cli_reads_the_worktree_credential_and_asks_a_question(self):
+    def test_withdrawing_a_stopped_writer_confirms_a_pending_owner_stop(self):
         item_id, execution_id = self.item()
-        _, token, _ = self.register(item_id, execution_id)
+        first, _, _ = self.register(item_id, execution_id)
+        writer = f"/v1/items/{item_id}/executions/{execution_id}/writer"
+        self.ok(writer, RUNNER, {"captain_id": self.captain["id"], "writer_id": first["writer"]["id"],
+                                 "session_id": "s-1"}, method="PATCH")
+        self.ok(f"/v1/items/{item_id}/executions/{execution_id}/cancel", OWNER,
+                {"expected_version": self.version(item_id), "reason": "Not needed"})
+        self.register(item_id, execution_id, replaces=first["writer"]["id"], replaced_stopped=True, code=409)
+        ended = self.ok(writer + "/withdraw", RUNNER, {"captain_id": self.captain["id"], "reason": "Worker crashed",
+                                                     "writer_id": first["writer"]["id"], "stopped": True})
+        self.assertEqual((ended["state"]["stopping"], ended["state"]["pending_output"], ended["writer"]["state"]),
+                         (None, "cancelled", "ended"))
+
+    def test_work_cli_pins_the_attempt_and_asks_a_question(self):
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
         worktree = self.path.parent / "worktree"
         worktree.mkdir()
         subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
         git_path = subprocess.run(["git", "rev-parse", "--git-path", "phalanx-writer.json"], cwd=worktree,
                                   check=True, capture_output=True, text=True).stdout.strip()
         (worktree / git_path).write_text(json.dumps({"token": token, "base_url": self.url}), encoding="utf-8")
+        (worktree / "result.json").write_text(json.dumps({"outcome": "succeeded", "report_markdown": "# R\n"}),
+                                              encoding="utf-8")
 
-        def work(*arguments):
+        def work(*arguments, code=0):
             result = subprocess.run([sys.executable, "-m", "phalanx", "work", *arguments], cwd=worktree,
                                     env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True,
                                     text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            return json.loads(result.stdout)
+            self.assertEqual(result.returncode, code, result.stderr)
+            return json.loads(result.stdout) if code == 0 else result.stderr
 
         self.assertEqual(work("progress", "--note", "Outlining")["writer"]["progress_note"], "Outlining")
-        asked = work("question", "Which audience?", "--handoff", "Outline drafted", "--option", "Ops")
+        drafted = work("result", "--attempt", binding["writer"]["attempt_id"], "--file", "result.json")
+        self.assertEqual(drafted["state"]["stage"], "report_review")
+        resent = work("result", "--attempt", binding["writer"]["attempt_id"], "--file", "result.json", code=1)
+        self.assertIn("is not open", resent)
+        self.assertEqual(work("status")["version"], drafted["version"])
+        asked = work("question", "Which audience?", "--attempt", drafted["writer"]["attempt_id"],
+                     "--handoff", "Outline drafted", "--option", "Ops")
         self.assertEqual(asked["state"]["status"], "waiting_for_input")
         self.assertEqual(asked["state"]["wait"]["reason"], "Which audience?")
 

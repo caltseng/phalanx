@@ -121,18 +121,25 @@ def claim_next(db, writer, *, continued_from=None):
 
 
 def release(db, writer, reason):
-    """End the writer. Requeue its open attempt so another writer or the old loop can take it."""
+    """End a writer whose session the Captain attests is stopped or never launched.
+
+    A pending owner stop is confirmed on the stopped session's behalf. Otherwise the open attempt
+    is requeued so another writer or the old loop can take it.
+    """
     row = intake.execution_row(db, writer["item_id"], writer["execution_id"])
     state = intake.STATE.validate_json(row["state_json"])
     attempt = db.execute("SELECT id FROM attempts WHERE execution_id=? AND ended_at IS NULL",
                          (row["id"],)).fetchone()
+    details = {"reason": f"Writer released: {reason}", "writer_id": writer["id"]}
     if attempt is not None and attempt["id"] == writer["attempt_id"]:
         if state.stopping is not None:
-            raise intake.Conflict("A stop is pending. The writer confirms it with stop-confirmed")
-        intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
-                     details={"reason": f"Writer released: {reason}", "writer_id": writer["id"]})
+            intake.confirm_stop(db, row, state, attempt["id"], details=details)
+        else:
+            intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
+                         details=details)
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
+    # step5-remove: hands the execution back to the old loop's queue affinity.
     request = json.loads(intake.item_row(db, writer["item_id"])["request_json"])
     db.execute("UPDATE executions SET queue_affinity=? WHERE id=?",
                (request.get("runner_affinity") or "", row["id"]))
@@ -150,8 +157,13 @@ def register(db, item_id, execution_id, payload):
     live_captain(db, payload.captain_id)
     if db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]:
         raise intake.Conflict("Dispatch is paused. No new writers are registered until it resumes")
-    intake.check_current(db, item_id, execution_id, payload.expected_version)
+    _, state = intake.check_current(db, item_id, execution_id, payload.expected_version)
     current = open_writer(db, execution_id)
+    if state.status in TERMINAL or state.stopping is not None or state.pending_output is not None:
+        if current is not None and state.stopping is not None:
+            raise intake.Conflict(f"The execution is closing. Withdraw writer {current['id']} with "
+                                  "stopped=true to confirm the stop")
+        raise intake.Conflict("The execution is closed or closing")
     if current is not None:
         if payload.replaces != current["id"]:
             raise intake.Conflict(f"Execution already has writer {current['id']}. Name it in replaces "
@@ -161,10 +173,7 @@ def register(db, item_id, execution_id, payload):
         release(db, current, "replaced")
     elif payload.replaces is not None:
         raise intake.Conflict("The writer to replace is no longer registered")
-    row = intake.execution_row(db, item_id, execution_id)
-    state = intake.STATE.validate_json(row["state_json"])
-    if state.status in TERMINAL or state.stopping is not None or state.pending_output is not None:
-        raise intake.Conflict("The execution is closed or closing")
+    state = intake.STATE.validate_json(intake.execution_row(db, item_id, execution_id)["state_json"])
     if state.status == Status.RUNNING:
         raise intake.Conflict("A runner attempt holds this execution")
     writer_id = uuid4().hex
@@ -174,6 +183,7 @@ def register(db, item_id, execution_id, payload):
         (writer_id, execution_id, item_id, payload.captain_id, payload.runtime, payload.nonce,
          payload.token_digest, payload.replaces, intake.timestamp()),
     )
+    # step5-remove: keeps the old loop from claiming a writer-bound execution.
     db.execute("UPDATE executions SET queue_affinity=? WHERE id=?", (WRITER_AFFINITY, execution_id))
     claim_next(db, writer_row(db, writer_id))
     return binding(db, writer_row(db, writer_id))
