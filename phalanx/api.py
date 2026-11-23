@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from . import dependencies, dispatch, finalization
 from .auth import require_owner, require_runner
-from .config import Credentials, database_path, lease_seconds
+from .config import Credentials, database_path, lease_seconds, local_board
 from .dispatch_api import router as dispatch_router
 from .intake_api import router as intake_router
 from .operator_api import router as operator_router
@@ -18,6 +18,7 @@ from .store import connect, migrate, write_transaction
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.credentials = Credentials.from_env()
+    app.state.local_board = local_board()
     app.state.database_path = database_path()
     dispatch.LEASE_SECONDS = lease_seconds()
     migrate(app.state.database_path)
