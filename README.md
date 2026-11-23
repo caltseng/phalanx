@@ -387,6 +387,46 @@ observes, the loop retracts its untaken `observe` requests, so the Captain never
 answers for a finished worker. Never rerun a request
 whose outcome you did not record; answer it from discovery instead.
 
+#### Standing relay serve
+
+The relay drains only while some agent turn is running the cycle above. A
+runtime's session tools can be called only from inside an agent turn, so the
+loop cannot serve or wake the relay itself. Make a standing serve part of muster
+setup:
+
+- Serve from a dedicated relay chat that repeats `relay next` without ending
+  its turn. Keep owner conversation in another chat so it never waits on the
+  relay.
+- Attach the runtime's own scheduler to that chat so a wake restarts serving
+  whenever its turn ended (see the runtime mapping below). Each wake runs the
+  cycle until it is told to stop. Overlapping servers are safe: `relay next`
+  hands each request to exactly one taker, so a wake that lands while another
+  server is active takes only requests nobody else took.
+
+When no server has polled or answered for `relay_stall_seconds` (180 seconds)
+while a request waits, the loop reports `relay_stalled` with the time of the
+first untaken request. It adds the reason to the lease renewal of every item
+whose worker needs the relay, so the operator board shows it as each item's
+wait reason. It then notifies the owner. The first poll or answer after that
+clears the stall. The loop then reports `relay_serving`, clears the board
+reasons on the next renewal, and notifies the owner again. It resumes by itself
+with no restart: queued observations are taken where they wait, and an expired
+launch or resolution is queued afresh on the next poll.
+
+Set `"notify_command"` in the runner config to an executable and its arguments,
+such as `["python", "notify.py"]`, to receive each `relay_stalled` and
+`relay_serving` event as one JSON object on stdin. Each event has `event`,
+`reason`, `items`, `runner_id` and `at`. The command runs without the Phalanx
+token variables and has 30 seconds. A failure shows as `notify_blocked` in loop
+status. The stall status itself is always written and emitted.
+
+Recovery bounds: a stall shows within `relay_stall_seconds`, plus one loop poll
+and one heartbeat (about four minutes with defaults). Once a wake is due,
+draining resumes after the wake interval, plus the runtime's turn-start delay,
+plus up to one loop poll. The turn-start delay covers waiting behind a running
+turn of that chat, and the app or terminal must be open to fire the wake. An
+expired request also costs at most one more poll to requeue.
+
 #### Runtime mapping
 
 Each runtime serves the same three operations with its own tools. Set the
@@ -402,12 +442,27 @@ in their first muster and record any correction here.
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Pass each session with its state to the observe helper with `--runtime copilot`, which reads `~/.copilot/session-state/<id>/events.jsonl`. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
+Standing relay serve per runtime:
+
+- **GitHub Copilot app:** in the relay chat, attach a session automation with
+  `save_session_automation` (`interval: "minutes"`, `every_minutes: 5`). Its
+  prompt is to serve the relay until told to stop. It wakes the same chat with its existing
+  context. A wake that arrives during a running turn waits for that turn. Worst
+  case, draining resumes about 5 minutes plus turn-start delay after the relay
+  stopped, while the app is open.
+- **Codex desktop app, GitHub Copilot CLI, Claude Code:** unverified. Use the
+  runtime's own scheduled or recurring prompt if it has one, or an OS scheduler
+  that resumes the relay session with a serve prompt. Record the mechanism and
+  its measured bound here after the first muster.
+
 **Acceptance gap:** The relay and fixture pass one shared contract test, and
 the PH-11b muster on the GitHub Copilot app accepted it natively: two real
 visible workers, a worker question answered through the Captain chat, and
 Captain restarts around a receipt, recorded in
-[the worker recovery report](docs/pilots/worker-recovery.md). Wider PR stages,
-owner notifications/due external rechecks remain integration work; this is not
+[the worker recovery report](docs/pilots/worker-recovery.md). Relay stall
+reporting and overlapping servers are covered by tests with a simulated
+scheduled wake. The runtime scheduler wake itself still needs a live muster.
+Wider PR stages and due external rechecks remain integration work; this is not
 full PH-11 or v1 acceptance.
 
 ### Load trusted validation policy

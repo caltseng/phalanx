@@ -29,7 +29,7 @@ class RecoveryAPI:
                                "version": 3, "lease_expires_at": 500}
         self.error = None
 
-    def call(self, path, body=None, *, lease=None, key=None):
+    def call(self, path, body=None, *, lease=None, key=None, **offer):
         prefix = "/dispatch/runners/desk"
         if path == prefix + "/recovery":
             return self.expired

@@ -43,6 +43,11 @@ def preflight(config: dict, token: str | None) -> None:
     if type(capacity) is not int or not low <= capacity <= high:
         blockers.append(f"Set local_check_capacity in the runner configuration to a whole number "
                         f"from {low} to {high}; found {capacity!r}")
+    notify = config.get("notify_command")
+    if notify is not None and (not isinstance(notify, list) or not notify
+                               or any(not isinstance(part, str) or not part for part in notify)):
+        blockers.append("Set notify_command in the runner configuration to a nonempty array of "
+                        f"executable and argument strings, or omit it; found {notify!r}")
     if config.get("validation_policy"):
         from pathlib import Path
         from .validation_policy import ValidationPolicyError, load_validation_policy

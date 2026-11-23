@@ -336,7 +336,8 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
     return execution_view(execution_row(db, row["item_id"], row["id"]))
 
 
-def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None):
+def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None,
+                  continued_from=None):
     """Persist a claim after PH-06 selects and admits it in this same write transaction."""
     now = time() if now is None else now
     if state.status != Status.QUEUED or lease_expires_at <= now:
@@ -358,9 +359,10 @@ def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, 
            WHERE execution_id=? AND version=? AND event IN (?, ?)""",
         (row["id"], row["version"], Event.REPLY, Event.RECHECK),
     ).fetchone()
-    execution = apply(db, row, state, Event.CLAIM, attempt_id=attempt_id,
-                      details={"runner_id": runner_id, "ready_since_ms": row["ready_since"],
-                               "dependencies": snapshot})
+    details = {"runner_id": runner_id, "ready_since_ms": row["ready_since"], "dependencies": snapshot}
+    if continued_from is not None:
+        details["continued_from"] = continued_from
+    execution = apply(db, row, state, Event.CLAIM, attempt_id=attempt_id, details=details)
     claim = {"attempt_id": attempt_id, "execution": execution, "dependencies": snapshot}
     if resume is not None:
         field = "input_reply" if resume["event"] == Event.REPLY else "external_recheck"
