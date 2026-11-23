@@ -122,7 +122,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(writer, RUNNER, {"captain_id": rival["id"], "writer_id": first["writer"]["id"],
                                  "session_id": "s-1"}, 409, method="PATCH")
         confirmed = self.ok(writer, RUNNER, {"captain_id": self.captain["id"], "writer_id": first["writer"]["id"],
-                                             "session_id": "s-1", "session_url": "https://example.test/s-1"},
+                                             "session_id": "s-1", "session_url": "ghapp://sessions/s-1"},
                             method="PATCH")
         self.assertEqual((confirmed["writer"]["state"], confirmed["writer"]["session_id"]), ("busy", "s-1"))
 

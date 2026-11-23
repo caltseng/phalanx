@@ -261,6 +261,7 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
         "item_id": item_id, "execution_id": binding["id"], "version": binding["version"],
         "stage": binding["state"]["stage"], "status": binding["state"]["status"], "writer": binding["writer"],
         "worktree": str(workspace.path), "repository": {"id": repository, **mapping},
+        "session_workspace": config.get("session_workspace"),
         "session_name": f"phx {item_id[:8]} {nonce}",
         "kickoff": kickoff(item, workspace.path, nonce, config.get("work_command", "python -m phalanx work")),
     }
