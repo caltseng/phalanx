@@ -6,6 +6,7 @@ import shutil
 import subprocess
 
 from .attended import RunnerAPI
+from .candidate_local import LOCAL_CHECK_CAPACITY, LOCAL_CHECK_CAPACITY_RANGE
 from .runner_errors import RunnerError
 from .validation import (
     CHECK_RECHECK_RANGE, CHECK_RECHECK_SECONDS, CHECK_WAIT_LIMIT_RANGE, CHECK_WAIT_LIMIT_SECONDS,
@@ -37,6 +38,16 @@ def preflight(config: dict, token: str | None) -> None:
     if type(config.get("auto_merge", True)) is not bool:
         blockers.append(f"Set auto_merge in the runner configuration to true or false; "
                         f"found {config['auto_merge']!r}")
+    capacity = config.get("local_check_capacity", LOCAL_CHECK_CAPACITY)
+    low, high = LOCAL_CHECK_CAPACITY_RANGE
+    if type(capacity) is not int or not low <= capacity <= high:
+        blockers.append(f"Set local_check_capacity in the runner configuration to a whole number "
+                        f"from {low} to {high}; found {capacity!r}")
+    notify = config.get("notify_command")
+    if notify is not None and (not isinstance(notify, list) or not notify
+                               or any(not isinstance(part, str) or not part for part in notify)):
+        blockers.append("Set notify_command in the runner configuration to a nonempty array of "
+                        f"executable and argument strings, or omit it; found {notify!r}")
     if config.get("validation_policy"):
         from pathlib import Path
         from .validation_policy import ValidationPolicyError, load_validation_policy

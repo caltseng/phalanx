@@ -4,10 +4,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx.github import GitHubClient, HTTPResponse
-from phalanx.published_validation_stage import (
-    PublishedValidationAssignment, PublishedValidationPolicy, PublishedValidationRunner,
-)
+from phalanx.published_validation_stage import PublishedValidationAssignment, PublishedValidationRunner
 from phalanx.validation import CheckKind, RequiredCheck
+from phalanx.validation_policy import PublishedValidationPolicy
 from phalanx.workspaces import _item_branch
 
 from test_github import BASE, HEAD, MERGE, pull, response
@@ -47,7 +46,7 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         github = GitHubClient("owner", "repo", token="fixture", transport=send)
         return PublishedValidationRunner(self.journal, self, github)
 
-    def call(self, path, body, *, lease, key=None):
+    def call(self, path, body, *, lease, key=None, **offer):
         self.assertEqual(lease, self.assignment.lease)
         route = path.rsplit("/", 1)[1]
         self.calls.append((route, body, key))

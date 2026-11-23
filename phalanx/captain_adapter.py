@@ -114,6 +114,11 @@ class BridgeAdapter:
         if retract is not None:
             retract(observing)
 
+    def relay_stall(self, threshold: float) -> str | None:
+        """Report a queueing transport whose server has left requests untaken past threshold seconds."""
+        stall = getattr(self.transport, "stall", None)
+        return stall(threshold) if stall is not None else None
+
     def resolve_project(self, mapping: dict) -> None:
         expected = {field: mapping[field] for field in ("host_id", "project_id", "checkout")}
         response = self.transport("resolve_project", expected)
@@ -148,6 +153,13 @@ class BridgeAdapter:
             else:
                 receipt["warning"] = "Bridge worker_url ignored; it must be an HTTPS link without credentials"
         return receipt
+
+    def resume(self, resume: dict) -> None:
+        """Send a continue prompt to the exact recorded writer; never starts a second writer."""
+        expected = {field: resume[field] for field in ("host_id", "project_id", "thread_id", "marker")}
+        response = self.transport("resume", {**expected, "prompt": resume["prompt"]})
+        if any(response.get(field) != expected[field] for field in ("host_id", "thread_id", "marker")):
+            raise RunnerError("Resume reply does not match the exact host, writer and marker")
 
     def observe(self, references: list[dict], *, cursors: dict[str, str],
                      timeout: float) -> ObservationBatch:
