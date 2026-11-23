@@ -129,11 +129,10 @@ class CaptainLoop:
             row = db.execute("SELECT value FROM captain WHERE key=?", (key,)).fetchone()
             event = {"slot": slot, "status": status, "reason": reason}
             if row and all(json.loads(row[0]).get(field) == value for field, value in event.items()):
-                return False
+                return
             event["at"] = datetime.now(timezone.utc).isoformat()
             db.execute("INSERT OR REPLACE INTO captain VALUES (?, ?)", (key, json.dumps(event)))
         self.emit(event)
-        return True
 
     def _block(self, slot, reason):
         """Keep a slot's blocker until a pass learns something new; the next heartbeat publishes it."""
@@ -449,7 +448,8 @@ class CaptainLoop:
                 result = self._resume_writer(runner, result)
             if "claim" in snapshot:
                 result["item_id"] = snapshot["claim"]["item_id"]
-            self._publish_recovery_wait(slot, snapshot.get("claim", {}).get("attempt_id"), result)
+            if self._publish_recovery_wait(slot, snapshot.get("claim", {}).get("attempt_id"), result):
+                result["notify_owner"] = True
             return result
         if "packet" not in snapshot or unlaunched:
             return self._prepare(slot, discovery)
@@ -499,11 +499,14 @@ class CaptainLoop:
                 "next_action": "Observe the writer active, then adopt the same attempt under a fresh lease"}
 
     def _publish_recovery_wait(self, slot, attempt_id, result):
-        """Show an expired attempt's recovery wait on the board, and clear it once recovery moves on."""
+        """Show an expired attempt's recovery wait on the board, and clear it once recovery moves on.
+
+        Returns True when a new owner wait was published, so the owner is notified once per wait.
+        """
         published = self.recovery_waits.get(slot)
         if not attempt_id or result["status"] in {"adopted", "recovered"}:
             self.recovery_waits.pop(slot, None)
-            return
+            return False
         blocker = None
         if result["status"] == "owner_wait":
             action = result.get("next_action") or "Address the reason"
@@ -515,8 +518,9 @@ class CaptainLoop:
         # Clear only a wait this loop published for the same attempt.
         if blocker is None and not (published and published[0] == attempt_id):
             self.recovery_waits.pop(slot, None)
-            return
-        if published != (attempt_id, blocker):
+            return False
+        changed = published != (attempt_id, blocker)
+        if changed:
             route = (f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/attempts/"
                      f"{quote(attempt_id, safe='')}/recovery-wait")
             self.api.call(route, {"blocker": blocker})
@@ -524,6 +528,7 @@ class CaptainLoop:
             self.recovery_waits.pop(slot, None)
         else:
             self.recovery_waits[slot] = (attempt_id, blocker)
+        return changed and result["status"] == "owner_wait"
 
     def _check_observation(self, runner, snapshot, observation):
         if (datetime.now(timezone.utc) - observation.observed_at).total_seconds() > 60:
@@ -612,8 +617,8 @@ class CaptainLoop:
                     if result.get("unchanged") and slot in self.blocked:
                         continue
                     self._block(slot, result.get("blocker"))
-                    emitted = self._status(slot, result["status"], result.get("reason", "Operation recorded"))
-                    if emitted and result["status"] == "owner_wait" and self.notify is not None:
+                    self._status(slot, result["status"], result.get("reason", "Operation recorded"))
+                    if result.get("notify_owner") and self.notify is not None:
                         self.notifications.append(self.notify_pool.submit(self.notify, {
                             "event": "owner_wait", "slot": slot, "attempt_id": result.get("attempt_id"),
                             "reason": result.get("reason"), "next_action": result.get("next_action"),

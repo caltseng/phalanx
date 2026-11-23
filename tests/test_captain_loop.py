@@ -617,6 +617,8 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertTrue(any(event["status"] == "resume_failed" for event in self.events))
         self.assertTrue(any(event["status"] == "writer_resumed" for event in self.events))
         self.spin(loop, lambda: bool(notified))
+        # A pass that lacked an observation reports another status; the same wait is not notified again.
+        loop._status(1, "observing", "Awaiting native observation before recovery")
         for _ in range(10):
             loop.step()
             time.sleep(0.01)
