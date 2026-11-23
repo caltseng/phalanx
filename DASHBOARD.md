@@ -109,7 +109,7 @@ RECENTLY CLOSED 25+
 9. **Times are honest.** Show relative times, with the absolute local time and UTC on hover. Always show the age of the data.
 10. **Neutral wording.** Say "worker chat", "runner" and "Captain", never the name of a specific agent runtime or operating system. This follows the runtime and platform neutrality rules in [AGENTS.md](AGENTS.md).
 11. **Accessible.** Full keyboard navigation, visible focus, WCAG 2.2 AA contrast, screen-reader labels, and respect for reduced motion. On the board, ↑/↓ or j/k move between rows, Enter expands a row and Escape collapses it.
-12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage.
+12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running rows march in step, waiting rows tick like a sundial, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
 13. **Nothing secret or third-party in the browser.** No tokens in storage, and no third-party scripts, fonts or analytics. Keep the strict CSP.
 
 ## Pages
