@@ -101,6 +101,7 @@ class NativeFixture:
         self.gated_slot = 1
         self.queued = False
         self.stopped = set()
+        self.blocked = {}
         self.omit_queued = False
 
     def __call__(self, operation, arguments):
@@ -132,6 +133,8 @@ class NativeFixture:
                     }
                     if ref["marker"] in self.stopped:
                         row.update(state="stopped", writers_stopped=True)
+                    elif ref["marker"] in self.blocked:
+                        row["blocker"] = self.blocked[ref["marker"]]
                     if self.omit_queued:
                         row.pop("client_thread_id", None)
                     rows.append(row)
@@ -487,6 +490,24 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(sum(event["status"] == "worker_overdue" for event in self.events), 1)
         packet = self.write_result(1)
         self.native.stopped.add(packet.marker)
+        self.spin(loop, lambda: bool(self.api.submissions) and not loop._records())
+
+    def test_session_waiting_for_owner_trust_is_an_owner_blocker_not_a_stop(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        loop = self.loop()
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        marker = AttendedRunner(self.root, self.config, self.api, slot=1)._handoff(loop._records()[1]).packet.marker
+        self.native.blocked[marker] = "repository trust is pending for checkout C:/repo"
+        self.spin(loop, lambda: any("repository trust is pending" in (blocker or "") for blocker in self.api.blockers))
+        renewals = len(self.api.renewed)
+        self.spin(loop, lambda: len(self.api.renewed) > renewals + 3)
+        self.assertEqual(sum(event["status"] == "worker_blocked" for event in self.events), 1)
+        self.assertFalse(any(event["status"] == "stopped_without_result" for event in self.events))
+        del self.native.blocked[marker]
+        self.spin(loop, lambda: self.api.blockers[-1] is None)
+        self.write_result(1)
+        self.native.stopped.add(marker)
         self.spin(loop, lambda: bool(self.api.submissions) and not loop._records())
 
     def test_stopped_writer_without_result_stops_renewing_for_recovery(self):

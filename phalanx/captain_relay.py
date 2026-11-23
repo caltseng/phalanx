@@ -163,6 +163,8 @@ def add_relay_command(commands):
     observe.add_argument("--session", nargs=3, action="append", default=[],
                          metavar=("SESSION_ID", "STATE", "PROJECT_ID"),
                          help="a listed worker session and its active, stopped or unknown state")
+    observe.add_argument("--blocked", nargs=2, action="append", default=[], metavar=("SESSION_ID", "REASON"),
+                         help="a listed session that cannot progress until the owner acts, and why")
     observe.add_argument("--complete", action="store_true", help="every worker session on the host was listed")
     observe.add_argument("--out", type=Path, help="reply file for `relay respond --file`; defaults to stdout")
 
@@ -171,7 +173,11 @@ def _observe_reply(args) -> dict:
     from .observe import build_reply, reader
 
     read = reader(args.runtime)
-    sessions = [{"thread_id": session_id, "state": state, "project_id": project_id, **read(session_id)}
+    blocked = dict(args.blocked)
+    if set(blocked) - {session_id for session_id, _, _ in args.session}:
+        raise RunnerError("Each --blocked session must also be listed with --session")
+    sessions = [{"thread_id": session_id, "state": state, "project_id": project_id, **read(session_id),
+                 **({"blocker": blocked[session_id]} if session_id in blocked else {})}
                 for session_id, state, project_id in args.session]
     return build_reply(read_request(args.state, args.id), sessions, host_id=args.host, complete=args.complete)
 

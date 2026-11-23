@@ -180,12 +180,16 @@ required; without it, initial draft claims are excluded as before.
 
 **One-time setup per repository.** Alongside the tokens, grant the Captain's
 runtime standing access to each mapped checkout before the first muster. A
-runtime that gates a repository on owner trust (the GitHub Copilot app asks
-once per repository) denies every worker tool until trust is granted, so an
-untrusted checkout would stop a worker mid-stage. For the GitHub Copilot app and
-CLI, the supported standing setup is to choose "trust for future sessions" once
-per checkout, or to add the checkout's path to the `trustedFolders` array in
-`~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)).
+runtime that gates a repository on owner trust denies every worker tool until
+trust is granted, so an untrusted checkout would stop a worker mid-stage. The
+GitHub Copilot CLI reads trust from the `trustedFolders` array in
+`~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)),
+or from choosing "trust for future sessions" once per checkout. The GitHub
+Copilot app also keeps its own per-project repository trust: a `trustedFolders`
+entry alone does not clear it, and a new session in an untrusted project shows a
+trust card and runs nothing until the owner accepts it. For the app, open one
+session in each mapped project and accept its trust card before the first
+muster, in addition to the `trustedFolders` entry.
 Only the owner grants trust; a Captain or worker never edits it. The Captain
 checks trust while serving `resolve_project` and answers an untrusted checkout
 with an error naming it and the setup action. The loop records every
@@ -193,7 +197,11 @@ unverified mapping, with its project ID, checkout path and error, together in
 one `mappings` loop status
 (`attended status --all`) and launches no worker for them, while unrelated
 mappings keep claiming and launching. Once trust is granted, the next check
-verifies the mapping and admission resumes.
+verifies the mapping and admission resumes. If a launched worker still waits
+on trust, the Captain reports its session with a `blocker`. The slot keeps its
+reservation and lease, reports one `worker_blocked` loop status, and the
+operator board shows the blocker as the item's wait reason. It never treats
+the worker as stopped; the worker continues once the owner accepts the trust prompt.
 
 By default the loop reaches the worker runtime through the **Captain chat relay**,
 because the Captain chat holds the runtime's session tools. The loop queues
@@ -320,7 +328,10 @@ variables are removed from its subprocess environment; keep the bridge trusted.
 | `observe` | Receives at most the configured batch of `references` (slot, host, project, original launch time, marker, assignment and receipt), per-marker `cursors`, and `timeout_seconds`. Return `observed_at` with timezone, boolean `discovery_complete`, `threads` (one row per worker session), and optional per-marker `cursors` (string or null to reset). |
 
 Session rows use the recovery observation fields documented below. A `stopped`
-row additionally requires `writers_stopped: true`. Observation timestamps must
+row additionally requires `writers_stopped: true`. A session that cannot
+progress until the owner acts, such as one waiting on a repository trust
+prompt, is not stopped: report it `active` or `unknown` with a nonempty
+`blocker` naming the action. A `stopped` row with a `blocker` is malformed. Observation timestamps must
 be fresh (at most 60 seconds old). Discovery is complete only after the relevant
 history pages have been reconciled, including queued or lost receipts; a cursor
 must not hide the first-turn identity or be treated as complete history.
@@ -354,7 +365,9 @@ directory. Repeat this cycle while the loop runs:
      `python -m phalanx relay --state C:\phalanx-runner observe ID --runtime RUNTIME --host HOST --session SESSION_ID STATE PROJECT_ID --complete --out reply.json`.
      Repeat `--session` for each listed session; `STATE` is `active`, `stopped`
      (writers verified stopped) or `unknown`. Pass `--complete` only when every
-     worker session on the host was listed. The helper keeps only sessions
+     worker session on the host was listed. Add `--blocked SESSION_ID REASON`
+     for a listed session that waits for the owner, such as on a trust prompt,
+     and list it `active`, never `stopped`. The helper keeps only sessions
      whose first prompt carries a queued marker and its exact assignment.
 3. Record the reply right away (observations go stale after 60 seconds):
    `python -m phalanx relay --state C:\phalanx-runner respond ID --file reply.json`,
@@ -365,8 +378,9 @@ directory. Repeat this cycle while the loop runs:
    yourself with `python -m phalanx reply ... --answered-by captain`.
    Escalate to Caleb in the Captain chat only when human judgment materially
    changes the outcome or authority is missing. `attended status --all` shows
-   slot reasons. Tell Caleb once about a `worker_overdue` slot, after
-   inspecting the worker to say whether it is still making progress.
+   slot reasons. Tell Caleb once about a `worker_overdue` or `worker_blocked`
+   slot, after inspecting the worker to say whether it is still making
+   progress or what he must do.
 
 Identical requests waiting to be taken share one entry. Verified project resolutions
 are cached for ten minutes and failed ones for one minute, so an untrusted
@@ -394,7 +408,7 @@ in their first muster and record any correction here.
 | Runtime | `resolve_project` | `launch` | `observe` |
 | --- | --- | --- | --- |
 | Codex desktop app | `list_projects`; match the project ID, host and root path. | `create_thread` with `title`, `prompt` and target `{"type": "project", "projectId": project_id, "environment": {"type": "local"}}`. Return `threadId` as `thread_id` or `clientThreadId` as `client_thread_id`. | `read_thread` for receipts; `list_threads` history search for the marker. Use `codex app-server` only after verifying its threads appear in the app sidebar with the same identity as the app's tools. |
-| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`); otherwise reply with an error that names the project ID and checkout path (two projects can share a name) and tells the owner to open a session in that project to get the app's trust prompt. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so pass each worker session with its state to the observe helper with `--runtime copilot`; it reads the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. |
+| GitHub Copilot app | `list_repositories`; match the project ID to its `id` and the checkout to its `main_repo_path`. Use `local` as the host. Confirm the checkout is trusted (listed in `trustedFolders` in `~/.copilot/config.json`), and, when any existing session in the project shows `repository_trust` blocking progress in `get_session`, treat the project as untrusted too. Otherwise reply with an error that names the project ID and checkout path (two projects can share a name) and tells the owner to open a session in that project and accept the app's trust card. | `create_session` with `project_id`, `workspace_type: "branch"` and no `base_branch` (the packet already names Phalanx's worktree), `name` set to the attempt UUID from the marker (`name` allows 40 characters, too few for `title`), and a kickoff with `prompt` in autopilot mode. Return the session ID as `thread_id`. | `get_session` for receipts; `list_sessions_and_chats` lists candidates. Both return only metadata, and no app tool reads a session's turns, so pass each worker session with its state to the observe helper with `--runtime copilot`; it reads the first `user.message` in `~/.copilot/session-state/<id>/events.jsonl` on the same machine. A session `get_session` reports busy is `active`; an idle session whose last turn ended is `stopped`. A session whose `get_session` `repository_trust` blocks progress is waiting for the owner, not stopped, even when idle: pass it `active` with `--blocked SESSION_ID "repository trust pending for CHECKOUT; accept the trust card in the app"`. If its transcript has no first prompt yet, write that row by hand from the launch receipt and request reference. |
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Pass each session with its state to the observe helper with `--runtime copilot`, which reads `~/.copilot/session-state/<id>/events.jsonl`. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
@@ -432,6 +446,7 @@ Each thread row includes the following fields.
 | `marker`, `assignment` | The exact first-turn attempt marker and the original packet's `result_identity` object from the first prompt. |
 | `state` | Use `active`, `stopped`, or `unknown`. Attest `stopped` only after confirming the native turn ended and accounting for any worktree writer it started. A missing thread or ambiguous state is `unknown`. |
 | `writers_stopped` | Required as `true` on a `stopped` row, after accounting for every worktree writer the session started. |
+| `blocker` | Optional. Why the session cannot progress until the owner acts, such as a pending repository trust prompt. Never on a `stopped` row. |
 | `client_thread_id` | The queued UUID when the native launch can be positively correlated with its saved queued receipt. Otherwise omit it. |
 
 A saved stop request can be replayed without another observation file. A `retry` response with `retry_at` gives the earliest next probe as Unix seconds. After an `owner_wait`, address the reason before using `--recheck`. An unmatched server attempt requires the original journal or explicit recovery of its writer. The recovery command verifies the local Git checkpoint and checks any result against the original packet. An expired attempt with an active writer or a verified result is adopted under a recovery claim. Any stage other than development leaves the checkout unchanged, so its saved result is verified against the unchanged worktree. The claim request and its fresh secret are journaled before sending, so a lost reply replays the same key. Afterwards the Captain renews and submits under the new lease. If the server refuses adoption, the reservation backs off and then waits for the owner; nothing is released. For a verified result with a live lease, use the exact receipt with the existing `attended submit` command. A reservation with no relay, receipt or submission is released only after `--recheck` proves no launch happened: no result file and a clean worktree at the accounted revision, or no worktree or branch at all. Use the original launch path to replay an unconfirmed claim, which reuses the saved claim request.

@@ -293,6 +293,21 @@ class ObserveHelperTests(unittest.TestCase):
         self.assertEqual(build_reply(self.request([self.reference]), sessions, host_id="other",
                                      complete=False)["threads"], [])
 
+    def test_session_waiting_for_the_owner_is_reported_blocked_never_stopped(self):
+        thread = str(uuid4())
+        session = {"thread_id": thread, "project_id": "project", "state": "active",
+                   "prompt": worker_prompt("phalanx-attempt-a", self.identity),
+                   "started_at": "2025-11-21T10:00:01+00:00", "blocker": "repository trust is pending"}
+        reply = build_reply(self.request([self.reference]), [session], host_id="local", complete=True)
+        observe = lambda reply: BridgeAdapter(lambda operation, arguments: reply).observe(
+            [self.reference], cursors={}, timeout=1)
+        self.assertEqual([row.blocker for row in observe(reply).threads], ["repository trust is pending"])
+        with self.assertRaisesRegex(RunnerError, "not stopped"):
+            build_reply(self.request([self.reference]), [{**session, "state": "stopped"}],
+                        host_id="local", complete=True)
+        reply["threads"][0].update(state="stopped", writers_stopped=True)
+        self.assertIn("phalanx-attempt-a", observe(reply).errors)
+
     def test_relay_observe_reads_copilot_transcripts_and_writes_a_reply(self):
         thread = str(uuid4())
         transcript = self.root / "home" / ".copilot" / "session-state" / thread / "events.jsonl"
@@ -316,12 +331,14 @@ class ObserveHelperTests(unittest.TestCase):
         written = subprocess.run(
             [sys.executable, "-m", "phalanx", "relay", "--state", str(state), "observe", taken["id"],
              "--runtime", "copilot", "--host", "local", "--session", thread, "active", "project",
+             "--blocked", thread, "repository trust is pending",
              "--complete", "--out", str(out)],
             cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(written.returncode, 0, written.stderr)
         self.assertEqual(relay("--state", str(state), "respond", taken["id"], "--file", str(out)).returncode, 0)
         waiter.join(10)
-        self.assertEqual([(str(row.thread_id), row.state) for row in results[0].threads], [(thread, "active")])
+        self.assertEqual([(str(row.thread_id), row.state, row.blocker) for row in results[0].threads],
+                         [(thread, "active", "repository trust is pending")])
         unknown = relay("--state", str(state), "observe", taken["id"], "--runtime", "other", "--host", "local")
         self.assertNotEqual(unknown.returncode, 0)
 

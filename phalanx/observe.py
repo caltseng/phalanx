@@ -39,7 +39,8 @@ def build_reply(request: dict, sessions: list[dict], *, host_id: str, complete: 
                 now: datetime | None = None) -> dict:
     """Return threads whose launch prompt carries a queued reference's exact marker and assignment.
 
-    Each session is `{"thread_id", "project_id", "state", "prompt", "started_at"}`.
+    Each session is `{"thread_id", "project_id", "state", "prompt", "started_at"}`,
+    plus an optional `blocker` when the session waits for the owner.
     The marker line is compared after trimming trailing whitespace, which some
     runtimes add or remove when they store the prompt.
     """
@@ -50,6 +51,9 @@ def build_reply(request: dict, sessions: list[dict], *, host_id: str, complete: 
     for session in sessions:
         if session["state"] not in STATES:
             raise RunnerError(f"Session state must be one of {', '.join(sorted(STATES))}")
+        if session.get("blocker") and session["state"] == "stopped":
+            raise RunnerError(f"Session {session['thread_id']} waits for the owner, so it is not stopped; "
+                              "report it active")
         lines = {line.rstrip() for line in session["prompt"].splitlines()}
         identity = _packet_identity(session["prompt"])
         for reference in references:
@@ -63,6 +67,7 @@ def build_reply(request: dict, sessions: list[dict], *, host_id: str, complete: 
                 "marker": reference["marker"], "assignment": reference["assignment"],
                 "state": session["state"],
                 **({"writers_stopped": True} if session["state"] == "stopped" else {}),
+                **({"blocker": session["blocker"]} if session.get("blocker") else {}),
             })
     return {
         "observed_at": (now or datetime.now(timezone.utc)).isoformat(),

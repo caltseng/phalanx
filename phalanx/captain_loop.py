@@ -450,6 +450,10 @@ class CaptainLoop:
             return {"status": "submitted", "execution": runner.submit(
                 packet.marker, snapshot["host_id"], str(native.thread_id),
             )}
+        if native.blocker:
+            reason = (f"Worker session is waiting for the owner: {native.blocker}. It keeps its reservation "
+                      "and continues once the owner acts")
+            return {"status": "worker_blocked", "reason": reason, "blocker": reason}
         age = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot["started_at"])).total_seconds()
         if age >= self.overdue_seconds:
             reason = (f"Worker has run over {self.overdue_seconds / 3600:g}h with no result and keeps its "

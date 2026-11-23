@@ -29,6 +29,8 @@ class NativeObservation:
     assignment: dict
     state: Literal["active", "stopped", "unknown"]
     client_thread_id: UUID | None = None
+    # Why the writer cannot progress until the owner acts; it is waiting, never stopped.
+    blocker: str | None = None
 
 
 def native_timestamp(value: str) -> datetime:
@@ -42,6 +44,10 @@ def native_observation(row: dict, observed: datetime) -> NativeObservation:
     """Parse one observe-reply thread row; raise KeyError, ValueError or TypeError if it is invalid."""
     state = row["state"]
     started = native_timestamp(row["started_at"])
+    blocker = row.get("blocker")
+    if blocker is not None and (not isinstance(blocker, str) or not blocker.strip()
+                                or len(blocker) > 2000 or state == "stopped"):
+        raise ValueError("A blocker must be a nonempty reason on a session that is not stopped")
     if (
         state not in {"active", "stopped", "unknown"} or started > observed
         or not isinstance(row["assignment"], dict)
@@ -55,6 +61,7 @@ def native_observation(row: dict, observed: datetime) -> NativeObservation:
         thread_id=UUID(row["thread_id"]), started_at=started,
         marker=row["marker"], assignment=row["assignment"], state=state,
         client_thread_id=UUID(row["client_thread_id"]) if row.get("client_thread_id") else None,
+        blocker=blocker.strip() if blocker else None,
     )
 
 
