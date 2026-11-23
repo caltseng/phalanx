@@ -12,7 +12,7 @@ from fastapi.responses import PlainTextResponse
 from .auth import authenticate_board_read
 from .intake import report as stored_report
 from .intake_api import run
-from .intake_models import Identifier
+from .intake_models import Identifier, short_title
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
 
@@ -25,7 +25,8 @@ ID = re.compile(r"[0-9a-f]{32}")
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
-           item.repository_id, json_extract(item.request_json, '$.goal') AS title,
+           item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
+           json_extract(item.request_json, '$.title') AS title,
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
@@ -122,7 +123,7 @@ def summary(row, now):
         "id": row["id"],
         "item_id": row["item_id"],
         "version": row["version"],
-        "title": row["title"],
+        "title": row["title"] or short_title(row["goal"]),
         "repository_id": row["repository_id"],
         "stage": row["stage"],
         "status": row["status"],
@@ -219,7 +220,8 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         ).fetchone()
         prerequisites = db.execute(
             """SELECT json_extract(block.value, '$.upstream_id') AS item_id,
-                      json_extract(upstream.request_json, '$.goal') AS title,
+                      json_extract(upstream.request_json, '$.goal') AS goal,
+                      json_extract(upstream.request_json, '$.title') AS title,
                       json_extract(block.value, '$.milestone') AS milestone,
                       json_extract(block.value, '$.reason') AS reason
                FROM executions AS execution
@@ -273,8 +275,13 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),
+        "goal": execution["goal"],
         "attempt": attempt["id"] if attempt else None,
-        "prerequisites": [dict(row) for row in prerequisites],
+        "prerequisites": [
+            {"item_id": row["item_id"], "title": row["title"] or short_title(row["goal"]),
+             "milestone": row["milestone"], "reason": row["reason"]}
+            for row in prerequisites
+        ],
         "question": question,
         "events": [dict(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),

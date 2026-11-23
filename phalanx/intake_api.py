@@ -48,6 +48,8 @@ def repositories(request: Request):
 @router.post("/items", status_code=201, dependencies=[Depends(require_owner)])
 def create(request: Request, body: Intake, key: Key = None):
     omitted = set()
+    if body.title is None:
+        omitted.add("title")
     if body.runner_affinity is None:
         omitted.add("runner_affinity")
     if not body.dependencies:

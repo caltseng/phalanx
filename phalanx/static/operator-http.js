@@ -114,6 +114,7 @@
         const page = await read(EXECUTIONS + "/" + identifier(id) + "/timeline?" + params, signal);
         return {
           item: item(page.item),
+          goal: typeof page.goal === "string" ? page.goal : null,
           attempt: page.attempt,
           resumeTrigger: page.item.resume_trigger,
           question: page.question ? {

@@ -149,10 +149,11 @@ Every page reads state through the API. Filters live in the URL: repository, lab
 
 ### Row anatomy
 
-From left to right:
+Each row is one line. Cells never wrap: overflow is ellipsized, and hovering the title shows it in full. From left to right:
 
+- an activity indicator while a worker or runner stage is running: a small, calm pulse that is static under `prefers-reduced-motion`, paired with text for screen readers, and absent for queued, waiting or blocked rows;
 - the label;
-- the title;
+- the title: the short `title` given at intake, or one derived from the goal's first sentence (about 80 characters) when absent. The full goal is in the item detail;
 - the repository;
 - the stage;
 - the revision round, if more than 1;

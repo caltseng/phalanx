@@ -21,6 +21,16 @@
     return value && Number.isFinite(date.getTime()) ? timestamp.format(date) : "Unknown";
   }
 
+  function since(value) {
+    const minutes = Math.floor((Date.now() - new Date(value).getTime()) / 60000);
+    if (!value || !Number.isFinite(minutes)) return "Unknown";
+    if (minutes < 1) return "<1m";
+    if (minutes < 60) return minutes + "m";
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return hours + "h " + (minutes % 60) + "m";
+    return Math.floor(hours / 24) + "d " + (hours % 24) + "h";
+  }
+
   function addLink(parent, label, value) {
     if (!value) return;
     let url;
@@ -42,13 +52,14 @@
    * source.list({kind, cursor, limit, signal}) resolves to {items, nextCursor}.
    * kind is "open" or "closed". Cursors are opaque strings or null. The adapter
    * orders closed items newest first and prioritizes input waits in open work.
-   * Items contain string id, title, repo, stage, status, lastAdvancedAt, waitReason?,
+   * Items contain string id, title (one short line), repo, stage, status, lastAdvancedAt, waitReason?,
    * retryAt? and recheckAt? (epoch ms), workerRef? (opaque bridge reference), chatUrl?, draftUrl?,
    * primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}, and for replies itemId? and version?.
    * Use status "waiting_for_input" for items requiring operator attention.
    * outcome is a display label, including "Checked in" vs "Ready for check-in".
    * source.detail({id, cursor, limit, signal}) resolves to
-   * {item, attempt?, nextAction?, resumeTrigger?, question?, dependencies?, events, nextCursor}.
+   * {item, goal?, attempt?, nextAction?, resumeTrigger?, question?, dependencies?, events, nextCursor}.
+   * goal is the full work request text.
    * question is {prompt, options, proposedDefault?} while the item waits for the owner.
    * attempt is a display reference. Dependencies are {title, milestone, status}.
    * Events are newest first and contain {at, fromStage?, stage, status, reason?}.
@@ -99,8 +110,8 @@
     }
 
     function renderItem(item, kind) {
-      const row = element("li");
-      const button = element("button", item.title, { type: "button", "data-item": item.id });
+      const row = element("li", null, kind === "open" ? { class: "line" } : {});
+      const button = element("button", item.title, { type: "button", "data-item": item.id, title: item.title });
       button.addEventListener("click", () => {
         if (selected?.id !== item.id) {
           selected = item;
@@ -111,20 +122,26 @@
         }
         detail.heading.focus();
       });
-      row.append(button, element("p", item.repo, { class: "meta" }));
       if (kind === "closed") {
+        row.append(button, element("p", item.repo, { class: "meta" }));
         row.append(element("p", label(item.outcome) + " · " + when(item.closedAt)));
         addOutput(row, item);
       } else {
-        row.append(element("p", "Stage: " + label(item.stage) + " · Status: " + label(item.status), {
-          class: item.status === "waiting_for_input" ? "attention" : "meta"
+        // Active means a worker or runner stage is running without a recorded wait or blocker.
+        const active = item.status === "running" && !item.waitReason;
+        row.append(active
+          ? element("span", null, { class: "activity", role: "img", "aria-label": "Being worked on", title: "Being worked on" })
+          : element("span"));
+        row.append(button);
+        const stage = element("span", null, { class: "meta", title: "Stage: " + label(item.stage) + " · Status: " + label(item.status) });
+        stage.append(element("span", "Stage: ", { class: "visually-hidden" }), label(item.stage),
+          element("span", ", status: " + label(item.status), { class: "visually-hidden" }));
+        const age = element("span", null, { class: "meta", title: "Last advanced: " + when(item.lastAdvancedAt) });
+        age.append(element("span", "In stage for ", { class: "visually-hidden" }), since(item.lastAdvancedAt));
+        const reason = item.waitReason || label(item.status);
+        row.append(stage, age, element("span", reason, {
+          title: reason, class: item.status === "waiting_for_input" ? "attention" : "meta"
         }));
-        row.append(element("p", "Last advanced: " + when(item.lastAdvancedAt), { class: "meta" }));
-        if (item.waitReason) row.append(element("p", item.waitReason));
-        addSchedule(row, item, { class: "meta" });
-        addWorker(row, item);
-        if (item.primaryPrUrl) addLink(row, "Primary PR", item.primaryPrUrl);
-        else addLink(row, "Draft PR", item.draftUrl);
       }
       return row;
     }
@@ -134,6 +151,8 @@
       const item = data.item;
       content.append(element("p", item.repo + " · Stage: " + label(item.stage) + " · Status: " + label(item.status)));
       if (item.waitReason) content.append(element("p", item.waitReason));
+      content.append(element("p", "Last advanced: " + when(item.lastAdvancedAt), { class: "meta" }));
+      if (data.goal) content.append(element("h3", "Request"), element("p", data.goal, { class: "goal" }));
       content.append(element("p", "Attempt: " + (data.attempt || "None recorded")));
       addWorker(content, item);
       if (data.nextAction) content.append(element("p", "Next action: " + data.nextAction));
@@ -157,6 +176,7 @@
         content.append(reply);
       }
       if (item.primaryPrUrl) addLink(content, "Primary PR", item.primaryPrUrl);
+      else addLink(content, "Draft PR", item.draftUrl);
       addOutput(content, item);
       if (data.dependencies?.length) {
         const list = element("ul");

@@ -27,7 +27,8 @@
   let pendingSignal;
   const calls = [];
   const detailData = (item, cursor) => ({
-    item, attempt: "Attempt 2", nextAction: "Review revision", resumeTrigger: "CI completes",
+    item, goal: "Full request for " + item.title + ".\nSecond line of detail.",
+    attempt: "Attempt 2", nextAction: "Review revision", resumeTrigger: "CI completes",
     dependencies: [{ title: "Build", milestone: "Verified", status: "satisfied" }],
     events: [{
       at: now, fromStage: cursor ? "development" : "review",
@@ -68,6 +69,11 @@
     assert(calls.length === 2 && calls.every(call => call[2] === 25), "Initial reads are bounded lists");
     assert(root.textContent.includes("waiting for input") && root.textContent.includes(waiting.waitReason), "Actionable wait");
     assert(item("wait").textContent === waiting.title && !root.querySelector("img"), "Untrusted text stays text");
+    const lines = [...root.querySelectorAll("li.line")];
+    assert(lines.length === 2 && lines.every(line => line.getBoundingClientRect().height < 48), "One compact line per open item");
+    assert(getComputedStyle(item("run")).whiteSpace === "nowrap" && getComputedStyle(item("run")).textOverflow === "ellipsis", "Titles never wrap");
+    const activity = item("run").parentElement.querySelector(".activity");
+    assert(activity?.getAttribute("aria-label") === "Being worked on" && !item("wait").parentElement.querySelector(".activity"), "Only running rows show activity");
     assert(!root.querySelector('a[href^="javascript:"]'), "Unsafe link omitted");
     assert(root.querySelector('a[href="' + failure.output.url + '"]')?.textContent === "Field report", "Failure output");
     assert(root.querySelector('a[href="' + success.output.url + '"]')?.textContent === "Verified PR", "Success output");
@@ -82,6 +88,7 @@
     assert(detail.textContent.includes("review → development") && detail.textContent.includes("Prerequisites"), "Current detail renders the stage loop and dependencies");
     assert(detail.textContent.includes("Attempt 2") && detail.textContent.includes("CI completes"), "Attempt and resume trigger");
     assert(detail.textContent.includes("opaque-worker-7") && detail.textContent.includes("Recheck scheduled"), "Worker reference and recheck");
+    assert(detail.textContent.includes("Full request for Update telemetry"), "Detail shows the full goal");
     assert(!detail.textContent.includes(waiting.title), "Late detail ignored");
     button("Next history page").click();
     button("Next open work page").click();

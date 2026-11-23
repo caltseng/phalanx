@@ -1,3 +1,4 @@
+import re
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -11,6 +12,18 @@ WaitLimit = Annotated[int, Field(strict=True, ge=CHECK_WAIT_LIMIT_RANGE[0], le=C
 Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,100}$")]
 RevisionID = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 Markdown = Annotated[str, StringConstraints(min_length=1, max_length=256000, pattern=r"\S")]
+Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120, pattern=r"^[^\r\n]+$")]
+TITLE_LIMIT = 80
+
+
+def short_title(goal, limit=TITLE_LIMIT, fallback="Untitled work"):
+    """A one-line title from the goal's first sentence, cut at a word boundary."""
+    line = next((line for line in goal.splitlines() if line.strip()), goal).strip().lstrip("#*-> ").strip()
+    sentence = re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0].rstrip(".").strip() or line or fallback
+    if len(sentence) <= limit:
+        return sentence
+    cut = sentence[:limit - 1]
+    return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:-") + "…"
 
 
 class Payload(BaseModel):
@@ -30,6 +43,7 @@ class Prerequisite(Payload):
 class Intake(Payload):
     repository_id: Identifier
     goal: Text
+    title: Title | None = None
     target: Target
     context_links: list[Text] = Field(default_factory=list, max_length=50)
     acceptance_criteria: list[Text] = Field(default_factory=list, max_length=50)

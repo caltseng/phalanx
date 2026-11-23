@@ -76,6 +76,45 @@ body { margin: 0; }
   background: #9b1c1c0d;
 }
 .phalanx-board p { margin: .35rem 0; }
+.phalanx-board .records > li.line {
+  display: grid;
+  grid-template-columns: .75rem minmax(0, 1fr) minmax(0, 10rem) 5.5rem minmax(0, 18rem);
+  align-items: center;
+  gap: .75rem;
+  padding: .2rem 0;
+}
+.phalanx-board .records > li.line > * {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow-wrap: normal;
+}
+.phalanx-board .records > li.line > button { justify-self: start; padding: .1rem .5rem; }
+.phalanx-board .records > li.line:has(> .attention) { padding-left: .5rem; }
+@media (max-width: 40rem) {
+  .phalanx-board .records > li.line { grid-template-columns: .75rem minmax(0, 1fr) auto auto; row-gap: .1rem; }
+  .phalanx-board .records > li.line > :last-child { grid-column: 2 / -1; }
+}
+.phalanx-board .activity {
+  justify-self: center;
+  width: .55rem;
+  height: .55rem;
+  border-radius: 50%;
+  background: var(--gold);
+  animation: phalanx-activity 2.4s ease-in-out infinite;
+}
+@keyframes phalanx-activity { 50% { opacity: .35; transform: scale(.7); } }
+@media (prefers-reduced-motion: reduce) { .phalanx-board .activity { animation: none; } }
+.phalanx-board .visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.phalanx-board .goal { white-space: pre-wrap; }
 .phalanx-board .meta { color: var(--ink-muted); }
 .phalanx-board .attention { color: var(--crimson-bright); font-weight: 700; }
 .phalanx-board a { color: var(--tyrian); }

@@ -207,6 +207,8 @@ def create(db, payload):
     request = payload.model_dump(mode="json", exclude={"dependencies"})
     if payload.runner_affinity is None:
         del request["runner_affinity"]
+    if payload.title is None:
+        del request["title"]
     db.execute("INSERT INTO work_items VALUES (?, ?, ?, ?)",
                (item_id, payload.repository_id, encode(request), timestamp()))
     if payload.dependencies:

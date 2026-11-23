@@ -1,11 +1,14 @@
 from dataclasses import asdict, replace
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx.intake import record, steer
-from phalanx.intake_models import Steering
+from phalanx.intake_models import Steering, short_title
 from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, open_page
 from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, write_transaction
@@ -169,6 +172,31 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             closed = closed_page(db, [EARLY, identifier(6100)], 3)
             self.assertEqual([row["id"] for row in opened], list(map(identifier, [4901, 4902, 4903])))
             self.assertEqual([row["id"] for row in closed], list(map(identifier, [6099, 6098, 6097])))
+
+    def test_board_titles_are_explicit_or_derived_from_the_goal(self):
+        self.assertEqual(self.page(BOARD + "?limit=1")["items"][0]["title"], "Work 5000")
+        goal = "Tighten the board. Each item should take one line.\n\nMore detail follows."
+        body = {"repository_id": "repo", "goal": goal, "target": "report"}
+        status, derived = self.request("/v1/items", OWNER, body)
+        self.assertEqual(status, 201, derived)
+        self.assertNotIn("title", derived)
+        self.assertEqual(self.request("/v1/items", OWNER, dict(body, title="Two\nlines"))[0], 422)
+        self.assertEqual(self.request("/v1/items", OWNER, dict(body, title="x" * 121))[0], 422)
+        cli = subprocess.run(
+            [sys.executable, "-m", "phalanx", "--api-url", self.url, "intake", "repo", goal,
+             "--target", "report", "--title", "  Compact board  "],
+            env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        explicit = json.loads(cli.stdout)
+        self.assertEqual(explicit["title"], "Compact board")
+        for item, title in ((derived, "Tighten the board"), (explicit, "Compact board")):
+            detail = self.page(f"{BOARD}/{item['execution']['id']}/timeline")
+            self.assertEqual((detail["item"]["title"], detail["goal"]), (title, goal))
+        long = short_title("Rework " + "every operator board row so it fits " * 5)
+        self.assertLessEqual(len(long), 80)
+        self.assertTrue(long.endswith("…") and "\n" not in long)
+        self.assertEqual(short_title("\n## Fix the login form! It drops cookies."), "Fix the login form!")
 
     def test_timeline_exposes_prerequisite_blockers_and_clears_after_steering(self):
         upstream = identifier(100001)

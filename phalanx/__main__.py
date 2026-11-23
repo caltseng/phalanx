@@ -54,6 +54,7 @@ def main() -> None:
     intake = commands.add_parser("intake", help="file a work item")
     intake.add_argument("repository")
     intake.add_argument("goal")
+    intake.add_argument("--title", help="short one-line title for the board; derived from the goal if omitted")
     intake.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
     intake.add_argument("--key", help="reuse this key when retrying the same request")
     issue = commands.add_parser("ingest-issue", help="file a registered repository's GitHub issue")
@@ -98,10 +99,10 @@ def main() -> None:
                                  body={"id": args.repository, "remote": args.remote})
             print(json.dumps(result, indent=2))
         elif args.command == "intake":
-            result = api_request(
-                args.api_url, "/v1/items", key=args.key,
-                body={"repository_id": args.repository, "goal": args.goal, "target": args.target},
-            )
+            body = {"repository_id": args.repository, "goal": args.goal, "target": args.target}
+            if args.title is not None:
+                body["title"] = args.title
+            result = api_request(args.api_url, "/v1/items", key=args.key, body=body)
             print(json.dumps(result, indent=2))
         elif args.command == "ingest-issue":
             result = ingest_issue(api_request, args.api_url, args.repository, args.number,
