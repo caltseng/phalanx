@@ -77,7 +77,9 @@ make the worktree dirty. Arguments are literal: no path
 discovery, interpolation, or environment expansion. `timeout_seconds` defaults
 to 60 and must be an integer from 1 through 86400; booleans are not integers.
 A check that times out is stopped with the processes it started and recorded as
-failed.
+failed. Its reason says whether the output identified failures (`FAIL:`,
+`ERROR:` or `FAILED` lines, a traceback, or `F`/`E` progress markers):
+"timed out ... with failures" or "timed out ..., no failure identified".
 
 `allow_skip` and `allow_inapplicable` default to false and must be JSON booleans.
 A `bypass` replaces the command and cannot include `argv` or `timeout_seconds`.
@@ -111,7 +113,7 @@ body = candidate_local.pre_validate(policy.local_checks)
 # Journal this exact body before the existing result submission.
 ```
 
-`policy.local_checks` contains the existing `candidate_local.LocalCheck` and
+`policy.local_checks` contains the existing `local_checks.LocalCheck` and
 `validation.PreCheck` types. `CandidateLocal.pre_validate` binds results to
 the claimed candidate only after verifying the clean worktree HEAD, records
 the affected check's name, disposition, reason and authorization, and returns
@@ -122,7 +124,7 @@ pass. The loader itself neither runs checks nor fabricates revision evidence.
 
 `policy.draft_checks` contains `validation.RequiredCheck` tuples for the draft
 collector/promotion caller. `policy.ready` is the existing
-`published_validation_stage.PublishedValidationPolicy`. All source-app,
+`validation_policy.PublishedValidationPolicy`. All source-app,
 head/test-merge revision and execution requirements survive conversion. A local
 bypass does **not** remove draft checks, ready CI, previews, or check-in gates.
 Carry the complete configured requirements into the existing exact-PR,
@@ -150,7 +152,20 @@ with the findings in the server state. A failed check's reason includes the
 last 4 KB of its combined stdout and stderr. The next development packet carries
 them as `review_findings` in its context. If they need no change, for example a
 flaky check, development may return the candidate unchanged to rerun
-validation; the server's rework cap bounds such loops. When the reviewed candidate differs
+validation; the server's rework cap bounds such loops. A timeout with no
+identified failure is ambiguous between a hung test and host contention, so
+it doesn't go back to development at first: the runner submits a failed result
+and the server retries `pre_pr_validation` after 60 s, then 120 s. The retries
+appear in transition history and as "Retry scheduled" on the board. A third
+pure timeout, or any timeout with identified failures, returns to development
+with the output tail.
+
+The runner runs at most `"local_check_capacity"` (optional runner config, 1 to
+64, default 1) local check sets at once on its host, using lock files under
+the attended state root. A validation that finds every slot busy runs no
+check. It waits as external gate `local_check_capacity` with the reason
+"Waiting for local check capacity" and is rechecked after 30 s, so waiting
+never counts against a check's timeout. When the reviewed candidate differs
 from the primary PR's head, `pr_promotion` first fast-forwards the item branch
 to it, leased on the observed PR head, then collects draft checks on the new
 head. A rebased candidate replaces the PR head under the same lease, but only
@@ -158,7 +173,12 @@ when the observed head is the last head Phalanx verified for that PR; an
 unverified head, or a PR that has left its item branch or target, becomes an
 owner question. Failed draft checks return the item to `development` with the
 failing reasons as findings. A target tip or PR head that moves during check
-collection is retried on the new revision rather than escalated. A configured local bypass is recorded as
+collection is retried on the new revision rather than escalated. Draft
+evidence binds to the PR's head and the base GitHub records for it, not the
+live target tip, because GitHub doesn't advance a PR's `base.sha` when the
+target branch moves. An ordinary target advance therefore doesn't block
+promotion; a conflict goes through the merge-conflict path. Ready evidence
+still binds to the live target tip. A configured local bypass is recorded as
 the check's disposition and as the pre-validation bypass evidence; draft and
 ready checks still apply.
 

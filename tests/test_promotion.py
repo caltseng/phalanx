@@ -30,14 +30,13 @@ class PromotionTest(TestCase):
     def setUp(self):
         self.github = Mock(repository="example/repo")
         self.github.get_pull_request.return_value = PULL
-        self.read_base = Mock(return_value=BASE)
         self.collect = Mock(return_value=DraftChecks((GATE,), (EVIDENCE,)))
         self.claim_current = Mock(return_value=True)
 
     def promote(self):
         return promote(self.github, item_id="item", number=12, base_ref="main",
                        revision=Revision(HEAD, BASE), collect=self.collect,
-                       read_base=self.read_base, claim_current=self.claim_current)
+                       claim_current=self.claim_current)
 
     def test_gate_pending_failed_or_unknown_avoids_promotion(self):
         for checks, gate in (
@@ -71,12 +70,12 @@ class PromotionTest(TestCase):
                 self.assertEqual(self.promote().status, "revision_changed")
                 self.assertEqual(self.github.mark_ready.call_count, write_count)
 
-    def test_base_and_pr_ref_are_verified(self):
-        self.read_base.return_value = MOVED
-        self.assertEqual(self.promote().status, "revision_changed")
-        self.read_base.return_value = BASE
-        self.github.get_pull_request.return_value = replace(PULL, head_ref="unrelated")
-        self.assertEqual(self.promote().status, "revision_changed")
+    def test_retarget_or_new_conflict_stops_promotion(self):
+        for changed in (replace(PULL, base_ref="release"), replace(PULL, head_ref="unrelated"),
+                        replace(PULL, mergeable=False)):
+            with self.subTest(changed=changed):
+                self.github.get_pull_request.return_value = changed
+                self.assertEqual(self.promote().status, "revision_changed")
         self.collect.assert_not_called()
         self.github.mark_ready.assert_not_called()
 

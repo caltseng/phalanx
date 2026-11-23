@@ -45,6 +45,10 @@
    * Items contain string id, title, repo, stage, status, lastAdvancedAt, waitReason?,
    * retryAt? and recheckAt? (epoch ms), workerRef? (opaque bridge reference), chatUrl?, draftUrl?,
    * primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url}, and for replies itemId? and version?.
+   * writer? is the registered worker session: {state, runtime, captainId, sessionUrl?, lastProgressAt?, progressNote?}.
+   * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, captainId?, reason, recovery,
+   * firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionRef, state, live,
+   * stale, heartbeatAt, wakeCount, focus, handoffNote?}]}. Their panels appear only when supplied.
    * Use status "waiting_for_input" for items requiring operator attention.
    * outcome is a display label, including "Checked in" vs "Ready for check-in".
    * source.detail({id, cursor, limit, signal}) resolves to
@@ -89,8 +93,19 @@
     }
 
     function addWorker(parent, item) {
+      if (item.writer) {
+        const writer = item.writer;
+        parent.append(element("p", "Writer: " + label(writer.state) + " · " + writer.runtime +
+          " · Captain " + String(writer.captainId).slice(0, 8), { class: "meta" }));
+        addLink(parent, "Writer session", writer.sessionUrl);
+        if (writer.lastProgressAt) {
+          parent.append(element("p", "Last progress: " + when(writer.lastProgressAt) +
+            (writer.progressNote ? " · " + writer.progressNote : ""), { class: "meta" }));
+        }
+      }
       addLink(parent, "Worker chat", item.chatUrl);
       if (item.workerRef) parent.append(element("p", "Worker reference: " + item.workerRef, { class: "meta" }));
+      if (item.slotNote) parent.append(element("p", item.slotNote, { class: "meta" }));
     }
 
     function addSchedule(parent, item, attrs = {}) {
@@ -322,11 +337,46 @@
         }, empty);
     }
 
+    if (source.flags) {
+      createPanel("Flags", "flags", () => true, (cursor, signal) => source.flags({ signal }), data => {
+        if (!data.flags.length) return element("p", "No flags. Nothing has drifted.");
+        const rows = element("ul", null, { class: "records" });
+        for (const flag of data.flags) {
+          const row = element("li");
+          const subject = [flag.itemId && "item " + flag.itemId.slice(0, 8),
+            flag.captainId && "Captain " + flag.captainId.slice(0, 8)].filter(Boolean).join(" · ");
+          row.append(element("p", label(flag.kind) + (subject ? " · " + subject : ""),
+            { class: flag.notifyOwner ? "attention" : "meta" }));
+          row.append(element("p", flag.reason), element("p", "Recovery: " + flag.recovery, { class: "meta" }));
+          row.append(element("p", "Since " + when(flag.firstSeen), { class: "meta" }));
+          rows.append(row);
+        }
+        return rows;
+      }, "");
+    }
     list("Work in progress", "open", "No open work on this page. The line holds.");
     const detail = createPanel("Selected item", "history", () => Boolean(selected),
       (cursor, signal) => source.detail({ id: selected.id, cursor, limit: PAGE_SIZE, signal }),
       renderDetail, "Select an item from the muster to inspect its recorded history.");
     list("Recently closed", "closed", "No closed work on this page.");
+    if (source.captains) {
+      createPanel("Captains", "captains", () => true, (cursor, signal) => source.captains({ signal }), data => {
+        if (!data.captains.length) return element("p", "No Captain has registered.");
+        const rows = element("ul", null, { class: "records" });
+        for (const captain of data.captains) {
+          const row = element("li");
+          const health = captain.live ? "live" : captain.stale ? "stale" : label(captain.state);
+          row.append(element("p", "Captain " + captain.id.slice(0, 8) + " · " + health + " · " + captain.sessionRef,
+            { class: captain.stale ? "attention" : "meta" }));
+          row.append(element("p", "Heartbeat: " + when(captain.heartbeatAt) + " · Wakes: " + captain.wakeCount,
+            { class: "meta" }));
+          if (captain.focus.length) row.append(element("p", "Focus: " + captain.focus.join(", "), { class: "meta" }));
+          if (captain.handoffNote) row.append(element("p", "Handoff: " + captain.handoffNote));
+          rows.append(row);
+        }
+        return rows;
+      }, "");
+    }
 
     function refreshAll() {
       updateStatus();
