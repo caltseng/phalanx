@@ -6,7 +6,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import closing, contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -356,7 +356,10 @@ class AttendedRunner:
             base_ref = base_sha
         workspace = manager.prepare(claim["item_id"], base=base_ref)
         candidate = state.get("candidate")
-        if candidate and candidate != workspace.head:
+        # A development reattempt may build on commits a rejected attempt left on the item branch.
+        if candidate and candidate != workspace.head and not (
+            stage == "development" and manager.contains_base(workspace, candidate)
+        ):
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
         review = self._review_assignment(claim, state) if stage == "adversarial_review" else None
         input_reply = claim.get("input_reply")
@@ -368,6 +371,11 @@ class AttendedRunner:
                 report_checkpoint["findings"] = findings
         context = {field: request.get(field, []) for field in ("context_links", "acceptance_criteria")}
         requirements = STAGES[stage]
+        base_revision = record["development_base"]["sha"] if stage == "development" else None
+        if base_revision:
+            requirements += (f" The candidate must contain base_revision {base_revision}, the pinned {base}."
+                             " If HEAD lacks it, integrate it with a normal merge of that commit and resolve "
+                             "any conflicts before committing; never rebase or rewrite history.")
         if stage in ("development", "pr_revision") and state.get("findings"):
             context["review_findings"] = state["findings"]
             if stage == "development":
@@ -389,7 +397,7 @@ class AttendedRunner:
             state_version=execution["version"], stage=stage, repository=repo,
             worktree=workspace.path, branch=workspace.branch, expected_revision=workspace.head,
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
-            evidence_requirements=requirements, base_branch=base,
+            evidence_requirements=requirements, base_branch=base, base_revision=base_revision,
             report_checkpoint=report_checkpoint,
             dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps(context, ensure_ascii=False),
@@ -597,11 +605,29 @@ class AttendedRunner:
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
-                    if not development_candidate(record, packet, workspace, evidence):
+                    base = record.get("development_base")
+                    merged = (base is not None and evidence != workspace.head and not workspace.dirty
+                              and manager.merged_base(workspace, evidence, base["sha"]))
+                    worker = replace(workspace, head=evidence) if merged else workspace
+                    if not development_candidate(record, packet, worker, evidence):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
-                    if "development_base" in record:
-                        manager.verify_base_ancestry(workspace, record["development_base"]["sha"])
-                    body["candidate"] = workspace.head
+                    conflict = None
+                    if base is not None and not manager.contains_base(workspace, base["sha"]):
+                        conflict = manager.integrate_base(
+                            workspace, base["sha"], f"Merge pinned {base['ref']} {base['sha']} into the candidate")
+                        workspace = manager.inspect(packet.item_id)
+                    if conflict is None:
+                        if base is not None:
+                            manager.verify_base_ancestry(workspace, base["sha"])
+                        body["candidate"] = workspace.head
+                    else:
+                        # Return the attempt to development through the bounded retry with a visible reason.
+                        body["outcome"] = "failed"
+                        body["failure_reason"] = (
+                            f"Candidate {evidence} does not contain the pinned development base "
+                            f"{base['ref']} {base['sha']}, and the runner could not merge it cleanly. "
+                            "The next development attempt must merge that base and resolve the conflicts."
+                            f"\n\n{conflict}")[:16000]
                 else:
                     body["report_markdown"] = result.details["evidence"]
             elif result.outcome == "failed":
