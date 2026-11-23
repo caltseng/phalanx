@@ -8,7 +8,10 @@ File, import, inspect and answer work with the owner CLI, and watch it on the op
 python -m phalanx register example https://github.com/example/project.git
 python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
 python -m phalanx inspect <item_id>
+python -m phalanx cancel <item_id> --reason "Superseded by a newer item"
 ```
+
+`cancel` reads the item's current execution and version, then requests cancellation with an idempotency key bound to that version. Retrying it after a lost response is safe: if the first request committed, the retry fails with a visible version conflict instead of cancelling twice.
 
 Register the expected remote without credentials. Intake targets are `report` for a stored Markdown field report, `ready_for_check_in` for a reviewed PR, and `checked_in` for a verified merge. Reuse `--key` when retrying the same request. The [API reference](api.md#work-items-and-executions) covers the full intake body, including context, acceptance criteria, priority, dependencies and steering.
 

@@ -87,6 +87,7 @@ class CaptainLoop:
         self.blocked: dict[int, str] = {}
         # Leases left to expire because their exact writer stopped without a result.
         self.lapsing: dict[int, str] = {}
+        self.recovery_waits: dict[int, tuple[str, str] | None] = {}
         self.closed = False
         self._bind_identity()
         with self.runner._journal() as db:
@@ -135,6 +136,14 @@ class CaptainLoop:
             event["at"] = datetime.now(timezone.utc).isoformat()
             db.execute("INSERT OR REPLACE INTO captain VALUES (?, ?)", (key, json.dumps(event)))
         self.emit(event)
+
+    def _clear_status(self, slot, status):
+        with self.runner._journal() as db:
+            cleared = db.execute("DELETE FROM captain WHERE key=? AND json_extract(value, '$.status')=?",
+                                 (f"status-{slot}", status)).rowcount
+        if cleared:
+            self.emit({"slot": slot, "status": "cleared", "reason": f"{status} resolved",
+                       "at": datetime.now(timezone.utc).isoformat()})
 
     def _block(self, slot, reason):
         """Keep a slot's blocker until a pass learns something new; the next heartbeat publishes it."""
@@ -210,7 +219,7 @@ class CaptainLoop:
                 "session": handoff.launch_arguments(original["project_id"]),
             }
         else:
-            # A legacy or interrupted claim retains the original filters and
+            # An interrupted claim retains the original filters and
             # secret. Do not substitute this loop's capabilities on replay.
             result = runner.prepare()
         if result["status"] != "launch_intent":
@@ -441,12 +450,19 @@ class CaptainLoop:
                         "unchanged": True}
             if observation is not None and "packet" in snapshot:
                 self._check_observation(runner, snapshot, observation)
-            return run_recovery(
+            result = run_recovery(
                 self.root, self.config["runner_id"], self.api, RecoveryJournal(self.root, slot),
                 observations=observation.threads if observation else (),
                 discovery_complete=observation.discovery_complete if observation else False,
                 no_launch_proof=unlaunched_proof(runner, snapshot) if unlaunched else None,
             )
+            if result["status"] == "resume_writer":
+                result = self._resume_writer(runner, result)
+            if "claim" in snapshot:
+                result["item_id"] = snapshot["claim"]["item_id"]
+            if self._publish_recovery_wait(slot, snapshot.get("claim", {}).get("attempt_id"), result):
+                result["notify_owner"] = True
+            return result
         if "packet" not in snapshot or unlaunched:
             return self._prepare(slot, discovery)
         if observation is None:
@@ -471,6 +487,60 @@ class CaptainLoop:
                       "reservation while active. Inspect the worker; reply to it or cancel the item if it is stuck")
             return {"status": "worker_overdue", "reason": reason, "blocker": reason}
         return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
+
+    def _resume_writer(self, runner, result):
+        """Continue the exact stopped writer through the bridge; its count was journaled first."""
+        resume = result.pop("resume")
+        prompt = runner._handoff(runner._snapshot()).resume_prompt()
+        try:
+            self.adapter.resume({**resume, "prompt": prompt})
+        except LaunchNotDelivered as error:
+            # The runtime provably never saw it, so this try does not count.
+            def refund(record, db):
+                if record.get("resume", {}).get("thread_id") == resume["thread_id"]:
+                    record["resume"]["count"] -= 1
+            runner._transaction(refund)
+            return {**result, "status": "resume_failed",
+                    "reason": f"{result['reason']}. The resume was not delivered ({error}); retrying after "
+                              "the resume grace period"}
+        except RunnerError as error:
+            return {**result, "status": "resume_failed",
+                    "reason": f"{result['reason']}. The resume may not have arrived ({error}); it counts "
+                              "toward the limit"}
+        return {**result, "status": "writer_resumed",
+                "next_action": "Observe the writer active, then adopt the same attempt under a fresh lease"}
+
+    def _publish_recovery_wait(self, slot, attempt_id, result):
+        """Show an expired attempt's recovery wait on the board, and clear it once recovery moves on.
+
+        Returns True when a new owner wait was published, so the owner is notified once per wait.
+        """
+        published = self.recovery_waits.get(slot)
+        if not attempt_id or result["status"] in {"adopted", "recovered"}:
+            self.recovery_waits.pop(slot, None)
+            return False
+        blocker = None
+        if result["status"] == "owner_wait":
+            action = result.get("next_action") or "Address the reason"
+            blocker = (f"Recovery is waiting on the owner: {result['reason']}. {action.rstrip('.')}, then run "
+                       f"`python -m phalanx attended-recover --config <runner config> --state {self.root} "
+                       f"--slot {slot} --recheck`")
+        elif result["status"] in {"writer_resumed", "resume_failed", "resume_pending"}:
+            blocker = result["reason"]
+        # Clear only a wait this loop published for the same attempt.
+        if blocker is None and not (published and published[0] == attempt_id):
+            self.recovery_waits.pop(slot, None)
+            return False
+        changed = published != (attempt_id, blocker)
+        if changed:
+            route = (f"/dispatch/runners/{quote(self.config['runner_id'], safe='')}/attempts/"
+                     f"{quote(attempt_id, safe='')}/recovery-wait")
+            self.api.call(route, {"blocker": blocker})
+        if blocker is None:
+            self.recovery_waits.pop(slot, None)
+        else:
+            self.recovery_waits[slot] = (attempt_id, blocker)
+        return changed and result["status"] == "owner_wait"
 
     def _check_observation(self, runner, snapshot, observation):
         if (datetime.now(timezone.utc) - observation.observed_at).total_seconds() > 60:
@@ -560,6 +630,13 @@ class CaptainLoop:
                         continue
                     self._block(slot, result.get("blocker"))
                     self._status(slot, result["status"], result.get("reason", "Operation recorded"))
+                    if result.get("notify_owner") and self.notify is not None:
+                        self.notifications.append(self.notify_pool.submit(self.notify, {
+                            "event": "owner_wait", "slot": slot, "attempt_id": result.get("attempt_id"),
+                            "reason": result.get("reason"), "next_action": result.get("next_action"),
+                            "items": [result["item_id"]] if "item_id" in result else [],
+                            "runner_id": self.config["runner_id"], "at": datetime.now(timezone.utc).isoformat(),
+                        }))
         records = self._records()
         for slot in list(self.cursors):
             if slot not in records and not any(slot in slots for slots in self.observations):
@@ -595,10 +672,14 @@ class CaptainLoop:
                 self.recovery_ready = True
         owned = {record["claim"]["attempt_id"] for record in records.values() if "claim" in record}
         self.unmatched = sorted(set(self.expired) - owned)
-        if self.unmatched and self.recovery_ready and self.unmatched != self.last_unmatched:
-            self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their journals: "
-                         + ", ".join(self.unmatched))
-        self.last_unmatched = self.unmatched.copy()
+        # Compare only fresh listings; the first one also clears a status left by an earlier run.
+        if self.recovery_ready and self.unmatched != self.last_unmatched:
+            if self.unmatched:
+                self._status(0, "unmatched_attempts", "Unmatched attempts reserve capacity; restore their "
+                             "journals: " + ", ".join(self.unmatched))
+            else:
+                self._clear_status(0, "unmatched_attempts")
+            self.last_unmatched = self.unmatched.copy()
         self._report_mappings()
         # Each project check is a Captain request; run it only for a free slot or a pending launch.
         general = [slot for slot in records if slot <= self.runner.capacity]

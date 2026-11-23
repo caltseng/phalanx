@@ -54,7 +54,7 @@ The Captain supplies a fresh JSON snapshot from the runtime's native session his
 
 - A saved stop request replays without another observation file.
 - A `retry` response with `retry_at` gives the earliest next probe as Unix seconds.
-- After an `owner_wait`, address the reason before using `--recheck`.
+- After an `owner_wait`, address the reason before using `--recheck`. While the Captain loop's recovery of an expired attempt waits on the owner, the board's wait reason names that reason and the exact `attended-recover --slot N --recheck` command.
 - An unmatched server attempt requires the original journal or explicit recovery of its writer.
 - The command verifies the local Git checkpoint and checks any result against the original packet. Any stage other than development leaves the checkout unchanged, so its saved result is verified against the unchanged worktree.
 - An expired attempt with an active writer or a verified result is adopted under a recovery claim. The claim request and its fresh secret are journaled before sending, so a lost reply replays the same key. Afterwards the Captain renews and submits under the new lease. If the server refuses adoption, the reservation backs off and then waits for the owner; nothing is released.

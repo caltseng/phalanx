@@ -48,6 +48,8 @@ For a launched stopping worker, the stop path requires its exact stopped native 
 
 A worker still active three hours after launch with no result keeps its reservation and lease; the loop never stops it. The slot reports `worker_overdue` once, and the operator board shows it as the item's wait reason until the worker produces a result. A writer observed stopped without a result file stops renewing its lease, so stopped-attempt recovery reconciles the expired attempt instead of the item staying reserved forever.
 
+If that writer left uncommitted changes or new commits without a result, recovery never releases or discards them. It resumes the same writer through the bridge's [`resume` operation](captain-relay.md#bridge-contract) with a continue prompt, then adopts the same attempt under a fresh lease once the writer is observed active. Each resume gets 180 seconds to show the writer active. After three resumes the slot waits on the owner, naming the attempt, writer, worktree and its dirty state; the board shows the same reason, and the optional `notify_command` receives an `owner_wait` event once. A parked wait is adopted without a recheck if the exact writer is later observed active, and `--recheck` resets the resume count.
+
 ### Output and shutdown
 
 The CLI prints JSON activity and actionable errors. Reservation status includes the last loop and recovery reason. Loop status has one durable store and is written and emitted only when its status or reason changes. Ctrl+C stops scheduling and drains in-flight operations without discarding reservations. Restart with the same configuration; see [Resume an existing install](resume.md).

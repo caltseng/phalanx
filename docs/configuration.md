@@ -6,7 +6,7 @@ Phalanx has no install locator or per-user config file. The server reads its set
 
 | Variable | Used by | Meaning |
 | --- | --- | --- |
-| `PHALANX_DB` | Server, `server backup`/`restore` | SQLite file. Defaults to `.phalanx/phalanx.sqlite3`, resolved against the working directory. Use an absolute path. The server creates the file if it is missing and applies pending migrations before serving. |
+| `PHALANX_DB` | Server, `server backup`/`restore` | SQLite file. Defaults to `.phalanx/phalanx.sqlite3`, resolved against the working directory. Use an absolute path. The server creates the file if it is missing, or applies pending schema steps to an existing store, before serving. It refuses a store older than schema version 12 rather than upgrading it. |
 | `PHALANX_OWNER_TOKEN` | Server, owner CLI commands | Owner bearer token. |
 | `PHALANX_RUNNER_TOKEN` | Server, runner commands | Runner bearer token. |
 | `PHALANX_LEASE_SECONDS` | Server | How long a claim or renewal keeps an attempt leased. Default 300; whole seconds from 30 to 3600, or the server refuses to start. Keep each runner's renewal interval well under it. |
@@ -49,7 +49,7 @@ The runner reads a JSON file passed as `--config`:
 | `check_wait_limit_seconds` | How long checks may stay pending on one head and base before the owner is asked. 60 to 2592000, default 7200. |
 | `local_check_capacity` | Validations that run local checks at once on the runner host. 1 to 64, default 1. |
 | `auto_merge` | `true` (default) merges at check-in; `false` delivers the ready PR and leaves the merge to the owner. |
-| `notify_command` | Executable and arguments, such as `["python", "notify.py"]`, that receives each `relay_stalled` and `relay_serving` event as one JSON object on stdin. Each event has `event`, `reason`, `items`, `runner_id` and `at`. It runs without the Phalanx token variables and has 30 seconds. A failure shows as `notify_blocked` in loop status. |
+| `notify_command` | Executable and arguments, such as `["python", "notify.py"]`, that receives each `relay_stalled`, `relay_serving` and slot `owner_wait` event as one JSON object on stdin. Each event has `event`, `reason`, `items`, `runner_id` and `at`; `owner_wait` adds `slot`, `attempt_id` and `next_action`, and is sent once per new reason. The [reconciler](direct-path.md#run-the-github-reconciler) also sends each owner-notify flag once. It runs without the Phalanx token variables and has 30 seconds. A failure shows as `notify_blocked` in loop status. |
 
 Keep the runner state directory private, outside every mapped checkout, and readable only by the runner account. It holds active lease secrets, the reservation journal and the relay queue.
 

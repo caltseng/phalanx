@@ -44,6 +44,7 @@ After a restart or reboot, don't rerun the quickstart: it would create new token
 - [Resume an existing install](docs/resume.md): restart order, single-instance checks and status.
 - [Runner operations](docs/runner-operations.md): the Captain loop, PR validation and check-in, and manual `attended` commands.
 - [Captain relay and bridge](docs/captain-relay.md): the bridge contract, Captain chat relay, standing relay serve and runtime mapping.
+- [Direct path](docs/direct-path.md): the GitHub reconciler and a Captain on the direct path.
 - [Recovery and troubleshooting](docs/recovery.md): stuck relays, reservation reconciliation, and SQLite backup and restore.
 - [Work items](docs/work-items.md): filing, GitHub issue import, answering questions and the operator board.
 - [Configuration](docs/configuration.md): environment variables and the runner config.

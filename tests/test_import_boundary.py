@@ -10,10 +10,10 @@ import unittest
 PACKAGE = Path(__file__).resolve().parents[1] / "phalanx"
 # Server-only: queue storage, HTTP routes and server-side lifecycle handlers.
 SERVER = {
-    "api", "auth", "config", "dependencies", "dependency_schema", "dispatch", "dispatch_api",
-    "dispatch_schema", "finalization", "finalization_schema", "intake", "intake_api", "intake_schema",
-    "operator_api", "operator_schema", "operator_web", "pr_observations", "server_admin", "store",
-    "wait_schema", "waits",
+    "api", "auth", "captains", "config", "dependencies", "dependency_schema", "direct_schema", "dispatch",
+    "dispatch_api", "dispatch_schema", "finalization", "finalization_schema", "flags", "intake", "intake_api",
+    "intake_schema", "operator_api", "operator_schema", "operator_web", "pr_observations", "reconciliation",
+    "reconciliation_schema", "server_admin", "store", "wait_schema", "waits", "writers",
 }
 # Wire contracts both sides import. They depend only on each other.
 SHARED = {"intake_models", "pr_models", "transitions", "validation"}
