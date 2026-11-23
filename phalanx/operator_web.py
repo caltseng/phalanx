@@ -19,7 +19,7 @@ def operator_board():
         media_type="text/html",
         headers={
             "Content-Security-Policy": (
-                "default-src 'none'; script-src 'self'; style-src 'self'; "
+                "default-src 'none'; script-src 'self'; style-src 'self'; img-src data:; "
                 "connect-src 'self'; form-action 'none'; frame-ancestors 'none'; base-uri 'none'"
             ),
             "Referrer-Policy": "no-referrer",

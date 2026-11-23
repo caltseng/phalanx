@@ -19,7 +19,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .github import GitHubClient, GitHubError
+from .github import GitHubClient, GitHubError, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
 from .pr_models import GITHUB_REMOTE
@@ -200,23 +200,28 @@ class Reconciler:
         branch = item_branch(item_id)
         pull = self.find_pull(github, owner, branch, execution.get("primary_pr_url"))
         body = {"observed_at": datetime.now(UTC).isoformat()}
+        base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
         checks = ()
         if pull is None:
             checkout = self.checkout(repo, remote, fetched)
             # With no remote branch there is nothing to flag, but posting keeps the observation fresh.
             if not git(checkout, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}",
                        check=False).returncode:
-                base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
                 body["merged_branch"] = git(
                     checkout, "merge-base", "--is-ancestor", f"refs/remotes/origin/{branch}",
                     f"refs/remotes/origin/{base}", check=False,
                 ).returncode == 0
         else:
+            body["target_base"] = base
             body["pr"] = {
                 "number": pull.number, "state": pull.state, "merged": bool(pull.merged), "draft": pull.draft,
                 "head_ref": pull.head_ref, "head_sha": pull.head_sha, "base_ref": pull.base_ref,
                 "base_sha": pull.base_sha, "merge_commit": pull.merge_commit_sha, "mergeable": pull.mergeable,
             }
+            if pull.merged and pull.merge_commit_sha and pull.base_ref == base:
+                # The server records how and when the PR merged with the delivery.
+                body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
+                body["pr"]["merged_at"] = pull.merged_at
             if pull.state == "open":
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)

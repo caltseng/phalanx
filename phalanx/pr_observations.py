@@ -181,12 +181,7 @@ def submit(db, item_id, execution_id, body, lease_digest):
                 or ready["pr_url"] != url or ready["expected"] != expected.model_dump()
                 or ready["pull"]["head_sha"] != revision.head):
             raise intake.Conflict("Verified merge must match the recorded authorized merge intent")
-        # The base may have advanced before the merge; the candidate must be the merged head parent.
-        if body.merge_parent_shas[1] != revision.head:
-            raise intake.Conflict("The merge commit's head parent must be the authorized candidate head")
-        pr = PullRequest(url, revision, merge_commit=pull.merge_commit, closed=True)
-        return intake.apply(db, row, state, Event.MERGE_VERIFIED, details=details,
-                            attempt_id=body.attempt_id, evidence=Evidence(pr=pr))
+        return _apply_merge(db, row, state, body, details, url, revision)
 
     if pull.base_sha != expected.base_sha or pull.state != "open" or pull.merged:
         raise intake.Conflict("Expected an open, unmerged PR at the observed base revision")
@@ -229,6 +224,35 @@ def submit(db, item_id, execution_id, body, lease_digest):
     details["outcome"] = outcome
     return intake.apply(db, row, state, Event.RESULT, details=details,
                         attempt_id=body.attempt_id, outcome=outcome, evidence=evidence)
+
+
+def _apply_merge(db, row, state, body, details, url, revision):
+    """Close on GitHub's merge of the candidate; the model checked the merge provenance."""
+    pull = body.pull
+    merged_at = pull.merged_at.isoformat() if pull.merged_at else None
+    pr = PullRequest(url, revision, merge_commit=pull.merge_commit, closed=True,
+                     merge_method=body.merge_method, merged_at=merged_at)
+    return intake.apply(db, row, state, Event.MERGE_VERIFIED, details=details,
+                        attempt_id=body.attempt_id, evidence=Evidence(pr=pr))
+
+
+def submit_merged(db, item_id, execution_id, body, lease_digest):
+    """Deliver a primary PR the repository merged at the validated candidate before check-in."""
+    row, state, repository = _check_refs(db, item_id, execution_id, body, lease_digest)
+    pull, expected = body.pull, body.expected
+    url = f"https://github.com/{repository}/pull/{pull.number}"
+    if state.primary_pr != url:
+        raise intake.Conflict("Merge evidence must observe the recorded primary PR")
+    if (pull.head_ref, pull.base_ref) != (expected.head_ref, expected.base_ref):
+        raise intake.Conflict("The merged PR must use the expected head and base branches")
+    if pull.head_sha != state.candidate:
+        raise intake.Conflict("The merged PR's final head must be the validated candidate")
+    publication = latest_observation(db, execution_id, Stage.PR_CREATION)
+    if not publication or publication["expected"]["base_ref"] != expected.base_ref:
+        raise intake.Conflict("Expected base branch must match the published primary PR")
+    details = body.model_dump(mode="json")
+    details["pr_url"] = url
+    return _apply_merge(db, row, state, body, details, url, Revision(pull.head_sha, expected.base_sha))
 
 
 def submit_rework(db, item_id, execution_id, body, lease_digest):

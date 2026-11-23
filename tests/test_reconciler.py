@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead, RemoteDisconnected
 import json
@@ -32,6 +33,8 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         self.post = f"{self.execution}/github-observation"
 
     def body(self, minute, **fields):
+        if "pr" in fields:
+            fields.setdefault("target_base", "main")
         return {"observed_at": (self.start + timedelta(minutes=minute)).isoformat(), **fields}
 
     def pull(self, **fields):
@@ -198,10 +201,18 @@ class FakeAPI:
 
 
 class FakeGitHub:
-    def __init__(self, pulls=(), error=None, feedback_error=None):
+    def __init__(self, pulls=(), error=None, feedback_error=None, parents=(), on_branch=False):
         self.pulls = pulls
         self.error = error
         self.feedback_error = feedback_error
+        self.parents = parents
+        self.on_branch = on_branch
+
+    def get_commit_parents(self, sha):
+        return self.parents
+
+    def is_on_branch(self, sha, branch):
+        return self.on_branch and branch == "main"
 
     def get_pull_request(self, number):
         if self.error:
@@ -261,7 +272,7 @@ class ReconcilerPassTest(unittest.TestCase):
         return checkout, heads
 
     def test_a_rate_limited_repository_waits_while_others_are_observed(self):
-        self.config["repositories"] = {"repo": {}, "other": {}}
+        self.config["repositories"] = {"repo": {"base_branch": "main"}, "other": {"base_branch": "main"}}
         self.github["repo"] = FakeGitHub([pull_request(HEAD, item_branch("one"))])
         self.github["other"] = FakeGitHub(error=GitHubError("get pull request", "rate limited", 403,
                                                             retry_after_seconds=30))
@@ -284,7 +295,7 @@ class ReconcilerPassTest(unittest.TestCase):
         self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
 
     def test_an_incomplete_github_read_posts_nothing_and_backs_off(self):
-        self.config["repositories"] = {"repo": {}}
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
         self.config["validation_policy"] = "policy.json"
         primary = "https://github.com/example/repo/pull/7"
         api = FakeAPI([execution("one", primary=primary), execution("two", primary=primary)],
@@ -305,6 +316,28 @@ class ReconcilerPassTest(unittest.TestCase):
                 self.assertEqual(api.posts, [])
                 self.assertNotIn("/items/two", api.calls)
                 self.assertGreater(reconciler.backoff["repo"], self.now)
+
+    def test_a_merge_into_the_target_is_posted_with_how_and_when_it_merged(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        merged = replace(pull_request(HEAD, item_branch("one"), state="closed"), merged=True,
+                         merge_commit_sha=OTHER, merged_at="2026-11-24T06:33:57Z")
+        api = FakeAPI([execution("one", primary="https://github.com/example/repo/pull/7")],
+                      {"repo": "https://github.com/example/repo"})
+        reconciler = self.reconciler(api)
+        for parents, on_branch, method in (((BASE, HEAD), False, "merge"), ((BASE,), True, "squash_or_rebase"),
+                                           ((BASE,), False, None)):
+            with self.subTest(method=method):
+                self.github["repo"] = FakeGitHub([merged], parents=parents, on_branch=on_branch)
+                api.posts.clear()
+                self.assertEqual(reconciler.run_pass()["errors"], [])
+                (_, body), = api.posts
+                self.assertEqual((body["pr"]["merge_method"], body["pr"]["merged_at"]),
+                                 (method, "2026-11-24T06:33:57Z"))
+        # A merge into another base never delivers, so how it merged doesn't matter.
+        self.github["repo"] = FakeGitHub([replace(merged, base_ref="dev")], parents=(BASE, HEAD))
+        api.posts.clear()
+        reconciler.run_pass()
+        self.assertNotIn("merge_method", api.posts[0][1]["pr"])
 
     def test_a_second_reconciler_cannot_share_the_state_directory(self):
         state = self.root / "state"

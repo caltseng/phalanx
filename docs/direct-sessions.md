@@ -1,6 +1,6 @@
 # Direct sessions: coordination, not a gate
 
-**Status: decided, not implemented.** Caleb decided the principle ([decision 68](decisions.md)), the sources of truth with no runner-local database (decision 69), multiple Captains with periodic successors (decision 70) and the design defaults [D1–D8](#decisions) (decision 71). Nothing here is implemented yet. Until it is, [SPEC.md](../SPEC.md) and [STATE_MACHINE.md](../STATE_MACHINE.md) describe the running system. The [gap check](#appendix-gap-check-of-attended-mode) at the end records what attended mode already does.
+**Status: decided, partly implemented.** Caleb decided the principle ([decision 68](decisions.md)), the sources of truth with no runner-local database (decision 69), multiple Captains with periodic successors (decision 70) and the design defaults [D1–D8](#decisions) (decision 71). Writer registration and `phx work` (step 2), the reconciler (step 3) and the writer's [PR lifecycle](#pr-publication-and-delivery) (pulled forward from step 5) are implemented. The rest isn't yet. Until it is, [SPEC.md](../SPEC.md) and [STATE_MACHINE.md](../STATE_MACHINE.md) describe the running system. The [gap check](#appendix-gap-check-of-attended-mode) at the end records what attended mode already does.
 
 ## Principle
 
@@ -63,19 +63,31 @@ Review stages (`adversarial_review`) launch a separate reviewer session, registe
 - `phx work progress` updates `last_progress_at` and an optional note. The board shows it and the no-progress flag uses it.
 - `needs_input` lands in the owner inbox as today. The Captain answers routine questions with `answered_by: captain`.
 
+### PR publication and delivery
+
+A writer-bound PR item goes `development` → `self_review` → `publication` → `delivery`. It never enters the runner-only stages, `adversarial_review` or `pr_revision`.
+
+1. **Publication.** After self-review passes, the worker pushes the item branch (`phalanx/<sha256 of the item ID>`, which the reconciler looks up). It opens one ready PR with an explicit base, the item's target branch, or reuses the open PR on that branch, marking a draft ready. For a `checked_in` target it enables GitHub auto-merge with any method the repository allows (D1, D2). Then it posts `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<n>"}` with `phx work result`. Only a successful publication result carries `pr_url`. The PR must be in the item's registered repository and must not be one an earlier execution of the item merged. The server records it as the execution's primary PR, so only that PR can deliver the execution, never an earlier execution's PR on the shared item branch.
+2. **Delivery.** The execution waits as `delivery / waiting_for_external` with no attempt, and the reconciler's observations drive it (see the next section). The writer stays registered. It watches the PR on GitHub and fixes failing checks, review feedback and conflicts by pushing to the open PR, which needs no attempt. The Captain sees the same problems as `checks_failed`, `review_feedback`, conflict and `head_drift` flags. The next observation picks up the new head.
+3. **Closed without merge.** The server asks the owner. A reply queues `delivery` for the writer, which reopens the PR or explains, then posts a result to return to the wait.
+
+Pre-PR local checks are flags, not a gate (D3). The reconciler runs the trusted policy's local checks on each new head and posts them as flags. Repository rules and required checks gate the merge. An independent reviewer session for `adversarial_review` isn't part of the direct path yet.
+
 ## GitHub reconciliation
 
 The reconciler runs periodically for each open PR item and for due external waits. It holds no lease or slot and posts facts through a runner-authenticated observation route. Each observation is idempotent on (execution, PR, head, observation digest) and carries `observed_at`. GitHub is authoritative, so a newer observation always replaces the server's view, even when it moves an item backward (for example, a reopened PR).
 
 | GitHub shows | Server records |
 | --- | --- |
-| The item's primary PR **merged by any method** (merge commit, squash or rebase), by Phalanx or a person | Delivered: it completes a `checked_in` target and records the merge commit and final head. It needs no Phalanx merge intent or second parent. A final head that differs from the last recorded one raises an informational `head_drift` flag. A `ready_for_check_in` target also completes when merged, so dependents unblock (fixes decision 58's gap). |
+| The item's primary PR **merged by any method** (merge commit, squash or rebase), by Phalanx or a person | Delivered: it completes a `checked_in` target and records the merge commit, final head, GitHub's `merged_at` and the method the reconciler verified (`merge` when the merge commit's second parent is the head, `squash_or_rebase` for a single-parent commit on the base branch, else none), the same rule check-in uses. It needs no Phalanx merge intent or second parent. A final head that differs from the last recorded one raises an informational `head_drift` flag. A `ready_for_check_in` target also completes when merged, so dependents unblock (fixes decision 58's gap). |
 | PR closed without merge | `waiting_for_input` with the question; never a replacement PR. |
 | New head, failing checks, new review feedback, conflict | Evidence on the timeline plus a flag. The writer, or the Captain if no writer is active, acts on it. |
 | Ready head with required checks and reviews satisfied | `ready_for_check_in`. Merging is GitHub's job (D2). |
 | Branch commits reachable from the base with no PR (git ancestry) | A flag only. |
 
 GitHub rate limits back off and never block other items.
+
+For a writer's execution in `delivery`, the server applies each observation of its primary PR as a state transition (`pr_observed`). The observation sets the current head. Each PR observation names the branch the PR must merge into: the item's `target_branch`, else the repository's `base_branch` from the reconciler's mapping. A PR on another base never reaches `ready_for_check_in` and raises a `wrong_base` flag, and a merge into another base asks the owner instead of delivering. A merge completes the execution and ends its writer. Every post is reapplied, so a lost apply recovers on the next pass, and an unchanged observation doesn't bump the execution's version. A snapshot older than one already recorded is ignored unless it shows a merge. A `ready_for_check_in` milestone, and the target, need required checks green, so they need the repository's trusted validation policy. Without one the execution keeps waiting, visibly, until merged. Executions on the old path only record observations.
 
 ## Liveness
 
@@ -100,6 +112,8 @@ There is no relay polling and no foreground polling loop.
    3. Record each action on its item's timeline (`captain_action` with the item ID and reason).
 
    New work must be filed as an item before a session is launched for it. Any visible session without a registered writer, reviewer or Captain registration is flagged `orphan_session`.
+
+   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. The README's [Captain section](../README.md#run-a-captain-on-the-direct-path) shows the setup.
 4. **Deviation detection.** See [Deviation flags](#deviation-flags). The reconciler and server raise these flags. They never block.
 5. **Escalation.** Escalate to the owner only for trust, scope changes, destructive actions (overwriting a foreign head, closing PRs, deleting branches or data), missing credentials or authority, and exhausted retry caps. The Captain decides everything else and logs it (`answered_by: captain`, [decisions.md](decisions.md)).
 
@@ -121,6 +135,14 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   3. It doesn't wait for the successor to take over. It finishes or explicitly abandons each of its own intents, which the server records, so they become actionable by any Captain.
   4. It sets `ended` and stops acting.
 - **Cleanup.** The successor confirms the predecessor is `ended` with no owned intents, then archives the predecessor's chat. A predecessor still `ending` after 30 min is treated as dead (below).
+
+  As built in step 4:
+  - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
+  - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
+  - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
+  - The record step reports every runtime session named `phx …` with its ID and name. The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` from these reports by matching name words to open writers' item ID prefix or nonce. A pending successor's name is exempt while its parent is `ending`.
+  - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
+  - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
 - **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`. Its unconfirmed intents become actionable by any live Captain, which resolves them by nonce. If it had already launched a successor, that successor continues. If not, [No live Captain](#no-live-captain) applies.
 
 ### No live Captain
@@ -211,6 +233,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
 | Relay coalescing (44cdf154) | Unnecessary. Recommend stopping it now. |
 | Relay SQLite contention (108f6009) | Unnecessary once the relay is retired (step 5). Until then, run one relay server, as the runbook already says. |
 | Dirty-stop recovery (a4bcb34f) | Unnecessary once attended slots go. Keep its invariant: writer replacement never discards unpushed changes. |
+| Merge before a PR gate (4a3d20b7) | Not fixed. The old path recognizes a merged primary PR only at its PR gates, so an execution still in `development` or `self_review` when its PR merges is cancelled with a report. Removed with the old path (step 5). |
 
 ## Migration order
 
@@ -218,7 +241,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
 2. **Writer registration and evidence.** Add the writer routes and token, the `writer` role on result routes, and `phx work`. Add Captain registration and heartbeat, flags, and the board's writer, Captain and flag columns.
 3. **Reconciler.** Read GitHub and git, post observations, and raise flags, including `no_live_captain`.
 4. **Charter, Captain automation and shifts.** Pilot one item end to end on the direct path while the old loop runs other items. An execution with a registered writer isn't queued, so the old loop can't claim it. Run at least one shift handoff and one keeper restart during the pilot.
-5. **End-to-end acceptance**, then retire the old path. The acceptance test must show:
+5. **End-to-end acceptance**, then retire the old path. The writer's [PR lifecycle](#pr-publication-and-delivery) landed early, so a pilot PR item can run fully direct. The acceptance test must show:
    - lost-launch discovery by nonce;
    - exact-writer matching, and no duplicate writers with two Captains racing for one item;
    - writer replacement without losing local changes;
