@@ -163,9 +163,7 @@ def _advance(db, row, url, body, target_base, stamp):
     view = intake.apply(db, row, state, Event.PR_OBSERVED, details=details,
                         attempt_id=attempt and attempt["id"], evidence=evidence)
     if view["state"]["status"] in TERMINAL:
-        db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL
-                      WHERE execution_id=? AND ended_at IS NULL""",
-                   (intake.timestamp(), f"closed as {view['state']['status']}", row["id"]))
+        intake.end_writers(db, row["id"], view["state"]["status"])
 
 
 def record_local_checks(db, item_id, execution_id, body: LocalChecks):

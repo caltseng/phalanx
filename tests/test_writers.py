@@ -97,6 +97,19 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual(binding["state"]["status"], "completed")
         self.ok("/v1/writer", token, code=401)
 
+    def test_report_finalization_ends_the_writer(self):
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        binding = self.submit(token, binding, report_markdown="# Report\n")
+        binding = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
+        self.assertEqual(binding["state"]["stage"], "report_storage")
+        finished = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
+        self.assertEqual(finished["state"]["status"], "completed")
+        with connect(self.path, mode="ro") as db:
+            writer = db.execute("SELECT * FROM writers WHERE id=?", (binding["writer"]["id"],)).fetchone()
+        self.assertIsNotNone(writer["ended_at"])
+        self.assertEqual((writer["end_reason"], writer["attempt_id"]), ("closed as completed", None))
+
     def test_queued_binding_stays_out_of_the_old_loop_and_survives_steering(self):
         item_id, execution_id = self.item()
         with write_transaction(self.path) as db:
