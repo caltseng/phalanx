@@ -163,6 +163,8 @@ class Evidence:
     merge_authorized: bool = False
     report_review_notes: str | None = None
     findings: str | None = None
+    # Findings are a merge conflict, which pr_revision resolves on the open PR at any PR stage.
+    merge_conflict: bool = False
 
 
 def _require(condition: object, message: str) -> None:
@@ -268,8 +270,12 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
     if stage is Stage.PR_REVISION:
         _require(evidence.candidate and evidence.candidate != candidate,
                  "A revision requires a new pushed candidate")
-        # A push that lost to a foreign push is reconciled before validation.
-        next_stage = Stage.PR_VALIDATION if revision.head == evidence.candidate else Stage.PR_RECONCILIATION
+        # A draft rejoins promotion for its draft-only checks; a push that lost to a
+        # foreign push is reconciled before validation.
+        if pr.draft:
+            next_stage = Stage.PR_PROMOTION
+        else:
+            next_stage = Stage.PR_VALIDATION if revision.head == evidence.candidate else Stage.PR_RECONCILIATION
         return _queue(state, next_stage, candidate=evidence.candidate, findings=None)
     _require(candidate == revision.head and not pr.merge_commit,
              "Stage evidence must observe the candidate on the open PR")
@@ -324,8 +330,10 @@ def _changes(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
         return _queue(state, Stage.PR_RECONCILIATION)
     _require(stage in {Stage.PR_PROMOTION, Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.CHECK_IN}
              and evidence.findings, "Changes-required outcome needs findings at this stage")
-    # Before the first promotion fixes build a new candidate; afterwards the ready PR is revised.
-    next_stage = Stage.DEVELOPMENT if stage is Stage.PR_PROMOTION else Stage.PR_REVISION
+    # Before the first promotion fixes build a new candidate, except merge conflicts, which
+    # are resolved on the open PR; afterwards the ready PR is revised.
+    develop = stage is Stage.PR_PROMOTION and not evidence.merge_conflict
+    next_stage = Stage.DEVELOPMENT if develop else Stage.PR_REVISION
     return _queue(state, next_stage, findings=evidence.findings)
 
 

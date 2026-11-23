@@ -24,6 +24,7 @@ py -m venv .venv
 python -m pip install -r requirements.lock -e .
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$env:PHALANX_LOCAL_BOARD = "1"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -35,6 +36,7 @@ python3 -m venv .venv
 python -m pip install -r requirements.lock -e .
 export PHALANX_OWNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PHALANX_RUNNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export PHALANX_LOCAL_BOARD=1
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
@@ -43,6 +45,8 @@ The `python -m phalanx` commands below are the same in either shell once the vir
 If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs. The package metadata keeps compatible version ranges for downstream installs. Without the lock file, `pip install -e .` installs only what the CLI, runner and Captain loop need; add the `server` extra (`pip install -e ".[server]"`) on the server host. Tests use the standard library and the same runtime dependencies.
 
 Set `PHALANX_DB` to select a SQLite file. It defaults to `.phalanx/phalanx.sqlite3` relative to the server's working directory. Use an absolute path when running commands from different directories. The server applies pending migrations before serving requests and defaults to local loopback HTTP with the command above. Use one server process and local storage. Arrange HTTPS before exposing the API beyond loopback.
+
+Set `PHALANX_LEASE_SECONDS` to change how long a claim or renewal keeps an attempt leased. It defaults to 300 and accepts whole seconds from 30 to 3600; the server refuses to start otherwise. Keep each runner's renewal interval well under it.
 
 From a second shell, call `Invoke-RestMethod http://127.0.0.1:8000/health` (or `curl http://127.0.0.1:8000/health`). This public probe checks database access. Send `Authorization: Bearer <token>` to `GET /v1/owner/status` or `GET /v1/runner/status` to verify credentials. Each probe requires its matching token. The server returns 401 for missing or invalid credentials and 403 for the other role. Store the tokens privately and provide each client with its own token and API base URL. Rotate tokens by replacing the environment values and restarting the server.
 
@@ -223,13 +227,14 @@ filters and secret. One asynchronous project discovery pass per poll verifies
 each distinct host/project/checkout mapping once and shares the results across
 slot admission and launch checks. Failed discovery is retried on the next poll.
 
-Each slot has one work lane. Lease renewals have separate lanes (20 seconds
+Each slot has one work lane. Lease renewals have separate lanes (60 seconds
 by default), as do bounded native observation batches (eight slots, two-second
 wait by default). Git, provider requests, a slow native batch, or an ambiguous
 slot cannot occupy the heartbeat or another slot's work lane. Configure
 `--batch-size 1` to isolate individual native waits. `--poll-seconds`,
 `--heartbeat-seconds`, `--batch-size`, and `--wait-seconds` tune the bounded
-scheduler. Per-attempt cursors and admission rotation stay in memory as
+scheduler. If a renewed lease has less than two heartbeat intervals left, the
+slot reports `renewal_interval_too_long`. Per-attempt cursors and admission rotation stay in memory as
 optimizations; they reset on restart and never prove stop or authorize replacement.
 
 Every prepared launch is relayed at most once. The loop journals relay intent
@@ -277,6 +282,13 @@ Rejected submissions remain observable across restart and stop confirmation
 archives their evidence once. An expired prepared packet with no relay effects
 uses the verified no-launch checkpoint for recovery without waiting for a
 native observation that cannot exist.
+
+A worker that is still active three hours after launch with no result keeps
+its reservation and lease; the loop never stops it. The slot reports
+`worker_overdue` once and the operator board shows it as the item's wait
+reason until the worker produces a result. A writer observed stopped without a
+result file stops renewing its lease, so stopped-attempt recovery reconciles
+the expired attempt instead of the item staying reserved forever.
 
 The CLI prints JSON activity and actionable errors; reservation status includes
 the last loop and recovery reason. Loop status has one durable store and is
@@ -356,7 +368,8 @@ directory. Repeat this cycle while the loop runs:
    yourself with `python -m phalanx reply ... --answered-by captain`.
    Escalate to Caleb in the Captain chat only when human judgment materially
    changes the outcome or authority is missing. `attended status --all` shows
-   slot reasons.
+   slot reasons. Tell Caleb once about a `worker_overdue` slot, after
+   inspecting the worker to say whether it is still making progress.
 
 Identical requests waiting to be taken share one entry. Verified project resolutions
 are cached for ten minutes and failed ones for one minute, so an untrusted
@@ -457,7 +470,7 @@ polling, webhooks, or synchronization; it does not modify the GitHub issue.
 
 ### Operator work board
 
-Open `http://127.0.0.1:8000/operator/` on the running server and enter its owner token. The browser holds the token in memory until you disconnect or reload the page. The board uses the same-origin bearer-authenticated read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
+Open `http://127.0.0.1:8000/operator/` on the running server. With `PHALANX_LOCAL_BOARD=1`, as in the local setup above, the board opens without a token: its read-only routes (`/v1/operator/*` and the stored report route) skip authentication for requests from a loopback client with a `localhost`, `127.0.0.1` or `[::1]` `Host` header. Every other route still requires its token. Leave the flag unset on a hosted server, including one behind a reverse proxy or tunnel on the same machine, because those connect from loopback too. Without the flag, the board asks for the owner token and holds it in memory until you disconnect or reload the page. The board uses the same-origin read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves the board at `/operator/` on its own origin.
 
 The board shows each item's prerequisite blockers, any scheduled retry or external recheck, its worker reference and chat link, its current PR and its final output. It is read-only. When an item is waiting for an answer, its detail shows the question and the `reply` command to answer it with. See [Answer a waiting item](#answer-a-waiting-item).
 
@@ -492,14 +505,15 @@ capacity and recovery within that trusted role.
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
 | `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
 | `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, initially about every 20 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, by default every 60 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. The adoption appears in both timelines as a `recover_claim` event at the same version. |
 
 A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity`, or
 `no_eligible_work`. A successful assignment includes the work request,
-execution and version, attempt ID, and lease expiry (90 seconds from claim).
+execution and version, attempt ID, and lease expiry (`PHALANX_LEASE_SECONDS`
+after the claim, 300 by default).
 Pass its attempt ID, execution version, and stage to the existing result route
 with the same lease header. Keep the bearer token and lease secret with the runner.
 After a lost claim response, replay the same body and lease secret to retrieve
@@ -558,7 +572,7 @@ results under a recovery claim.
 
 Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions. Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. So neither reads nor writes wait more than one turn of the other, however deep the write queue gets in DELETE journal mode. The gate adds no timeout of its own, because one write turn may legitimately outlast the busy timeout across `BEGIN` and `COMMIT`. Don't call it inside a write transaction. Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it. Connections use foreign-key enforcement, `synchronous=EXTRA`, and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Lease checks and idempotency keys make retrying the identical request safe. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them. Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction.
 
-Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu and macOS with CPython 3.14. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
+Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. The [CI workflow](.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14 and Ubuntu and macOS with CPython 3.14. Each of those runs is split into three parallel jobs with `python tests/shard.py INDEX 3`, which deals the discovered tests round-robin so each test runs exactly once, and the single `Tests` check passes only when every shard passes. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
 
 ### Answer a waiting item
 

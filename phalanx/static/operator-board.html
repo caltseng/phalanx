@@ -10,14 +10,14 @@
 </head>
 <body>
   <div id="operator-session" class="phalanx-board">
-    <form id="operator-connect" method="post">
+    <form id="operator-connect" method="post" hidden>
       <h1>Phalanx work board</h1>
       <label for="operator-token">Owner token</label>
       <input id="operator-token" type="password" autocomplete="off" required>
       <button type="submit">Connect</button>
     </form>
     <button id="operator-disconnect" type="button" hidden>Disconnect</button>
-    <p id="operator-session-status" role="status"></p>
+    <p id="operator-session-status" role="status">Loading…</p>
     <noscript>Enable JavaScript to use the work board.</noscript>
   </div>
   <main id="operator-board" class="phalanx-board" hidden></main>

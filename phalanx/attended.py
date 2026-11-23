@@ -73,7 +73,7 @@ STAGES = {
         "actionable findings as changes_required in details.findings."
     ),
     "pr_revision": (
-        "The PR is open and ready for review; keep it ready. Fix review_findings in the context on top of "
+        "The PR is open; keep its draft or ready state. Fix review_findings in the context on top of "
         "the current HEAD. To integrate the target branch or commits someone else pushed to the PR branch, "
         "merge them, or rebase if every commit on the branch is your own. Self-review only the new diff, "
         "rerun the failed checks and the local checks covering the files you changed, and commit. Put the "
