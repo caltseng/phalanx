@@ -140,6 +140,30 @@ def recheck(db, item_id, execution_id, payload):
         raise intake.Conflict("No scheduled external recheck is active")
     if due["due_at_ms"] > int(time() * 1000):
         raise intake.Conflict("External recheck is not due yet")
+    return _admit(db, row, state, due)
+
+
+def admit_due_rechecks(db, limit):
+    """Queue up to `limit` due rechecks in the caller's single write transaction."""
+    rows = db.execute(
+        """SELECT e.*, h.details_json, due.due_at_ms
+           FROM external_rechecks AS due
+           JOIN executions AS e ON e.id=due.execution_id AND e.version=due.version
+           JOIN transition_history AS h ON h.execution_id=e.id AND h.version=e.version
+           WHERE due.due_at_ms <= ? AND e.status = 'waiting_for_external'
+             AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id=e.id)
+           ORDER BY due.due_at_ms, due.execution_id LIMIT ?""",
+        (int(time() * 1000), limit),
+    ).fetchall()
+    admitted = []
+    for row in rows:
+        updated = _admit(db, row, intake.STATE.validate_json(row["state_json"]), row)
+        admitted.append({"item_id": row["item_id"], "execution_id": row["id"],
+                         "version": updated["version"]})
+    return admitted
+
+
+def _admit(db, row, state, due):
     details = _gate_details(due["details_json"])
     details["due_at_ms"] = due["due_at_ms"]
     details["wait_version"] = row["version"]

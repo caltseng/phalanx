@@ -192,6 +192,12 @@ def due_rechecks(request: Request, limit: BatchLimit = 50):
     return run(request, waits.due_rechecks, limit)
 
 
+@router.post("/runner/due-rechecks/admit", dependencies=[Depends(require_runner)])
+def admit_due_rechecks(request: Request, limit: BatchLimit = 100):
+    # Retrying is safe without a key: it only admits rechecks that are still due.
+    return run(request, waits.admit_due_rechecks, limit, write=True)
+
+
 @router.post("/items/{item_id}/executions/{execution_id}/recheck",
              dependencies=[Depends(require_runner)])
 def recheck(request: Request, item_id: Identifier, execution_id: Identifier,

@@ -399,6 +399,39 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="dupe")[0], 409)
         self.assertEqual(self.get(due_path, RUNNER), (200, []))
 
+    def test_due_rechecks_are_admitted_in_one_batch(self):
+        first, intake_body, _, _ = self.create("ready_for_check_in")
+        status, second = self.submit("/v1/items", intake_body, key="second")
+        self.assertEqual(status, 201, second)
+        waiting = []
+        for index, item in enumerate((first, second)):
+            body = {key: value for key, value in self.claim(item, item["execution"]).items()
+                    if key != "outcome"}
+            body.update(reason="Waiting for CI", gate="ci", retry_after_seconds=60,
+                        revision={"head": "head-one", "base": "base-one"})
+            status, updated = self.submit(
+                f"/v1/items/{item['id']}/executions/{item['execution']['id']}/external-wait",
+                body, token=RUNNER, lease=LEASE, key=f"wait-{index}")
+            self.assertEqual(status, 200, updated)
+            waiting.append(updated)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE external_rechecks SET due_at_ms=1 WHERE execution_id=?",
+                       (first["execution"]["id"],))
+        admit = "/v1/runner/due-rechecks/admit?limit=100"
+        self.assertEqual(self.submit(admit, {})[0], 403)
+        status, admitted = self.submit(admit, {}, token=RUNNER)
+        self.assertEqual(status, 200, admitted)
+        self.assertEqual(admitted, [{"item_id": first["id"], "execution_id": first["execution"]["id"],
+                                     "version": waiting[0]["version"] + 1}])
+        self.assertEqual(self.get(f"/v1/items/{first['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "queued")
+        self.assertEqual(self.get(f"/v1/items/{second['id']}", OWNER)[1]["execution"]["state"]["status"],
+                         "waiting_for_external")
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE external_rechecks SET due_at_ms=1")
+        self.assertEqual(len(self.submit(admit, {}, token=RUNNER)[1]), 1)
+        self.assertEqual(self.submit(admit, {}, token=RUNNER), (200, []))
+
     def test_external_wait_limit_asks_owner_after_elapsed_time_on_one_revision(self):
         item, _, _, route = self.create("ready_for_check_in")
         claim = self.claim(item, item["execution"])

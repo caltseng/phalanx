@@ -618,17 +618,8 @@ class CaptainLoop:
 
     def _recheck_due(self):
         """Requeue published gates whose scheduled observation time has arrived."""
-        errors = []
-        for row in self.api.call("/runner/due-rechecks"):
-            route = (f"/items/{quote(row['item_id'], safe='')}/executions/"
-                     f"{quote(row['execution_id'], safe='')}/recheck")
-            try:
-                self.api.call(route, {"expected_version": row["version"]},
-                              key=f"recheck:{row['execution_id']}:{row['version']}")
-            except RunnerError as error:
-                errors.append(f"{row['item_id']}: {error}")
-        if errors:
-            raise RunnerError("; ".join(errors))
+        while len(self.api.call("/runner/due-rechecks/admit?limit=100", {})) == 100:
+            pass
 
     def run(self, stop: Event):
         # Only one loop relays launches from this journal. Manual receipt and
