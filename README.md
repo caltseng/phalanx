@@ -104,6 +104,9 @@ requests due rechecks each poll. Pending draft and ready checks are rechecked ev
 the owner is asked; a reply starts a fresh window. A missing or
 broken policy waits for an owner reply that
 names the problem, and startup preflight reports a malformed file before any claim.
+Worker packets name the repository's first configured local check command as `checks_command`
+and its executable as `checks_interpreter`, and the prompt tells workers to run tests with it
+rather than borrow another checkout's virtual environment or install packages.
 
 For a `checked_in` item, `pr_reconciliation` records the merge intent once every gate is
 current, and `check_in` merges

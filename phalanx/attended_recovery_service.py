@@ -141,6 +141,7 @@ def run_recovery(root, runner_id, api, journal, *, observations=(), discovery_co
     packet = WorkPacket(**{
         **saved, "attempt_id": UUID(saved["attempt_id"]), "worktree": Path(saved["worktree"]),
         "dependencies": tuple(saved.get("dependencies", ())),
+        "checks_command": tuple(saved.get("checks_command", ())),
     }) if saved else None
 
     def decision(**kwargs):

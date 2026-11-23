@@ -116,7 +116,8 @@ def reconcile(record, *, runner_id, packet: WorkPacket | None, expired,
         serialized = {**asdict(packet), "attempt_id": str(packet.attempt_id),
                       "worktree": str(packet.worktree)}
         saved = record.get("packet") or {}
-        saved = {**saved, "dependencies": tuple(saved.get("dependencies", ()))}
+        saved = {**saved, "dependencies": tuple(saved.get("dependencies", ())),
+                 "checks_command": tuple(saved.get("checks_command", ()))}
         if (saved != serialized or packet.attempt_id.hex != attempt.replace("-", "")
                 or packet.item_id != claim["item_id"]
                 or packet.stage != claim["execution"]["state"]["stage"]

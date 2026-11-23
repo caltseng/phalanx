@@ -217,3 +217,10 @@ pre-validation removes the section. These notes go through a runner-local outbox
 keyed on the revision and findings keeps retries from posting twice, and a
 failed write retries up to five times without blocking the item. Pending notes
 appear as `pr_notes` in the `prepare` output.
+
+Worker packets for the repository carry the first configured local check's
+command as `checks_command` and its executable as `checks_interpreter`. The
+worker prompt tells workers to run tests with that interpreter and its options
+and never to use another checkout's virtual environment or install packages.
+Both fields are omitted when no policy or local check command is configured, or
+the policy cannot be loaded; the validation stages report that error.

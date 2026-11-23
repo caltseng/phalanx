@@ -78,6 +78,7 @@ class WorkPacket:
     base_branch: str | None = None
     report_checkpoint: dict[str, str] | None = None
     dependencies: tuple[dict, ...] = ()
+    checks_command: tuple[str, ...] = ()
 
     @property
     def marker(self) -> str:
@@ -160,7 +161,16 @@ class WorkerHandoff:
             "handoff": packet.handoff,
             **({"report_checkpoint": packet.report_checkpoint} if packet.report_checkpoint else {}),
             "dependencies": packet.dependencies,
+            **({"checks_interpreter": packet.checks_command[0], "checks_command": list(packet.checks_command)}
+               if packet.checks_command else {}),
         }, indent=2, ensure_ascii=False)
+        environment = """
+Run tests and checks with the packet's checks_interpreter, the runner's
+environment for this repository's local checks. Pass the interpreter options
+that precede the module or script in checks_command, the runner's own check.
+Never use another checkout's virtual environment or install packages. If a
+check needs something that interpreter lacks, report it instead of improvising.
+""" if packet.checks_command else ""
         outcomes = "\n".join(
             f"- {outcome}: {', '.join(fields)}"
             + (f" (optional: {', '.join(OPTIONAL_FIELDS[outcome])})" if outcome in OPTIONAL_FIELDS else "")
@@ -182,7 +192,7 @@ the packet as the explicit working directory for every repository command and
 target all repository edits there. Before writing, verify the Git root,
 current branch, and HEAD against the packet. If you cannot verify or target
 the worktree, report the workspace blocker and leave repository files untouched.
-
+{environment}
 Work packet:
 {assignment}
 

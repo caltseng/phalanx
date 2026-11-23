@@ -381,6 +381,7 @@ class AttendedRunner:
             dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps(context, ensure_ascii=False),
             handoff=json.dumps(input_reply, ensure_ascii=False) if input_reply is not None else "",
+            checks_command=self._checks_command(repo),
         )
         handoff = WorkerHandoff(packet, self.results)
         if os.path.lexists(handoff.result_path) or os.path.lexists(handoff.temporary_path):
@@ -396,6 +397,18 @@ class AttendedRunner:
         return {"status": "launch_intent", "marker": packet.marker, "host_id": record["host_id"],
                 "unverified_mappings": record["blocked"],
                 "session": handoff.launch_arguments(record["project_id"])}
+
+    def _checks_command(self, repo):
+        """Name the repository's first local check command so workers test in its environment."""
+        path = self.config.get("validation_policy")
+        if not path:
+            return ()
+        from .validation_policy import ValidationPolicyError, load_validation_policy
+        try:
+            checks = load_validation_policy(Path(path), repo).local_checks or ()
+        except ValidationPolicyError:
+            return ()  # The validation stages surface the policy error to the owner.
+        return next((check.argv for check in checks if check.argv), ())
 
     def _review_assignment(self, claim, state):
         """Bind the review to the exact PR revision whose passing gates queued it."""
@@ -528,6 +541,7 @@ class AttendedRunner:
         return WorkerHandoff(WorkPacket(**{
             **packet, "attempt_id": UUID(packet["attempt_id"]), "worktree": Path(packet["worktree"]),
             "dependencies": tuple(packet.get("dependencies", ())),
+            "checks_command": tuple(packet.get("checks_command", ())),
         }), self.results)
 
     def submit(self, marker, host_id, thread_id):

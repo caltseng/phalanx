@@ -635,6 +635,24 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         runner.submit(marker, "local", thread_id)
         self.assertEqual(self.api.posts[0][0]["candidate"], self.api.candidate)
 
+    def test_development_packet_names_the_checks_interpreter(self):
+        self.api.drop_claim = self.api.drop_result = False
+        self.api.stage = "development"
+        policy = self.root.parent / "validation-policy.json"
+        command = [sys.executable, "-B", "-m", "unittest"]
+        policy.write_text(json.dumps({"version": 1, "repositories": {"repo": {
+            "local_checks": [{"name": "unit tests", "argv": command}],
+            "draft_checks": [], "ready_checks": [],
+        }}}), encoding="utf-8")
+        self.config["validation_policy"] = str(policy)
+        prompt = self.runner().prepare()["session"]["prompt"]
+        packet = json.JSONDecoder().raw_decode(prompt.split("Work packet:\n", 1)[1])[0]
+        self.assertEqual((packet["checks_interpreter"], packet["checks_command"]), (sys.executable, command))
+        self.assertIn("Never use another checkout's", prompt)
+        # The journaled packet reloads for submission and recovery.
+        runner = self.runner()
+        self.assertEqual(runner._handoff(runner._snapshot()).packet.checks_command, tuple(command))
+
     def start_development(self):
         self.api.remote = "git@github.com:example/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", self.api.remote)
