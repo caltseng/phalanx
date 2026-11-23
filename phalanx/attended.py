@@ -6,7 +6,7 @@ import re
 import secrets
 import sqlite3
 from contextlib import closing, contextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -19,6 +19,7 @@ from . import report_execution as reports
 from .handoff import WorkerHandoff, WorkPacket
 from .pr_notes import PRNotes
 from .runner_errors import RunnerError
+from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES
 from .workspaces import WorkspaceError, WorkspaceManager, _file_lock
 
 
@@ -41,12 +42,17 @@ class RunnerAPI:
         self.token = token
         self.opener = build_opener(NoRedirect())
 
-    def call(self, path, body=None, *, lease=None, key=None, plain_text=False):
+    def call(self, path, body=None, *, lease=None, key=None, plain_text=False,
+             next_lease=None, next_stages=()):
         headers = {"Authorization": f"Bearer {self.token}"}
         if body is not None:
             headers["Content-Type"] = "application/json"
         if lease:
             headers["Phalanx-Lease"] = lease
+        if next_lease and next_stages:
+            # Offer to keep this slot for the next stage under a fresh lease.
+            headers["Phalanx-Next-Lease"] = next_lease
+            headers["Phalanx-Next-Stages"] = ",".join(next_stages)
         if key:
             headers["Idempotency-Key"] = key
         request = Request(self.base_url + "/v1" + path, headers=headers,
@@ -101,8 +107,7 @@ def development_candidate(record, packet, workspace, evidence: str) -> bool:
 
 
 # Runner-owned stages that need no worker session.
-RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
-                 "pr_reconciliation", "check_in")
+RUNNER_STAGES = tuple(sorted(map(str, RUNNER_ONLY_STAGES)))
 
 
 class AttendedRunner:
@@ -136,8 +141,12 @@ class AttendedRunner:
             record = json.loads(row[0]) if row else {}
             archived = record.copy() if "submission" in record and "cancel_stop" not in record else None
             result = action(record, db)
-            if archived is not None and not record:
+            # A continuation replaces the record with the next stage's claim.
+            continued = bool(archived and record
+                             and record.get("claim", {}).get("attempt_id") != archived["claim"]["attempt_id"])
+            if archived is not None and (not record or continued):
                 archived.pop("lease")
+                archived.pop("next_lease", None)
                 db.execute("CREATE TABLE IF NOT EXISTS completed (attempt_id TEXT PRIMARY KEY, record TEXT)")
                 db.execute("INSERT INTO completed VALUES (?, ?)",
                            (archived["claim"]["attempt_id"], json.dumps(archived)))
@@ -178,15 +187,16 @@ class AttendedRunner:
             raise RunnerError("No registered checkout passed verification; check local mappings and origins")
         return eligible, blocked
 
-    def prepare(self, *, draft=False, report_storage=False, stages=None):
+    def prepare(self, *, draft=False, report_storage=False, stages=None, continue_stages=None):
         # Only competing preparations of this slot wait here. Heartbeats and
         # other slots can still use the journal during HTTP and Git operations.
         with _file_lock(self.root / f"attended-prepare-{self.slot}.lock"):
-            result = self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages)
+            result = self._prepare_slot(draft=draft, report_storage=report_storage, stages=stages,
+                                        continue_stages=continue_stages)
         notes = PRNotes(self.root).flush(os.environ.get("PHALANX_GITHUB_TOKEN"))
         return {**result, "pr_notes": notes} if notes else result
 
-    def _prepare_slot(self, *, draft, report_storage, stages=None):
+    def _prepare_slot(self, *, draft, report_storage, stages=None, continue_stages=None):
         runner_stage = "pr_creation" if draft else reports.STORAGE if report_storage else None
         if stages is not None and (
             runner_stage or not stages or set(stages) - (set(STAGES) | set(RUNNER_STAGES))
@@ -199,18 +209,30 @@ class AttendedRunner:
         if not snapshot:
             if draft and not github_token:
                 raise RunnerError("Set PHALANX_GITHUB_TOKEN in the runner environment for draft publication")
-            if self.slot > self.capacity:
+            claimed = sorted(stages) if stages is not None else [runner_stage] if runner_stage else sorted(STAGES)
+            lane = self.slot > self.capacity
+            if self.slot > self.capacity + RUNNER_ONLY_SLOTS:
                 raise RunnerError("Slot exceeds local capacity; use an enabled slot")
+            if lane and (set(claimed) | set(continue_stages or ())) - set(RUNNER_STAGES):
+                raise RunnerError("Slots above capacity run only runner-only stages")
             eligible, blocked = self._verified_mappings(draft=draft)
 
             def reserve(record, db):
-                if db.execute("SELECT count(*) FROM slot").fetchone()[0] >= self.capacity:
+                # Slots above capacity form the small runner-only lane and are counted apart.
+                # A reservation counts toward the lane only if it holds just runner-only stages,
+                # so a general reservation left above a reduced capacity still counts toward it.
+                limit = RUNNER_ONLY_SLOTS if lane else self.capacity
+                used = sum(
+                    (slot > self.capacity and set(json.loads(row).get("stages") or ()) <= set(RUNNER_STAGES)) == lane
+                    for slot, row in db.execute("SELECT id, record FROM slot"))
+                if used >= limit:
                     raise RunnerError("Local capacity is full; inspect status and reconcile active slots")
                 record.update(lease=secrets.token_urlsafe(32), runner_id=self.config["runner_id"],
-                              repositories=eligible, blocked=blocked,
-                              stages=sorted(stages) if stages is not None else
-                              [runner_stage] if runner_stage else sorted(STAGES),
+                              repositories=eligible, blocked=blocked, stages=claimed,
                               slots=self.capacity)
+                if continue_stages:
+                    record.update(next_lease=secrets.token_urlsafe(32),
+                                  continue_stages=sorted(continue_stages))
                 return record
 
             snapshot = self._transaction(reserve)
@@ -295,7 +317,7 @@ class AttendedRunner:
         def finish(record, db):
             if record.get("lease") == snapshot["lease"]:
                 if status["status"] == "draft_submitted":
-                    record.clear()
+                    self._settle(record, status["execution"])
                 else:
                     record["draft_status"] = status
 
@@ -343,7 +365,10 @@ class AttendedRunner:
             base_ref = base_sha
         workspace = manager.prepare(claim["item_id"], base=base_ref)
         candidate = state.get("candidate")
-        if candidate and candidate != workspace.head:
+        # A development reattempt may build on commits a rejected attempt left on the item branch.
+        if candidate and candidate != workspace.head and not (
+            stage == "development" and manager.contains_base(workspace, candidate)
+        ):
             raise RunnerError("Worktree HEAD differs from the current server candidate; reconcile before launch")
         review = self._review_assignment(claim, state) if stage == "adversarial_review" else None
         input_reply = claim.get("input_reply")
@@ -355,6 +380,11 @@ class AttendedRunner:
                 report_checkpoint["findings"] = findings
         context = {field: request.get(field, []) for field in ("context_links", "acceptance_criteria")}
         requirements = STAGES[stage]
+        base_revision = record["development_base"]["sha"] if stage == "development" else None
+        if base_revision:
+            requirements += (f" The candidate must contain base_revision {base_revision}, the pinned {base}."
+                             " If HEAD lacks it, integrate it with a normal merge of that commit and resolve "
+                             "any conflicts before committing; never rebase or rewrite history.")
         if stage in ("development", "pr_revision") and state.get("findings"):
             context["review_findings"] = state["findings"]
             if stage == "development":
@@ -376,7 +406,7 @@ class AttendedRunner:
             state_version=execution["version"], stage=stage, repository=repo,
             worktree=workspace.path, branch=workspace.branch, expected_revision=workspace.head,
             goal=request["goal"], output_type="report" if request["target"] == "report" else "pull_request",
-            evidence_requirements=requirements, base_branch=base,
+            evidence_requirements=requirements, base_branch=base, base_revision=base_revision,
             report_checkpoint=report_checkpoint,
             dependencies=tuple(claim.get("dependencies", ())),
             context=json.dumps(context, ensure_ascii=False),
@@ -584,11 +614,29 @@ class AttendedRunner:
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
-                    if not development_candidate(record, packet, workspace, evidence):
+                    base = record.get("development_base")
+                    merged = (base is not None and evidence != workspace.head and not workspace.dirty
+                              and manager.merged_base(workspace, evidence, base["sha"]))
+                    worker = replace(workspace, head=evidence) if merged else workspace
+                    if not development_candidate(record, packet, worker, evidence):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
-                    if "development_base" in record:
-                        manager.verify_base_ancestry(workspace, record["development_base"]["sha"])
-                    body["candidate"] = workspace.head
+                    conflict = None
+                    if base is not None and not manager.contains_base(workspace, base["sha"]):
+                        conflict = manager.integrate_base(
+                            workspace, base["sha"], f"Merge pinned {base['ref']} {base['sha']} into the candidate")
+                        workspace = manager.inspect(packet.item_id)
+                    if conflict is None:
+                        if base is not None:
+                            manager.verify_base_ancestry(workspace, base["sha"])
+                        body["candidate"] = workspace.head
+                    else:
+                        # Return the attempt to development through the bounded retry with a visible reason.
+                        body["outcome"] = "failed"
+                        body["failure_reason"] = (
+                            f"Candidate {evidence} does not contain the pinned development base "
+                            f"{base['ref']} {base['sha']}, and the runner could not merge it cleanly. "
+                            "The next development attempt must merge that base and resolve the conflicts."
+                            f"\n\n{conflict}")[:16000]
                 else:
                     body["report_markdown"] = result.details["evidence"]
             elif result.outcome == "failed":
@@ -658,15 +706,38 @@ class AttendedRunner:
         claim = snapshot["claim"]
         route = submission.get("route", "result")
         path = f"/items/{claim['item_id']}/executions/{claim['execution']['id']}/{route}"
-        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=key)
+        response = self.api.call(path, submission["body"], lease=snapshot["lease"], key=key,
+                                 **self.offer(snapshot))
 
         def finish(record, db):
             # A concurrent idempotent submit may already have archived this attempt.
             if record.get("lease") == snapshot["lease"]:
-                record.clear()
+                self._settle(record, response)
 
         self._transaction(finish)
         return response
+
+    @staticmethod
+    def offer(record):
+        """Headers that let the server keep this slot for the item's next runnable stage."""
+        if not record.get("next_lease") or not record.get("continue_stages"):
+            return {}
+        return {"next_lease": record["next_lease"], "next_stages": record["continue_stages"]}
+
+    @staticmethod
+    def _settle(record, response):
+        """End this attempt's record, or install the server's continuation in the same slot."""
+        continuation = response.get("continuation") if isinstance(response, dict) else None
+        if not continuation or continuation.get("status") != "claimed" or not record.get("next_lease"):
+            record.clear()
+            return
+        kept = {field: record[field] for field in (
+            "runner_id", "repositories", "blocked", "stages", "slots", "continue_stages") if field in record}
+        lease = record["next_lease"]
+        record.clear()
+        record.update(kept, lease=lease, claim=continuation,
+                      lease_expires_at=continuation["lease_expires_at"],
+                      next_lease=secrets.token_urlsafe(32))
 
 
 def add_attended_command(commands):

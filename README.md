@@ -78,9 +78,12 @@ Save a local JSON config such as:
 }
 ```
 
-Local capacity defaults to 1. Use numbered slots from 1 through the configured
-capacity. The server still applies dispatch pause, stage and item eligibility,
-and its per-runner capacity. A local capacity reduction applies to new
+Local capacity defaults to 1 and bounds agent worker sessions. The runner
+holds two more numbered slots for runner-only stages (PR publication, checks,
+promotion, reconciliation, check-in and report storage), so they run while
+every worker slot is busy. Use numbered slots from 1 through capacity plus 2.
+The server still applies dispatch pause, stage and item eligibility, its
+per-runner capacity for worker stages, and a runner-only lane of 2. A local capacity reduction applies to new
 reservations. Existing reservations in higher-numbered slots can still be
 inspected, renewed, and submitted, and count toward local capacity. When
 upgrading the bridge, finish any in-flight CLI commands and use the new
@@ -105,7 +108,11 @@ worktree, `pr_promotion` verifies draft checks and marks the primary PR ready, a
 requests due rechecks each poll. Pending draft and ready checks are rechecked every
 `"check_recheck_seconds"` (optional runner config, 5 to 86400, default 30). After
 `"check_wait_limit_seconds"` (60 to 2592000, default 7200) pending on one head and base,
-the owner is asked; a reply starts a fresh window. A missing or
+the owner is asked; a reply starts a fresh window. At most `"local_check_capacity"`
+(1 to 64, default 1) validations run local checks at once on the runner host; the rest wait
+with the reason "Waiting for local check capacity" without using their check timeout. A local
+check that times out with no identified failure retries validation twice with backoff before
+returning to development. A missing or
 broken policy waits for an owner reply that
 names the problem, and startup preflight reports a malformed file before any claim.
 
@@ -218,8 +225,11 @@ check-in claims are excluded without `PHALANX_GITHUB_TOKEN`,
 and validation claims without `validation_policy`. The server's atomic eligible-stage claim still
 applies pause, capacity, priority, repository, dependency and affinity gates.
 Worker claims require verified runtime project mappings; runner-only claims retain all
-Git-verified mappings even when their runtime is unavailable. The loop alternates
-which group it polls first and preserves each pending claim's exact original
+Git-verified mappings even when their runtime is unavailable. Slots 1..`capacity`
+poll worker stages first and fall back to runner-only stages. Two extra slots,
+`capacity`+1 and `capacity`+2, form the runner-only lane: they claim and continue only
+runner-only stages, so promotion and validation never wait behind long workers.
+The loop preserves each pending claim's exact original
 filters and secret. One asynchronous project discovery pass per poll verifies
 each distinct host/project/checkout mapping once and shares the results across
 slot admission and launch checks. Failed discovery is retried on the next poll.
@@ -383,6 +393,46 @@ observes, the loop retracts its untaken `observe` requests, so the Captain never
 answers for a finished worker. Never rerun a request
 whose outcome you did not record; answer it from discovery instead.
 
+#### Standing relay serve
+
+The relay drains only while some agent turn is running the cycle above. A
+runtime's session tools can be called only from inside an agent turn, so the
+loop cannot serve or wake the relay itself. Make a standing serve part of muster
+setup:
+
+- Serve from a dedicated relay chat that repeats `relay next` without ending
+  its turn. Keep owner conversation in another chat so it never waits on the
+  relay.
+- Attach the runtime's own scheduler to that chat so a wake restarts serving
+  whenever its turn ended (see the runtime mapping below). Each wake runs the
+  cycle until it is told to stop. Overlapping servers are safe: `relay next`
+  hands each request to exactly one taker, so a wake that lands while another
+  server is active takes only requests nobody else took.
+
+When no server has polled or answered for `relay_stall_seconds` (180 seconds)
+while a request waits, the loop reports `relay_stalled` with the time of the
+first untaken request. It adds the reason to the lease renewal of every item
+whose worker needs the relay, so the operator board shows it as each item's
+wait reason. It then notifies the owner. The first poll or answer after that
+clears the stall. The loop then reports `relay_serving`, clears the board
+reasons on the next renewal, and notifies the owner again. It resumes by itself
+with no restart: queued observations are taken where they wait, and an expired
+launch or resolution is queued afresh on the next poll.
+
+Set `"notify_command"` in the runner config to an executable and its arguments,
+such as `["python", "notify.py"]`, to receive each `relay_stalled` and
+`relay_serving` event as one JSON object on stdin. Each event has `event`,
+`reason`, `items`, `runner_id` and `at`. The command runs without the Phalanx
+token variables and has 30 seconds. A failure shows as `notify_blocked` in loop
+status. The stall status itself is always written and emitted.
+
+Recovery bounds: a stall shows within `relay_stall_seconds`, plus one loop poll
+and one heartbeat (about four minutes with defaults). Once a wake is due,
+draining resumes after the wake interval, plus the runtime's turn-start delay,
+plus up to one loop poll. The turn-start delay covers waiting behind a running
+turn of that chat, and the app or terminal must be open to fire the wake. An
+expired request also costs at most one more poll to requeue.
+
 #### Runtime mapping
 
 Each runtime serves the same three operations with its own tools. Set the
@@ -398,12 +448,27 @@ in their first muster and record any correction here.
 | GitHub Copilot CLI | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `copilot` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Pass each session with its state to the observe helper with `--runtime copilot`, which reads `~/.copilot/session-state/<id>/events.jsonl`. |
 | Claude Code | Verify the checkout exists and is the configured root; the project ID is the configured value. | Start `claude` in a new visible terminal in the checkout with `prompt` as its first prompt. Return its session UUID as `thread_id`. | Read the session transcript under `~/.claude/projects/`, or find the marker in it. |
 
+Standing relay serve per runtime:
+
+- **GitHub Copilot app:** in the relay chat, attach a session automation with
+  `save_session_automation` (`interval: "minutes"`, `every_minutes: 5`). Its
+  prompt is to serve the relay until told to stop. It wakes the same chat with its existing
+  context. A wake that arrives during a running turn waits for that turn. Worst
+  case, draining resumes about 5 minutes plus turn-start delay after the relay
+  stopped, while the app is open.
+- **Codex desktop app, GitHub Copilot CLI, Claude Code:** unverified. Use the
+  runtime's own scheduled or recurring prompt if it has one, or an OS scheduler
+  that resumes the relay session with a serve prompt. Record the mechanism and
+  its measured bound here after the first muster.
+
 **Acceptance gap:** The relay and fixture pass one shared contract test, and
 the PH-11b muster on the GitHub Copilot app accepted it natively: two real
 visible workers, a worker question answered through the Captain chat, and
 Captain restarts around a receipt, recorded in
-[the worker recovery report](docs/pilots/worker-recovery.md). Wider PR stages,
-owner notifications/due external rechecks remain integration work; this is not
+[the worker recovery report](docs/pilots/worker-recovery.md). Relay stall
+reporting and overlapping servers are covered by tests with a simulated
+scheduled wake. The runtime scheduler wake itself still needs a live muster.
+Wider PR stages and due external rechecks remain integration work; this is not
 full PH-11 or v1 acceptance.
 
 ### Load trusted validation policy
@@ -500,7 +565,7 @@ capacity and recovery within that trusted role.
 | Method and path | Request and behavior |
 | --- | --- |
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
-| `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
+| `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner) for agent worker stages. Runner-only stages use a separate lane of 2 per runner. Reductions take effect for the next claim and leave all reservations in place. |
 | `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, by default every 60 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |
@@ -522,7 +587,8 @@ An intake item can set `runner_affinity` to require a specific runner ID.
 For matching repositories and affinity, urgency rises one band per aging
 interval. Within the effective band, the server chooses the oldest eligible
 timestamp and breaks ties by item ID. Execution views report
-`ready_since_ms` and `retry_at_ms` as Unix milliseconds. A reconciled retry
+`ready_since_ms` and `retry_at_ms` as Unix milliseconds, and `retry_count`
+as the retries scheduled in the current stage. A reconciled retry
 starts accruing age when its delay elapses. A newly queued stage gets its
 own clock. The claim index excludes blocked stages. A stage begins to age
 once its last prerequisite clears and any retry delay elapses.

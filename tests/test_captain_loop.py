@@ -7,7 +7,7 @@ import subprocess
 import sqlite3
 import sys
 from tempfile import TemporaryDirectory
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 import time
 import unittest
 from unittest.mock import ANY, patch
@@ -16,9 +16,12 @@ from uuid import uuid4
 from phalanx.attended import AttendedRunner, RunnerAPI, RunnerError
 from phalanx.attended_recovery_service import unlaunched_proof
 from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
-from phalanx.captain_loop import CaptainLoop
+from phalanx.captain_loop import CaptainLoop, command_notifier
+from phalanx.captain_relay import RelayTransport, respond, take_next
+from phalanx.transitions import RUNNER_ONLY_SLOTS
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
+from timing import WAIT_SECONDS
 
 
 class QueueAPI:
@@ -35,7 +38,7 @@ class QueueAPI:
         self.drop_result = False
         self.lock = Lock()
 
-    def call(self, route, body=None, *, lease=None, key=None):
+    def call(self, route, body=None, *, lease=None, key=None, **offer):
         with self.lock:
             if route == "/repositories":
                 return [{"id": "repo", "remote": str(self.checkout)}]
@@ -121,7 +124,7 @@ class NativeFixture:
         if operation == "observe":
             self.waits.append(arguments)
             if self.gate and any(ref["slot"] == self.gated_slot for ref in arguments["references"]):
-                self.gate.wait(5)
+                self.gate.wait(WAIT_SECONDS)
             rows = []
             for ref in arguments["references"]:
                 receipt = self.threads.get(ref["marker"])
@@ -172,7 +175,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.addCleanup(loop.close)
         return loop
 
-    def spin(self, loop, condition, timeout=30):
+    def spin(self, loop, condition, timeout=WAIT_SECONDS):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             loop.step()
@@ -197,7 +200,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         def prepare(manager, item, **kwargs):
             if item == "first":
                 entered.set()
-                git_gate.wait(5)
+                git_gate.wait(WAIT_SECONDS)
             return original(manager, item, **kwargs)
         self.native.gate = native_gate
         self.native.gated_slot = 3
@@ -266,6 +269,72 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(len(undelivered), 1)
         self.assertEqual([launch["marker"] for launch in self.native.launches], undelivered)
         self.assertEqual(loop._records()[1]["relay"], {"marker": undelivered[0], "status": "started"})
+
+    def test_relay_stall_is_visible_and_a_scheduled_wake_drains_without_restart(self):
+        self.api.waiting = ["first"]
+        relay = self.directory / "relay"
+        taken, notes = [], []
+        def serve(stop):
+            while not stop.is_set():
+                request = take_next(relay, wait=0.05, poll=0.005)
+                if "id" not in request:
+                    continue
+                taken.append(request["id"])
+                try:
+                    respond(relay, request["id"], response=self.native(request["operation"], request["arguments"]))
+                except RunnerError as error:
+                    respond(relay, request["id"], error=str(error))
+        def start(count):
+            stop = Event()
+            threads = [Thread(target=serve, args=(stop,)) for _ in range(count)]
+            for thread in threads:
+                thread.start()
+            def halt():
+                stop.set()
+                for thread in threads:
+                    thread.join(30)
+            self.addCleanup(halt)
+            return halt
+        loop = CaptainLoop(self.root, self.config, self.api, BridgeAdapter(RelayTransport(relay, timeout=30, poll=0.01)),
+                           poll_seconds=0.01, heartbeat_seconds=0.02, batch_size=1, relay_stall_seconds=0.3,
+                           emit=self.events.append, notify=notes.append)
+        self.addCleanup(loop.close)
+        def first_slot():
+            # Either slot may claim "first"; slots claim concurrently.
+            return next((slot for slot, row in loop._records().items()
+                         if row.get("claim", {}).get("item_id") == "first" and row.get("receipt")), None)
+        halt = start(1)
+        self.spin(loop, lambda: first_slot() is not None)
+        halt()
+        packet = self.write_result(first_slot())
+        self.native.stopped.add(packet.marker)
+        self.api.waiting.append("second")
+        stalled = "Captain relay has taken no request"
+        self.spin(loop, lambda: any(stalled in (blocker or "") for blocker in self.api.blockers)
+                  and [note["event"] for note in notes] == ["relay_stalled"])
+        self.assertTrue(any(event["status"] == "relay_stalled" for event in self.events))
+        self.assertIn("first", notes[0]["items"])
+        self.assertEqual((self.api.submissions, len(self.native.launches)), ([], 1))
+
+        start(2)  # A scheduled wake overlapping a server that is already running.
+        self.spin(loop, lambda: bool(self.api.submissions) and len(self.native.launches) == 2
+                  and [note["event"] for note in notes] == ["relay_stalled", "relay_serving"])
+        self.assertTrue(any(event["status"] == "relay_serving" for event in self.events))
+        self.assertEqual(len(taken), len(set(taken)))
+        self.assertEqual(len({launch["marker"] for launch in self.native.launches}), 2)
+        self.spin(loop, lambda: self.api.blockers[-1] is None)
+
+    def test_notify_command_gets_the_event_without_runner_secrets(self):
+        output = self.directory / "event.json"
+        script = ("import json, os, sys; event = json.load(sys.stdin); "
+                  "event['token'] = os.environ.get('PHALANX_RUNNER_TOKEN'); "
+                  f"open({str(output)!r}, 'w').write(json.dumps(event))")
+        with patch.dict(os.environ, {"PHALANX_RUNNER_TOKEN": "secret"}):
+            command_notifier([sys.executable, "-c", script])({"event": "relay_stalled"})
+        self.assertEqual(json.loads(output.read_text()), {"event": "relay_stalled", "token": None})
+        self.assertIsNone(command_notifier(None))
+        with self.assertRaises(subprocess.CalledProcessError):
+            command_notifier([sys.executable, "-c", "raise SystemExit(3)"])({})
 
     def test_pending_claim_replays_original_filters_and_secret(self):
         self.api.waiting = ["first"]
@@ -392,7 +461,10 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "Transient post-packet"):
             loop._prepare(1)
         original = loop._records()[1]
-        claim_requests = len(self.api.requests)
+        # Only the runner-only lane keeps polling; the original worker claim is never repeated.
+        def worker_claims():
+            return sum("report_drafting" in body["stages"] for body, _ in self.api.requests)
+        claim_requests = worker_claims()
         self.assertNotIn("relay", original)
         self.assertFalse(self.native.launches)
         self.spin(loop, lambda: bool(loop._records()[1].get("receipt")))
@@ -401,7 +473,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             time.sleep(0.01)
         resumed = loop._records()[1]
         self.assertEqual(len(self.native.launches), 1)
-        self.assertEqual(len(self.api.requests), claim_requests)
+        self.assertEqual(worker_claims(), claim_requests)
         self.assertEqual(resumed["packet"], original["packet"])
         self.assertEqual(resumed["lease"], original["lease"])
         self.assertEqual(resumed["started_at"], original["started_at"])
@@ -693,6 +765,56 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertTrue(any(row["status"] == "unmatched_attempts"
                             for row in blocked.runner.status(all_slots=True)["loop_status"]))
 
+    def test_runner_only_lane_claims_beside_full_agent_slots_without_touching_workers(self):
+        for capacity in (1, 5, 10):
+            with self.subTest(capacity=capacity):
+                self.setUp()
+                self.config["capacity"] = capacity
+                storage = [f"storage-{n}" for n in range(RUNNER_ONLY_SLOTS + 1)]
+                workers = [f"worker-{n}" for n in range(capacity + 1)]
+                # Runner-only work ranks first, but general slots still fill with agent workers.
+                self.api.waiting = storage + workers
+                self.api.stages.update(dict.fromkeys(storage, "report_storage"))
+                gate, lock, stored, running = Event(), Lock(), [], []
+                peak = [0]
+                def store(runner, snapshot):
+                    with lock:
+                        stored.append((runner.slot, snapshot["claim"]["item_id"]))
+                        running.append(runner.slot)
+                        peak[0] = max(peak[0], len(running))
+                    gate.wait(WAIT_SECONDS)
+                    with lock:
+                        running.remove(runner.slot)
+                    runner._transaction(lambda record, db: record.clear())
+                    return {"status": "report_storage_submitted"}
+                with patch.object(AttendedRunner, "_store_report", store):
+                    loop = self.loop()
+                    try:
+                        self.spin(loop, lambda: len(self.native.launches) == capacity
+                                  and len(stored) == RUNNER_ONLY_SLOTS)
+                        launched = {slot: record["claim"]["attempt_id"]
+                                    for slot, record in loop._records().items() if slot <= capacity}
+                        for _ in range(20):
+                            loop.step()
+                            time.sleep(0.01)
+                        self.assertEqual(set(launched), set(range(1, capacity + 1)))
+                        self.assertEqual({slot for slot, _ in stored},
+                                         set(range(capacity + 1, capacity + RUNNER_ONLY_SLOTS + 1)))
+                        self.assertEqual((peak[0], len(stored)), (RUNNER_ONLY_SLOTS, RUNNER_ONLY_SLOTS))
+                        self.assertEqual(self.api.waiting, [storage[-1], workers[-1]])
+                        gate.set()
+                        # Agent slots stay full; the lane admits the next runner-only stage.
+                        self.spin(loop, lambda: len(stored) == len(storage))
+                        self.assertEqual(stored[-1], (stored[-1][0], storage[-1]))
+                        self.assertGreater(stored[-1][0], capacity)
+                        self.assertEqual(len(self.native.launches), capacity)
+                        self.assertEqual({slot: record["claim"]["attempt_id"] for slot, record
+                                          in loop._records().items() if slot <= capacity}, launched)
+                        self.assertEqual(self.api.waiting, [workers[-1]])
+                    finally:
+                        gate.set()
+                        loop.close()
+
     def test_unmatched_attempt_reserves_capacity_without_blocking_other_slot(self):
         self.api.expired = [{"attempt_id": "unmatched", "item_id": "missing"}]
         loop = self.loop()
@@ -874,7 +996,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         gate, entered = Event(), Event()
         def draft(runner, snapshot, token):
             entered.set()
-            gate.wait(5)
+            gate.wait(WAIT_SECONDS)
             runner._transaction(lambda record, db: record.clear())
             return {"status": "draft_submitted"}
         loop = self.loop()
@@ -909,7 +1031,6 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             return original_call(route, body, **kwargs)
         self.api.call = call
         loop = self.loop()
-        loop.admission[1] = "worker"
         def store(runner, snapshot):
             self.assertEqual(snapshot["claim"]["request"]["repository_id"], "repo")
             runner._transaction(lambda record, db: record.clear())
@@ -1121,7 +1242,8 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual(runner.renew()["attempt_id"], snapshot["claim"]["attempt_id"])
         packet = self.write_result(1)
         self.native.stopped.add(packet.marker)
-        self.spin(restarted, lambda: not runner._snapshot())
+        self.spin(restarted, lambda: ((runner._snapshot().get("claim") or {}).get("execution") or {})
+                  .get("state", {}).get("stage") == "report_review")
         restarted.close()
         execution = self.get(f"/v1/items/{item['id']}", OWNER)[1]["execution"]
         self.assertEqual(execution["state"]["stage"], "report_review")
