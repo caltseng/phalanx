@@ -78,9 +78,12 @@ Save a local JSON config such as:
 }
 ```
 
-Local capacity defaults to 1. Use numbered slots from 1 through the configured
-capacity. The server still applies dispatch pause, stage and item eligibility,
-and its per-runner capacity. A local capacity reduction applies to new
+Local capacity defaults to 1 and bounds agent worker sessions. The runner
+holds two more numbered slots for runner-only stages (PR publication, checks,
+promotion, reconciliation, check-in and report storage), so they run while
+every worker slot is busy. Use numbered slots from 1 through capacity plus 2.
+The server still applies dispatch pause, stage and item eligibility, its
+per-runner capacity for worker stages, and a runner-only lane of 2. A local capacity reduction applies to new
 reservations. Existing reservations in higher-numbered slots can still be
 inspected, renewed, and submitted, and count toward local capacity. When
 upgrading the bridge, finish any in-flight CLI commands and use the new
@@ -222,8 +225,11 @@ check-in claims are excluded without `PHALANX_GITHUB_TOKEN`,
 and validation claims without `validation_policy`. The server's atomic eligible-stage claim still
 applies pause, capacity, priority, repository, dependency and affinity gates.
 Worker claims require verified runtime project mappings; runner-only claims retain all
-Git-verified mappings even when their runtime is unavailable. The loop alternates
-which group it polls first and preserves each pending claim's exact original
+Git-verified mappings even when their runtime is unavailable. Slots 1..`capacity`
+poll worker stages first and fall back to runner-only stages. Two extra slots,
+`capacity`+1 and `capacity`+2, form the runner-only lane: they claim and continue only
+runner-only stages, so promotion and validation never wait behind long workers.
+The loop preserves each pending claim's exact original
 filters and secret. One asynchronous project discovery pass per poll verifies
 each distinct host/project/checkout mapping once and shares the results across
 slot admission and launch checks. Failed discovery is retried on the next poll.
@@ -577,7 +583,7 @@ capacity and recovery within that trusted role.
 | Method and path | Request and behavior |
 | --- | --- |
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results, and recovery continue. |
-| `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner). Reductions take effect for the next claim and leave all reservations in place. |
+| `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner) for agent worker stages. Runner-only stages use a separate lane of 2 per runner. Reductions take effect for the next claim and leave all reservations in place. |
 | `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
 | `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, by default every 60 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
 | `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version, and reconciliation action. |

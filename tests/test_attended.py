@@ -26,6 +26,7 @@ from phalanx.finalization import attempt
 from phalanx.git_publication import PublicationResult
 from phalanx.github import ATTRIBUTION, GitHubClient
 from phalanx.store import connect, write_transaction
+from phalanx.transitions import RUNNER_ONLY_SLOTS
 from phalanx.workspaces import WorkspaceManager, _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -482,8 +483,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertNotEqual(first.status()["packet"]["branch"], second.status()["packet"]["branch"])
         self.assertNotEqual(self.api.claim_leases, second_api.claim_leases)
         self.assertEqual([row["slot"] for row in first.status(all_slots=True)["reservations"]], [1, 2])
-        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+        with self.assertRaisesRegex(RunnerError, "Slots above capacity run only runner-only stages"):
             self.runner(3).prepare()
+        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+            self.runner(3 + RUNNER_ONLY_SLOTS).prepare()
 
         marker = launches[0]["marker"]
         native_id = str(uuid4())

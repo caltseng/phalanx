@@ -45,7 +45,7 @@ from phalanx import dispatch, intake, waits  # noqa: E402
 from phalanx.dispatch_api import DispatchSettings  # noqa: E402
 from phalanx.intake_models import Intake  # noqa: E402
 from phalanx.store import connect, migrate, write_transaction  # noqa: E402
-from phalanx.transitions import Event, Outcome, Wait  # noqa: E402
+from phalanx.transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES, Event, Outcome, Wait  # noqa: E402
 
 
 OWNER = "o" * 32
@@ -973,21 +973,29 @@ class Probe:
             checks["quick_check"] = db.execute("PRAGMA quick_check").fetchone()[0]
             limits = dict(db.execute("SELECT runner_id, capacity FROM runner_limits").fetchall())
             events = defaultdict(list)
-            for runner, started, ended in db.execute("SELECT runner_id, started_at, ended_at FROM attempts"):
-                events[runner].append((started, 1))
-                events[runner].append((ended or "9999", -1))
-            peaks = {}
+            for runner, stage, started, ended in db.execute(
+                    "SELECT runner_id, stage, started_at, ended_at FROM attempts"):
+                agent = stage not in RUNNER_ONLY_STAGES
+                events[runner].append((started, 1, agent))
+                events[runner].append((ended or "9999", -1, agent))
+            peaks, agent_peaks = {}, {}
             for runner, entries in events.items():
-                load = peak = 0
-                for _, change in sorted(entries, key=lambda entry: (entry[0], entry[1])):
+                load = peak = agents = agent_peak = 0
+                for _, change, agent in sorted(entries, key=lambda entry: (entry[0], entry[1])):
                     load += change
+                    agents += change if agent else 0
                     peak = max(peak, load)
-                peaks[runner] = peak
+                    agent_peak = max(agent_peak, agents)
+                peaks[runner], agent_peaks[runner] = peak, agent_peak
             checks["peak_attempts_by_runner"] = {runner: peaks[runner] for runner in sorted(peaks)
                                                  if runner.startswith("runner-")}
+            checks["peak_agent_attempts_by_runner"] = {runner: agent_peaks[runner] for runner in sorted(agent_peaks)
+                                                       if runner.startswith("runner-")}
+            # Agent stages are bounded by capacity; the runner-only lane adds RUNNER_ONLY_SLOTS on top.
             checks["overbooked_runners"] = sorted(
-                runner for runner, peak in peaks.items()
-                if peak > limits.get(runner, dispatch.DEFAULT_CAPACITY))
+                runner for runner in peaks
+                if peaks[runner] > limits.get(runner, dispatch.DEFAULT_CAPACITY) + RUNNER_ONLY_SLOTS
+                or agent_peaks[runner] > limits.get(runner, dispatch.DEFAULT_CAPACITY))
             checks["executions_with_two_open_attempts"] = db.execute(
                 """SELECT count(*) FROM (SELECT execution_id FROM attempts WHERE ended_at IS NULL
                    GROUP BY execution_id HAVING count(*) > 1)"""

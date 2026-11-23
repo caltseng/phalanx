@@ -18,6 +18,7 @@ from phalanx.attended_recovery_service import unlaunched_proof
 from phalanx.captain_adapter import BridgeAdapter, CommandTransport, LaunchNotDelivered
 from phalanx.captain_loop import CaptainLoop, command_notifier
 from phalanx.captain_relay import RelayTransport, respond, take_next
+from phalanx.transitions import RUNNER_ONLY_SLOTS
 from phalanx.workspaces import WorkspaceManager
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 from timing import WAIT_SECONDS
@@ -473,7 +474,10 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(RunnerError, "Transient post-packet"):
             loop._prepare(1)
         original = loop._records()[1]
-        claim_requests = len(self.api.requests)
+        # Only the runner-only lane keeps polling; the original worker claim is never repeated.
+        def worker_claims():
+            return sum("report_drafting" in body["stages"] for body, _ in self.api.requests)
+        claim_requests = worker_claims()
         self.assertNotIn("relay", original)
         self.assertFalse(self.native.launches)
         self.spin(loop, lambda: bool(loop._records()[1].get("receipt")))
@@ -482,7 +486,7 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             time.sleep(0.01)
         resumed = loop._records()[1]
         self.assertEqual(len(self.native.launches), 1)
-        self.assertEqual(len(self.api.requests), claim_requests)
+        self.assertEqual(worker_claims(), claim_requests)
         self.assertEqual(resumed["packet"], original["packet"])
         self.assertEqual(resumed["lease"], original["lease"])
         self.assertEqual(resumed["started_at"], original["started_at"])
@@ -833,6 +837,56 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertTrue(any(row["status"] == "unmatched_attempts"
                             for row in blocked.runner.status(all_slots=True)["loop_status"]))
 
+    def test_runner_only_lane_claims_beside_full_agent_slots_without_touching_workers(self):
+        for capacity in (1, 5, 10):
+            with self.subTest(capacity=capacity):
+                self.setUp()
+                self.config["capacity"] = capacity
+                storage = [f"storage-{n}" for n in range(RUNNER_ONLY_SLOTS + 1)]
+                workers = [f"worker-{n}" for n in range(capacity + 1)]
+                # Runner-only work ranks first, but general slots still fill with agent workers.
+                self.api.waiting = storage + workers
+                self.api.stages.update(dict.fromkeys(storage, "report_storage"))
+                gate, lock, stored, running = Event(), Lock(), [], []
+                peak = [0]
+                def store(runner, snapshot):
+                    with lock:
+                        stored.append((runner.slot, snapshot["claim"]["item_id"]))
+                        running.append(runner.slot)
+                        peak[0] = max(peak[0], len(running))
+                    gate.wait(WAIT_SECONDS)
+                    with lock:
+                        running.remove(runner.slot)
+                    runner._transaction(lambda record, db: record.clear())
+                    return {"status": "report_storage_submitted"}
+                with patch.object(AttendedRunner, "_store_report", store):
+                    loop = self.loop()
+                    try:
+                        self.spin(loop, lambda: len(self.native.launches) == capacity
+                                  and len(stored) == RUNNER_ONLY_SLOTS)
+                        launched = {slot: record["claim"]["attempt_id"]
+                                    for slot, record in loop._records().items() if slot <= capacity}
+                        for _ in range(20):
+                            loop.step()
+                            time.sleep(0.01)
+                        self.assertEqual(set(launched), set(range(1, capacity + 1)))
+                        self.assertEqual({slot for slot, _ in stored},
+                                         set(range(capacity + 1, capacity + RUNNER_ONLY_SLOTS + 1)))
+                        self.assertEqual((peak[0], len(stored)), (RUNNER_ONLY_SLOTS, RUNNER_ONLY_SLOTS))
+                        self.assertEqual(self.api.waiting, [storage[-1], workers[-1]])
+                        gate.set()
+                        # Agent slots stay full; the lane admits the next runner-only stage.
+                        self.spin(loop, lambda: len(stored) == len(storage))
+                        self.assertEqual(stored[-1], (stored[-1][0], storage[-1]))
+                        self.assertGreater(stored[-1][0], capacity)
+                        self.assertEqual(len(self.native.launches), capacity)
+                        self.assertEqual({slot: record["claim"]["attempt_id"] for slot, record
+                                          in loop._records().items() if slot <= capacity}, launched)
+                        self.assertEqual(self.api.waiting, [workers[-1]])
+                    finally:
+                        gate.set()
+                        loop.close()
+
     def test_unmatched_attempt_reserves_capacity_without_blocking_other_slot(self):
         self.api.expired = [{"attempt_id": "unmatched", "item_id": "missing"}]
         loop = self.loop()
@@ -1049,7 +1103,6 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             return original_call(route, body, **kwargs)
         self.api.call = call
         loop = self.loop()
-        loop.admission[1] = "worker"
         def store(runner, snapshot):
             self.assertEqual(snapshot["claim"]["request"]["repository_id"], "repo")
             runner._transaction(lambda record, db: record.clear())
