@@ -87,6 +87,27 @@ The reconciler runs periodically for each open PR item and for due external wait
 
 GitHub rate limits back off and never block other items.
 
+Post-merge deployment is an optional observation, not a lifecycle stage or
+completion gate. A repository mapping's `post_merge_check` names its
+post-merge deployment check run. For configured repositories the reconciler
+observes executions checked into the mapping's `base_branch` for at most 24 hours
+after check-in, stopping earlier on success and never enumerating older closed pages.
+It reads that check on the exact delivered merge commit. The latest run derives a board flag: missing or
+unfinished is `deployment_pending`, completed success is `deployed`, and
+any other completed conclusion is `deployment_failed`. Rechecks replace the
+flag after retries before success. After the window, successes have no flag,
+failures remain visible, and still-pending signals become one owner-notifying
+`deployment_missing` flag with the deadline as its stable first-seen time.
+Closed executions never raise `observation_stale`. Heartbeats carry each mapped
+repository's current check name (or none); removing or changing it records a
+disabled signal for previously observed deployments without GitHub reads, even
+outside the polling window.
+Closed executions accept only deployment observations matching their
+delivered PR, head and merge commit; their state, output and version do not
+change. Repositories without this setting have no deployment signal or
+extra post-merge polling. GitHub owns the workflow; no runtime runs a
+deployment stage and a pending or failed deploy never reopens delivery.
+
 For a writer's execution in `delivery`, the server applies each observation of its primary PR as a state transition (`pr_observed`). The observation sets the current head. Each PR observation names the branch the PR must merge into: the item's `target_branch`, else the repository's `base_branch` from the reconciler's mapping. A PR on another base never reaches `ready_for_check_in` and raises a `wrong_base` flag, and a merge into another base asks the owner instead of delivering. A merge completes the execution and ends its writer. Every post is reapplied, so a lost apply recovers on the next pass, and an unchanged observation doesn't bump the execution's version. A snapshot older than one already recorded is ignored unless it shows a merge. A `ready_for_check_in` milestone, and the target, need required checks green, so they need the repository's trusted validation policy. Without one the execution keeps waiting, visibly, until merged. Executions on the old path only record observations.
 
 ## Liveness

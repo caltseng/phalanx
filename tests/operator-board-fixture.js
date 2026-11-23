@@ -32,6 +32,7 @@
     delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
   const flags = [
+    { kind: "deployed", executionId: "done", reason: "deploy succeeded", recovery: "Informational", firstSeen: now, notifyOwner: false },
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
     { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true }
   ];
@@ -102,6 +103,8 @@
     assert(item("wait").textContent === waiting.title && !root.querySelector("img"), "Untrusted text stays text");
     assert(!root.querySelector('a[href^="javascript:"]'), "Unsafe link omitted");
     assert(root.querySelector('a[href="' + success.output.url + '"]')?.textContent === "#1", "Closed PR link");
+    assert(item("done").closest("li").querySelector(".chip.c-good")?.textContent === "deployed",
+           "Successful post-merge deployment is a non-warning chip on the closed row");
     item("wait").click();
     item("run").click();
     await tick();
@@ -138,6 +141,14 @@
     assert(done.includes("Merged on GitHub") && done.includes("squash or rebase · a40536e00000"),
            "GitHub delivery shown apart from the Phalanx outcome");
     item("done").click();
+    for (const kind of ["deployment_pending", "deployment_failed"]) {
+      flags[0] = { ...flags[0], kind };
+      refresh();
+      await tick();
+      assert(item("done").closest("li").querySelector(".chip.c-warn")?.textContent === kind.replaceAll("_", " "),
+             "Deployment refresh updates the closed row without changing its outcome");
+      assert(item("done").closest("li").textContent.includes("checked in"), "Deployment is separate from check-in");
+    }
     offline = true;
     refresh();
     await tick();
