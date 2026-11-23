@@ -627,15 +627,18 @@ Each heartbeat re-reads the charter and records that revision.
    finds a lost launch by its name, which holds the nonce.
 4. Run the keeper (D8) as an app automation that starts a new session every
    30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode
-   `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper
-   --config <shift config>` and follow it." The keeper exits when a live
+   `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper`
+   and follow it. `phx shift` means `python -m phalanx shift --config <shift
+   config>`. Create the Captain session in project `<session_workspace>`."
+   The keeper exits when a live
    Captain exists, or when the most recent Captain ended less than 10 minutes
    ago with no successor registered yet, or when it stopped with `Stop condition
    met:` under the current charter revision. Otherwise it starts a Captain. An
-   automation run can't attach a session automation to itself, so the keeper
-   creates a `phx captain keeper` chat with `create_session` and a 5-minute
-   `schedule`, and then exits. The app keeps each exited keeper session, so
-   archive them now and then.
+   automation run can't attach a session automation to itself or create a
+   chat, so the keeper calls `create_session` with `project_id` set to the
+   shift config's `session_workspace`, the name `phx captain keeper` and a
+   5-minute `schedule`, and then exits. The app keeps each exited keeper
+   session, so archive them now and then.
 5. The app may let only a session's creator archive it. A successor Captain
    can't archive its predecessor's chat or the worker sessions its
    predecessor launched, so it asks the owner to archive those.

@@ -18,10 +18,12 @@ config and environment that printed this prompt: for example
    names the same `phx shift` command you were given.
    - If your session tools can give this session that schedule, become the Captain: run
      `phx shift prompt captain` and follow it from *First wake*.
-   - If they can't, as when a scheduler run can't schedule itself, create one new chat named
-     `phx captain keeper` with your session tools. Give it that schedule, and this first prompt:
-     "In this chat, `phx shift` means `<the command>`. Run `phx shift prompt captain` and follow it from
-     *First wake*." Then stop. Two Captains starting at once is harmless.
+   - If they can't, as when a scheduler run can't schedule itself, create one new session named
+     `phx captain keeper` with your session tools, in the workspace your scheduler's prompt names for
+     it (a runtime may refuse to let a scheduler run create a plain chat). Give it that schedule, and
+     this first prompt: "In this session, `phx shift` means `<the command>`. Run
+     `phx shift prompt captain` and follow it from *First wake*." Then stop. Two Captains starting at
+     once is harmless.
 
    If `captains` lists earlier Captains, the new Captain passes `--parent` with the most recent one's
    ID, so it inherits that Captain's handoff note and open intents. Put that ID in the first prompt.
