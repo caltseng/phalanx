@@ -25,7 +25,11 @@ SUMMARY = """
            item.repository_id, json_extract(item.request_json, '$.goal') AS title,
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
-           recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url
+           recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
+           (SELECT attempt.blocker FROM attempts AS attempt
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
+           (SELECT attempt.lease_expires_at FROM attempts AS attempt
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -103,6 +107,14 @@ def summary(row, now):
     if blocked_count and not wait:
         noun = "prerequisite" if blocked_count == 1 else "prerequisites"
         wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
+    if row["runner_blocker"] and not wait:
+        wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
+    expires = row["lease_expires_at"]
+    if expires is not None and expires <= now.timestamp() and not wait:
+        # Runners publish blockers only while renewing, so an expired lease needs its own reason.
+        at = datetime.fromtimestamp(expires, UTC).isoformat()
+        wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
+                "trigger": "The runner recovers the expired attempt on its next pass"}
     return {
         "id": row["id"],
         "item_id": row["item_id"],

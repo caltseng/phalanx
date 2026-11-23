@@ -89,6 +89,17 @@ STAGES = {
         "severity in details.findings."
     ),
 }
+
+
+def development_candidate(record, packet, workspace, evidence: str) -> bool:
+    """Accept a clean worktree HEAD that is a new commit or, on a retry, the recorded
+    candidate kept unchanged (for example after a flaky check) so it is revalidated."""
+    return bool(re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
+                and evidence == workspace.head and not workspace.dirty
+                and (evidence != packet.expected_revision
+                     or evidence == record["claim"]["execution"]["state"].get("candidate")))
+
+
 # Runner-owned stages that need no worker session.
 RUNNER_STAGES = ("pr_creation", reports.STORAGE, "pre_pr_validation", "pr_promotion", "pr_validation",
                  "pr_reconciliation", "check_in")
@@ -347,7 +358,9 @@ class AttendedRunner:
         if stage in ("development", "pr_revision") and state.get("findings"):
             context["review_findings"] = state["findings"]
             if stage == "development":
-                requirements += " First address review_findings in the context on top of the current HEAD."
+                requirements += (" First address review_findings in the context on top of the current HEAD."
+                                 " If they need no change, such as a check that passes when rerun, "
+                                 "leave the checkout unchanged and return the current HEAD to rerun validation.")
             if state.get("primary_pr") and candidate:
                 PRNotes(self.root).record(
                     state["primary_pr"], candidate,
@@ -479,24 +492,27 @@ class AttendedRunner:
 
         return self._transaction(save)
 
-    def _renew(self, record):
+    def _renew(self, record, blocker=None):
         claim = record.get("claim")
         if not claim:
             raise RunnerError("There is no known claim to renew")
         endpoint = f"/dispatch/runners/{record['runner_id']}/attempts/{claim['attempt_id']}/renew"
-        # Each renewal republishes the bridge's opaque worker reference for the operator board.
+        # Each renewal republishes the bridge's opaque worker reference and any
+        # current runner-side blocker for the operator board.
         receipt = record.get("receipt", {})
         reference = receipt.get("thread_id") or receipt.get("client_thread_id")
         body = {"worker": {"reference": reference, **(
             {"url": receipt["worker_url"]} if receipt.get("worker_url") else {}
         )}} if reference else {}
+        if blocker:
+            body["blocker"] = blocker
         result = self.api.call(endpoint, body, lease=record["lease"])
         record["lease_expires_at"] = result["lease_expires_at"]
         return result
 
-    def renew(self):
+    def renew(self, blocker=None):
         snapshot = self._snapshot()
-        result = self._renew(snapshot)
+        result = self._renew(snapshot, blocker)
 
         def save_renewal(record, db):
             self._ensure_reservation(record, snapshot["lease"])
@@ -568,9 +584,7 @@ class AttendedRunner:
             elif result.outcome == "succeeded":
                 evidence = result.details["evidence"].strip()
                 if packet.stage == "development":
-                    if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", evidence)
-                            or evidence != workspace.head or workspace.dirty
-                            or evidence == packet.expected_revision):
+                    if not development_candidate(record, packet, workspace, evidence):
                         raise RunnerError("Development requires a new candidate at the clean worktree HEAD")
                     if "development_base" in record:
                         manager.verify_base_ancestry(workspace, record["development_base"]["sha"])
@@ -681,7 +695,7 @@ def add_attended_command(commands):
 
 
 def run_attended(args):
-    config = json.loads(args.config.read_text(encoding="utf-8"))
+    config = json.loads(args.config.read_text(encoding="utf-8-sig"))
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
     if args.action == "prepare":
         from .runner_preflight import preflight

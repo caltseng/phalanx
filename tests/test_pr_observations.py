@@ -201,6 +201,23 @@ class PullObservationTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual((updated["state"]["stage"], updated["state"]["findings"]),
                          ("development", "Local check unit tests failed: Exited with status 1"))
 
+    def test_unchanged_development_reruns_validation_until_the_repeat_limit(self):
+        self.assertEqual(self.submit(self.observation(self.claim("pr_creation"), draft=True))[0], 200)
+        failed = [{"name": "unit tests", "outcome": "failed", "reason": "Exited with status 1"}]
+        for attempt in range(intake.REPEAT_LIMIT + 1):
+            self.assertEqual(self.result(self.claim("self_review"), reviewed_candidate=HEAD)[0], 200)
+            status, updated = self.request(f"{self.execution}/result", RUNNER, dict(
+                self.claim("pre_pr_validation"), outcome="changes_required", candidate=HEAD,
+                local_checks=failed,
+            ), self.lease)
+            self.assertEqual(status, 200, updated)
+            if attempt < intake.REPEAT_LIMIT:
+                self.assertEqual(updated["state"]["stage"], "development")
+                self.develop()
+        self.assertEqual((updated["state"]["stage"], updated["state"]["wait"]["trigger"]),
+                         ("pre_pr_validation", "owner reply"))
+        self.assertIn("same findings", updated["state"]["wait"]["reason"])
+
     def test_failed_draft_check_returns_to_development_with_findings(self):
         self.publish()
         status, updated = self.submit(self.observation(

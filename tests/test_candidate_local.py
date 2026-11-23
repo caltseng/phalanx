@@ -99,9 +99,13 @@ class CandidateLocalTest(unittest.TestCase):
 
     def test_failed_check_and_worktree_change_cannot_advance(self):
         operation = self.operation("pre_pr_validation")
-        failed = operation.pre_validate((self.command("fails", "raise SystemExit(7)"),))
+        failed = operation.pre_validate((self.command(
+            "fails", "import sys; print('x' * 9000); sys.stderr.write('last line'); raise SystemExit(7)"),))
         self.assertEqual(failed["outcome"], "changes_required")
-        self.assertEqual(failed["local_checks"][0]["reason"], "Exited with status 7")
+        reason = failed["local_checks"][0]["reason"]
+        self.assertTrue(reason.startswith("Exited with status 7\n\nOutput tail:\n"))
+        self.assertTrue(reason.endswith("last line"))
+        self.assertLess(len(reason), 4200)
         writes = self.command("mutates", "from pathlib import Path; Path('unexpected').touch()")
         body = operation.pre_validate((writes,))
         self.assertEqual(body["outcome"], "needs_input")

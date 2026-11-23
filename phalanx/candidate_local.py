@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
@@ -12,6 +13,8 @@ from .handoff import WorkerResult, WorkPacket
 from .transitions import Outcome, Stage
 from .validation import GateState, PreCheck, PreEvidence, PreOutcome, evaluate_pre_validation
 from .workspaces import Workspace, WorkspaceError, WorkspaceManager
+
+OUTPUT_TAIL_BYTES = 4096
 
 
 @dataclass(frozen=True)
@@ -195,20 +198,25 @@ class CandidateLocal:
 def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
     env = {key: value for key, value in os.environ.items()
            if not key.upper().startswith(("GIT_", "PHALANX_"))}
-    try:
-        process = subprocess.Popen(check.argv, cwd=path, env=env, stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   start_new_session=os.name != "nt")
-    except OSError as exc:
-        raise WorkspaceError(f"Repair the configured check command (OS error {exc.errno})") from None
-    try:
-        returncode = process.wait(timeout=check.timeout_seconds)
-    except subprocess.TimeoutExpired:
-        _kill_tree(process)
-        return PreOutcome.FAILED, f"Timed out after {check.timeout_seconds} seconds"
-    if returncode:
-        return PreOutcome.FAILED, f"Exited with status {returncode}"
-    return PreOutcome.PASSED, ""
+    # A file, unlike a pipe, cannot fill up and block the check or its children.
+    with tempfile.TemporaryFile() as output:
+        try:
+            process = subprocess.Popen(check.argv, cwd=path, env=env, stdin=subprocess.DEVNULL,
+                                       stdout=output, stderr=subprocess.STDOUT,
+                                       start_new_session=os.name != "nt")
+        except OSError as exc:
+            raise WorkspaceError(f"Repair the configured check command (OS error {exc.errno})") from None
+        try:
+            returncode = process.wait(timeout=check.timeout_seconds)
+            reason = f"Exited with status {returncode}" if returncode else ""
+        except subprocess.TimeoutExpired:
+            _kill_tree(process)
+            returncode, reason = None, f"Timed out after {check.timeout_seconds} seconds"
+        if returncode == 0:
+            return PreOutcome.PASSED, ""
+        output.seek(max(0, output.seek(0, os.SEEK_END) - OUTPUT_TAIL_BYTES))
+        tail = output.read().decode("utf-8", errors="replace").strip()
+    return PreOutcome.FAILED, f"{reason}\n\nOutput tail:\n{tail}" if tail else reason
 
 
 def _kill_tree(process: subprocess.Popen) -> None:

@@ -73,6 +73,7 @@ class CaptainLoop:
         except RunnerError:
             self.rechecks = False
         self.observing = set()
+        self.blocked: dict[int, str] = {}
         self.closed = False
         self._bind_identity()
 
@@ -126,6 +127,15 @@ class CaptainLoop:
             self.emit({"slot": slot, "status": "cleared", "reason": f"{status} resolved",
                        "at": datetime.now(timezone.utc).isoformat()})
 
+    def _block(self, slot, reason):
+        """Keep a slot's blocker until a pass learns something new; the next heartbeat publishes it."""
+        if self.blocked.get(slot) != reason:
+            if reason is None:
+                del self.blocked[slot]
+            else:
+                self.blocked[slot] = reason
+            self.lease_due[slot] = 0
+
     @staticmethod
     def _mapping_key(mapping):
         return tuple(mapping[field] for field in ("host_id", "project_id", "checkout"))
@@ -155,7 +165,9 @@ class CaptainLoop:
         self.reported_discovery = future
         try:
             resolved = future.result()
-            blocked = {repo: resolved[self._mapping_key(mapping)]
+            # Two runtime projects can share a name, so each entry names its exact project and checkout.
+            blocked = {f"{repo} (project {mapping['project_id']}, checkout {mapping['checkout']})":
+                       resolved[self._mapping_key(mapping)]
                        for repo, mapping in self.config["repositories"].items()
                        if resolved[self._mapping_key(mapping)] is not None}
         except Exception as error:
@@ -412,7 +424,8 @@ class CaptainLoop:
         if snapshot.get("recover_stop") or snapshot.get("recover_claim") or expired:
             if ("packet" in snapshot and not unlaunched and observation is None
                     and not any(field in snapshot for field in ("recover_stop", "recover_claim", "submission"))):
-                return {"status": "observing", "reason": "Awaiting native observation before recovery"}
+                return {"status": "observing", "reason": "Awaiting native observation before recovery",
+                        "unchanged": True}
             if observation is not None and "packet" in snapshot:
                 self._check_observation(runner, snapshot, observation)
             return run_recovery(
@@ -424,7 +437,8 @@ class CaptainLoop:
         if "packet" not in snapshot or unlaunched:
             return self._prepare(slot, discovery)
         if observation is None:
-            return {"status": "observing", "reason": "Awaiting an exact native observation; launch is never replayed"}
+            return {"status": "observing", "reason": "Awaiting an exact native observation; launch is never replayed",
+                    "unchanged": True}
         packet = runner._handoff(snapshot).packet
         native = self._native(runner, snapshot, observation)
         runner.receipt(packet.marker, snapshot["host_id"], thread_id=str(native.thread_id))
@@ -495,7 +509,8 @@ class CaptainLoop:
                     pass
                 except Exception as error:
                     for slot in slots:
-                        self._status(slot, "observation_blocked", f"{type(error).__name__}: {error}")
+                        self._block(slot, f"{type(error).__name__}: {error}")
+                        self._status(slot, "observation_blocked", self.blocked[slot])
                 else:
                     if "" in batch.errors:
                         self._status(0, "observation_blocked", batch.errors[""])
@@ -507,15 +522,21 @@ class CaptainLoop:
                 try:
                     result = future.result()
                 except Exception as error:
-                    self._status(slot, "slot_blocked", f"{type(error).__name__}: {error}; reconcile this reservation")
+                    self._block(slot, f"{type(error).__name__}: {error}; reconcile this reservation")
+                    self._status(slot, "slot_blocked", self.blocked[slot])
                 else:
                     if result.get("status") == "adopted":
                         self.expired.pop(result["attempt_id"], None)
+                    if result.get("unchanged") and slot in self.blocked:
+                        continue
+                    self._block(slot, None)
                     self._status(slot, result["status"], result.get("reason", "Operation recorded"))
         records = self._records()
         for slot in list(self.cursors):
             if slot not in records and not any(slot in slots for slots in self.observations):
                 del self.cursors[slot]
+        for slot in set(self.blocked) - set(records):
+            del self.blocked[slot]
         observing = {(slot, record.get("claim", {}).get("attempt_id")) for slot, record in records.items()
                      if "packet" in record and any(field in record for field in ("relay", "receipt"))}
         if self.observing - observing:
@@ -576,7 +597,8 @@ class CaptainLoop:
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
                     and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
-                self.renewals[slot] = (self.lease_pool.submit(self._runner(slot).renew), record["lease"])
+                self.renewals[slot] = (self.lease_pool.submit(self._runner(slot).renew, self.blocked.get(slot)),
+                                       record["lease"])
                 self.lease_due[slot] = now + self.heartbeat_seconds
             if slot not in self.work and now >= self.work_due.get(slot, 0):
                 observation = self.pending_observations.pop(slot, None)
@@ -652,7 +674,7 @@ def add_captain_command(commands):
 
 
 def run_captain(args):
-    config = json.loads(args.config.read_text(encoding="utf-8"))
+    config = json.loads(args.config.read_text(encoding="utf-8-sig"))
     token = os.environ.get("PHALANX_RUNNER_TOKEN")
     preflight(config, token)
     transport = (CommandTransport(args.adapter_command) if args.adapter_command

@@ -549,17 +549,21 @@ class Probe:
             if claim is None:
                 self.violation("Throttled item was not claimable")
                 return
+            # Measure from before the request: a later read can wait out a slow write turn.
+            sent_ms = int(time.time() * 1000)
             result = self.finish_stage(
                 client, claim, lease, outcome="failed", report_markdown=None,
                 failure_reason="Provider returned 429 Too Many Requests",
                 retry_after_seconds=self.config.throttle_seconds,
             )
-            item = self.item(client, claim["item_id"])
-            execution = item["execution"]
-            if (result is None or execution["state"]["status"] != "queued"
-                    or execution["retry_at_ms"] is None
-                    or execution["retry_at_ms"] < time.time() * 1000 + (self.config.throttle_seconds - 2) * 1000):
-                self.violation(f"Throttled item {claim['item_id']} has no visible provider retry time")
+            if result is None:
+                continue
+            execution = self.item(client, claim["item_id"])["execution"]
+            due = execution["retry_at_ms"]
+            if (execution["state"]["status"] != "queued" or due is None
+                    or due < sent_ms + self.config.throttle_seconds * 1000):
+                self.violation(f"Throttled item {claim['item_id']} has no visible provider retry time: "
+                               f"status {execution['state']['status']}, retry_at_ms {due}, sent_ms {sent_ms}")
                 continue
             retry_at[claim["item_id"]] = execution["retry_at_ms"]
         early = resumed = 0

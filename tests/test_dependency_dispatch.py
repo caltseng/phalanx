@@ -8,7 +8,7 @@ import unittest
 from phalanx import dependencies, dispatch, finalization, intake
 from phalanx.dispatch_api import Claim
 from phalanx.intake_models import Intake, Rerun
-from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
+from phalanx.store import MIGRATIONS, REVISION_MIGRATION, connect, migrate, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target, Wait, start
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -176,10 +176,11 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
                   "development_findings": "Fix the build", "publication_conflict": False}
         legacy.pop("findings")
         with connect(path, mode="rwc") as db:
-            for migration in MIGRATIONS[:-1]:
+            revision = MIGRATIONS.index(REVISION_MIGRATION)
+            for migration in MIGRATIONS[:revision]:
                 for statement in migration:
                     db.execute(statement)
-            db.execute(f"PRAGMA user_version = {len(MIGRATIONS) - 1}")
+            db.execute(f"PRAGMA user_version = {revision}")
             intake.register(db, "source", "https://example.com/source.git")
             stamp = intake.timestamp()
             db.execute("INSERT INTO work_items VALUES ('item','source','{}',?)", (stamp,))

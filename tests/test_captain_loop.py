@@ -25,6 +25,7 @@ class QueueAPI:
     def __init__(self, checkout):
         self.checkout = checkout
         self.requests, self.renewed, self.submissions, self.recovered = [], [], [], []
+        self.blockers = []
         self.claims = {}
         self.waiting = ["first", "second"]
         self.stages = {}
@@ -70,6 +71,7 @@ class QueueAPI:
             if route.endswith("/renew"):
                 row = self.claims[lease]
                 self.renewed.append(row["item_id"])
+                self.blockers.append(body.get("blocker"))
                 return {"attempt_id": row["attempt_id"], "lease_expires_at": time.time() + 90}
             if route.endswith("/result"):
                 self.submissions.append((body, lease, key))
@@ -451,9 +453,28 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
         self.assertEqual({launch["session"]["project_id"] for launch in self.native.launches}, {"project"})
         reported = [event for event in self.events if event["status"] == "mapping_blocked"]
         self.assertEqual(len(reported), 1, "one status per change, not one per slot or poll")
-        self.assertRegex(reported[0]["reason"], "untrusted-a: .*trust its checkout once; untrusted-b: ")
+        self.assertIn(f"untrusted-a (project untrusted-a, checkout {self.checkout}): untrusted-a is untrusted; "
+                      f"trust its checkout once; untrusted-b (project untrusted-b, checkout {self.checkout}): ",
+                      reported[0]["reason"])
         saved = AttendedRunner(self.root, self.config, self.api).status(all_slots=True)["loop_status"]
         self.assertIn(reported[0]["reason"], [event["reason"] for event in saved])
+
+    def test_slot_blocker_stays_visible_and_is_published_until_the_condition_changes(self):
+        self.config["capacity"] = 1
+        self.api.waiting = ["first"]
+        loop = self.loop()
+        self.spin(loop, lambda: bool(loop._records().get(1, {}).get("receipt")))
+        with patch.object(loop, "_native", side_effect=RunnerError("No exact writer")):
+            self.spin(loop, lambda: any("No exact writer" in (blocker or "") for blocker in self.api.blockers))
+            for _ in range(20):
+                loop.step()
+                time.sleep(0.01)
+            blocked = next(index for index, event in enumerate(self.events) if event["status"] == "slot_blocked")
+            self.assertEqual([event for event in self.events[blocked:]
+                              if event["slot"] == 1 and event["status"] != "slot_blocked"], [])
+        self.spin(loop, lambda: any(event["reason"].startswith("Exact native writer is active")
+                                    for event in self.events[blocked:]))
+        self.spin(loop, lambda: self.api.blockers[-1] is None)
 
     def test_malformed_resolution_blocks_only_its_mapping(self):
         self.config["repositories"]["healthy"] = {**self.config["repositories"]["repo"],

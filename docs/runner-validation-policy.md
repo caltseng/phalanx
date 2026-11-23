@@ -146,8 +146,11 @@ entry or `null` phase becomes an owner question naming the gap; startup
 preflight rejects a malformed file before any claim.
 
 Self-review findings and failed local checks return the item to `development`
-with the findings in the server state. The next development packet carries
-them as `review_findings` in its context. When the reviewed candidate differs
+with the findings in the server state. A failed check's reason includes the
+last 4 KB of its combined stdout and stderr. The next development packet carries
+them as `review_findings` in its context. If they need no change, for example a
+flaky check, development may return the candidate unchanged to rerun
+validation; the server's rework cap bounds such loops. When the reviewed candidate differs
 from the primary PR's head, `pr_promotion` first fast-forwards the item branch
 to it, leased on the observed PR head, then collects draft checks on the new
 head. A rebased candidate replaces the PR head under the same lease, but only
