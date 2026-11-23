@@ -100,6 +100,8 @@ There is no relay polling and no foreground polling loop.
    3. Record each action on its item's timeline (`captain_action` with the item ID and reason).
 
    New work must be filed as an item before a session is launched for it. Any visible session without a registered writer, reviewer or Captain registration is flagged `orphan_session`.
+
+   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. The README's [Captain section](../README.md#run-a-captain-on-the-direct-path) shows the setup.
 4. **Deviation detection.** See [Deviation flags](#deviation-flags). The reconciler and server raise these flags. They never block.
 5. **Escalation.** Escalate to the owner only for trust, scope changes, destructive actions (overwriting a foreign head, closing PRs, deleting branches or data), missing credentials or authority, and exhausted retry caps. The Captain decides everything else and logs it (`answered_by: captain`, [decisions.md](decisions.md)).
 
