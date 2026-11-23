@@ -41,9 +41,7 @@ def development_checkpoint(journal, claim):
     if row is None or row[0] is None:
         return None
     checkpoint = json.loads(row[0])
-    provenance = checkpoint.get("base")
-    if provenance is None:
-        return None
+    provenance = checkpoint["base"]
     from .draft_stage import DevelopmentCheckpoint
 
     return DevelopmentCheckpoint(
@@ -53,6 +51,7 @@ def development_checkpoint(journal, claim):
 
 
 def publish_draft(root, api, record, mapping, checkpoint, token):
+    from .attended import AttendedRunner
     from .draft_stage import DraftAssignment, DraftStageRunner
 
     claim = record["claim"]
@@ -61,7 +60,7 @@ def publish_draft(root, api, record, mapping, checkpoint, token):
     owner, name = repository.split("/")
     assignment = DraftAssignment(
         claim["item_id"], execution["id"], record["runner_id"], claim["attempt_id"],
-        execution["version"], record["lease"],
+        execution["version"], record["lease"], AttendedRunner.offer(record),
     )
     goal = claim["request"]["goal"]
     return DraftStageRunner(root / "publication", api, GitHubClient(owner, name, token=token)).run(

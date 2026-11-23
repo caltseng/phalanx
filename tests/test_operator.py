@@ -9,9 +9,8 @@ import unittest
 
 from phalanx.intake import record, steer
 from phalanx.intake_models import Steering, short_title
-from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, open_page
-from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, write_transaction
+from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target, Wait
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -53,12 +52,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        # Exercise the live migration from populated PH-05 storage.
-        with write_transaction(self.path, create=True) as db:
-            for statement in INTAKE_SCHEMA:
-                db.execute(statement)
-            db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-            db.execute("PRAGMA user_version = 2")
+        migrate(self.path)
+        with write_transaction(self.path) as db:
             db.execute("INSERT INTO repositories VALUES ('repo', 'https://github.com/a/b', ?)", (EARLY,))
             for number in range(1, 5001):
                 insert(db, number)
@@ -68,13 +63,6 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                 insert(db, number, self.closed(number))
             for version in range(2, 5001):
                 transition(db, 10, version, QUEUED)
-
-        # Bring the pre-operator store to the deployed PH-09 version first.
-        with write_transaction(self.path) as db:
-            for version, statements in enumerate(MIGRATIONS[2:4], start=3):
-                for statement in statements:
-                    db.execute(statement)
-                db.execute(f"PRAGMA user_version = {version}")
         self.start_server(self.path)
 
     @staticmethod

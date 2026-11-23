@@ -134,7 +134,12 @@ def collect_github_checks(
         if pull.state != "open" or _identity(pull) != _identity(expected):
             return _blocked("The primary PR identity, revision, or open state changed",
                             retry_after_seconds=_CHANGED_RETRY_SECONDS)
-        if github.get_branch_tip(pull.base_ref) != pull.base_sha:
+
+        # Ready evidence binds to the live target tip. Draft evidence binds to
+        # the PR's own head and base: GitHub doesn't advance base.sha when the
+        # target moves, and mergeability and check-in cover an ordinary advance.
+        bind_tip = phase != Phase.DRAFT
+        if bind_tip and github.get_branch_tip(pull.base_ref) != pull.base_sha:
             return _blocked("The target branch tip differs from the PR base revision",
                             retry_after_seconds=_CHANGED_RETRY_SECONDS)
 
@@ -188,7 +193,7 @@ def collect_github_checks(
             or (merge_sha is not None and (
                 after.merge_commit_sha != merge_sha or after.mergeable is not True
             ))
-            or github.get_branch_tip(pull.base_ref) != revision.base
+            or (bind_tip and github.get_branch_tip(pull.base_ref) != revision.base)
         ):
             return _blocked("The primary PR or target branch changed during check collection",
                             retry_after_seconds=_CHANGED_RETRY_SECONDS)
