@@ -502,8 +502,12 @@ and the **Phalanx repository ID** (not `owner/repo`):
 
 ```powershell
 python -m phalanx register example https://github.com/example/project.git
-python -m phalanx ingest-issue example 42 --target ready_for_check_in
+python -m phalanx ingest-issue example 42
 ```
+
+The import targets `checked_in` by default, so Phalanx merges the PR once GitHub's
+required reviews and checks pass (unless the runner's `auto_merge` is off). Pass
+`--target ready_for_check_in` to stop at the ready PR, or `--target report`.
 
 Set `PHALANX_OWNER_TOKEN` for the API and `PHALANX_GITHUB_TOKEN` in the local
 environment with read access to the issue and comments. The GitHub token stays
@@ -597,10 +601,16 @@ Item inspection includes configured links and the execution's
 
 An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with
 `expected_version` and changes to `goal`, `context_links`,
-`acceptance_criteria`, `priority`, `runner_affinity`, or `dependencies`.
-Omitted fields keep their values. An empty list clears a list field, and
+`acceptance_criteria`, `priority`, `runner_affinity`, `dependencies`, or
+`target`. Omitted fields keep their values. An empty list clears a list field, and
 `null` clears runner affinity. The patch accepts `Idempotency-Key`.
 Stale versions and executions outside the queued state return HTTP 409.
+A `target` change moves a PR item between `ready_for_check_in` and
+`checked_in`, so a queued `pr_reconciliation` advances to `check_in` instead of
+completing at the ready PR. Changes to or from `report`, or to
+`ready_for_check_in` once the item is at `check_in`, return HTTP 409. Set
+`steered_by` to `owner` (the default) or `captain`; the timeline's `steer`
+event records it with the before and after values.
 
 A successful claim includes a `dependencies` snapshot with each upstream
 execution ID, output reference, and exact revision. For a reviewed PR it
@@ -656,7 +666,7 @@ python -m phalanx intake example "Review the test coverage" --target report --ke
 python -m phalanx inspect <item_id>
 ```
 
-Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
+Register the expected remote without credentials. These are intake targets: `checked_in` (the default when `--target` is omitted) merges the PR once GitHub's required reviews and checks pass, unless the runner's `auto_merge` is off; `ready_for_check_in` stops at the reviewed, ready PR; `report` delivers a Markdown report. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
 
 The authenticated API exposes these routes under `/v1`.
 

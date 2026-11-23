@@ -1,6 +1,6 @@
 """Transactions for durable intake and versioned lifecycle events."""
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from hashlib import sha256
 from hmac import compare_digest
@@ -230,9 +230,17 @@ def steer(db, item_id, execution_id, payload):
     if state.status != Status.QUEUED or state.stopping or state.pending_output:
         raise Conflict("Steering requires queued work. Resolve the active execution or rerun it first.")
 
-    edits = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_version"})
+    edits = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_version", "steered_by"})
     if not edits or any(value is None for name, value in edits.items() if name != "runner_affinity"):
         raise Conflict("Steering requires at least one edit. Use an empty list to clear list fields.")
+    state_json = row["state_json"]
+    if "target" in edits:
+        if Target.REPORT in (state.target, payload.target):
+            raise Conflict("Steering can change only between ready_for_check_in and checked_in. "
+                           "A report and a PR are different outputs; file a new item instead.")
+        if state.stage == Stage.CHECK_IN and payload.target == Target.READY:
+            raise Conflict("The item is already merging its ready PR. Cancel it to stop the merge.")
+        state_json = encode(asdict(replace(state, target=payload.target)))
     request = json.loads(item_row(db, item_id)["request_json"])
     previous = {name: request.get(name) for name in edits if name != "dependencies"}
     if "dependencies" in edits:
@@ -244,12 +252,13 @@ def steer(db, item_id, execution_id, payload):
     now = timestamp()
     db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
     db.execute(
-        """UPDATE executions SET version=?, updated_at=?, queue_priority=?, queue_affinity=? WHERE id=?""",
-        (row["version"] + 1, now, PRIORITY[request.get("priority", "normal")],
+        """UPDATE executions SET version=?, state_json=?, updated_at=?, queue_priority=?, queue_affinity=?
+           WHERE id=?""",
+        (row["version"] + 1, state_json, now, PRIORITY[request.get("priority", "normal")],
          request.get("runner_affinity") or "", execution_id),
     )
-    record(db, execution_id, row["version"] + 1, "steer", {"before": previous, "after": edits},
-           row["state_json"], now)
+    record(db, execution_id, row["version"] + 1, "steer",
+           {"before": previous, "after": edits, "steered_by": payload.steered_by}, state_json, now)
     dependencies.refresh_wait(db, item_id, execution_id, int(time() * 1000))
     return inspect(db, item_id)
 

@@ -112,6 +112,23 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             self.assertEqual(cli.returncode, 0, cli.stderr)
             self.assertEqual(json.loads(cli.stdout), item)
 
+    def test_pr_intake_defaults_to_checked_in_and_keeps_explicit_targets(self):
+        self.assertEqual(self.submit("/v1/repositories", {"id": "example", "remote": REMOTE})[0], 200)
+        status, item = self.submit("/v1/items", {"repository_id": "example", "goal": "Fix the bug"})
+        self.assertEqual(status, 201, item)
+        self.assertEqual((item["target"], item["execution"]["state"]["target"]),
+                         ("checked_in", "checked_in"))
+        for extra, target in (([], "checked_in"), (["--target", "ready_for_check_in"], "ready_for_check_in")):
+            with self.subTest(target=target):
+                cli = subprocess.run(
+                    [sys.executable, "-m", "phalanx", "--api-url", self.url,
+                     "intake", "example", "Fix the bug", *extra],
+                    env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True,
+                    capture_output=True, timeout=60,
+                )
+                self.assertEqual(cli.returncode, 0, cli.stderr)
+                self.assertEqual(json.loads(cli.stdout)["execution"]["state"]["target"], target)
+
     def test_report_review_loop_and_verified_output_survive_restart(self):
         item, _, base, route = self.create()
         path = route + "/result"
