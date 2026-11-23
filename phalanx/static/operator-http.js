@@ -94,6 +94,9 @@
         recheckAt: epochMs(row.recheck_at_ms),
         workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
         chatUrl: httpsUrl(row.worker_url),
+        slotNote: typeof row.stage_owner === "string"
+          ? (row.slot_retained ? "Retained slot" : "Admitted") + "; " + row.stage + " attempt " + row.stage_owner.slice(0, 8)
+          : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null,
         primaryPrUrl: httpsUrl(row.primary_pr_url),
         closedAt: row.closed_at,
         outcome: row.outcome

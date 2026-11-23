@@ -8,6 +8,7 @@ the reply with `relay respond`. Requests use the same JSON contract as the
 """
 
 from contextlib import closing, contextmanager
+from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -35,7 +36,13 @@ def _queue(root: Path):
         db.execute("""CREATE TABLE IF NOT EXISTS request (
             id TEXT PRIMARY KEY, key TEXT NOT NULL, operation TEXT NOT NULL, body TEXT NOT NULL,
             status TEXT NOT NULL, response TEXT, error TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL)""")
+        # When a relay server last polled or answered, so the loop can tell a stalled relay from a quiet one.
+        db.execute("CREATE TABLE IF NOT EXISTS server (key TEXT PRIMARY KEY, value REAL NOT NULL)")
         yield db
+
+
+def _seen(db) -> None:
+    db.execute("INSERT OR REPLACE INTO server VALUES ('seen', ?)", (time(),))
 
 
 class RelayTransport:
@@ -98,6 +105,19 @@ class RelayTransport:
                                   "a launch is reconciled by native discovery")
             sleep(self.poll)
 
+    def stall(self, threshold: float) -> str | None:
+        """Name a stall when no relay server has polled since a request arrived more than threshold ago."""
+        with _queue(self.root) as db:
+            row = db.execute("SELECT value FROM server WHERE key='seen'").fetchone()
+            # Requeued and retracted requests count too, so expiry never resets the stall clock.
+            since = db.execute("SELECT MIN(created_at) FROM request WHERE created_at > ?",
+                               (row[0] if row else 0,)).fetchone()[0]
+        if since is None or time() - since < threshold:
+            return None
+        at = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return (f"Captain relay has taken no request since {at}; start or wake the relay server. "
+                "Waiting work resumes by itself once it takes requests")
+
     def retract_observations(self, observing: set[str]) -> None:
         """Withdraw untaken observations that name any marker whose slot no longer observes."""
         with _queue(self.root) as db:
@@ -122,6 +142,7 @@ def take_next(root: Path, wait: float = 30, poll: float = 0.2) -> dict:
     deadline = time() + wait
     while True:
         with _queue(Path(root).resolve()) as db:
+            _seen(db)
             row = db.execute("SELECT id, body FROM request WHERE status='pending' "
                              "ORDER BY created_at LIMIT 1").fetchone()
             if row:
@@ -141,6 +162,7 @@ def respond(root: Path, request_id: str, *, response: dict | None = None, error:
         row = db.execute("SELECT status FROM request WHERE id=?", (request_id,)).fetchone()
         if row is None or row[0] != "taken":
             raise RunnerError("Respond only to a request taken with `relay next`; it is unknown or settled")
+        _seen(db)
         db.execute("UPDATE request SET status='answered', response=?, error=?, updated_at=? WHERE id=?",
                    (None if response is None else json.dumps(response), error, time(), request_id))
     return {"status": "recorded", "id": request_id}

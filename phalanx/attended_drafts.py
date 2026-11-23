@@ -53,6 +53,7 @@ def development_checkpoint(journal, claim):
 
 
 def publish_draft(root, api, record, mapping, checkpoint, token):
+    from .attended import AttendedRunner
     from .draft_stage import DraftAssignment, DraftStageRunner
 
     claim = record["claim"]
@@ -61,7 +62,7 @@ def publish_draft(root, api, record, mapping, checkpoint, token):
     owner, name = repository.split("/")
     assignment = DraftAssignment(
         claim["item_id"], execution["id"], record["runner_id"], claim["attempt_id"],
-        execution["version"], record["lease"],
+        execution["version"], record["lease"], AttendedRunner.offer(record),
     )
     goal = claim["request"]["goal"]
     return DraftStageRunner(root / "publication", api, GitHubClient(owner, name, token=token)).run(
