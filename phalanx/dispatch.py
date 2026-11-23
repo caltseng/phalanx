@@ -5,10 +5,12 @@ import json
 from time import time
 
 from . import intake
+from .config import DEFAULT_LEASE_SECONDS
 from .transitions import Event, Status, Wait
 
 
-LEASE_SECONDS = 90
+# The server sets this once at startup from PHALANX_LEASE_SECONDS.
+LEASE_SECONDS = DEFAULT_LEASE_SECONDS
 DEFAULT_CAPACITY = 4
 PRIORITIES = range(3)
 QUEUE_BUCKET = """
