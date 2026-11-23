@@ -91,18 +91,27 @@
         id, itemId, output, delivery,
         version: row.version,
         title: row.title,
+        goal: row.goal,
+        target: row.target,
         repo: row.repository_id,
         stage: row.stage,
         status: row.status,
+        createdAt: row.created_at,
         lastAdvancedAt: row.last_advanced_at,
+        lastProgressAt: row.last_progress_at,
+        waitSince: row.wait_since,
         waitReason: row.wait_reason,
+        resumeTrigger: row.resume_trigger,
         retryAt: epochMs(row.retry_at_ms),
         recheckAt: epochMs(row.recheck_at_ms),
-        workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
-        chatUrl: httpsUrl(row.worker_url),
-        slotNote: typeof row.stage_owner === "string"
-          ? (row.slot_retained ? "Retained slot" : "Admitted") + "; " + row.stage + " attempt " + row.stage_owner.slice(0, 8)
-          : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null,
+        // Old runner path; delete with direct sessions step 5.
+        legacy: {
+          workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
+          chatUrl: httpsUrl(row.worker_url),
+          slotNote: typeof row.stage_owner === "string"
+            ? (row.slot_retained ? "Retained slot" : "Admitted") + "; " + row.stage + " attempt " + row.stage_owner.slice(0, 8)
+            : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null
+        },
         primaryPrUrl: httpsUrl(row.primary_pr_url),
         closedAt: row.closed_at,
         outcome: row.outcome,
@@ -122,6 +131,7 @@
       return {
         id: row.id, sessionRef: row.session_ref, state: row.state, live: row.live === true,
         stale: row.stale === true, heartbeatAt: row.heartbeat_at, wakeCount: row.wake_count,
+        charterRevision: typeof row.charter_revision === "string" ? row.charter_revision : null,
         focus: Array.isArray(row.focus) ? row.focus : [], handoffNote: row.handoff_note
       };
     }
@@ -149,7 +159,6 @@
         return {
           item: item(page.item),
           attempt: page.attempt,
-          resumeTrigger: page.item.resume_trigger,
           question: page.question ? {
             prompt: page.question.prompt,
             options: Array.isArray(page.question.options) ? page.question.options : [],
@@ -162,7 +171,7 @@
             reason: dependency.reason
           })),
           events: pageRows(page.events, limit).map(event => ({
-            at: event.created_at, fromStage: event.from_stage,
+            at: event.created_at, event: event.event, fromStage: event.from_stage,
             stage: event.stage, status: event.status, reason: event.reason
           })),
           nextCursor: nextCursor(page.next_cursor)

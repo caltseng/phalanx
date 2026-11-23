@@ -27,7 +27,8 @@ ID = re.compile(r"[0-9a-f]{32}")
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
-           item.repository_id, json_extract(item.request_json, '$.goal') AS title,
+           item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
+           json_extract(item.request_json, '$.target') AS target,
            progress.last_advanced_at, progress.wait_since,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
@@ -111,6 +112,16 @@ def page_cursor(rows, limit, scope, key):
     return encode_cursor(scope, key(rows[limit - 1])) if len(rows) > limit else None
 
 
+def short_title(goal, limit=80):
+    """One board line from the goal: its first sentence, cut at a word boundary."""
+    line = next((line for line in goal.splitlines() if line.strip()), "").strip().lstrip("#*-> ").strip()
+    sentence = re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0].strip() or line or "Untitled"
+    if len(sentence) <= limit:
+        return sentence
+    cut = sentence[:limit - 1]
+    return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:-") + "…"
+
+
 def summary(row, now):
     state = json.loads(row["state_json"])
     wait = state.get("wait") or {}
@@ -160,8 +171,11 @@ def summary(row, now):
         "id": row["id"],
         "item_id": row["item_id"],
         "version": row["version"],
-        "title": row["title"],
+        "title": short_title(row["goal"]),
+        "goal": row["goal"],
+        "target": row["target"],
         "repository_id": row["repository_id"],
+        "created_at": row["created_at"],
         "stage": row["stage"],
         "status": row["status"],
         "last_advanced_at": row["last_advanced_at"],
@@ -350,7 +364,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
     return {
         "item": summary(execution, datetime.now(UTC)),
         "attempt": attempt["id"] if attempt else None,
-        "prerequisites": [dict(row) for row in prerequisites],
+        "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
         "question": question,
         "events": [dict(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
