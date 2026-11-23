@@ -11,6 +11,7 @@
 ## Design priorities
 
 - Prioritize reliable delivery and simplicity. Choose the smallest design that keeps state correct and lets interrupted work resume. Design and test for a large queue and many concurrent workers on one machine. Multi-device execution and handoff are P2.
+- While we prove out the prototype, choose the simplest correct design. Database migrations, legacy-schema support and backwards-compatibility layers aren't requirements unless Caleb asks for one: change the schema, API or format directly and update its callers. This is the current prototyping-phase policy (Caleb, 2026-11-23). It doesn't permit deleting or resetting live data, and checks, trust and authorization still apply.
 - Add abstractions, services, settings, and gates when they solve a concrete problem. Keep constraints scoped to the operation that needs them, and leave teams and runtimes room to work within their own repo’s requirements.
 - Aim for end-to-end autonomy from dispatch through delivery. Set up standing permissions and credentials for routine, in-scope operations so they can run without interactive permission prompts. Respect repository rules and external approval gates. Surface missing access as an actionable blocker when it prevents delivery.
 - Default to self-resolution. Run checks, diagnose failures, retry transient errors, fix routine conflicts, and address actionable review feedback independently. Escalate when human judgment materially affects the outcome, authority is genuinely missing, or further attempts cannot make progress.
