@@ -231,9 +231,14 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.observe(binding)["version"], ready["version"])
         self.observe(binding, number=8, code=409)
         # A squash merge has a fresh commit and a pushed fix moved the head: GitHub wins.
-        merged = self.observe(binding, state="closed", merged=True, head_sha=OTHER, merge_commit=MERGE)
+        self.observe(binding, state="open", merge_method="merge", code=422)
+        merged = self.observe(binding, state="closed", merged=True, head_sha=OTHER, merge_commit=MERGE,
+                              merge_method="squash_or_rebase", merged_at="2026-11-24T06:33:57Z")
         self.assertEqual((merged["state"]["status"], merged["state"]["candidate"]), ("completed", OTHER))
-        self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+        output = merged["state"]["final_output"]
+        self.assertEqual((output["merge_commit"], output["merge_method"], output["revision"]["head"]),
+                         (MERGE, "squash_or_rebase", OTHER))
+        self.assertTrue(output["merged_at"].startswith("2026-11-24T06:33:57"))
         self.ok("/v1/writer", token, code=401)
 
     def test_a_rerun_is_delivered_only_by_the_pr_its_writer_published(self):

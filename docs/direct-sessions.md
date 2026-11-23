@@ -79,7 +79,7 @@ The reconciler runs periodically for each open PR item and for due external wait
 
 | GitHub shows | Server records |
 | --- | --- |
-| The item's primary PR **merged by any method** (merge commit, squash or rebase), by Phalanx or a person | Delivered: it completes a `checked_in` target and records the merge commit and final head. It needs no Phalanx merge intent or second parent. A final head that differs from the last recorded one raises an informational `head_drift` flag. A `ready_for_check_in` target also completes when merged, so dependents unblock (fixes decision 58's gap). |
+| The item's primary PR **merged by any method** (merge commit, squash or rebase), by Phalanx or a person | Delivered: it completes a `checked_in` target and records the merge commit, final head, GitHub's `merged_at` and the method the reconciler verified (`merge` when the merge commit's second parent is the head, `squash_or_rebase` for a single-parent commit on the base branch, else none), the same rule check-in uses. It needs no Phalanx merge intent or second parent. A final head that differs from the last recorded one raises an informational `head_drift` flag. A `ready_for_check_in` target also completes when merged, so dependents unblock (fixes decision 58's gap). |
 | PR closed without merge | `waiting_for_input` with the question; never a replacement PR. |
 | New head, failing checks, new review feedback, conflict | Evidence on the timeline plus a flag. The writer, or the Captain if no writer is active, acts on it. |
 | Ready head with required checks and reviews satisfied | `ready_for_check_in`. Merging is GitHub's job (D2). |

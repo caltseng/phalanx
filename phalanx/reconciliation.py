@@ -41,6 +41,16 @@ class ObservedPull(Payload):
     base_sha: SHA
     merge_commit: SHA | None = None
     mergeable: bool | None = None
+    # For a merge into the target: "merge" or "squash_or_rebase" as the reconciler verified it
+    # (None when it couldn't), and GitHub's merged_at.
+    merge_method: Literal["merge", "squash_or_rebase"] | None = None
+    merged_at: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def merge_details(self):
+        if not self.merged and (self.merge_method or self.merged_at):
+            raise ValueError("Merge method and time describe a merged PR")
+        return self
 
 
 class LocalChecks(Payload):
@@ -137,7 +147,9 @@ def _advance(db, row, url, body, target_base, stamp):
             or state.pending_output or (pull.merged and pull.merge_commit is None)):
         return
     pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
-                     merge_commit=pull.merge_commit if pull.merged else None, closed=pull.state == "closed")
+                     merge_commit=pull.merge_commit if pull.merged else None, closed=pull.state == "closed",
+                     merge_method=pull.merge_method,
+                     merged_at=pull.merged_at and pull.merged_at.isoformat())
     ready = (pull.state == "open" and not pull.draft and pull.mergeable is not False and not body.feedback
              and body.checks in (GateState.SATISFIED, GateState.NOT_CONFIGURED))
     evidence = Evidence(pr=pr, pr_ready=ready, off_base=pull.base_ref != target_base)
