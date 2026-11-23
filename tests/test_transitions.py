@@ -140,6 +140,34 @@ class TransitionTests(unittest.TestCase):
                        wait=Wait("PR closed without merge", "owner reply"))
         self.assertEqual((state.status, state.primary_pr), (Status.WAITING_FOR_INPUT, READY.url))
 
+    def test_writer_publishes_and_github_observations_deliver(self):
+        """A writer skips the runner stages; review rework returns through development."""
+        state = result(start(Target.MERGED), Evidence(candidate=REV.head), direct=True)
+        self.assertEqual(state.stage, Stage.SELF_REVIEW)
+        rework = result(state, Evidence(candidate=REV.head, findings="Fix"), Outcome.CHANGES_REQUIRED, direct=True)
+        self.assertEqual(rework.stage, Stage.DEVELOPMENT)
+        state = result(state, Evidence(reviewed_candidate=REV.head), direct=True)
+        self.assertEqual(state.stage, Stage.PUBLICATION)
+        running = decide(state, Event.CLAIM)
+        self.assertEqual(decide(running, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True)), running)
+        with self.assertRaises(ValueError):
+            decide(running, Event.RESULT, outcome=Outcome.CHANGES_REQUIRED, evidence=Evidence(findings="x"))
+        waiting = decide(running, Event.RESULT, outcome=Outcome.SUCCEEDED, direct=True)
+        self.assertEqual((waiting.stage, waiting.status), (Stage.DELIVERY, Status.WAITING_FOR_EXTERNAL))
+        observed = decide(waiting, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True))
+        self.assertEqual((observed.status, observed.primary_pr, observed.ready_revision),
+                         (Status.WAITING_FOR_EXTERNAL, READY.url, REV))
+        stale = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=READY))
+        self.assertIsNone(stale.ready_revision)
+        with self.assertRaises(ValueError):
+            decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=replace(READY, url="https://example.com/pull/2")))
+        merged = replace(READY, revision=Revision("squashed-head", "base"), merge_commit="merge", closed=True)
+        done = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=merged))
+        self.assertEqual((done.status, done.final_output, done.candidate),
+                         (Status.COMPLETED, merged, "squashed-head"))
+        with self.assertRaises(ValueError):
+            decide(ready(), Event.PR_OBSERVED, evidence=Evidence(pr=merged))
+
     def test_cancel_reconciles_in_flight_merge(self):
         state = result(ready(Target.MERGED), replace(GATES, merge_authorized=True))
         state = decide(decide(state, Event.CLAIM), Event.CANCEL)

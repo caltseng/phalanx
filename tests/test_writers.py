@@ -12,12 +12,15 @@ from phalanx import captains, dispatch, flags, intake
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.store import connect, migrate, write_transaction
+from phalanx.transitions import item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
 STAGES = ["report_drafting", "report_review", "report_storage"]
 ROOT = Path(__file__).resolve().parents[1]
+HEAD, OTHER, BASE, MERGE = "a" * 40, "b" * 40, "c" * 40, "d" * 40
+PR_URL = "https://github.com/e/r/pull/7"
 
 
 class WriterTest(ServerFixture, unittest.TestCase):
@@ -139,7 +142,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(writer + "/withdraw", RUNNER, withdrawal, 409)
         ended = self.ok(writer + "/withdraw", RUNNER, dict(withdrawal, stopped=True))
         self.assertEqual((ended["state"]["status"], ended["writer"]["state"]), ("queued", "ended"))
-        self.assertEqual(self.old_loop_claim()["item_id"], item_id)
+        self.assertEqual(self.old_loop_claim()["status"], "no_eligible_work")
 
     def test_withdrawing_a_stopped_writer_confirms_a_pending_owner_stop(self):
         item_id, execution_id = self.item()
@@ -184,6 +187,85 @@ class WriterTest(ServerFixture, unittest.TestCase):
                      "--handoff", "Outline drafted", "--option", "Ops")
         self.assertEqual(asked["state"]["status"], "waiting_for_input")
         self.assertEqual(asked["state"]["wait"]["reason"], "Which audience?")
+
+    def pr_item(self, target, **fields):
+        item = self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "Fix it", "target": target,
+                                             **fields}, 201)
+        return item["id"], item["execution"]["id"]
+
+    def publish(self, target, **fields):
+        """Carry a writer-bound PR item through development and self-review to publication."""
+        item_id, execution_id = self.pr_item(target, **fields)
+        binding, token, _ = self.register(item_id, execution_id)
+        binding = self.submit(token, binding, candidate=HEAD)
+        self.assertEqual((binding["state"]["stage"], binding["state"]["status"]), ("self_review", "running"))
+        binding = self.submit(token, binding, reviewed_candidate=HEAD)
+        self.assertEqual((binding["state"]["stage"], binding["state"]["status"]), ("publication", "running"))
+        return binding, token
+
+    def observe(self, binding, **pull):
+        pull = {"number": 7, "state": "open", "merged": False, "draft": False,
+                "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD, "base_ref": "main",
+                "base_sha": BASE, **pull}
+        body = {"observed_at": datetime.now(UTC).isoformat(), "pr": pull,
+                **({"checks": "satisfied"} if pull["state"] == "open" else {})}
+        self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/github-observation", RUNNER, body)
+        return self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]
+
+    def test_writer_publishes_and_any_merge_delivers(self):
+        binding, token = self.publish("checked_in")
+        result = f"/v1/items/{binding['item_id']}/executions/{binding['id']}/result"
+        body = {"attempt_id": binding["writer"]["attempt_id"], "stage": "publication",
+                "expected_version": binding["version"], "outcome": "succeeded"}
+        self.ok(result, token, body, 409)
+        self.ok(result, token, dict(body, pr_url="https://github.com/other/r/pull/7"), 409)
+        self.assertEqual(self.observe(binding)["version"], binding["version"])
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.assertEqual((binding["state"]["stage"], binding["state"]["status"], binding["writer"]["attempt_id"]),
+                         ("delivery", "waiting_for_external", None))
+        self.assertEqual(self.observe(binding, draft=True)["state"]["primary_pr"], PR_URL)
+        ready = self.observe(binding)
+        self.assertEqual((ready["state"]["status"], ready["state"]["ready_revision"]),
+                         ("waiting_for_external", {"head": HEAD, "base": BASE}))
+        self.assertEqual(self.observe(binding)["version"], ready["version"])
+        # A squash merge has a fresh commit and a pushed fix moved the head: GitHub wins.
+        merged = self.observe(binding, state="closed", merged=True, head_sha=OTHER, merge_commit=MERGE)
+        self.assertEqual((merged["state"]["status"], merged["state"]["candidate"]), ("completed", OTHER))
+        self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+        self.ok("/v1/writer", token, code=401)
+
+    def test_ready_head_unblocks_dependents_and_closes_a_ready_target(self):
+        binding, token = self.publish("checked_in")
+        dependent, dependent_execution = self.pr_item(
+            "report", dependencies=[{"upstream_id": binding["item_id"], "milestone": "ready_for_check_in"}])
+        waiting, dependent_token, _ = self.register(dependent, dependent_execution)
+        self.assertIsNone(waiting["writer"]["attempt_id"])
+        self.submit(token, binding, pr_url=PR_URL)
+        self.assertEqual(self.observe(binding, draft=True)["state"]["status"], "waiting_for_external")
+        self.assertIsNone(self.ok("/v1/writer/attempt", dependent_token, method="POST")["writer"]["attempt_id"])
+        self.assertEqual(self.observe(binding)["state"]["status"], "waiting_for_external")
+        self.assertEqual(self.ok("/v1/writer/attempt", dependent_token, method="POST")["state"]["status"],
+                         "running")
+
+        ready, ready_token = self.publish("ready_for_check_in")
+        self.submit(ready_token, ready, pr_url=PR_URL)
+        self.assertEqual(self.observe(ready)["state"]["status"], "completed")
+        self.ok("/v1/writer", ready_token, code=401)
+
+    def test_closed_pr_asks_the_owner_and_old_pr_stages_refuse_writers(self):
+        binding, token = self.publish("checked_in")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        closed = self.observe(binding, state="closed")
+        self.assertEqual((closed["state"]["status"], closed["state"]["wait"]["trigger"]),
+                         ("waiting_for_input", "owner reply"))
+
+        item_id, execution_id = self.pr_item("checked_in")
+        with write_transaction(self.path) as db:
+            state = json.loads(db.execute("SELECT state_json FROM executions WHERE id=?",
+                                          (execution_id,)).fetchone()[0])
+            db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                       (json.dumps(dict(state, stage="pr_creation")), execution_id))
+        self.register(item_id, execution_id, code=409)
 
 
 class CaptainFlagTest(ServerFixture, unittest.TestCase):

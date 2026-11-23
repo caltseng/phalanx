@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 from . import dependencies
 from .finalization_schema import enqueue
+from .pr_models import GITHUB_REMOTE
 from .transitions import (
     Bypass, Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
@@ -485,9 +486,21 @@ def result(db, item_id, execution_id, payload, lease_digest):
     if payload.question is not None:
         wait = Wait(wait.reason if wait else payload.question.prompt, "owner reply")
     excluded = {"report_markdown", "expected_version"}
-    excluded.update(field for field in ("review_notes", "local_checks")
+    excluded.update(field for field in ("review_notes", "local_checks", "pr_url")
                     if getattr(payload, field) is None)
     details = payload.model_dump(mode="json", exclude=excluded)
+    publishing = state.stage == Stage.PUBLICATION and payload.outcome == Outcome.SUCCEEDED
+    if (payload.pr_url is not None) != publishing:
+        raise Conflict("A successful publication result reports the PR URL, and only it does")
+    if publishing:
+        remote, = db.execute("SELECT remote FROM repositories WHERE id=?",
+                             (item_row(db, item_id)["repository_id"],)).fetchone()
+        match = GITHUB_REMOTE.fullmatch(remote)
+        if match is None or not payload.pr_url.lower().startswith(f"https://github.com/{match[1].lower()}/pull/"):
+            raise Conflict("The PR must be in the item's registered GitHub repository")
+    # step5-remove: a writer's attempt takes the direct path; step 5 makes it the only path.
+    direct = db.execute("SELECT 1 FROM writers WHERE attempt_id=? AND ended_at IS NULL",
+                        (payload.attempt_id,)).fetchone() is not None
     retry_at = None
     if payload.retry_after_seconds is not None and payload.failure_reason is None:
         raise Conflict("A retry delay requires a technical failure reason")
@@ -552,6 +565,7 @@ def result(db, item_id, execution_id, payload, lease_digest):
     return apply(
         db, row, state, Event.RESULT, details=details, attempt_id=payload.attempt_id,
         outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
+        direct=direct,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
                           prevalidated_candidate=payload.prevalidated_candidate, bypass=bypass,
                           report_draft=draft_revision, reviewed_report=draft_revision,

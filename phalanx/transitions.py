@@ -24,6 +24,14 @@ class Stage(StrEnum):
     REPORT_DRAFTING = "report_drafting"
     REPORT_REVIEW = "report_review"
     REPORT_STORAGE = "report_storage"
+    # A writer's PR lifecycle after self-review: it pushes, opens the ready PR and enables
+    # auto-merge, then the server follows the reconciler's GitHub observations to delivery.
+    PUBLICATION = "publication"
+    DELIVERY = "delivery"
+
+
+# Stages a GitHub observation of the item's PR can advance.
+OBSERVED_STAGES = frozenset({Stage.PUBLICATION, Stage.DELIVERY})
 
 
 # Stages the runner completes itself, without an agent worker session.
@@ -70,6 +78,7 @@ class Event(StrEnum):
     CLOSE_FAILURE = "close_failure"
     STOP_CONFIRMED = "stop_confirmed"
     MERGE_VERIFIED = "merge_verified"
+    PR_OBSERVED = "pr_observed"
     FINALIZE = "finalize"
 
 
@@ -110,6 +119,7 @@ class Wait:
 
 
 TERMINAL = frozenset({Status.COMPLETED, Status.FAILED, Status.CANCELLED})
+DELIVERY_WAIT = Wait("GitHub checks, reviews and merge of the primary PR", "reconciler observation")
 
 
 @dataclass(frozen=True)
@@ -175,6 +185,9 @@ class Evidence:
     findings: str | None = None
     # Findings are a merge conflict, which pr_revision resolves on the open PR at any PR stage.
     merge_conflict: bool = False
+    # The observed PR head is open and ready, with required checks green, no unresolved
+    # feedback and no conflict.
+    pr_ready: bool = False
 
 
 def _require(condition: object, message: str) -> None:
@@ -228,13 +241,43 @@ def _merge_verified(state: Execution, evidence: Evidence) -> Execution:
     return _close(state, Status.COMPLETED, pr)
 
 
-def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
+def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
+    """Follow GitHub's view of a writer's PR. GitHub's head, URL and merge win (decision 69)."""
+    pr = evidence.pr
+    _require(state.stage in OBSERVED_STAGES and state.target is not Target.REPORT
+             and pr and pr.url and pr.revision.head and pr.revision.base
+             and (not state.primary_pr or state.primary_pr == pr.url),
+             "A PR observation requires the item's PR in publication or delivery")
+    if pr.merge_commit:
+        # A merge by any method, by anyone, delivers either PR target. GitHub's head is the
+        # candidate. Interim: routes through _merge_verified once #168 lands.
+        return _close(replace(state, primary_pr=pr.url, candidate=pr.revision.head),
+                      Status.COMPLETED, pr)
+    if state.stage is not Stage.DELIVERY or state.status is not Status.WAITING_FOR_EXTERNAL:
+        return state
+    state = replace(state, primary_pr=pr.url, candidate=pr.revision.head)
+    if pr.closed:
+        return _wait(state, Status.WAITING_FOR_INPUT,
+                     Wait(f"{pr.url} was closed without merging", "owner reply"), ready_revision=None)
+    if not evidence.pr_ready:
+        return replace(state, ready_revision=None)
+    if state.target is Target.READY:
+        return _close(replace(state, ready_revision=pr.revision), Status.COMPLETED, pr)
+    # Ready for check-in: dependents may start; GitHub auto-merge delivers it.
+    return replace(state, ready_revision=pr.revision)
+
+
+def _success(state: Execution, evidence: Evidence, wait: Wait | None, direct: bool) -> Execution:
     stage = state.stage
     candidate = state.candidate
     if stage is Stage.DEVELOPMENT:
         _require(evidence.candidate, "Development requires a recoverable candidate")
-        next_stage = Stage.SELF_REVIEW if state.primary_pr else Stage.PR_CREATION
+        next_stage = Stage.SELF_REVIEW if state.primary_pr or direct else Stage.PR_CREATION
         return _queue(state, next_stage, candidate=evidence.candidate, findings=None)
+    if stage is Stage.PUBLICATION or stage is Stage.DELIVERY:
+        # The writer pushed and opened the PR, or acted on an owner reply. The reconciler's
+        # observations of GitHub decide what happens next.
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT, stage=Stage.DELIVERY)
     if stage is Stage.PR_CREATION:
         pr = evidence.pr
         _require(pr and pr.url and pr.draft and not pr.closed and not pr.merge_commit
@@ -245,7 +288,7 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
     if stage is Stage.SELF_REVIEW:
         _require(candidate and evidence.reviewed_candidate == candidate,
                  "Self-review evidence must match the candidate")
-        return _queue(state, Stage.PRE_PR_VALIDATION)
+        return _queue(state, Stage.PUBLICATION if direct else Stage.PRE_PR_VALIDATION)
     if stage is Stage.PRE_PR_VALIDATION:
         bypass = evidence.bypass
         _require(candidate and evidence.prevalidated_candidate == candidate,
@@ -313,6 +356,8 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
 
 def _changes(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
     stage = state.stage
+    _require(stage not in OBSERVED_STAGES,
+             "Push fixes to the open PR; publication and delivery take no changes_required")
     if stage is Stage.PR_CREATION:
         # An existing PR on the item branch blocked the first draft; adopt it.
         pr = evidence.pr
@@ -355,6 +400,7 @@ def decide(
     evidence: Evidence = Evidence(),
     wait: Wait | None = None,
     retry_allowed: bool = False,
+    direct: bool = False,  # step5-remove: a writer's result; step 5 makes this the only path
 ) -> Execution:
     """Decide one event or raise ValueError for an inadmissible event.
 
@@ -362,6 +408,8 @@ def decide(
     policy. Scheduling a retry or recheck is the caller's responsibility.
     STOP_CONFIRMED attests that the worker and in-flight effects were accounted
     for. A successful RESULT ends the current attempt, even on a stage loop.
+    A direct (writer) result skips the runner-only stages: self-review leads to
+    publication, and PR_OBSERVED follows GitHub from there to delivery.
     """
     _require(state.status not in TERMINAL, "A closed execution must be rerun as a new execution")
     if state.pending_output is not None:
@@ -379,6 +427,8 @@ def decide(
     if state.stopping is not None:
         _require(event is Event.STOP_CONFIRMED, "Reconcile outstanding effects before closing")
         return _disposition(state, state.stopping, evidence.stored_report)
+    if event is Event.PR_OBSERVED:
+        return _pr_observed(state, evidence)
     if event in {Event.CANCEL, Event.CLOSE_FAILURE}:
         status = Status.CANCELLED if event is Event.CANCEL else Status.FAILED
         if state.status in {Status.RUNNING, Status.WAITING_FOR_EXTERNAL}:
@@ -410,7 +460,7 @@ def decide(
     _require(event is Event.RESULT and state.status is Status.RUNNING,
              "Stage results require a running attempt")
     if outcome is Outcome.SUCCEEDED:
-        return _success(state, evidence, wait)
+        return _success(state, evidence, wait, direct)
     if outcome is Outcome.CHANGES_REQUIRED:
         return _changes(state, evidence, wait)
     if outcome is Outcome.FAILED and retry_allowed:

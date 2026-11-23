@@ -6,7 +6,6 @@ stage result opens the next stage's attempt under the same writer.
 """
 
 from datetime import UTC, datetime
-import json
 from time import time
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -17,7 +16,7 @@ from pydantic import StringConstraints
 from . import captains, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
 from .intake_models import Identifier, Payload, Text, Versioned
-from .transitions import TERMINAL, Event, Status
+from .transitions import TERMINAL, Event, Stage, Status
 
 
 # step5-remove: the old dispatch loop claims by queue affinity and attempts carry a timed lease.
@@ -25,6 +24,11 @@ from .transitions import TERMINAL, Event, Status
 # and its attempts use a lease that never expires. The writer token is the fence.
 WRITER_AFFINITY = "@writer"
 NO_EXPIRY = 253402300799
+# step5-remove: the old loop's PR stages. A writer delivers a PR through publication and delivery.
+OLD_PR_STAGES = frozenset({
+    Stage.PR_CREATION, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION, Stage.PR_VALIDATION,
+    Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.PR_REVISION, Stage.CHECK_IN,
+})
 
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Nonce = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{16,100}$")]
@@ -124,7 +128,7 @@ def release(db, writer, reason):
     """End a writer whose session the Captain attests is stopped or never launched.
 
     A pending owner stop is confirmed on the stopped session's behalf. Otherwise the open attempt
-    is requeued so another writer or the old loop can take it.
+    is requeued for the next writer.
     """
     row = intake.execution_row(db, writer["item_id"], writer["execution_id"])
     state = intake.STATE.validate_json(row["state_json"])
@@ -139,10 +143,6 @@ def release(db, writer, reason):
                          details=details)
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
-    # step5-remove: hands the execution back to the old loop's queue affinity.
-    request = json.loads(intake.item_row(db, writer["item_id"])["request_json"])
-    db.execute("UPDATE executions SET queue_affinity=? WHERE id=?",
-               (request.get("runner_affinity") or "", row["id"]))
 
 
 def register(db, item_id, execution_id, payload):
@@ -164,6 +164,10 @@ def register(db, item_id, execution_id, payload):
             raise intake.Conflict(f"The execution is closing. Withdraw writer {current['id']} with "
                                   "stopped=true to confirm the stop")
         raise intake.Conflict("The execution is closed or closing")
+    # step5-remove: an execution the old loop already took past development stays on that path.
+    if state.stage in OLD_PR_STAGES:
+        raise intake.Conflict(f"The execution is in the runner stage {state.stage}. Rerun the item "
+                              "to deliver it through a writer")
     if current is not None:
         if payload.replaces != current["id"]:
             raise intake.Conflict(f"Execution already has writer {current['id']}. Name it in replaces "

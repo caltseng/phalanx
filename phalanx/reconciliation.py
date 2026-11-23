@@ -1,7 +1,9 @@
 """GitHub and git observations from the background reconciler, and the flags derived from them.
 
-Observations are timestamped facts. They never change an execution's state or
-version, so recording one can't race a running attempt, and they never block work.
+Observations are timestamped facts, and they never block work. They advance only a writer's
+publication and delivery stages, where GitHub decides: a merge by any method delivers, and a
+ready PR reaches ready_for_check_in (decision 69). Elsewhere they leave the execution's state and
+version alone, so recording one can't race a running attempt.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -14,7 +16,9 @@ from . import intake
 from .intake_models import Payload
 from .operator_schema import OPEN
 from .pr_models import GITHUB_REMOTE, SHA
-from .transitions import item_branch
+from .transitions import (
+    OBSERVED_STAGES, TERMINAL, Event, Evidence, PullRequest, Revision, Status, decide, item_branch,
+)
 from .validation import GateState
 
 
@@ -96,6 +100,8 @@ def record(db, item_id, execution_id, body: Observation):
     payload["pr"] = payload["pr"] and dict(payload["pr"], url=url)
     stamp = observed_at.isoformat(timespec="microseconds")
     key = (execution_id, url, head, intake.digest(intake.encode(payload)))
+    latest, = db.execute("SELECT max(last_observed_at) FROM github_observations WHERE execution_id=?",
+                         (execution_id,)).fetchone()
     # A repeat only advances when it was last seen, so the timeline shows each fact once.
     seen = db.execute(
         """UPDATE github_observations SET last_observed_at = max(last_observed_at, ?)
@@ -108,7 +114,47 @@ def record(db, item_id, execution_id, body: Observation):
     checked = head and db.execute(
         "SELECT 1 FROM local_check_results WHERE execution_id=? AND head_sha=?", (execution_id, head),
     ).fetchone()
+    # An older snapshot than one already seen only ever adds a merge, which can't be undone.
+    if body.pr is not None and (latest is None or stamp >= latest or body.pr.merged):
+        _advance(db, row, url, body, stamp)
     return {"recorded": seen is None, "local_checks_recorded": bool(checked)}
+
+
+def _advance(db, row, url, body, stamp):
+    """Apply every post, not only new ones, so a lost apply recovers on the next pass."""
+    state = intake.STATE.validate_json(row["state_json"])
+    pull = body.pr
+    if (state.stage not in OBSERVED_STAGES or state.stopping or state.pending_output
+            or (pull.merged and pull.merge_commit is None)):
+        return
+    pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
+                     merge_commit=pull.merge_commit if pull.merged else None, closed=pull.state == "closed")
+    ready = (pull.state == "open" and not pull.draft and pull.mergeable is not False and not body.feedback
+             and body.checks in (GateState.SATISFIED, GateState.NOT_CONFIGURED))
+    evidence = Evidence(pr=pr, pr_ready=ready)
+    following = decide(state, Event.PR_OBSERVED, evidence=evidence)
+    if following == state:
+        return
+    details = {"pr": url, "pr_state": "merged" if pull.merged else pull.state, "head": pull.head_sha,
+               "observed_at": stamp}
+    if following.status == Status.WAITING_FOR_INPUT:
+        details["question"] = {
+            "prompt": f"{url} was closed without merging. Reopen it and reply to resume delivery, "
+                      "or cancel the item. Phalanx never opens a replacement PR.",
+            "handoff": f"Item branch {item_branch(row['item_id'])}, head {pull.head_sha}",
+        }
+    if pr.merge_commit:
+        details["merge_commit"] = pr.merge_commit
+        if state.candidate and state.candidate != pull.head_sha:
+            details["head_drift"] = f"Merged head differs from the recorded candidate {state.candidate}"
+    attempt = db.execute("SELECT id FROM attempts WHERE execution_id=? AND ended_at IS NULL",
+                         (row["id"],)).fetchone()
+    view = intake.apply(db, row, state, Event.PR_OBSERVED, details=details,
+                        attempt_id=attempt and attempt["id"], evidence=evidence)
+    if view["state"]["status"] in TERMINAL:
+        db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL
+                      WHERE execution_id=? AND ended_at IS NULL""",
+                   (intake.timestamp(), f"closed as {view['state']['status']}", row["id"]))
 
 
 def record_local_checks(db, item_id, execution_id, body: LocalChecks):

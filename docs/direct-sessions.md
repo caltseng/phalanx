@@ -1,6 +1,6 @@
 # Direct sessions: coordination, not a gate
 
-**Status: decided, not implemented.** Caleb decided the principle ([decision 68](decisions.md)), the sources of truth with no runner-local database (decision 69), multiple Captains with periodic successors (decision 70) and the design defaults [D1–D8](#decisions) (decision 71). Nothing here is implemented yet. Until it is, [SPEC.md](../SPEC.md) and [STATE_MACHINE.md](../STATE_MACHINE.md) describe the running system. The [gap check](#appendix-gap-check-of-attended-mode) at the end records what attended mode already does.
+**Status: decided, partly implemented.** Caleb decided the principle ([decision 68](decisions.md)), the sources of truth with no runner-local database (decision 69), multiple Captains with periodic successors (decision 70) and the design defaults [D1–D8](#decisions) (decision 71). Writer registration and `phx work` (step 2), the reconciler (step 3) and the writer's [PR lifecycle](#pr-publication-and-delivery) (pulled forward from step 5) are implemented. The rest isn't yet. Until it is, [SPEC.md](../SPEC.md) and [STATE_MACHINE.md](../STATE_MACHINE.md) describe the running system. The [gap check](#appendix-gap-check-of-attended-mode) at the end records what attended mode already does.
 
 ## Principle
 
@@ -63,6 +63,16 @@ Review stages (`adversarial_review`) launch a separate reviewer session, registe
 - `phx work progress` updates `last_progress_at` and an optional note. The board shows it and the no-progress flag uses it.
 - `needs_input` lands in the owner inbox as today. The Captain answers routine questions with `answered_by: captain`.
 
+### PR publication and delivery
+
+A writer-bound PR item goes `development` → `self_review` → `publication` → `delivery`. It never enters the runner-only stages, `adversarial_review` or `pr_revision`.
+
+1. **Publication.** After self-review passes, the worker pushes the item branch (`phalanx/<sha256 of the item ID>`, which the reconciler looks up). It opens one ready PR against the target branch, or reuses the open PR on that branch. For a `checked_in` target it enables GitHub auto-merge with any method the repository allows (D1, D2). Then it posts `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<n>"}` with `phx work result`. Only a successful publication result carries `pr_url`, and the PR must be in the item's registered repository.
+2. **Delivery.** The execution waits as `delivery / waiting_for_external` with no attempt, and the reconciler's observations drive it (see the next section). The writer stays registered. It acts on `checks_failed`, `review_feedback`, conflict and `head_drift` flags by pushing fixes to the open PR, which needs no attempt, and the next observation picks up the new head.
+3. **Closed without merge.** The server asks the owner. A reply queues `delivery` for the writer, which reopens the PR or explains, then posts a result to return to the wait.
+
+Pre-PR local checks are flags, not a gate (D3). The reconciler runs the trusted policy's local checks on each new head and posts them as flags. Repository rules and required checks gate the merge. An independent reviewer session for `adversarial_review` isn't part of the direct path yet.
+
 ## GitHub reconciliation
 
 The reconciler runs periodically for each open PR item and for due external waits. It holds no lease or slot and posts facts through a runner-authenticated observation route. Each observation is idempotent on (execution, PR, head, observation digest) and carries `observed_at`. GitHub is authoritative, so a newer observation always replaces the server's view, even when it moves an item backward (for example, a reopened PR).
@@ -76,6 +86,8 @@ The reconciler runs periodically for each open PR item and for due external wait
 | Branch commits reachable from the base with no PR (git ancestry) | A flag only. |
 
 GitHub rate limits back off and never block other items.
+
+For a writer's execution in `publication` or `delivery`, the server applies each PR observation as a state transition (`pr_observed`). The observation sets the primary PR and current head. A merge completes the execution and ends its writer. Every post is reapplied, so a lost apply recovers on the next pass, and an unchanged observation doesn't bump the execution's version. A snapshot older than one already recorded is ignored unless it shows a merge. A `ready_for_check_in` milestone, and the target, need required checks green, so they need the repository's trusted validation policy. Without one the execution keeps waiting, visibly, until merged. Executions on the old path only record observations.
 
 ## Liveness
 
@@ -220,7 +232,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
 2. **Writer registration and evidence.** Add the writer routes and token, the `writer` role on result routes, and `phx work`. Add Captain registration and heartbeat, flags, and the board's writer, Captain and flag columns.
 3. **Reconciler.** Read GitHub and git, post observations, and raise flags, including `no_live_captain`.
 4. **Charter, Captain automation and shifts.** Pilot one item end to end on the direct path while the old loop runs other items. An execution with a registered writer isn't queued, so the old loop can't claim it. Run at least one shift handoff and one keeper restart during the pilot.
-5. **End-to-end acceptance**, then retire the old path. The acceptance test must show:
+5. **End-to-end acceptance**, then retire the old path. The writer's [PR lifecycle](#pr-publication-and-delivery) landed early, so a pilot PR item can run fully direct. The acceptance test must show:
    - lost-launch discovery by nonce;
    - exact-writer matching, and no duplicate writers with two Captains racing for one item;
    - writer replacement without losing local changes;
