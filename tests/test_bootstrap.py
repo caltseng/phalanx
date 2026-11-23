@@ -44,13 +44,14 @@ server.run()
 
 
 class ServerFixture:
-    def start_server(self, path):
+    def start_server(self, path, **environment):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
         env = dict(os.environ, PHALANX_DB=str(path), PHALANX_OWNER_TOKEN=OWNER,
-                   PHALANX_RUNNER_TOKEN=RUNNER)
+                   PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0")
+        env.update(environment)
         log = path.with_suffix(".log")
         with log.open("w") as output:
             server = subprocess.Popen(
@@ -152,6 +153,18 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
+
+    def test_lease_seconds_defaults_and_rejects_invalid_values(self):
+        from phalanx.config import lease_seconds
+        with patch.dict(os.environ):
+            os.environ.pop("PHALANX_LEASE_SECONDS", None)
+            self.assertEqual(lease_seconds(), 300)
+            os.environ["PHALANX_LEASE_SECONDS"] = "45"
+            self.assertEqual(lease_seconds(), 45)
+            for value in ("0", "-5", "29", "3601", "1.5", "", "five"):
+                os.environ["PHALANX_LEASE_SECONDS"] = value
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    lease_seconds()
 
     def test_migration_refuses_foreign_and_future_databases(self):
         with TemporaryDirectory() as directory:

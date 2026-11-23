@@ -31,10 +31,11 @@ _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reco
 
 class CaptainLoop:
     def __init__(self, root: Path, config: dict, api, adapter: BridgeAdapter, *,
-                 poll_seconds: float = 2, heartbeat_seconds: float = 20,
-                 batch_size: int = 8, wait_seconds: float = 2, emit=None):
-        if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds <= 20:
-            raise RunnerError("Poll interval must be at most 30s and heartbeat interval at most 20s")
+                 poll_seconds: float = 2, heartbeat_seconds: float = 60,
+                 batch_size: int = 8, wait_seconds: float = 2, overdue_seconds: float = 3 * 3600,
+                 emit=None):
+        if not 0 < poll_seconds <= 30 or not 0 < heartbeat_seconds:
+            raise RunnerError("Poll interval must be at most 30s and heartbeat interval must be positive")
         if type(batch_size) is not int or not 1 <= batch_size <= 32 or not 0 < wait_seconds <= 5:
             raise RunnerError("Native batches need 1-32 slots and a wait of at most 5s")
         if not isinstance(config.get("runner_id"), str) or not config["runner_id"]:
@@ -46,6 +47,7 @@ class CaptainLoop:
                 raise RunnerError("The private runner state must be outside mapped checkouts")
         self.poll_seconds, self.heartbeat_seconds = poll_seconds, heartbeat_seconds
         self.batch_size, self.wait_seconds = batch_size, wait_seconds
+        self.overdue_seconds = overdue_seconds
         self.emit = emit or (lambda event: print(json.dumps(event), flush=True))
         self.slot_pool = ThreadPoolExecutor(max_workers=256, thread_name_prefix="captain-slot")
         self.lease_pool = ThreadPoolExecutor(max_workers=256, thread_name_prefix="captain-lease")
@@ -74,6 +76,8 @@ class CaptainLoop:
             self.rechecks = False
         self.observing = set()
         self.blocked: dict[int, str] = {}
+        # Leases left to expire because their exact writer stopped without a result.
+        self.lapsing: dict[int, str] = {}
         self.closed = False
         self._bind_identity()
 
@@ -445,9 +449,20 @@ class CaptainLoop:
         if native.state == "stopped":
             if stopping:
                 return self._confirm_stop(runner, current, native)
+            if runner._handoff(snapshot).read_result() is None:
+                # Stopped-attempt recovery needs an expired lease; renewing would hold the item forever.
+                self.lapsing[slot] = snapshot["lease"]
+                return {"status": "stopped_without_result",
+                        "reason": "Exact native writer stopped without a result; the lease will lapse "
+                                  "and stopped-attempt recovery will reconcile it"}
             return {"status": "submitted", "execution": runner.submit(
                 packet.marker, snapshot["host_id"], str(native.thread_id),
             )}
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(snapshot["started_at"])).total_seconds()
+        if age >= self.overdue_seconds:
+            reason = (f"Worker has run over {self.overdue_seconds / 3600:g}h with no result and keeps its "
+                      "reservation while active. Inspect the worker; reply to it or cancel the item if it is stuck")
+            return {"status": "worker_overdue", "reason": reason, "blocker": reason}
         return {"status": "observing", "reason": f"Exact native writer is {native.state}; reservation retained"}
 
     def _check_observation(self, runner, snapshot, observation):
@@ -496,10 +511,17 @@ class CaptainLoop:
             if future.done():
                 del self.renewals[slot]
                 try:
-                    future.result()
+                    renewed = future.result()
                 except Exception as error:
                     self._status(slot, "renewal_blocked", f"{type(error).__name__}: {error}; reconcile the lease",
                                  lease=lease)
+                    continue
+                remaining = renewed["lease_expires_at"] - time()
+                if remaining < 2 * self.heartbeat_seconds:
+                    self._status(slot, "renewal_interval_too_long",
+                                 f"The {self.heartbeat_seconds:g}s heartbeat is not under half the {remaining:.0f}s "
+                                 "remaining lease; lower --heartbeat-seconds or raise the server's "
+                                 "PHALANX_LEASE_SECONDS", lease=lease)
         for slots, future in list(self.observations.items()):
             if future.done():
                 del self.observations[slots]
@@ -529,7 +551,7 @@ class CaptainLoop:
                         self.expired.pop(result["attempt_id"], None)
                     if result.get("unchanged") and slot in self.blocked:
                         continue
-                    self._block(slot, None)
+                    self._block(slot, result.get("blocker"))
                     self._status(slot, result["status"], result.get("reason", "Operation recorded"))
         records = self._records()
         for slot in list(self.cursors):
@@ -537,6 +559,8 @@ class CaptainLoop:
                 del self.cursors[slot]
         for slot in set(self.blocked) - set(records):
             del self.blocked[slot]
+        for slot in set(self.lapsing) - set(records):
+            del self.lapsing[slot]
         observing = {(slot, record.get("claim", {}).get("attempt_id")) for slot, record in records.items()
                      if "packet" in record and any(field in record for field in ("relay", "receipt"))}
         if self.observing - observing:
@@ -596,7 +620,7 @@ class CaptainLoop:
             self.recheck_due = now + self.poll_seconds
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
-                    and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
+                    and self.lapsing.get(slot) != record["lease"] and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
                 self.renewals[slot] = (self.lease_pool.submit(self._runner(slot).renew, self.blocked.get(slot)),
                                        record["lease"])
                 self.lease_due[slot] = now + self.heartbeat_seconds
@@ -665,7 +689,7 @@ def add_captain_command(commands):
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--poll-seconds", type=float, default=2)
-    parser.add_argument("--heartbeat-seconds", type=float, default=20)
+    parser.add_argument("--heartbeat-seconds", type=float, default=60)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--wait-seconds", type=float, default=2)
     parser.add_argument("--adapter-command", nargs=argparse.REMAINDER,

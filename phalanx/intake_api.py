@@ -80,11 +80,6 @@ def timeline(request: Request, item_id: Identifier, execution_id: Identifier):
     return run(request, intake.timeline, item_id, execution_id)
 
 
-@router.get("/items/{item_id}/executions/{execution_id}/report", response_class=PlainTextResponse)
-def report(request: Request, item_id: Identifier, execution_id: Identifier):
-    return run(request, intake.report, item_id, execution_id)
-
-
 @router.get("/items/{item_id}/executions/{execution_id}/drafts/{revision}",
             response_class=PlainTextResponse)
 def draft(request: Request, item_id: Identifier, execution_id: Identifier, revision: RevisionID):
