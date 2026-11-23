@@ -225,6 +225,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
 | Relay coalescing (44cdf154) | Unnecessary. Recommend stopping it now. |
 | Relay SQLite contention (108f6009) | Unnecessary once the relay is retired (step 5). Until then, run one relay server, as the runbook already says. |
 | Dirty-stop recovery (a4bcb34f) | Unnecessary once attended slots go. Keep its invariant: writer replacement never discards unpushed changes. |
+| Merge before a PR gate (4a3d20b7) | Not fixed. The old path recognizes a merged primary PR only at its PR gates, so an execution still in `development` or `self_review` when its PR merges is cancelled with a report. Removed with the old path (step 5). |
 
 ## Migration order
 
