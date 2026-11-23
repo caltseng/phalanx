@@ -8,7 +8,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx import captains, dispatch, flags, intake
+from phalanx import captains, dispatch, flags, intake, store
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.store import connect, migrate, write_transaction
@@ -426,6 +426,23 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             (stale,) = flags.all_flags(db, now)["flags"]
         self.assertEqual(stale["kind"], "captain_stale")
         self.assertIn("without finishing its handoff", stale["reason"])
+
+    def test_upgrade_resets_sessions_stored_as_bare_ids(self):
+        path = self.path.with_name("previous.sqlite3")
+        with write_transaction(path, create=True) as db:
+            for version, statements in enumerate(store.MIGRATIONS[:-1], start=1):
+                for statement in statements:
+                    db.execute(statement)
+                db.execute(f"PRAGMA user_version = {version}")
+            now = intake.timestamp()
+            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, sessions_json, created_at,
+                              heartbeat_at) VALUES ('c', 'chat', 'c1', 'active', '["s-1"]', ?, ?)""", (now, now))
+        migrate(path)
+        with write_transaction(path) as db:
+            captain = captains.heartbeat(db, "c", captains.Heartbeat(
+                charter_revision="c1", wake_count=1, state="active", sessions=[captains.Session(id="s-1", name="phx x")]))
+            self.assertEqual([session["id"] for session in captain["sessions"]], ["s-1"])
+            flags.all_flags(db)
 
     def test_stored_flags_are_idempotent_and_cleared_by_their_raiser(self):
         self.start_server(self.path)

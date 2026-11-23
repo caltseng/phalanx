@@ -54,6 +54,8 @@ DIRECT_SCHEMA = (
 # Shift handoff: when a Captain started ending, and the actions Captains record on item timelines.
 CAPTAIN_SHIFT_SCHEMA = (
     "ALTER TABLE captains ADD COLUMN ending_at TEXT",
+    # Sessions were bare IDs and are now objects. The next heartbeat reports them again.
+    "UPDATE captains SET sessions_json = '[]'",
     """CREATE TABLE captain_actions (
         id TEXT PRIMARY KEY NOT NULL,
         execution_id TEXT NOT NULL REFERENCES executions(id),
