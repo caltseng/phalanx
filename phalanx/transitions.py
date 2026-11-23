@@ -249,6 +249,9 @@ def _merge_verified(state: Execution, evidence: Evidence) -> Execution:
         _require(state.target is Target.MERGED and state.ready_revision == pr.revision,
                  "Verified merge must match the authorized ready revision")
         return _close(state, Status.COMPLETED, pr)
+    if state.stage is Stage.DELIVERY:
+        # The writer's PR merged into its target; _pr_observed took GitHub's head as the candidate.
+        return _close(replace(state, ready_revision=pr.revision), Status.COMPLETED, pr)
     # The repository merged the validated candidate itself, so the item is delivered.
     _require(state.stage in EXTERNAL_MERGE_STAGES, "Merge verification requires a PR gate or check-in")
     return _close(replace(state, stage=Stage.CHECK_IN, ready_revision=pr.revision), Status.COMPLETED, pr)
@@ -270,8 +273,8 @@ def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
                           "owner reply"), ready_revision=None)
     if pr.merge_commit:
         # A merge by any method, by anyone, delivers either PR target. GitHub's head is the
-        # candidate. Interim: routes through _merge_verified once #168 lands.
-        return _close(replace(state, candidate=pr.revision.head), Status.COMPLETED, pr)
+        # candidate, since a writer's push can race auto-merge (decision 81).
+        return _merge_verified(replace(state, candidate=pr.revision.head), evidence)
     if state.status is not Status.WAITING_FOR_EXTERNAL:
         return state
     state = replace(state, candidate=pr.revision.head)
