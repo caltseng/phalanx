@@ -45,3 +45,4 @@
 - Use `phalanx/` for new topic branches unless Caleb or the target repo specifies otherwise. Run checks appropriate to the change and report any gaps.
 - For Phalanx work items, record the report or PR and its verification. Check in only when authorized by the work item or repository policy and after the current PR head satisfies the required checks and approvals.
 - End PR descriptions that Phalanx creates with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Preserve the footer across updates and retries.
+- Prefix the titles of PRs that Phalanx creates with `[WIP] ` while they are drafts or in progress, and with `[Blocked] ` while blocked. Remove the prefix when the PR is ready for review. The runner keeps one normalized prefix through its PR notes outbox. Title prefixes never affect gates. See [STATE_MACHINE.md](STATE_MACHINE.md#pr-title-lifecycle-prefix).

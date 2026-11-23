@@ -20,11 +20,14 @@ from .attended_recovery_service import RecoveryJournal, _verify_local, run_recov
 from .captain_adapter import (BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch,
                               RequestRetracted)
 from .captain_relay import RelayTransport
+from .pr_notes import TITLE, PRNotes, title_status
 from .runner_preflight import preflight
 from .workspaces import _file_lock, _item_branch
 
 
 _LAUNCH_EFFECTS = ("relay", "receipt", "submission", "recover_stop", "recover_claim")
+# Title changes follow stage transitions; a slower cadence bounds API and GitHub reads.
+TITLE_SYNC_SECONDS = 30
 _GITHUB_STAGES = {"pr_creation", "pr_promotion", "pr_validation", "pr_reconciliation", "pr_revision",
                   "check_in"}
 _POLICY_STAGES = {"pre_pr_validation", "pr_promotion", "pr_validation", "pr_reconciliation"}
@@ -76,6 +79,8 @@ class CaptainLoop:
         self.reported_discovery, self.blocked_mappings = None, {}
         self.recheck_future = None
         self.recheck_due = 0
+        self.title_future = None
+        self.title_due = 0
         try:
             self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
         except RunnerError:
@@ -618,6 +623,19 @@ class CaptainLoop:
         if self.rechecks and self.recheck_future is None and now >= self.recheck_due:
             self.recheck_future = self.control_pool.submit(self._recheck_due)
             self.recheck_due = now + self.poll_seconds
+        if self.title_future is not None and self.title_future.done():
+            future, self.title_future = self.title_future, None
+            try:
+                pending = future.result()
+            except Exception as error:
+                pending = f"{type(error).__name__}: {error}; retrying next sync"
+            if pending:
+                self._status("titles", "titles_pending", pending)
+            else:
+                self._status("titles", "titles_synced", "PR lifecycle titles match their executions")
+        if self.title_future is None and now >= self.title_due:
+            self.title_future = self.native_pool.submit(self._sync_titles)
+            self.title_due = now + TITLE_SYNC_SECONDS
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
                     and self.lapsing.get(slot) != record["lease"] and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
@@ -711,6 +729,24 @@ class CaptainLoop:
                 errors.append(f"{row['item_id']}: {error}")
         if errors:
             raise RunnerError("; ".join(errors))
+
+    def _sync_titles(self):
+        """Queue each open PR's lifecycle title and flush the outbox; return a reason while any title is pending.
+
+        Titles are visibility only: a failed write never touches the execution and retries on a later pass.
+        """
+        notes, cursor = PRNotes(self.root), None
+        while True:
+            page = self.api.call("/operator/executions?kind=open&limit=100"
+                                 + (f"&cursor={quote(cursor, safe='')}" if cursor else ""))
+            for row in page["items"]:
+                if row.get("primary_pr_url") and row["repository_id"] in self.config["repositories"]:
+                    notes.title(row["primary_pr_url"], title_status(row), row["version"])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
+        pending = [note for note in notes.flush(os.environ.get("PHALANX_GITHUB_TOKEN")) if note["note"] == TITLE]
+        return "; ".join(f"{note['pr']}: {note['error']}" for note in pending)
 
     def run(self, stop: Event):
         # Only one loop relays launches from this journal. Manual receipt and

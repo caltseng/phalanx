@@ -6,7 +6,7 @@ from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from phalanx.github import ATTRIBUTION, GitHubClient
-from phalanx.pr_notes import MAX_ATTEMPTS, PRNotes, known_gaps
+from phalanx.pr_notes import BLOCKED, MAX_ATTEMPTS, WIP, PRNotes, known_gaps, lifecycle_title, title_status
 
 from test_github import response
 
@@ -17,6 +17,8 @@ SHA = "a" * 40
 class FakePR:
     def __init__(self):
         self.body = f"Fix tests\n\n{ATTRIBUTION}"
+        self.title = "[WIP] Fix tests"
+        self.draft = True
         self.comments = []
         self.writes = 0
         self.down = False
@@ -33,8 +35,10 @@ class FakePR:
             return response([{"body": body} for body in self.comments])
         if request.method == "PATCH":
             self.writes += 1
-            self.body = json.loads(request.data)["body"]
-        return response({"body": self.body})
+            payload = json.loads(request.data)
+            self.body = payload.get("body", self.body)
+            self.title = payload.get("title", self.title)
+        return response({"body": self.body, "title": self.title, "draft": self.draft})
 
 
 class PRNotesTests(unittest.TestCase):
@@ -74,6 +78,60 @@ class PRNotesTests(unittest.TestCase):
         self.notes.comment(URL, f"converted-to-draft:{SHA}", "Converted to draft.")
         self.assertEqual(self.notes.flush("token"), [])
         self.assertEqual(len(self.pr.comments), 1)
+
+    def sync(self, stage, status="running", runner_blocker=None):
+        self.version = getattr(self, "version", 0) + 1
+        execution = {"stage": stage, "status": status, "runner_blocker": runner_blocker}
+        self.notes.title(URL, title_status(execution), self.version)
+        return self.notes.flush("token")
+
+    def test_lifecycle_title_follows_draft_blocked_ready_and_regression(self):
+        self.pr.title = "Fix tests"
+        self.assertEqual(self.sync("development", "queued"), [])
+        self.assertEqual(self.pr.title, "[WIP] Fix tests")
+        # Pending CI on a draft is routine work, not a blocker.
+        self.sync("pr_validation", "waiting_for_external")
+        self.assertEqual(self.pr.title, "[WIP] Fix tests")
+        self.sync("pre_pr_validation", "waiting_for_input")
+        self.assertEqual(self.pr.title, "[Blocked] Fix tests")
+        self.sync("pr_promotion", "running", runner_blocker="Captain relay stalled")
+        self.assertEqual(self.pr.title, "[Blocked] Fix tests")
+        self.sync("pr_promotion")
+        self.assertEqual(self.pr.title, "[WIP] Fix tests")
+        self.pr.draft = False
+        self.sync("pr_validation", "waiting_for_external")
+        self.assertEqual(self.pr.title, "Fix tests")
+        # New scope returns a ready PR to development.
+        self.sync("development", "queued")
+        self.assertEqual(self.pr.title, "[WIP] Fix tests")
+        # Someone converted the ready PR back to draft during revision.
+        self.sync("pr_reconciliation")
+        self.assertEqual(self.pr.title, "Fix tests")
+        self.pr.draft = True
+        self.sync("pr_revision")
+        self.assertEqual(self.pr.title, "[WIP] Fix tests")
+
+    def test_title_writes_are_idempotent_and_never_stack_prefixes(self):
+        self.pr.title = "[wip] [Blocked]  [WIP] Fix tests"
+        self.sync("development")
+        self.assertEqual(self.pr.title, "[WIP] Fix tests")
+        writes = self.pr.writes
+        # A replayed sync of the same version is not re-queued, and a later version
+        # rereads the title but leaves a correct one alone.
+        self.assertFalse(self.notes.title(URL, "in_progress", self.version))
+        self.sync("self_review")
+        self.assertEqual(self.pr.writes, writes)
+        self.assertEqual(lifecycle_title("[Blocked] [WIP]", None), "Untitled")
+        self.assertEqual(lifecycle_title("Fix [WIP] later", WIP), "[WIP] Fix [WIP] later")
+
+    def test_failed_title_write_stays_visible_and_retries(self):
+        self.pr.title = "Fix tests"
+        self.pr.down = True
+        pending = self.sync("pre_pr_validation", "waiting_for_input")
+        self.assertEqual((pending[0]["note"], pending[0]["retrying"]), ("title", True))
+        self.pr.down = False
+        self.assertEqual(self.notes.flush("token"), [])
+        self.assertEqual(self.pr.title, f"{BLOCKED} Fix tests")
 
     def test_known_gaps_replace_the_section_and_keep_one_footer_last(self):
         first = known_gaps(f"Body\n{ATTRIBUTION}", "Open: lint")

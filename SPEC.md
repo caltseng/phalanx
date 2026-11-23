@@ -24,6 +24,7 @@ Use Phalanx terminology in operator-facing copy where it describes a concrete ev
 
 Append `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)` as its own paragraph at the end of each PR description Phalanx creates. Keep the footer when updating that description and add it only once across retries.
 
+Prefix the title of each PR Phalanx opens with `[WIP] ` while it is a draft or in progress, and with `[Blocked] ` while its execution waits for input or has a recorded blocker. Remove the prefix once the PR is ready for review. Restore it if work regresses. The prefix is for visibility only and never affects gates. See [STATE_MACHINE.md](STATE_MACHINE.md#pr-title-lifecycle-prefix).
 1. An authenticated client files an item through the API and receives its ID. The API supports listing and inspecting work, claiming eligible items, renewing claims, posting progress and results, and responding to a question.
 2. A runner requests an atomic claim for an eligible repo only when it has a free slot and dispatch is enabled. Agents can run concurrently, including on the same repo when their tasks are independent. A runner uses a separate worktree and topic branch for each PR item.
 3. An agent reads the repo instructions, executes one assigned stage, and returns its outcome and evidence or a focused question. The server applies the transition rules before the item is eligible for another stage. A waiting item releases its worker slot and retains the question, prior work, and resume context.

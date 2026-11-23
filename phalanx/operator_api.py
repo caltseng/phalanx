@@ -140,6 +140,7 @@ def summary(row, now):
         "last_advanced_at": row["last_advanced_at"],
         "last_progress_at": row["updated_at"],
         "wait_reason": wait.get("reason"),
+        "runner_blocker": row["runner_blocker"],
         "blocked_prerequisite_count": blocked_count,
         "resume_trigger": wait.get("trigger"),
         "retry_at_ms": row["retry_at"],

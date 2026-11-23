@@ -7,7 +7,7 @@ import re
 import sqlite3
 
 from .github import GitHubClient
-
+from .pr_notes import WIP, lifecycle_title
 
 def github_repository(remote):
     from .pr_models import GITHUB_REMOTE
@@ -67,7 +67,7 @@ def publish_draft(root, api, record, mapping, checkpoint, token):
     goal = claim["request"]["goal"]
     return DraftStageRunner(root / "publication", api, GitHubClient(owner, name, token=token)).run(
         assignment, checkpoint, default_base=mapping["base_branch"],
-        title=draft_title(goal), body=goal,
+        title=lifecycle_title(draft_title(goal), WIP), body=goal,
     )
 
 

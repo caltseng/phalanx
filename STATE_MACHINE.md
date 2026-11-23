@@ -66,6 +66,16 @@ If GitHub reports the PR already merged, verify the merge matches this work item
 
 Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current check-in claim supplies the verified provider merge commit and its ordered parents, with the candidate head as the head parent. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
 
+### PR title lifecycle prefix
+
+The title of a PR Phalanx opens shows its lifecycle, for visibility only. It never changes readiness, promotion, validation, or check-in gates.
+
+- `[WIP] ` while the PR is a draft or the execution is in `development`, `pr_creation`, `self_review`, `pre_pr_validation`, or `pr_promotion`, including when queued or waiting for routine CI.
+- `[Blocked] ` while the execution is `waiting_for_input` or has a recorded runner blocker that needs owner or external action.
+- No prefix once the PR is ready for review and work isn't blocked. A regression to draft or `development` restores the matching prefix.
+
+The runner writes titles through its PR notes outbox. On each execution version change, it rereads the live title and draft flag, strips any leading `[WIP]` or `[Blocked]` prefixes, and patches only if the result differs. A failed title write retries and stays visible in the Captain loop status. It never blocks or fails a stage.
+
 ## Repository validation policy
 
 - Each repo can define applicable pre-validation commands, when they may be skipped, draft-only checks, expected CI, and required previews. Start from repository instructions and GitHub’s required checks. If no CI is expected or required, advance. If expected CI is absent, recheck and surface a blocker if it stays missing.

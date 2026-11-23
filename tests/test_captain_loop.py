@@ -32,6 +32,7 @@ class QueueAPI:
         self.waiting = ["first", "second"]
         self.stages = {}
         self.expired = []
+        self.open_executions, self.listings = [], []
         self.paused = False
         self.drop_claim = False
         self.drop_result = False
@@ -43,6 +44,9 @@ class QueueAPI:
                 return [{"id": "repo", "remote": str(self.checkout)}]
             if route.endswith("/recovery"):
                 return self.expired.copy()
+            if route.startswith("/operator/executions?"):
+                self.listings.append(route)
+                return self.open_executions.pop(0) if self.open_executions else {"items": [], "next_cursor": None}
             if route == "/dispatch/claim":
                 self.requests.append((body.copy(), lease))
                 if lease not in self.claims:
@@ -191,6 +195,20 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             **packet.result_identity(), "outcome": "succeeded", "details": {"evidence": text},
         }), encoding="utf-8")
         return packet
+
+    def test_title_sync_pages_open_executions_and_keeps_to_mapped_repositories(self):
+        pr = "https://github.com/owner/repo/pull/7"
+        row = {"status": "queued", "stage": "development", "version": 4, "runner_blocker": None}
+        self.api.open_executions = [
+            {"items": [{**row, "repository_id": "repo", "primary_pr_url": pr},
+                       {**row, "repository_id": "other", "primary_pr_url": "https://github.com/o/x/pull/1"}],
+             "next_cursor": "page-2"},
+            {"items": [{**row, "repository_id": "repo", "primary_pr_url": None}], "next_cursor": None},
+        ]
+        with patch.dict(os.environ, {"PHALANX_GITHUB_TOKEN": ""}):
+            pending = self.loop()._sync_titles()
+        self.assertEqual(pending, f"{pr}: Set PHALANX_GITHUB_TOKEN to publish PR notes")
+        self.assertTrue(self.api.listings[-1].endswith("&cursor=page-2"))
 
     def test_slow_git_and_native_wait_do_not_block_other_slot_or_heartbeats(self):
         git_gate, native_gate = Event(), Event()

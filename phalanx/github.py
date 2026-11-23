@@ -420,6 +420,20 @@ class GitHubClient:
         self._request("update pull request description", "PATCH", self._pull_url(number),
                       payload={"body": body})
 
+    def get_pull_request_title(self, number: int) -> tuple[str, bool]:
+        """Return the PR's current title and whether it is a draft."""
+        operation = "get pull request title"
+        data, _ = self._request(operation, "GET", self._pull_url(number))
+        title = data.get("title") if isinstance(data, dict) else None
+        draft = data.get("draft") if isinstance(data, dict) else None
+        if not isinstance(title, str) or type(draft) is not bool:
+            raise GitHubError(operation, "invalid pull request response")
+        return title, draft
+
+    def update_pull_request_title(self, number: int, title: str) -> None:
+        self._request("update pull request title", "PATCH", self._pull_url(number),
+                      payload={"title": title})
+
     def list_pull_request_comments(self, number: int, *, page_limit: int = 10) -> tuple[str, ...]:
         """Return the bodies of the PR's conversation comments."""
         url = self._pull_url(number).replace("/pulls/", "/issues/") + "/comments?per_page=100"
