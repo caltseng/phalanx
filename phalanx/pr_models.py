@@ -191,6 +191,13 @@ class VerifiedMerge(AttemptEvent):
     merge_parent_shas: tuple[SHA, SHA]
 
 
+class OwnerMerge(Payload):
+    """A runner's observation that the owner merged a delivered ready PR."""
+
+    runner_id: Identifier
+    pull: MergedPull
+
+
 Observation = Annotated[
     Publication | Validation | IndependentReview | Reconciliation | Revised | VerifiedMerge,
     Field(discriminator="stage"),

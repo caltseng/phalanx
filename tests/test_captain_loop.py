@@ -9,6 +9,7 @@ import sys
 from tempfile import TemporaryDirectory
 from threading import Event, Lock
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, patch
 from uuid import uuid4
@@ -868,6 +869,32 @@ class CaptainLoopTests(ServerFixture, unittest.TestCase):
             self.assertTrue(self.loop().rechecks)
             self.assertLessEqual({"pre_pr_validation", "pr_promotion", "pr_validation"},
                                  set(loop._capabilities()))
+
+    def test_merge_watch_records_owner_merge_of_delivered_pr(self):
+        head, merged = "a" * 40, "c" * 40
+        watch = {"item_id": "up", "execution_id": "up-execution", "repository_id": "repo",
+                 "remote": "https://github.com/acme/app.git", "target_branch": None, "head_ref": "phalanx/up",
+                 "pr_url": "https://github.com/acme/app/pull/7", "revision": {"head": head, "base": "b" * 40}}
+        posts = []
+        def call(route, body=None, **kwargs):
+            if route == "/runner/owner-merge-watches":
+                return [watch, {**watch, "item_id": "other", "repository_id": "unmapped"}]
+            posts.append((route, body, kwargs["key"]))
+            return {}
+        self.api.call = call
+        pull = SimpleNamespace(number=7, head_repository="acme/app", base_repository="acme/app",
+                               head_ref="phalanx/up", base_ref="main", head_sha=head, base_sha="d" * 40,
+                               state="closed", draft=False, merged=True, merge_commit_sha=merged)
+        with patch.dict(os.environ, {"PHALANX_GITHUB_TOKEN": "fixture-only"}), patch(
+            "phalanx.captain_loop.owner_merge", return_value=pull,
+        ) as observe:
+            self.loop()._watch_merges()
+        target = observe.call_args.args[1]
+        self.assertEqual((target.number, target.base_ref, target.revision.head), (7, "main", head))
+        self.assertEqual([(route, key) for route, _, key in posts],
+                         [("/items/up/executions/up-execution/owner-merge", "owner-merge:up-execution")])
+        expected = {field: getattr(pull, field) for field in vars(pull) if field != "merge_commit_sha"}
+        self.assertEqual(posts[0][1], {"runner_id": "desk", "pull": {**expected, "merge_commit": merged}})
 
     def test_slow_runner_only_draft_keeps_worker_slot_and_renewals_usable(self):
         self.api.stages["first"] = "pr_creation"

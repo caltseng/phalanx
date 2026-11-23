@@ -169,6 +169,13 @@ def timeline(db, item_id, execution_id):
     } for row in db.execute(
         "SELECT * FROM attempt_adoptions WHERE execution_id=?", (execution_id,),
     )]
+    events += [{
+        "version": max(states), "event": "owner_merge", "attempt_id": None,
+        "created_at": row["recorded_at"],
+        "details": {"pr_url": row["pr_url"], "head_sha": row["head_sha"],
+                    "merge_commit": row["merge_commit"], "runner_id": row["runner_id"]},
+        "state": states[max(states)],
+    } for row in db.execute("SELECT * FROM owner_merges WHERE execution_id=?", (execution_id,))]
     return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 

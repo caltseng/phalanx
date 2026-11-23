@@ -78,17 +78,38 @@ def check_in(github: GitHubClient, target: MergeTarget, *, assert_claim: Callabl
     return _observe(github, target)
 
 
+def owner_merge(github: GitHubClient, target: MergeTarget) -> PullRequest | None:
+    """Return the PR if the owner merged it at the ready head by any method, else ``None``.
+
+    Raises GitHubError when GitHub cannot be read and ValueError when the PR
+    no longer matches the delivered one, so the caller can surface it.
+    """
+    pull = github.get_pull_request(target.number)
+    if not _matches(github, target, pull):
+        raise ValueError(f"{target.url} no longer matches the delivered branch and target")
+    if not pull.merged or pull.state != "closed" or pull.draft or not pull.merge_commit_sha:
+        return None
+    if pull.head_sha != target.revision.head:
+        raise ValueError(f"{target.url} was merged at {pull.head_sha}, not its verified head "
+                         f"{target.revision.head}. Rerun the prerequisite or replace it.")
+    return pull
+
+
+def _matches(github: GitHubClient, target: MergeTarget, pull: PullRequest) -> bool:
+    repository = github.repository.casefold()
+    return (pull.number == target.number and pull.url.casefold() == target.url.casefold()
+            and (pull.head_ref, pull.base_ref) == (target.head_ref, target.base_ref)
+            and (pull.head_repository or "").casefold() == repository
+            and pull.base_repository.casefold() == repository)
+
+
 def _observe(github: GitHubClient, target: MergeTarget) -> CheckInOutcome:
     """Read the PR and verify a merge of the ready head; an unmerged PR is ``pending``."""
     try:
         pull = github.get_pull_request(target.number)
     except GitHubError as error:
         return CheckInOutcome("pending", str(error), retry_after_seconds=error.retry_after_seconds)
-    repository = github.repository.casefold()
-    if (pull.number != target.number or pull.url.casefold() != target.url.casefold()
-            or (pull.head_ref, pull.base_ref) != (target.head_ref, target.base_ref)
-            or (pull.head_repository or "").casefold() != repository
-            or pull.base_repository.casefold() != repository):
+    if not _matches(github, target, pull):
         return CheckInOutcome("unresolved", "The PR no longer matches the recorded branch and target", pull)
     if not pull.merged:
         return CheckInOutcome("pending", "GitHub has yet to show the merge", pull)

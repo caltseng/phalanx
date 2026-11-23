@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import finalization, intake, pr_models, pr_observations, waits
+from . import finalization, intake, owner_merges, pr_models, pr_observations, waits
 from .auth import authenticate, require_owner, require_runner
 from .store import read_transaction, write_transaction
 from .intake_models import (
@@ -193,6 +193,19 @@ def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
             body: Versioned, key: RequiredKey):
     return run(request, waits.recheck, item_id, execution_id, body, write=True,
                scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
+
+
+@router.get("/runner/owner-merge-watches", dependencies=[Depends(require_runner)])
+def owner_merge_watches(request: Request, limit: BatchLimit = 50):
+    return run(request, owner_merges.watches, limit)
+
+
+@router.post("/items/{item_id}/executions/{execution_id}/owner-merge",
+             dependencies=[Depends(require_runner)])
+def owner_merge(request: Request, item_id: Identifier, execution_id: Identifier,
+                body: pr_models.OwnerMerge, key: RequiredKey):
+    return run(request, owner_merges.record, item_id, execution_id, body, write=True,
+               scope=f"owner-merge:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",

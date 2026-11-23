@@ -14,6 +14,11 @@ from urllib.parse import quote
 from uuid import UUID
 
 from .attended import AttendedRunner, RunnerAPI, RunnerError, RUNNER_STAGES, STAGES
+from .attended_drafts import github_repository
+from .check_in import MergeTarget, owner_merge
+from .github import GitHubClient, GitHubError
+from .pr_models import GitHubPull
+from .transitions import Revision
 from .attended_recovery import _matches
 from .attended_recovery_service import RecoveryJournal, _verify_local, run_recovery, unlaunched_proof
 from .captain_adapter import (BridgeAdapter, CommandTransport, LaunchNotDelivered, ObservationBatch,
@@ -70,6 +75,9 @@ class CaptainLoop:
         self.reported_discovery, self.blocked_mappings = None, {}
         self.recheck_future = None
         self.recheck_due = 0
+        self.merge_watch_future = None
+        self.merge_watch_due = 0
+        self.merge_watch_seconds = config.get("merge_watch_seconds", 60)
         try:
             self.rechecks = bool({"pr_promotion", "pr_validation"} & set(self._capabilities()))
         except RunnerError:
@@ -606,6 +614,16 @@ class CaptainLoop:
         if self.rechecks and self.recheck_future is None and now >= self.recheck_due:
             self.recheck_future = self.control_pool.submit(self._recheck_due)
             self.recheck_due = now + self.poll_seconds
+        if self.merge_watch_future is not None and self.merge_watch_future.done():
+            future, self.merge_watch_future = self.merge_watch_future, None
+            try:
+                future.result()
+            except Exception as error:
+                self._status(0, "merge_watch_blocked", f"{type(error).__name__}: {error}; retrying next watch")
+        if (self.merge_watch_future is None and now >= self.merge_watch_due
+                and os.environ.get("PHALANX_GITHUB_TOKEN")):
+            self.merge_watch_future = self.control_pool.submit(self._watch_merges)
+            self.merge_watch_due = now + self.merge_watch_seconds
         for slot, record in records.items():
             if ("claim" in record and record.get("lease_expires_at", 0) > time()
                     and self.lapsing.get(slot) != record["lease"] and slot not in self.renewals and now >= self.lease_due.get(slot, 0)):
@@ -650,6 +668,34 @@ class CaptainLoop:
                 self.api.call(route, {"expected_version": row["version"]},
                               key=f"recheck:{row['execution_id']}:{row['version']}")
             except RunnerError as error:
+                errors.append(f"{row['item_id']}: {error}")
+        if errors:
+            raise RunnerError("; ".join(errors))
+
+    def _watch_merges(self):
+        """Record owner merges of delivered ready PRs that checked_in dependents wait on."""
+        token, errors = os.environ["PHALANX_GITHUB_TOKEN"], []
+        for row in self.api.call("/runner/owner-merge-watches"):
+            mapping = self.config["repositories"].get(row["repository_id"])
+            repository = github_repository(row["remote"])
+            number = row["pr_url"].rsplit("/", 1)[-1]
+            if mapping is None or repository is None or not number.isdigit():
+                continue
+            target = MergeTarget(int(number), row["pr_url"], row["head_ref"],
+                                 row["target_branch"] or mapping["base_branch"],
+                                 Revision(row["revision"]["head"], row["revision"]["base"]))
+            try:
+                pull = owner_merge(GitHubClient(*repository.split("/"), token=token), target)
+                if pull is None:
+                    continue
+                route = (f"/items/{quote(row['item_id'], safe='')}/executions/"
+                         f"{quote(row['execution_id'], safe='')}/owner-merge")
+                self.api.call(route, {
+                    "runner_id": self.config["runner_id"],
+                    "pull": {**{field: getattr(pull, field) for field in GitHubPull.model_fields},
+                             "merge_commit": pull.merge_commit_sha},
+                }, key=f"owner-merge:{row['execution_id']}")
+            except (GitHubError, RunnerError, ValueError) as error:
                 errors.append(f"{row['item_id']}: {error}")
         if errors:
             raise RunnerError("; ".join(errors))

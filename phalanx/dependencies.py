@@ -120,7 +120,7 @@ def resolve_dependencies(
     resolved = []
     unmet = []
     for row in db.execute(
-        """SELECT d.upstream_id, d.milestone, e.id, e.state_json,
+        """SELECT d.upstream_id, d.milestone, e.id, e.state_json, m.merge_commit AS owner_merge,
                   EXISTS (SELECT 1 FROM reports WHERE execution_id = e.id) AS report_exists
            FROM work_dependencies AS d
            LEFT JOIN executions AS e ON e.id = (
@@ -129,6 +129,7 @@ def resolve_dependencies(
                  AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id = latest.id)
                ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
            )
+           LEFT JOIN owner_merges AS m ON m.execution_id = e.id
            WHERE d.item_id = ?
            ORDER BY d.upstream_id""",
         (item_id,),
@@ -155,13 +156,16 @@ def resolve_dependencies(
                 ))
                 continue
         elif milestone == Target.MERGED:
-            if state.status == Status.COMPLETED and isinstance(output, PullRequest) and output.merge_commit:
+            merge_commit = isinstance(output, PullRequest) and (output.merge_commit or row["owner_merge"])
+            if state.status == Status.COMPLETED and merge_commit:
                 resolved.append(ResolvedDependency(
-                    upstream_id, milestone, execution_id, output.url, output.merge_commit, output.revision,
+                    upstream_id, milestone, execution_id, output.url, merge_commit, output.revision,
                 ))
                 continue
-            if state.status == Status.COMPLETED:
-                reason = "Prerequisite completed without check-in. Rerun it with check-in or replace it."
+            if state.status == Status.COMPLETED and isinstance(output, PullRequest):
+                reason = (f"Prerequisite delivered {output.url} without check-in. Waiting for the owner to "
+                          "merge it at its verified head; the runner records the merge. Or rerun it with "
+                          "check-in or replace it.")
         elif state.status == Status.COMPLETED and isinstance(output, PullRequest):
             resolved.append(ResolvedDependency(
                 upstream_id, milestone, execution_id, output.url, output.revision.head, output.revision,

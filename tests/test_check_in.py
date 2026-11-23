@@ -1,7 +1,7 @@
 import json
 import unittest
 
-from phalanx.check_in import MergeTarget, check_in
+from phalanx.check_in import MergeTarget, check_in, owner_merge
 from phalanx.github import GitHubClient, HTTPResponse
 from phalanx.transitions import Revision
 
@@ -83,6 +83,16 @@ class CheckInTests(unittest.TestCase):
     def test_github_rules_refusal_waits(self):
         self.mode = "refused"
         self.assertEqual(self.run_check_in().status, "refused")
+
+    def test_owner_merge_accepts_any_method_only_at_the_ready_head(self):
+        github = GitHubClient("owner", "repo", token="fixture", transport=self.send)
+        self.assertIsNone(owner_merge(github, TARGET))
+        self.pull.update(state="closed", merged=True, merge_commit_sha=MERGE)
+        self.assertEqual(owner_merge(github, TARGET).merge_commit_sha, MERGE)
+        self.pull["head"]["sha"] = OTHER
+        with self.assertRaisesRegex(ValueError, "not its verified head"):
+            owner_merge(github, TARGET)
+        self.assertEqual(self.puts, 0)
 
 
 if __name__ == "__main__":

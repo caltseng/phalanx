@@ -31,3 +31,15 @@ DEPENDENCY_SCHEMA = (
     )""",
     "INSERT INTO dependency_audit (id, cursor) VALUES (1, NULL)",
 )
+
+# A runner-attested owner merge of a completed execution's ready PR satisfies checked_in.
+OWNER_MERGE_SCHEMA = (
+    """CREATE TABLE owner_merges (
+        execution_id TEXT PRIMARY KEY NOT NULL REFERENCES executions(id),
+        pr_url TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        merge_commit TEXT NOT NULL,
+        runner_id TEXT NOT NULL,
+        recorded_at TEXT NOT NULL
+    ) WITHOUT ROWID""",
+)

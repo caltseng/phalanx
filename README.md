@@ -535,6 +535,17 @@ an `upstream_id` and a `milestone` of `report`, `ready_for_check_in`, or
 Item inspection includes configured links and the execution's
 `unmet_dependencies`, with an explanation for each wait.
 
+A `checked_in` prerequisite that completed with a ready PR clears when the
+owner merges that PR at its verified head. With `PHALANX_GITHUB_TOKEN` set,
+the Captain loop polls `GET /v1/runner/owner-merge-watches?limit=50` every
+`merge_watch_seconds` (default 60) for such PRs with queued dependents. It
+reads each PR from GitHub and posts a merge, by any method, to
+`POST /v1/items/{item_id}/executions/{execution_id}/owner-merge` with
+`runner_id`, the merged `pull`, and an idempotency key. The server checks the
+PR identity and head, records the merge commit, and shows an `owner_merge`
+event in the upstream timeline. A merge of another head is reported as a
+`merge_watch_blocked` status; rerun or replace that prerequisite.
+
 An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with
 `expected_version` and changes to `goal`, `context_links`,
 `acceptance_criteria`, `priority`, `runner_affinity`, or `dependencies`.

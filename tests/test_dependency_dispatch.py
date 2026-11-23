@@ -9,7 +9,8 @@ from phalanx import dependencies, dispatch, finalization, intake
 from phalanx.dispatch_api import Claim
 from phalanx.intake_models import Intake, Rerun
 from phalanx.store import MIGRATIONS, REVISION_MIGRATION, connect, migrate, write_transaction
-from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target, Wait, start
+from phalanx.transitions import (Event, Evidence, Outcome, PullRequest, Revision, Stage, Status, StoredReport,
+                                 Target, Wait, item_branch, start)
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -212,6 +213,55 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
         self.start_server(self.path)
         with write_transaction(self.path) as db:
             self.assertEqual(self.claim(db, "after-restart")["item_id"], consumer["id"])
+
+    def test_owner_merge_of_ready_pr_satisfies_checked_in_dependent(self):
+        head, base, merged = "a" * 40, "b" * 40, "c" * 40
+        self.start_server(self.path)
+        with write_transaction(self.path) as db:
+            intake.register(db, "app", "https://github.com/acme/app.git")
+            source = intake.create(db, Intake(repository_id="app", goal="Ship it", target=Target.READY))
+            consumer = intake.create(db, Intake(
+                repository_id="consumer", goal="Review this repository", target=Target.REPORT,
+                dependencies=[{"upstream_id": source["id"], "milestone": "checked_in"}]))
+            row = intake.current_execution(db, source["id"])
+            url = "https://github.com/acme/app/pull/7"
+            completed = replace(intake.STATE.validate_json(row["state_json"]), status=Status.COMPLETED,
+                                final_output=PullRequest(url, Revision(head, base)))
+            db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                       (intake.encode(asdict(completed)), row["id"]))
+            dependencies.refresh_dependents(db, source["id"], int(time() * 1000))
+            wait = intake.inspect(db, consumer["id"])["execution"]["unmet_dependencies"][0]
+            self.assertIn(url, wait["reason"])
+            self.assertEqual(self.claim(db, "unmerged"), {"status": "no_eligible_work"})
+
+        status, watches = self.request("/v1/runner/owner-merge-watches", RUNNER)
+        self.assertEqual(status, 200, watches)
+        self.assertEqual([(watch["execution_id"], watch["pr_url"], watch["revision"]["head"],
+                           watch["head_ref"]) for watch in watches],
+                         [(row["id"], url, head, item_branch(source["id"]))])
+        path = f"/v1/items/{source['id']}/executions/{row['id']}/owner-merge"
+        pull = {"number": 7, "head_repository": "acme/app", "base_repository": "acme/app",
+                "head_ref": item_branch(source["id"]), "base_ref": "main", "head_sha": head,
+                "base_sha": "d" * 40, "state": "closed", "draft": False, "merged": True,
+                "merge_commit": merged}
+
+        def record(key, **changes):
+            return self.request(path, RUNNER, {"runner_id": "local", "pull": {**pull, **changes}},
+                                {"Idempotency-Key": key})
+
+        self.assertEqual(record("moved", head_sha="e" * 40)[0], 409)
+        self.assertEqual(record("merged")[0], 200)
+        self.assertEqual(record("merged")[0], 200)
+        self.assertEqual(record("other", merge_commit="f" * 40)[0], 409)
+        self.assertEqual(self.request("/v1/runner/owner-merge-watches", RUNNER)[1], [])
+        with write_transaction(self.path) as db:
+            assignment = self.claim(db, "merged")
+            self.assertEqual(assignment["item_id"], consumer["id"])
+            self.assertEqual([(pin["reference"], pin["revision"]) for pin in assignment["dependencies"]],
+                             [(url, merged)])
+            history = intake.timeline(db, source["id"], row["id"])
+            self.assertEqual(history[-1]["event"], "owner_merge")
+            self.assertEqual(history[-1]["details"]["merge_commit"], merged)
 
     def test_owner_steering_is_versioned_and_rejects_active_changes(self):
         self.start_server(self.path)
