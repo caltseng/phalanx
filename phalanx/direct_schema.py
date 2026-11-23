@@ -50,3 +50,18 @@ DIRECT_SCHEMA = (
         PRIMARY KEY (kind, item_id, execution_id, captain_id)
     )""",
 )
+
+# Shift handoff: when a Captain started ending, and the actions Captains record on item timelines.
+CAPTAIN_SHIFT_SCHEMA = (
+    "ALTER TABLE captains ADD COLUMN ending_at TEXT",
+    """CREATE TABLE captain_actions (
+        id TEXT PRIMARY KEY NOT NULL,
+        execution_id TEXT NOT NULL REFERENCES executions(id),
+        captain_id TEXT NOT NULL REFERENCES captains(id),
+        version INTEGER NOT NULL,
+        action TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX captain_actions_by_execution ON captain_actions (execution_id, created_at)",
+)

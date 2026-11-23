@@ -188,6 +188,12 @@ def heartbeat(db, runner_id):
     return {"runner_id": runner_id, "last_seen": now}
 
 
+def retire(db, runner_id):
+    """Forget a decommissioned reconciler, so reconciler_stale stops flagging it."""
+    cursor = db.execute("DELETE FROM reconciler_heartbeats WHERE runner_id=?", (runner_id,))
+    return {"runner_id": runner_id, "retired": cursor.rowcount > 0}
+
+
 def _flag(kind, row, reason, recovery, first_seen, notify_owner=False):
     return {"kind": kind, "item_id": row["item_id"] if row else "",
             "execution_id": row["execution_id"] if row else "", "captain_id": "",
@@ -285,7 +291,8 @@ def reconciler_stale(db, now):
         if now - seen >= RECONCILER_STALE:
             flags.append(_flag(
                 "reconciler_stale", None, f"Reconciler {runner_id} has sent no heartbeat since {last_seen}",
-                f"A Captain restarts reconciler {runner_id}, or reports it to the owner",
+                f"A Captain restarts reconciler {runner_id}, reports it to the owner, or retires it "
+                "with `phx shift retire-reconciler` if it was decommissioned",
                 (seen + RECONCILER_STALE).isoformat(timespec="microseconds"),
             ))
     return flags
