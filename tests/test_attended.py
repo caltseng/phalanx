@@ -843,6 +843,15 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 return
             self.assertEqual(result["execution"]["state"]["stage"], "pr_validation", result)
             self.assertFalse(github.pull["draft"])
+            if moved_base:
+                # Ready evidence still binds to the live target tip, so a stale PR base is re-queued
+                # for a fresh observation rather than validated.
+                stale = self.runner().prepare(stages=["pr_validation"])
+                state = stale["execution"]["state"]
+                self.assertEqual((state["stage"], state["status"]), ("pr_validation", "queued"), stale)
+                with write_transaction(self.root.parent / "queue.sqlite3") as db:
+                    db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
+                github.base = github.pull["base"]["sha"] = github.tip
             run = {"id": 1, "name": "test", "head_sha": candidate, "status": "in_progress",
                    "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
             github.runs = [run]
