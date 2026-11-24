@@ -1,5 +1,5 @@
 from argparse import Namespace
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 import hashlib
 import io
 import json
@@ -19,6 +19,7 @@ from phalanx import deployment
 from phalanx.__main__ import main
 from phalanx.muster import MusterError
 from phalanx.workspaces import any_file_lock
+from timing import WAIT_SECONDS
 
 
 class DeploymentTest(unittest.TestCase):
@@ -68,6 +69,10 @@ class DeploymentTest(unittest.TestCase):
             deployment.initialize(Path("relative"))
         with self.assertRaises(ValueError):
             deployment.initialize(self.root / "invalid", port=0)
+        self.assertFalse((self.root / "invalid").exists())
+        with self.assertRaisesRegex(ValueError, "without credentials") as caught:
+            deployment.initialize(self.root / "invalid", api_url="https://user:never-print@example.test")
+        self.assertNotIn("never-print", str(caught.exception))
         self.assertFalse((self.root / "invalid").exists())
 
     def test_legacy_json_environment_and_explicit_paths_are_preserved(self):
@@ -141,6 +146,24 @@ class DeploymentTest(unittest.TestCase):
             self.assertEqual(call.call_args.args[0][-2:], ["shift", "status"])
             self.assertNotIn("PHALANX_RUNNER_TOKEN", os.environ)
 
+    def test_database_removed_during_lock_acquisition_is_not_recreated(self):
+        home = self.install()
+        config, env = deployment.configuration(home / "deployment.json")
+        database = Path(env["PHALANX_DB"])
+        database.parent.mkdir()
+        database.write_bytes(b"existing database")
+
+        def acquire(paths):
+            database.unlink()
+            return nullcontext(paths[0])
+
+        serve = Mock()
+        with patch.object(deployment, "any_file_lock", side_effect=acquire):
+            with self.assertRaisesRegex(ValueError, "disappeared before startup"):
+                deployment.run_service(config, env, "server", serve=serve)
+        serve.assert_not_called()
+        self.assertFalse(database.exists())
+
     def test_read_only_check_has_no_service_or_database_side_effects(self):
         home = self.install()
         args = Namespace(deploy_command="check", config=home / "deployment.json", home=None)
@@ -190,12 +213,12 @@ class DeploymentTest(unittest.TestCase):
                    "--config", str(path), "server"]
         url = f"http://127.0.0.1:{port}"
         for first in (True, False):
-            with self.subTest(first_start=first), (home / "service-test.log").open("w+") as log:
+            with (home / "service-test.log").open("w+") as log:
                 process = subprocess.Popen(
                     [*command, *(["--initialize-database"] if first else [])],
                     env=env, stdout=log, stderr=log)
                 try:
-                    deadline = time.monotonic() + 60
+                    deadline = time.monotonic() + WAIT_SECONDS
                     while True:
                         if process.poll() is not None:
                             log.seek(0)
@@ -206,16 +229,17 @@ class DeploymentTest(unittest.TestCase):
                             break
                         except (OSError, URLError):
                             if time.monotonic() >= deadline:
-                                self.fail("Isolated deployment server did not become healthy")
+                                log.seek(0)
+                                self.fail("Isolated deployment server did not become healthy:\n" + log.read())
                             time.sleep(0.1)
                     request = Request(url + "/v1/muster/status",
                                       headers={"Authorization": "Bearer " + "r" * 32})
-                    with urlopen(request, timeout=5) as response:
+                    with urlopen(request, timeout=WAIT_SECONDS) as response:
                         snapshot = json.load(response)
                     self.assertEqual(snapshot["identity"]["home"], str(home))
                     self.assertEqual(snapshot["writers"], [])
                     duplicate = subprocess.run(command, env=env, capture_output=True,
-                                               text=True, timeout=60)
+                                               text=True, timeout=WAIT_SECONDS)
                     self.assertNotEqual(duplicate.returncode, 0)
                     self.assertIn("already owns", duplicate.stderr)
                 finally:

@@ -7,9 +7,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from urllib.parse import urlsplit
 
 from .muster import _unique, read_environment, resolve_home
-from .reconciler import API
 from .workspaces import any_file_lock
 
 DEFAULT_HOME = ".phalanx_muster"
@@ -25,7 +25,11 @@ def initialize(home=None, *, api_url=None, port=8000):
     if not 1 <= port <= 65535:
         raise ValueError("Server port must be between 1 and 65535")
     api_url = api_url if api_url is not None else f"http://127.0.0.1:{port}"
-    API(api_url, "configuration-validation")
+    url = urlsplit(api_url)
+    if (not url.hostname or url.username or url.password or url.query or url.fragment
+            or (url.scheme != "https" and not (
+                url.scheme == "http" and url.hostname in {"localhost", "127.0.0.1", "::1"}))):
+        raise ValueError("Use HTTPS or a loopback HTTP API URL without credentials")
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     files = {
         "deployment.json": {
@@ -114,8 +118,6 @@ def run_service(config, env, service, *, initialize_database=False, once=False, 
                          "For a new install only, pass --initialize-database")
     if path.exists() and initialize_database:
         raise ValueError("--initialize-database is only for a new database")
-    if not initialize_database and not path.is_file():
-        raise ValueError("Recorded database disappeared before startup; refusing to create a replacement")
     if serve is None:
         raise ValueError("Server launch requires the server-host entrypoint")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,6 +126,8 @@ def run_service(config, env, service, *, initialize_database=False, once=False, 
             raise ValueError("A deployment server already owns this database")
         if path.exists() and initialize_database:
             raise ValueError("--initialize-database is only for a new database")
+        if not initialize_database and not path.is_file():
+            raise ValueError("Recorded database disappeared before startup; refusing to create a replacement")
         with service_environment(env):
             serve(host=config["server"]["host"], port=config["server"]["port"])
         return 0
