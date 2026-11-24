@@ -89,22 +89,14 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         self.assertIn(f"Local checks passed on {HEAD}", reasons)
 
     def test_flags_follow_the_latest_observation(self):
-        drifted = self.pull(head_sha=OTHER, mergeable=False)
         self.request(self.post, RUNNER, self.body(
-            1, pr=drifted, checks="failed", check_reasons=["build failed"], feedback=["alice: fix"]))
-        self.assertEqual(set(self.flags()), {"head_drift", "merge_conflict", "checks_failed", "review_feedback"})
+            1, pr=self.pull(mergeable=False), checks="failed", check_reasons=["build failed"],
+            feedback=["alice: fix"]))
+        self.assertEqual(set(self.flags()), {"merge_conflict", "checks_failed", "review_feedback"})
         status, body = self.request("/v1/flags", OWNER)
         self.assertEqual(status, 200)
-        self.assertLessEqual({"head_drift", "merge_conflict", "observation_stale"},
+        self.assertLessEqual({"merge_conflict", "observation_stale"},
                              {flag["kind"] for flag in body["flags"]})
-        self.request(f"{self.execution}/local-checks", RUNNER,
-                     {"head": OTHER, "failures": ["lint: Exited with status 1\n\ntail"]})
-        flags = self.flags()
-        self.assertEqual(flags["pre_pr_checks_failed"]["reason"],
-                         f"Local checks failed on {OTHER}: lint: Exited with status 1")
-        with read_transaction(self.path) as db:
-            checked_at, = db.execute("SELECT checked_at FROM local_check_results").fetchone()
-        self.assertEqual(flags["pre_pr_checks_failed"]["first_seen"], checked_at)
         self.request(self.post, RUNNER, self.body(3, pr=self.pull(state="closed")))
         self.assertEqual(set(self.flags()), {"pr_closed"})
         self.request(self.post, RUNNER, self.body(4, pr=self.pull(state="closed", merged=True)))
@@ -114,6 +106,28 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual((status, timeline["item"]["pr"]["state"]), (200, "merged"))
         self.request(self.post, RUNNER, self.body(5, merged_branch=True))
         self.assertEqual(set(self.flags()), {"unpublished_branch_merged"})
+
+    def test_blockers_on_a_superseded_head_do_not_outlive_the_recorded_candidate(self):
+        # #154: GitHub was last seen at the old conflicting head while the writer had already
+        # pushed and recorded its resolution, HEAD, as the candidate.
+        self.request(self.post, RUNNER, self.body(
+            1, pr=self.pull(head_sha=OTHER, mergeable=False), checks="failed", check_reasons=["build failed"],
+            feedback=["alice: fix"]))
+        self.request(f"{self.execution}/local-checks", RUNNER, {"head": OTHER, "failures": ["lint: failed"]})
+        flags = self.flags()
+        self.assertEqual(set(flags), {"head_drift", "review_feedback"})
+        self.assertTrue(flags["head_drift"]["recovery"].startswith("Informational"))
+        self.request(self.post, RUNNER, self.body(2, pr=self.pull(mergeable=False)))
+        self.assertEqual(set(self.flags()), {"merge_conflict"})
+        self.request(f"{self.execution}/local-checks", RUNNER,
+                     {"head": HEAD, "failures": ["lint: Exited with status 1\n\ntail"]})
+        flags = self.flags()
+        self.assertEqual(flags["pre_pr_checks_failed"]["reason"],
+                         f"Local checks failed on {HEAD}: lint: Exited with status 1")
+        with read_transaction(self.path) as db:
+            checked_at, = db.execute(
+                "SELECT checked_at FROM local_check_results WHERE head_sha=?", (HEAD,)).fetchone()
+        self.assertEqual(flags["pre_pr_checks_failed"]["first_seen"], checked_at)
 
     def test_late_local_checks_never_revive_an_older_snapshot(self):
         self.request(self.post, RUNNER, self.body(1, pr=self.pull(head_sha=OTHER, mergeable=False)))
