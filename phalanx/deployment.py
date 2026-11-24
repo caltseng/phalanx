@@ -63,7 +63,7 @@ def initialize(home=None, *, api_url=None, port=8000):
         'goal = "SET_GOAL"\nrepositories = []\n'
         'allowed_actions = ["Implement scoped work and publish PRs under repository rules"]\n'
         'escalate = ["Missing authority or credentials"]\nstop_when = ["Owner stops the muster"]\n'
-        '[shift]\nmax_writers = 5\nmax_hours = 4\nmax_wakes = 48\n', encoding="utf-8")
+        '[shift]\nmax_hours = 4\nmax_wakes = 48\n', encoding="utf-8")
     return root
 
 

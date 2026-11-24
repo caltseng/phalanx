@@ -192,11 +192,14 @@ alone never prove a process stopped. Follow [resume](resume.md) and [recovery](r
 
 ### Shipped code is not installation state
 
-At this audit baseline, `shift launch` passes charter `max_writers` to registration;
-intents and waiting writers count. The loader default is four and `deploy init`
-explicitly generates five. These are one concurrent-writer budget, **not** five
-building writers plus ten total. The configurable split-capacity/settings work is
-not part of this audited revision; do not treat approval or an open PR as deployment.
+The single concurrent-writer budget is persisted `dispatch_settings.max_writers`,
+initially five, editable by the owner in Scribe or through the dispatch settings API.
+Registration enforces it atomically across Captains and repositories; intents and
+waiting writers count. `shift launch` supplies no separate limit, and charters reject
+`[shift] max_writers`; `deploy init` writes only `max_hours` and `max_wakes` shift
+bounds. This is **not** five building writers plus ten total. Shipped code does not
+prove installation state: coordinate removal of an existing charter concurrency
+entry with service deployment; do not treat approval or an open PR as deployment.
 Likewise loopback board reads are optionally tokenless, but intake/replies/settings
 and other writes still require their documented bearer credentials. No tokenless
 localhost write path is implied.

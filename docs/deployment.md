@@ -55,8 +55,11 @@ Generated files contain no credentials, database or live state:
   and GitHub token. The new directory requests mode 700 on POSIX; Windows permissions
   must be checked by the owner before saving secrets.
 - `shift.json`, `charter.toml`, `reconciler.json`: edit the runtime, native workspace,
-  repository mappings, goal and stable reconciler ID. The charter template sets
-  `max_writers = 5`. Fill its repository list and corresponding mappings before use.
+  repository mappings, goal and stable reconciler ID. The charter template sets only
+  `max_hours = 4` and `max_wakes = 48` under `[shift]`. Fill its repository list and
+  corresponding mappings before use. Concurrency comes from persisted
+  `dispatch_settings.max_writers` (initially 5), editable by the owner in Scribe or
+  through the dispatch settings API, not from the charter.
 
 See [direct-path configuration](direct-path.md) for mappings, prepared checks environments
 and runtime schedules. Do not put credentials in the JSON configs. Discovery is optional:
