@@ -87,6 +87,7 @@ def binding(db, writer):
     return {
         **intake.execution_view(execution),
         "item_id": writer["item_id"],
+        "last_reply": intake.latest_reply(db, execution["id"]),
         "writer": {
             "id": writer["id"], "captain_id": writer["captain_id"], "runtime": writer["runtime"],
             "nonce": writer["nonce"], "state": "ended" if writer["ended_at"] else writer["state"],

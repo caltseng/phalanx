@@ -66,6 +66,12 @@ the writer token, not the runner token. Accepted results and uncertain retries r
 idempotent. `needs_input` saves a focused question and handoff; Captain answers use
 `answered_by: captain`. Progress updates the writer's visible note and timestamp.
 
+`phx work status` and `phx work next` include `last_reply`: the latest persisted reply
+for this writer's execution, or `null` before any reply. It contains the exact `answer`,
+reply `version`, `created_at` and `answered_by` (`owner` or `captain`), matching owner
+inspection. Read it when resuming after input; no duplicate session message is needed.
+The reply version stays unchanged when `next` opens a new attempt.
+
 ### PR publication and delivery
 
 PR stages are `development` -> `self_review` -> `publication` -> `delivery`.
