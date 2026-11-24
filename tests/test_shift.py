@@ -79,9 +79,16 @@ class CharterTest(unittest.TestCase):
         path.write_text(json.dumps(self.config), encoding="utf-8")
         self.assertEqual(shift.load_config(path), self.config)
 
+    def test_kickoff_names_the_current_executions_target_not_the_original_request(self):
+        item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Rerun for review",
+                "execution": {"id": "execution", "state": {"target": "ready_for_check_in"}}}
+        prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
+        self.assertIn("Target: ready_for_check_in", prompt)
+        self.assertNotIn("Target: checked_in", prompt)
+
     def test_draft_kickoff_never_instructs_promotion_or_auto_merge(self):
         item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Review only",
-                "execution": {"id": "execution", "state": {"publication_mode": "draft"}}}
+                "execution": {"id": "execution", "state": {"publication_mode": "draft", "target": "checked_in"}}}
         prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
         self.assertIn("gh pr create --draft --base main", prompt)
         self.assertIn("gh pr ready --undo", prompt)

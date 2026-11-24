@@ -223,7 +223,7 @@ def kickoff(item, worktree, nonce, work_command, base, checks_environment=None):
     template = Template(resources.files("phalanx").joinpath("prompts", "worker.md").read_text(encoding="utf-8"))
     return template.substitute(
         item_id=item["id"], execution_id=item["execution"]["id"], repository=item["repository_id"],
-        target=item["target"], goal=item["goal"], worktree=worktree, nonce=nonce, work=work_command,
+        target=item["execution"]["state"]["target"], goal=item["goal"], worktree=worktree, nonce=nonce, work=work_command,
         base=base, publication=publication, publication_mode=mode,
         checks_environment=(f"`{checks_environment}`" if checks_environment is not None
                             else "Not configured. Do not guess an interpreter or command prefix."),
