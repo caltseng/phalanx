@@ -32,7 +32,7 @@ Use CPython 3.14 for deployment and pilot runs. Phalanx supports CPython 3.12 an
 
 ```powershell
 py -m venv .venv
-.venv/Scripts/Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.lock -e .
 ```
 
@@ -122,7 +122,10 @@ Only the owner grants trust; a Captain or worker never edits it. The Captain ins
 
 With the server up, start the [reconciler and Captain](direct-path.md). Configure the shift
 charter, shared worktrees workspace and per-repository checks environment. Start a native
-Captain chat with `python -m phalanx shift prompt captain`, attach its five-minute wake and
-the keeper's thirty-minute schedule. The Captain launches registered native writers.
+Captain chat using the text printed by `python -m phalanx shift prompt captain`; the CLI
+prints instructions, it does not create that chat. Attach its five-minute wake and the
+keeper's thirty-minute schedule through the runtime. The Captain launches registered
+native writers. The [architecture map](architecture.md) distinguishes these sessions
+from the API service and independent reconciler.
 
 Record in your runbook how you started each piece. From now on, use [Resume an existing install](resume.md) after a restart or reboot.

@@ -5,6 +5,9 @@ Captains, writers, shifts and GitHub reconciliation are the only execution path.
 removes the previous transport, admission machinery, separate PR-stage executor and client
 SQLite stores. See [the operating guide](direct-path.md) and
 [pilot evidence](pilots/direct-sessions.md).
+The [implementation map](architecture.md) diagrams component ownership, one writer's
+stage/result sequence and deployment boundaries. Removing the relay did not remove the
+HTTP API server or Scribe.
 
 ## Principle
 
@@ -282,11 +285,19 @@ See [Recovery](recovery.md).
 
 ## Durable state
 
-Only the API opens the queue database. Clients keep configuration, credentials, the charter,
+Only the API and explicit server-host backup/restore administration open the queue database.
+Execution clients keep configuration, credentials, the charter,
 worktrees, artifacts and OS file locks, not local SQLite stores. Existing unused files are
 left untouched; upgrades never delete live queue records.
 
 ## Migration order
+
+This is the historical implementation/removal sequence, not a current deployment checklist.
+Both removals shipped in [#209](https://github.com/caltseng/phalanx/pull/209) and
+[#214](https://github.com/caltseng/phalanx/pull/214). The pilot records distinguish landed
+code from live acceptance evidence; this list certifies no additional pilot cases.
+For an existing installation follow [reviewed deployment adoption](deployment.md#existing-runtime-reviewed-adoption-not-a-rename),
+not the retired recovery machinery.
 
 1. Record merged means delivered, including owner merges releasing dependencies.
 2. Register direct writers and accept their scoped evidence.

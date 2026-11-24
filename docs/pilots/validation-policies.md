@@ -4,6 +4,10 @@ The reconciler validation policy, based on the PH-14a live runs on
 [phalanx-pilot-py](https://github.com/caltseng/phalanx-pilot-py) and
 [phalanx-pilot-web](https://github.com/caltseng/phalanx-pilot-web). The format
 is described in [validation-policy.md](../validation-policy.md).
+This is an example derived from those historical runs, not an inventory of today's
+installation. Verify repository workflow/check names and prepared interpreters before
+adopting it. Local failures now raise reconciler flags; no retired promotion stage is
+required.
 
 Save it outside every checkout, for example `C:\muster\validation.json`,
 and set `"validation_policy"` in the reconciler config to that path. Before use:

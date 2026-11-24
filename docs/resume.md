@@ -14,7 +14,10 @@ to `.phalanx_muster`; the new spelling is only the new-install default.
 ## Restart in order
 
 1. Check the recorded API's `/health`. If it answers, keep it. Otherwise load the existing
-   owner/runner tokens and database path, then start exactly one server per database:
+   owner/runner tokens and database path. If the recorded path is missing, stop and
+   investigate; raw Uvicorn would create an empty store. Use the existing supervisor
+   and entrypoint. The raw alternative below is only for an installation already
+   managed that way, after verifying the file exists:
 
    ```powershell
    $env:PHALANX_DB = "<recorded absolute path>"
@@ -24,7 +27,9 @@ to `.phalanx_muster`; the new spelling is only the new-install default.
 
 2. Verify authenticated `/v1/owner/status` and `/v1/runner/status`. Resume the
    [reconciler](direct-path.md#run-the-github-reconciler) with its original config and scratch directory.
-3. Inspect `python -m phalanx muster status` and `python -m phalanx shift status`.
+3. Inspect `python -m phalanx muster status` when discovery and matching API home
+   identity are configured; otherwise keep explicit config and authenticated API
+   status. Read `python -m phalanx shift --config <recorded shift config> status`.
    Keep any live Captain and its scheduled wake. If none is live, run the
    [keeper procedure](direct-path.md#in-the-github-copilot-app).
 

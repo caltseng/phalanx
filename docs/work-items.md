@@ -49,7 +49,13 @@ python -m phalanx reply ITEM_ID EXECUTION_ID "Use the existing interface" --vers
 
 A reply records who answered: `--answered-by owner` (the default) or `--answered-by captain` when the Captain answered a routine question itself. Reuse the same key and body when retrying after a lost response. For more inbox entries, pass the last entry's `waiting_since` to `--after-time` and its `execution_id` to `--after-id`.
 
-Runners submit a structured `question` with `prompt`, `handoff`, optional `options` (one choice per list element) and optional `proposed_default` in a stage result that needs input. The next claim after a reply includes `input_reply` with the answer, `answered_by` and the question. The execution timeline keeps them, and `inspect` shows the current execution's `last_reply`.
+Writers submit a structured `question` with `prompt`, `handoff`, optional `options`
+(one choice per list element) and optional `proposed_default` through `work question`
+or a `needs_input` result. The reply queues the same stage and retains its writer.
+`work status` and `work next` expose the persisted `last_reply`, including its answer,
+version, timestamp and `answered_by`; `inspect` and the timeline retain the question
+and reply. An internal attempt claim's `input_reply` is not the writer CLI's response
+shape. Resume from the binding rather than expecting the Captain to relay an answer.
 
 ## Operator work board
 
@@ -62,7 +68,8 @@ other authenticated operations; a supplied bearer token is still validated. Leav
 flag unset on a hosted server, including behind a same-machine reverse proxy or tunnel.
 Without the flag, the board asks for a bearer token and holds it in memory until you
 disconnect or reload. The board uses same-origin reads and opens stored field reports
-as plain text. Its static assets use origin-root paths and hold no secrets.
+through the authenticated plain-text report API; the board renders a safe Markdown
+subset in its report dialog. Its static assets use origin-root paths and hold no secrets.
 
 Scribe shows **Needs you**, **Flags**, live/stale **Captains** (ended Captains are collapsed),
 **Active**, **Queued and waiting**, and **Recently closed**. Rows expose stage/status,
@@ -70,7 +77,8 @@ the execution's current target, age, registered writer/session, prerequisite or 
 charter hold, retries/rechecks, PR and final output. Running work/live Captains share a
 pikehead; queued/waiting work uses shields and flags use pennants, with text labels as well
 as glyphs. Expanding a row loads paginated history, stage returns, prerequisites and any
-question with its exact `reply` command. Reports currently open as plain text.
+question with its exact `reply` command. Reports omit raw HTML and external images;
+code stays literal and links allow only credential-free HTTP(S).
 
 The header **+ / New work item** is the local board's write action: it files through the
 existing owner-authenticated intake API, defaults to **Merged** (`checked_in`), and accepts
@@ -81,9 +89,10 @@ token in browser storage, and retains the exact request/idempotency key after an
 response for safe retry. Browser writes must be same-origin. See the
 [form contract](../DASHBOARD.md#new-work-item-local-board).
 
-Other board actions still use the CLI/API; detail pages, search/filter controls and rendered
-Markdown reports remain planned. The already-merged [server reads](api.md#operator-board-data)
-support labels, groups, filters, overview counts and conditional ETags; that API support
-does not mean all corresponding UI has shipped. PR/CI/size/duplicate facts come only from
+Other board actions still use the CLI/API. Item/execution deep links, queue/history pages,
+URL-backed search/filters and rendered Markdown reports have shipped locally. Group pages,
+hosted sign-in and the broader dashboard action set remain planned. The
+[server reads](api.md#operator-board-data) also support label-group rollups, overview counts
+and conditional ETags; API support alone does not imply matching UI. PR/CI/size/duplicate facts come only from
 reconciler observations and stay unknown when unobserved, never inferred from a writer's URL.
 **Merged** is a display label; API targets remain unchanged.

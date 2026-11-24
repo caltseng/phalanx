@@ -23,14 +23,28 @@ to recover. Read the API, GitHub and native session state before repeating an ex
 Read `shift status`, the writer's nonce/native identity and the actual worktree.
 Confirm the old session and all its writers stopped before replacing it with
 `shift launch --replaces WRITER`. Keep all commits and uncommitted changes. Registration atomically
-revokes the old token and opens the replacement's attempt. A stale writer cannot post.
+revokes the old token and opens an attempt only when the replacement's stage is eligible;
+otherwise its binding retains the wait. A stale writer cannot post.
 If the worktree is unavailable, retain server handoff context and report the missing artifact.
 Never reset, clean or discard work to make replacement easier.
 
 For an unconfirmed intent, only its owning Captain acts until it ends, goes stale or abandons
-the intent. First search native sessions by nonce; confirm the exact matching session.
+the intent. First search the full native inventory and verify the exact full nonce in
+kickoff/metadata; task-first or renamed display titles are not identity. Confirm only
+the exact matching session.
 Withdraw an intent only after proving launch never happened, or its session stopped.
 See [registration and fencing](direct-sessions.md#writer-registration-and-fencing).
+
+## Uncertain result submission
+
+Read `work status` before retrying. `work result --attempt ...` pins the attempt:
+it fills stage/version from the current binding and refuses to submit to a different
+attempt after a lost response. If the stage advanced, continue that stage rather than
+reposting the old result as new work. If the writer gets HTTP 401, stop; its binding may
+have ended on completion, withdrawal or replacement. The Captain/owner checks the API
+timeline and final output with its own credential. Do not print the credential file,
+renew a retired lease, recreate a local journal or launch a second writer to repair
+an ambiguous response.
 
 ## Back up and restore SQLite
 
@@ -43,12 +57,18 @@ refuse to overwrite existing files.
 python -m phalanx server backup C:\muster\backups\phalanx-01.sqlite3
 ```
 
-To restore, stop the server, choose a fresh database path in an existing directory, restore
-there and verify `/health` after restart. Keep the old database until verification and record
-the new path privately.
+Restore is an operator recovery window, not a writer action. Account for live sessions
+and external effects with their owners before rolling state back. Stop the server and
+its restart supervisor, choose a fresh database path in an existing directory, restore
+there and verify `/health` and authenticated identity after restart. A backup may predate
+writer registrations, replies or GitHub effects; reconcile them before resuming dispatch.
+Keep the old database until verification and record the new path privately.
 
 ```powershell
 $env:PHALANX_DB = "C:\muster\db\restored.sqlite3"
 python -m phalanx server restore C:\muster\backups\phalanx-01.sqlite3
-python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
+
+Restart with the recorded service entrypoint/supervisor and restored path. Do not start
+a raw Uvicorn process alongside a deployment-managed server. See
+[deployment and recovery boundaries](architecture.md#deployment-and-recovery-boundaries).
