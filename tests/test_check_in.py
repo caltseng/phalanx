@@ -22,6 +22,8 @@ class CheckInTests(unittest.TestCase):
         self.puts = 0
         self.mode = "success"
         self.claims = 0
+        self.compare = "ahead"
+        self.compares = 0
 
     def complete_merge(self):
         self.pull.update(state="closed", merged=True, merge_commit_sha=MERGE)
@@ -33,6 +35,9 @@ class CheckInTests(unittest.TestCase):
             body = self.pull
         elif (method, route) == ("GET", f"/git/commits/{MERGE}"):
             body = {"sha": MERGE, "parents": [{"sha": parent} for parent in self.parents]}
+        elif (method, route) == ("GET", f"/compare/{MERGE}...release/main"):
+            self.compares += 1
+            body = {"status": self.compare}
         elif (method, route) == ("PUT", "/pulls/12/merge"):
             self.assertEqual(json.loads(request.data), {"sha": HEAD, "merge_method": "merge"})
             self.puts += 1
@@ -72,6 +77,28 @@ class CheckInTests(unittest.TestCase):
         self.parents = [BASE, OTHER]
         self.assertEqual(self.run_check_in().status, "unresolved")
         self.assertEqual(self.puts, 0)
+
+    def test_external_squash_or_rebase_merge_of_the_ready_head_is_verified_on_the_base_branch(self):
+        # Churchtree #55: one parent (the prior base), merge commit on the base branch.
+        self.complete_merge()
+        self.parents = [BASE]
+        result = self.run_check_in()
+        self.assertEqual((result.status, result.method, result.parents, self.puts), ("merged", "squash_or_rebase",
+                                                                                     (BASE,), 0))
+        self.compare = "diverged"
+        self.assertEqual(self.run_check_in().status, "unresolved")
+        self.assertEqual(self.compares, 2)
+
+    def test_external_merge_of_another_head_is_never_accepted(self):
+        self.complete_merge()
+        self.pull["head"]["sha"] = OTHER
+        self.parents = [BASE]
+        result = self.run_check_in()
+        self.assertEqual(result.status, "unresolved")
+        self.assertIn(OTHER, result.reason)
+        self.parents = [BASE, OTHER]
+        self.assertEqual(self.run_check_in().status, "unresolved")
+        self.assertEqual((self.puts, self.compares), (0, 0))
 
     def test_moved_head_or_conflict_returns_to_development_without_a_write(self):
         self.pull["mergeable"] = False

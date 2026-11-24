@@ -154,6 +154,13 @@ class BridgeAdapter:
                 receipt["warning"] = "Bridge worker_url ignored; it must be an HTTPS link without credentials"
         return receipt
 
+    def resume(self, resume: dict) -> None:
+        """Send a continue prompt to the exact recorded writer; never starts a second writer."""
+        expected = {field: resume[field] for field in ("host_id", "project_id", "thread_id", "marker")}
+        response = self.transport("resume", {**expected, "prompt": resume["prompt"]})
+        if any(response.get(field) != expected[field] for field in ("host_id", "thread_id", "marker")):
+            raise RunnerError("Resume reply does not match the exact host, writer and marker")
+
     def observe(self, references: list[dict], *, cursors: dict[str, str],
                      timeout: float) -> ObservationBatch:
         response = self.transport("observe", {

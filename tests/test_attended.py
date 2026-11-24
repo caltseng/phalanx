@@ -26,6 +26,7 @@ from phalanx.finalization import attempt
 from phalanx.git_publication import PublicationResult
 from phalanx.github import ATTRIBUTION, GitHubClient
 from phalanx.store import connect, write_transaction
+from phalanx.transitions import RUNNER_ONLY_SLOTS
 from phalanx.workspaces import WorkspaceManager, _item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -44,6 +45,7 @@ class FakeGitHub:
         self.threads = []
         self.lose_merge = False
         self.tip = None
+        self.merge_parents = None
 
     def __call__(self, request, _timeout):
         path = urlsplit(request.full_url).path
@@ -54,7 +56,10 @@ class FakeGitHub:
                 raise TimeoutError
             return response({"merged": True, "sha": "e" * 40})
         if path.endswith("/git/commits/" + "e" * 40):
-            return response({"sha": "e" * 40, "parents": [{"sha": self.base}, {"sha": self.head}]})
+            parents = self.merge_parents or [self.base, self.head]
+            return response({"sha": "e" * 40, "parents": [{"sha": parent} for parent in parents]})
+        if "/compare/" + "e" * 40 + "..." in path:
+            return response({"status": "ahead"})
         if request.method == "POST" and path == "/graphql":
             if "reviewThreads" in json.loads(request.data)["query"]:
                 return response({"data": {"repository": {"pullRequest": {
@@ -482,8 +487,10 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertNotEqual(first.status()["packet"]["branch"], second.status()["packet"]["branch"])
         self.assertNotEqual(self.api.claim_leases, second_api.claim_leases)
         self.assertEqual([row["slot"] for row in first.status(all_slots=True)["reservations"]], [1, 2])
-        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+        with self.assertRaisesRegex(RunnerError, "Slots above capacity run only runner-only stages"):
             self.runner(3).prepare()
+        with self.assertRaisesRegex(RunnerError, "Slot exceeds local capacity"):
+            self.runner(3 + RUNNER_ONLY_SLOTS).prepare()
 
         marker = launches[0]["marker"]
         native_id = str(uuid4())
@@ -520,13 +527,11 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             self.runner().prepare()
         self.assertEqual(self.runner(2).status()["attempt_id"], second_api.attempt)
 
-    def test_legacy_pending_claim_can_replay_while_another_slot_launches(self):
+    def test_pending_claim_can_replay_while_another_slot_launches(self):
         with self.assertRaisesRegex(RunnerError, "lost claim"):
             self.runner().prepare()
-        with closing(sqlite3.connect(self.runner().journal)) as db, db:
+        with closing(sqlite3.connect(self.runner().journal)) as db:
             record = json.loads(db.execute("SELECT record FROM slot WHERE id=1").fetchone()[0])
-            del record["slots"]
-            db.execute("UPDATE slot SET record=? WHERE id=1", (json.dumps(record),))
 
         self.config["capacity"] = 2
         self.config["repositories"]["broken"] = {"checkout": str(self.root / "missing")}
@@ -824,6 +829,9 @@ class AttendedTest(ServerFixture, unittest.TestCase):
     def test_check_in_merges_and_reconciles_a_lost_merge_response_over_http(self):
         self.live_review_path(blocking=False, merge=True)
 
+    def test_repository_squash_merge_before_promotion_is_delivered_over_http(self):
+        self.live_review_path(blocking=False, external_merge=True)
+
     def test_advanced_main_still_promotes_on_green_draft_checks_and_merges(self):
         self.live_review_path(blocking=False, merge=True, moved_base=True)
 
@@ -831,7 +839,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.live_review_path(blocking=False, moved_base=True, draft_conclusion="failure")
 
     def live_review_path(self, *, blocking, conflict=False, feedback=False, merge=False, moved_base=False,
-                         draft_conclusion="success"):
+                         draft_conclusion="success", external_merge=False):
         remote = "git@github.com:owner/repo.git"
         self.git(self.checkout, "remote", "set-url", "origin", remote)
         base = self.git(self.checkout, "rev-parse", "HEAD")
@@ -914,6 +922,19 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             if moved_base:
                 # main advanced past the draft's REST base.sha, which GitHub does not advance.
                 github.tip = "c" * 40
+            if external_merge:
+                # The repository's own automation squash-merged the candidate (Churchtree #55 shape).
+                github.pull.update(state="closed", draft=False, merged=True, merge_commit_sha="e" * 40,
+                                   merged_at="2026-11-24T06:33:57Z")
+                github.merge_parents = [base]
+                result = self.runner().prepare(stages=["pr_promotion"])
+                state = result["execution"]["state"]
+                self.assertEqual((state["status"], state["stage"]), ("completed", "check_in"), result)
+                output = state["final_output"]
+                self.assertEqual((output["merge_commit"], output["merge_method"], output["revision"]["head"]),
+                                 ("e" * 40, "squash_or_rebase", candidate))
+                self.assertIsNone(state["wait"])
+                return
 
             def recheck():
                 with write_transaction(self.root.parent / "queue.sqlite3") as db:
@@ -945,15 +966,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
                 return
             self.assertEqual(result["execution"]["state"]["stage"], "pr_validation", result)
             self.assertFalse(github.pull["draft"])
-            if moved_base:
-                # Ready evidence still binds to the live target tip, so a stale PR base is re-queued
-                # for a fresh observation rather than validated.
-                stale = self.runner().prepare(stages=["pr_validation"])
-                state = stale["execution"]["state"]
-                self.assertEqual((state["stage"], state["status"]), ("pr_validation", "queued"), stale)
-                with write_transaction(self.root.parent / "queue.sqlite3") as db:
-                    db.execute("UPDATE executions SET retry_at=NULL, ready_since=0")
-                github.base = github.pull["base"]["sha"] = github.tip
+            # A moved target tip no longer stalls ready evidence; it binds to the PR's recorded base.
             run = {"id": 1, "name": "test", "head_sha": candidate, "status": "in_progress",
                    "conclusion": None, "app": {"id": 15368}, "pull_requests": []}
             github.runs = [run]
@@ -1159,7 +1172,7 @@ class AttendedTest(ServerFixture, unittest.TestCase):
             "execution": {"id": "e", "version": 3, "state": {
                 "stage": "pr_promotion", "candidate": candidate,
                 "primary_pr": "https://github.com/o/r/pull/7"}}}}
-        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=draft, node_id="PR_7", mergeable=True)
+        pull = SimpleNamespace(head_sha=candidate, base_sha="c" * 40, draft=draft, node_id="PR_7", mergeable=True, merged=False)
         github = SimpleNamespace(get_pull_request=lambda number: pull, get_branch_tip=lambda ref: "d" * 40)
         runner = SimpleNamespace(config={"repositories": {"repo": {"base_branch": "main"}}}, root=self.root,
                                  api=SimpleNamespace(call=lambda path: timeline))
@@ -1277,22 +1290,6 @@ class AttendedTest(ServerFixture, unittest.TestCase):
         self.assertEqual((result["status"], body["outcome"], body["candidate"]),
                          ("pre_pr_validation_submitted", "needs_input", "a" * 40))
         self.assertIn("validation_policy", body["question"]["prompt"])
-
-    def test_legacy_development_launch_preserves_candidate_and_blocks_draft(self):
-        runner, marker, thread, worktree, candidate, _ = self.start_development()
-        runner._transaction(lambda record, db: record.pop("development_base"))
-        runner.submit(marker, "local", thread)
-        self.api.attempt = uuid4().hex
-        self.api.stage, self.api.candidate = "pr_creation", candidate
-        with patch.dict(os.environ, PHALANX_GITHUB_TOKEN="runner-only"), patch(
-            "phalanx.attended.publish_draft",
-        ) as publish:
-            result = self.runner().prepare(draft=True)
-        publish.assert_not_called()
-        self.assertEqual(result["status"], "draft_blocked")
-        self.assertIn("no accepted development base checkpoint", result["reason"])
-        self.assertEqual(self.runner().status()["reason"], result["reason"])
-        self.assertEqual(self.git(worktree, "rev-parse", "HEAD"), candidate)
 
 
 class DraftTitleTest(unittest.TestCase):

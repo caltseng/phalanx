@@ -6,7 +6,7 @@ from time import time
 
 from . import intake
 from .config import DEFAULT_LEASE_SECONDS
-from .transitions import TERMINAL, Event, Status, Wait
+from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES, TERMINAL, Event, Stage, Status, Wait
 
 
 # The server sets this once at startup from PHALANX_LEASE_SECONDS.
@@ -98,21 +98,23 @@ def admit(db, request, lease_digest):
     settings = db.execute("SELECT * FROM dispatch_settings WHERE id=1").fetchone()
     if settings["paused"]:
         return {"status": "paused"}
-    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?",
-                       (request.runner_id,)).fetchone()
-    capacity = limit["capacity"] if limit else DEFAULT_CAPACITY
+    capacity = _capacity(db, request.runner_id)
     if request.slots is not None:
         capacity = min(capacity, request.slots)
-    reserved = db.execute(
-        "SELECT count(*) FROM attempts WHERE runner_id=? AND ended_at IS NULL",
-        (request.runner_id,),
-    ).fetchone()[0]
-    if reserved >= capacity:
-        return {"status": "at_capacity", "reserved": reserved, "capacity": capacity}
+    reserved, agents = _reserved(db, request.runner_id)
+    full = {"status": "at_capacity", "reserved": reserved, "capacity": capacity}
+    if reserved >= capacity + RUNNER_ONLY_SLOTS:
+        return full
 
     now = time()
     repository_ids = sorted(set(request.repository_ids))
     stages = sorted(set(request.stages or ()))
+    restricted = agents >= capacity
+    if restricted:
+        # Agent workers hold the whole capacity; only runner-only stages may use the extra slots.
+        stages = sorted(str(stage) for stage in set(stages or Stage) & RUNNER_ONLY_STAGES)
+        if not stages:
+            return full
     expires = int(now) + LEASE_SECONDS
     # Each stale head is removed from the index by claim_attempt. Bound the
     # repair work in one poll so other writers can acquire the transaction.
@@ -134,7 +136,23 @@ def admit(db, request, lease_digest):
                 "lease_expires_at": expires, "item_id": row["item_id"],
                 "request": json.loads(work_item["request_json"]),
             }
-    return {"status": "no_eligible_work"}
+    return full if restricted else {"status": "no_eligible_work"}
+
+
+def _capacity(db, runner_id):
+    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?", (runner_id,)).fetchone()
+    return limit["capacity"] if limit else DEFAULT_CAPACITY
+
+
+def _reserved(db, runner_id):
+    """Count the runner's open attempts, and those at stages that run an agent worker."""
+    runner_only = sorted(map(str, RUNNER_ONLY_STAGES))
+    row = db.execute(
+        f"""SELECT count(*), coalesce(sum(stage NOT IN ({",".join("?" * len(runner_only))})), 0)
+            FROM attempts WHERE runner_id=? AND ended_at IS NULL""",
+        (*runner_only, runner_id),
+    ).fetchone()
+    return row[0], row[1]
 
 
 def hand_off(db, item_id, attempt_id, view, continuation):
@@ -200,12 +218,11 @@ def _release_reason(db, row, state, runner_id, continuation, now):
         return "pinned to another runner"
     if db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]:
         return "dispatch paused"
-    limit = db.execute("SELECT capacity FROM runner_limits WHERE runner_id=?", (runner_id,)).fetchone()
-    capacity = limit["capacity"] if limit else DEFAULT_CAPACITY
-    reserved = db.execute(
-        "SELECT count(*) FROM attempts WHERE runner_id=? AND ended_at IS NULL", (runner_id,),
-    ).fetchone()[0]
-    if reserved >= capacity:
+    capacity = _capacity(db, runner_id)
+    reserved, agents = _reserved(db, runner_id)
+    if reserved >= capacity + RUNNER_ONLY_SLOTS or (
+        state.stage not in RUNNER_ONLY_STAGES and agents >= capacity
+    ):
         return "runner at capacity"
     return None
 
@@ -234,6 +251,15 @@ def renew(db, runner_id, attempt_id, lease_digest, worker=None, blocker=None):
         db.execute("INSERT OR REPLACE INTO attempt_workers VALUES (?, ?, ?)",
                    (attempt_id, worker.reference, worker.url))
     return {"attempt_id": attempt_id, "lease_expires_at": expires}
+
+
+def report_recovery_wait(db, runner_id, attempt_id, blocker):
+    # An expired lease cannot renew, so recovery reports its owner wait here; None clears it.
+    attempt = open_attempt(db, runner_id, attempt_id)
+    if attempt["lease_expires_at"] > time():
+        raise intake.Conflict("The lease is live. Report blockers on renewal")
+    db.execute("UPDATE attempts SET blocker=? WHERE id=?", (blocker, attempt_id))
+    return {"attempt_id": attempt_id, "blocker": blocker}
 
 
 def recovery_candidates(db, runner_id):

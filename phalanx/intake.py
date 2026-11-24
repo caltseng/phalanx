@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 from . import dependencies
 from .finalization_schema import enqueue
+from .pr_models import GITHUB_REMOTE
 from .transitions import (
     Bypass, Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
@@ -170,6 +171,30 @@ def timeline(db, item_id, execution_id):
     } for row in db.execute(
         "SELECT * FROM attempt_adoptions WHERE execution_id=?", (execution_id,),
     )]
+    events += [{
+        "version": row["version"], "event": "github_observation", "attempt_id": None,
+        "created_at": row["observed_at"],
+        "details": {**json.loads(row["observation_json"]), "last_observed_at": row["last_observed_at"]},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM github_observations WHERE execution_id=?", (execution_id,),
+    )]
+    events += [{
+        "version": row["version"], "event": "local_checks", "attempt_id": None,
+        "created_at": row["checked_at"],
+        "details": {"head": row["head_sha"], "failures": json.loads(row["failures_json"])},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM local_check_results WHERE execution_id=?", (execution_id,),
+    )]
+    events += [{
+        "version": row["version"], "event": "captain_action", "attempt_id": None,
+        "created_at": row["created_at"],
+        "details": {"captain_id": row["captain_id"], "action": row["action"], "reason": row["reason"]},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM captain_actions WHERE execution_id=?", (execution_id,),
+    )]
     return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 
@@ -244,7 +269,9 @@ def steer(db, item_id, execution_id, payload):
     now = timestamp()
     db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
     db.execute(
-        """UPDATE executions SET version=?, updated_at=?, queue_priority=?, queue_affinity=? WHERE id=?""",
+        """UPDATE executions SET version=?, updated_at=?, queue_priority=?,
+               queue_affinity=CASE WHEN queue_affinity='@writer' THEN queue_affinity ELSE ? END
+           WHERE id=?""",  # step5-remove: keeps writer-bound executions out of the old loop
         (row["version"] + 1, now, PRIORITY[request.get("priority", "normal")],
          request.get("runner_affinity") or "", execution_id),
     )
@@ -334,6 +361,13 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
     if dependencies.milestone_evidence(state) != dependencies.milestone_evidence(next_state):
         dependencies.refresh_dependents(db, row["item_id"], now_ms)
     return execution_view(execution_row(db, row["item_id"], row["id"]))
+
+
+def end_writers(db, execution_id, status):
+    """End every open writer of an execution that closed as the terminal status."""
+    db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL
+                  WHERE execution_id=? AND ended_at IS NULL""",
+               (timestamp(), f"closed as {status}", execution_id))
 
 
 def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None,
@@ -467,9 +501,38 @@ def result(db, item_id, execution_id, payload, lease_digest):
     if payload.question is not None:
         wait = Wait(wait.reason if wait else payload.question.prompt, "owner reply")
     excluded = {"report_markdown", "expected_version"}
-    excluded.update(field for field in ("review_notes", "local_checks")
+    excluded.update(field for field in ("review_notes", "local_checks", "pr_url")
                     if getattr(payload, field) is None)
     details = payload.model_dump(mode="json", exclude=excluded)
+    publishing = state.stage == Stage.PUBLICATION and payload.outcome == Outcome.SUCCEEDED
+    if (payload.pr_url is not None) != publishing:
+        raise Conflict("A successful publication result reports the PR URL, and only it does")
+    published = None
+    if publishing:
+        remote, = db.execute("SELECT remote FROM repositories WHERE id=?",
+                             (item_row(db, item_id)["repository_id"],)).fetchone()
+        match = GITHUB_REMOTE.fullmatch(remote)
+        if match is None or not payload.pr_url.lower().startswith(f"https://github.com/{match[1].lower()}/pull/"):
+            raise Conflict("The PR must be in the item's registered GitHub repository")
+        # The reconciler's URL for the same PR, so its observations match primary_pr exactly.
+        published = f"https://github.com/{match[1]}/pull/{payload.pr_url.rsplit('/', 1)[1]}"
+        # Every execution shares the item branch, so an earlier execution's PR may still be found there.
+        if db.execute(
+            """SELECT 1 FROM executions AS execution
+               LEFT JOIN github_observations AS observation ON observation.execution_id = execution.id
+               WHERE execution.item_id=? AND execution.id<>?
+                 AND ((lower(observation.pr_url)=lower(?)
+                       AND json_extract(observation.observation_json, '$.pr.merged'))
+                      OR (lower(json_extract(execution.state_json, '$.final_output.url'))=lower(?)
+                          AND json_extract(execution.state_json, '$.final_output.merge_commit') IS NOT NULL))
+               LIMIT 1""",
+            (item_id, execution_id, published, published),
+        ).fetchone():
+            raise Conflict(f"{published} was already merged for an earlier execution. Publish this "
+                           "execution's work in a new PR")
+    # step5-remove: a writer's attempt takes the direct path; step 5 makes it the only path.
+    direct = db.execute("SELECT 1 FROM writers WHERE attempt_id=? AND ended_at IS NULL",
+                        (payload.attempt_id,)).fetchone() is not None
     retry_at = None
     if payload.retry_after_seconds is not None and payload.failure_reason is None:
         raise Conflict("A retry delay requires a technical failure reason")
@@ -534,11 +597,12 @@ def result(db, item_id, execution_id, payload, lease_digest):
     return apply(
         db, row, state, Event.RESULT, details=details, attempt_id=payload.attempt_id,
         outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
+        direct=direct,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
                           prevalidated_candidate=payload.prevalidated_candidate, bypass=bypass,
                           report_draft=draft_revision, reviewed_report=draft_revision,
                           report_review_notes=payload.report_review_notes,
-                          findings=findings),
+                          findings=findings, published_pr=published),
     )
 
 def draft(db, item_id, execution_id, revision):

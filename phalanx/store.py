@@ -6,30 +6,22 @@ from tempfile import TemporaryDirectory
 from threading import Condition
 
 from .dependency_schema import DEPENDENCY_SCHEMA
+from .direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, DIRECT_SCHEMA
 from .dispatch_schema import ADOPTION_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
 from .operator_schema import BLOCKER_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
+from .reconciliation_schema import RECONCILIATION_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
 
-# PH-15b folds ready_for_check_in into pr_reconciliation and renames development_findings.
-REVISION_MIGRATION = tuple(
-    f"""UPDATE {table} SET state_json = json_remove(json_set(state_json,
-            '$.stage', CASE json_extract(state_json, '$.stage')
-                WHEN 'ready_for_check_in' THEN 'pr_reconciliation' ELSE json_extract(state_json, '$.stage') END,
-            '$.findings', json_extract(state_json, '$.development_findings')),
-        '$.development_findings', '$.publication_conflict')"""
-    for table in ("executions", "transition_history")
-) + (
-    "UPDATE attempts SET stage = 'pr_reconciliation' WHERE stage = 'ready_for_check_in'",
-    # check_in reads its merge intent from the latest reconciliation observation.
-    """UPDATE transition_history SET details_json = json_set(details_json, '$.stage', 'pr_reconciliation')
-       WHERE json_extract(details_json, '$.stage') = 'ready_for_check_in'""",
-)
+# Version 11 rewrote pre-PH-15b rows. Its step stays empty so deployed stores keep their version.
+REVISION_MIGRATION = ()
 
 
 APPLICATION_ID = 0x50484C58  # PHLX
+# Older stores needed row rewrites that were removed (decision 67), so they are refused.
+OLDEST_SUPPORTED_VERSION = 12
 BUSY_TIMEOUT = 2  # seconds
 
 
@@ -104,6 +96,10 @@ MIGRATIONS = (
     ADOPTION_SCHEMA,
     REVISION_MIGRATION,
     BLOCKER_SCHEMA,
+    DIRECT_SCHEMA,
+    RECONCILIATION_SCHEMA,
+    CAPTAIN_SHIFT_SCHEMA,
+    CLOSED_WRITER_MIGRATION,
 )
 
 
@@ -140,6 +136,14 @@ def read_transaction(path: Path):
         db.execute("COMMIT")
 
 
+def _check_supported(app_id: int, version: int) -> None:
+    if app_id != APPLICATION_ID or not 1 <= version <= len(MIGRATIONS):
+        raise ValueError("Unsupported Phalanx database identity or schema version")
+    if version < OLDEST_SUPPORTED_VERSION:
+        raise ValueError(f"Phalanx store schema version {version} predates the oldest supported "
+                         f"version {OLDEST_SUPPORTED_VERSION} and cannot be upgraded")
+
+
 def migrate(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with write_transaction(path, create=True) as db:
@@ -148,8 +152,8 @@ def migrate(path: Path) -> None:
         if version == 0:
             if app_id or db.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone():
                 raise ValueError("Database is not an empty SQLite database or a Phalanx store")
-        elif app_id != APPLICATION_ID or not 1 <= version <= len(MIGRATIONS):
-            raise ValueError("Unsupported Phalanx database identity or schema version")
+        else:
+            _check_supported(app_id, version)
         if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise ValueError("Phalanx requires SQLite DELETE journal mode")
 
@@ -169,8 +173,7 @@ def snapshot(source: Path, destination: Path) -> None:
             live.backup(copy)
             app_id = copy.execute("PRAGMA application_id").fetchone()[0]
             version = copy.execute("PRAGMA user_version").fetchone()[0]
-            if app_id != APPLICATION_ID or not 1 <= version <= len(MIGRATIONS):
-                raise ValueError("Unsupported Phalanx database identity or schema version")
+            _check_supported(app_id, version)
             if [row[0] for row in copy.execute("PRAGMA integrity_check")] != ["ok"]:
                 raise ValueError("SQLite snapshot failed integrity_check")
             copy.execute("PRAGMA journal_mode = DELETE")

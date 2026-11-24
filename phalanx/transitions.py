@@ -24,6 +24,26 @@ class Stage(StrEnum):
     REPORT_DRAFTING = "report_drafting"
     REPORT_REVIEW = "report_review"
     REPORT_STORAGE = "report_storage"
+    # A writer's PR lifecycle after self-review: it pushes, opens the ready PR and enables
+    # auto-merge, then the server follows the reconciler's GitHub observations to delivery.
+    PUBLICATION = "publication"
+    DELIVERY = "delivery"
+
+
+# A writer's stages after self-review, which take no changes_required: fixes go to the open PR.
+WRITER_PR_STAGES = frozenset({Stage.PUBLICATION, Stage.DELIVERY})
+
+
+# PR gates that may observe the repository's own merge of the validated candidate.
+EXTERNAL_MERGE_STAGES = frozenset({Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION})
+# Stages the runner completes itself, without an agent worker session.
+RUNNER_ONLY_STAGES = frozenset({
+    Stage.PR_CREATION, Stage.REPORT_STORAGE, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION,
+    Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.CHECK_IN,
+})
+# Per-runner attempts beyond its capacity that only runner-only stages may use, so a
+# short GitHub or check stage never waits behind long agent workers.
+RUNNER_ONLY_SLOTS = 2
 
 
 class Status(StrEnum):
@@ -60,6 +80,7 @@ class Event(StrEnum):
     CLOSE_FAILURE = "close_failure"
     STOP_CONFIRMED = "stop_confirmed"
     MERGE_VERIFIED = "merge_verified"
+    PR_OBSERVED = "pr_observed"
     FINALIZE = "finalize"
 
 
@@ -78,6 +99,9 @@ class PullRequest:
     draft: bool = False
     merge_commit: str | None = None
     closed: bool = False
+    # "merge" or "squash_or_rebase", and GitHub's merged_at, for a verified merge.
+    merge_method: str | None = None
+    merged_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +124,7 @@ class Wait:
 
 
 TERMINAL = frozenset({Status.COMPLETED, Status.FAILED, Status.CANCELLED})
+DELIVERY_WAIT = Wait("GitHub checks, reviews and merge of the primary PR", "reconciler observation")
 
 
 @dataclass(frozen=True)
@@ -165,6 +190,13 @@ class Evidence:
     findings: str | None = None
     # Findings are a merge conflict, which pr_revision resolves on the open PR at any PR stage.
     merge_conflict: bool = False
+    # The observed PR head is open and ready, with required checks green, no unresolved
+    # feedback and no conflict.
+    pr_ready: bool = False
+    # The observed PR's base branch isn't the item's target branch.
+    off_base: bool = False
+    # The PR URL a writer reports when publication succeeds.
+    published_pr: str | None = None
 
 
 def _require(condition: object, message: str) -> None:
@@ -211,20 +243,68 @@ def _primary(state: Execution, evidence: Evidence) -> PullRequest:
 
 def _merge_verified(state: Execution, evidence: Evidence) -> Execution:
     pr = _primary(state, evidence)
-    _require(state.target is Target.MERGED and state.ready_revision == pr.revision
-             and state.candidate == pr.revision.head
-             and not pr.draft and pr.merge_commit,
+    _require(state.candidate == pr.revision.head and not pr.draft and pr.merge_commit,
              "Verified merge must match the primary PR and expected candidate")
-    return _close(state, Status.COMPLETED, pr)
+    if state.stage is Stage.CHECK_IN:
+        _require(state.target is Target.MERGED and state.ready_revision == pr.revision,
+                 "Verified merge must match the authorized ready revision")
+        return _close(state, Status.COMPLETED, pr)
+    if state.stage is Stage.DELIVERY:
+        # The writer's PR merged into its target; _pr_observed took GitHub's head as the candidate.
+        return _close(replace(state, ready_revision=pr.revision), Status.COMPLETED, pr)
+    # The repository merged the validated candidate itself, so the item is delivered.
+    _require(state.stage in EXTERNAL_MERGE_STAGES, "Merge verification requires a PR gate or check-in")
+    return _close(replace(state, stage=Stage.CHECK_IN, ready_revision=pr.revision), Status.COMPLETED, pr)
 
 
-def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
+def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
+    """Follow GitHub's view of a writer's PR. GitHub's head, URL and merge win (decision 69)."""
+    pr = evidence.pr
+    # Only the PR this execution's writer published can deliver it, never an earlier
+    # execution's PR on the shared item branch.
+    _require(state.stage is Stage.DELIVERY and state.target is not Target.REPORT
+             and pr and pr.url and pr.revision.head and pr.revision.base
+             and state.primary_pr == pr.url,
+             "A PR observation requires the PR this execution's writer published, in delivery")
+    if pr.merge_commit and evidence.off_base:
+        # A merge can't be undone, and this one didn't deliver into the item's target.
+        return _wait(state, Status.WAITING_FOR_INPUT,
+                     Wait(f"{pr.url} was merged into a branch other than the item's target",
+                          "owner reply"), ready_revision=None)
+    if pr.merge_commit:
+        # A merge by any method, by anyone, delivers either PR target. GitHub's head is the
+        # candidate, since a writer's push can race auto-merge (decision 81).
+        return _merge_verified(replace(state, candidate=pr.revision.head), evidence)
+    if state.status is not Status.WAITING_FOR_EXTERNAL:
+        return state
+    state = replace(state, candidate=pr.revision.head)
+    if pr.closed:
+        return _wait(state, Status.WAITING_FOR_INPUT,
+                     Wait(f"{pr.url} was closed without merging", "owner reply"), ready_revision=None)
+    if not evidence.pr_ready or evidence.off_base:
+        return replace(state, ready_revision=None)
+    if state.target is Target.READY:
+        return _close(replace(state, ready_revision=pr.revision), Status.COMPLETED, pr)
+    # Ready for check-in: dependents may start; GitHub auto-merge delivers it.
+    return replace(state, ready_revision=pr.revision)
+
+
+def _success(state: Execution, evidence: Evidence, wait: Wait | None, direct: bool) -> Execution:
     stage = state.stage
     candidate = state.candidate
     if stage is Stage.DEVELOPMENT:
         _require(evidence.candidate, "Development requires a recoverable candidate")
-        next_stage = Stage.SELF_REVIEW if state.primary_pr else Stage.PR_CREATION
+        next_stage = Stage.SELF_REVIEW if state.primary_pr or direct else Stage.PR_CREATION
         return _queue(state, next_stage, candidate=evidence.candidate, findings=None)
+    if stage is Stage.PUBLICATION:
+        # The writer pushed and opened the PR. The reconciler's observations of that exact PR
+        # decide what happens next.
+        _require(evidence.published_pr, "Publication requires the published PR's URL")
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT, stage=Stage.DELIVERY,
+                     primary_pr=evidence.published_pr)
+    if stage is Stage.DELIVERY:
+        # The writer acted on an owner reply.
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT)
     if stage is Stage.PR_CREATION:
         pr = evidence.pr
         _require(pr and pr.url and pr.draft and not pr.closed and not pr.merge_commit
@@ -235,7 +315,7 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
     if stage is Stage.SELF_REVIEW:
         _require(candidate and evidence.reviewed_candidate == candidate,
                  "Self-review evidence must match the candidate")
-        return _queue(state, Stage.PRE_PR_VALIDATION)
+        return _queue(state, Stage.PUBLICATION if direct else Stage.PRE_PR_VALIDATION)
     if stage is Stage.PRE_PR_VALIDATION:
         bypass = evidence.bypass
         _require(candidate and evidence.prevalidated_candidate == candidate,
@@ -303,6 +383,8 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None) -> Executi
 
 def _changes(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
     stage = state.stage
+    _require(stage not in WRITER_PR_STAGES,
+             "Push fixes to the open PR; publication and delivery take no changes_required")
     if stage is Stage.PR_CREATION:
         # An existing PR on the item branch blocked the first draft; adopt it.
         pr = evidence.pr
@@ -345,6 +427,7 @@ def decide(
     evidence: Evidence = Evidence(),
     wait: Wait | None = None,
     retry_allowed: bool = False,
+    direct: bool = False,  # step5-remove: a writer's result; step 5 makes this the only path
 ) -> Execution:
     """Decide one event or raise ValueError for an inadmissible event.
 
@@ -352,6 +435,8 @@ def decide(
     policy. Scheduling a retry or recheck is the caller's responsibility.
     STOP_CONFIRMED attests that the worker and in-flight effects were accounted
     for. A successful RESULT ends the current attempt, even on a stage loop.
+    A direct (writer) result skips the runner-only stages: self-review leads to
+    publication, and PR_OBSERVED follows GitHub from there to delivery.
     """
     _require(state.status not in TERMINAL, "A closed execution must be rerun as a new execution")
     if state.pending_output is not None:
@@ -364,11 +449,12 @@ def decide(
                      "Finalization requires the reviewed report revision")
         return _disposition(state, state.pending_output, evidence.stored_report)
     if event is Event.MERGE_VERIFIED:
-        _require(state.stage is Stage.CHECK_IN, "Merge verification requires check-in")
         return _merge_verified(state, evidence)
     if state.stopping is not None:
         _require(event is Event.STOP_CONFIRMED, "Reconcile outstanding effects before closing")
         return _disposition(state, state.stopping, evidence.stored_report)
+    if event is Event.PR_OBSERVED:
+        return _pr_observed(state, evidence)
     if event in {Event.CANCEL, Event.CLOSE_FAILURE}:
         status = Status.CANCELLED if event is Event.CANCEL else Status.FAILED
         if state.status in {Status.RUNNING, Status.WAITING_FOR_EXTERNAL}:
@@ -400,7 +486,7 @@ def decide(
     _require(event is Event.RESULT and state.status is Status.RUNNING,
              "Stage results require a running attempt")
     if outcome is Outcome.SUCCEEDED:
-        return _success(state, evidence, wait)
+        return _success(state, evidence, wait, direct)
     if outcome is Outcome.CHANGES_REQUIRED:
         return _changes(state, evidence, wait)
     if outcome is Outcome.FAILED and retry_allowed:
