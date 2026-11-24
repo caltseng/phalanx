@@ -35,7 +35,7 @@ class Prerequisite(Payload):
 class Intake(Payload):
     repository_id: Identifier
     goal: Text
-    target: Target
+    target: Target = Target.MERGED
     context_links: list[Text] = Field(default_factory=list, max_length=50)
     acceptance_criteria: list[Text] = Field(default_factory=list, max_length=50)
     target_branch: Text | None = None
@@ -64,6 +64,8 @@ class Steering(Versioned):
     runner_affinity: Identifier | None = None
     label: Label | None = None
     dependencies: list[Prerequisite] | None = Field(default=None, max_length=100)
+    target: Target | None = None
+    steered_by: Literal["owner", "captain"] = "owner"
 
 
 class Cancel(Versioned):

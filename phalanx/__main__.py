@@ -40,6 +40,9 @@ def api_request(base_url, route, *, body=None, key=None):
         raise ValueError(f"HTTP {error.code}: {detail}") from error
 
 
+TARGET_HELP = ("checked_in (default) merges the PR once GitHub's required reviews and checks pass, "
+               "ready_for_check_in stops at the ready PR; "
+               "report delivers a Markdown report")
 TARGETS = ("report", "ready_for_check_in", "checked_in")
 
 
@@ -68,7 +71,8 @@ def main() -> None:
     intake = commands.add_parser("intake", help="file a work item")
     intake.add_argument("repository")
     intake.add_argument("goal")
-    intake.add_argument("--target", choices=TARGETS, required=True)
+    intake.add_argument("--target", choices=TARGETS, default="checked_in",
+                        help=TARGET_HELP)
     intake.add_argument("--publication-mode", choices=["ready", "draft"], default="ready",
                         help="direct sessions: stop at a verified draft instead of promoting or merging")
     intake.add_argument("--key", help="reuse this key when retrying the same request")
@@ -84,7 +88,8 @@ def main() -> None:
     issue = commands.add_parser("ingest-issue", help="file a registered repository's GitHub issue")
     issue.add_argument("repository", help="registered Phalanx repository ID")
     issue.add_argument("number", type=int, help="GitHub issue number in that repository")
-    issue.add_argument("--target", choices=["report", "ready_for_check_in", "checked_in"], required=True)
+    issue.add_argument("--target", choices=TARGETS, default="checked_in",
+                       help=TARGET_HELP)
     issue.add_argument("--publication-mode", choices=["ready", "draft"], default="ready")
     issue.add_argument("--key", help="override the stable issue key for an intentional new import")
     inspect = commands.add_parser("inspect", help="show a work item and its current execution")

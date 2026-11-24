@@ -100,8 +100,10 @@ ceilings, merge authorization or delivery gates.
   again, continue from step 1.
   - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
     actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
-    result. The reconciler verifies delivery: a ready PR with required checks green for a ready-only
-    target, or a GitHub merge for check-in.
+    result. Read the latest target on each pass: enable GitHub auto-merge only for `checked_in`,
+    and disable it for `ready_for_check_in` if an owner retargeted the item. GitHub's required
+    reviews, checks and rulesets still gate merging. The reconciler verifies delivery: a ready PR
+    with required checks green for a ready-only target, or a GitHub merge for check-in.
   - Draft mode: don't push after self-review. Delivery verifies an open draft at the reviewed
     candidate and target base, and never waits for ready-only CI or promotion. If you must change
     the PR, push the change: the reconciler then queues `self_review` for the new head, so review it
