@@ -117,8 +117,13 @@
       svg.append(node);
     };
     if (kind === "run") {
-      path("M8 .5 11.5 8 8 10.5 4.5 8Z", { fill: "currentColor" });
-      path("M8 10V15", { stroke: "currentColor", "stroke-width": "1.5" });
+      svg.setAttribute("viewBox", "0 0 12 16");
+      path("M2 4.5C1.9 5.8 .2 6.7 .6 7.9L2 9.3 3.4 7.9C3.8 6.7 2.1 5.8 2 4.5ZM1.4 8.8H2.6V14.5H1.4Z",
+        { class: "spear spear-left", fill: "currentColor" });
+      path("M10 4.5C9.9 5.8 8.2 6.7 8.6 7.9L10 9.3 11.4 7.9C11.8 6.7 10.1 5.8 10 4.5ZM9.4 8.8H10.6V14.5H9.4Z",
+        { class: "spear spear-right", fill: "currentColor" });
+      path("M6 2.5C5.8 4.2 3.8 5.5 4.3 7L6 8.6 7.7 7C8.2 5.5 6.2 4.2 6 2.5ZM5.3 8H6.7V15H5.3Z",
+        { class: "spear spear-center", fill: "currentColor" });
     } else if (kind === "captain") {
       path("M1 6C1 2.5 4 .5 8 .5S15 2.5 15 6H12.5C12 4 10.5 3 8 3S4 4 3.5 6Z",
         { fill: "currentColor" });

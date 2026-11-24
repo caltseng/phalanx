@@ -154,8 +154,13 @@
     assert(section("captains").querySelector(".captains li").textContent.includes("cap-1"), "Live Captains sort first");
     assert(/heartbeat \d+s ago/.test(section("captains").textContent), "Heartbeat age has context and ago");
     assert(section("captains").querySelector("time").getAttribute("aria-label").includes("T"), "Absolute time accessible");
-    assert(item("run").closest("li").querySelector(".mark-run") &&
-      !section("captains").querySelector(".mark-run"), "Running work retains its spearhead, distinct from Captains");
+    const formation = item("run").closest("li").querySelector(".mark-run");
+    assert(formation?.querySelectorAll(".spear").length === 3 &&
+      formation.getAttribute("aria-hidden") === "true" && formation.getAttribute("focusable") === "false" &&
+      formation.parentElement.title === "running" &&
+      formation.parentElement.querySelector(".sr-only").textContent === "running" &&
+      !section("captains").querySelector(".mark-run"),
+    "Running work has three spears, distinct from Captains, with unchanged accessible state");
     for (const [health, word] of [["run", "live"], ["attn", "stale"], ["muted", "ended"]]) {
       const row = section("captains").querySelector(".row.t-" + health);
       const glyph = row.querySelector(".glyph");

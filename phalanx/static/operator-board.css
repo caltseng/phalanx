@@ -225,6 +225,7 @@ body { margin: 0; }
 
 .glyph > [aria-hidden] { display: inline-block; line-height: 1; }
 .status-mark { vertical-align: -.12em; }
+.mark-run { height: 1.333333em; }
 .chip .flag-mark { font-size: 1em; }
 .captain-ref { display: inline-flex; align-items: baseline; gap: .3em; }
 .captain-ended, .captain-ended .stat, .captain-ended .reason { color: var(--muted); }
@@ -394,11 +395,15 @@ body { margin: 0; }
     70%, 100% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--pulse) 0%, transparent); }
   }
 
-  /* Running work advances in lockstep, like a phalanx on the march. */
-  .glyph.t-run > [aria-hidden] { animation: march 1.6s cubic-bezier(.7, 0, .3, 1) var(--clock, 0s) infinite; }
-  @keyframes march {
-    0%, 100% { transform: translateX(-1px); }
-    50% { transform: translateX(1.5px); }
+  /* The 12-by-16 row icon renders SVG units as pixels, keeping the wave at 2px. */
+  .mark-run .spear {
+    animation: formation 2.2s ease-in-out var(--clock, 0s) infinite;
+  }
+  .mark-run .spear-center { animation-delay: calc(var(--clock, 0s) + .22s); }
+  .mark-run .spear-right { animation-delay: calc(var(--clock, 0s) + .44s); }
+  @keyframes formation {
+    0%, 70%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-2px); }
   }
 
   /* A live Captain's heart beats. */
