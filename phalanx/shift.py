@@ -23,8 +23,7 @@ from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
 # Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
-SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48}
-MAX_OPEN_ITEMS = 1000
+SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48, "max_writers": 4}
 # A launch's staged intent. It becomes the live credential once the server accepts its nonce.
 PENDING = "phalanx-writer.pending.json"
 
@@ -97,7 +96,7 @@ def load_charter(config):
     shift = charter.get("shift", {})
     if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
-        raise ShiftError("Charter [shift] takes positive integers max_hours and max_wakes")
+        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes and max_writers")
     return {**charter, "shift": {**SHIFT_DEFAULTS, **shift}, "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
 
@@ -172,7 +171,7 @@ def _summary(item):
 def status(api, charter, captain_id=None):
     """Flags, Captains and the charter's open items: what a wake reconciles."""
     items, cursor = [], None
-    while len(items) < MAX_OPEN_ITEMS:
+    while True:
         query = {"kind": "open", "limit": 100, **({"cursor": cursor} if cursor else {})}
         page = api("/v1/operator/executions?" + urlencode(query))
         items.extend(page["items"])
@@ -180,10 +179,13 @@ def status(api, charter, captain_id=None):
         if not cursor:
             break
     scope = set(charter["repositories"])
+    scoped = [_summary(item) for item in items if item["repository_id"] in scope]
     return {
         "flags": api("/v1/flags")["flags"],
         "captains": api("/v1/captains?limit=100")["captains"],
-        "items": [_summary(item) for item in items if item["repository_id"] in scope],
+        "items": scoped,
+        "active_writers": sum(item["writer"] is not None for item in scoped),
+        "max_writers": charter["shift"]["max_writers"],
         "out_of_scope_open_items": sum(item["repository_id"] not in scope for item in items),
         **({"captain": api(f"/v1/captains/{_q(captain_id)}")} if captain_id else {}),
     }
@@ -289,6 +291,8 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
             "captain_id": captain_id, "runtime": config["runtime"], "nonce": saved["nonce"],
             "token_digest": hashlib.sha256(saved["token"].encode()).hexdigest(),
             "replaces": replaces, "replaced_stopped": replaces is not None,
+            "writer_limit": {"max_writers": charter["shift"]["max_writers"],
+                             "repositories": charter["repositories"]},
         })
         if binding["writer"]["state"] != "ended":
             break
