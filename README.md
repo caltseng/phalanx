@@ -34,6 +34,14 @@ python -m phalanx intake example "Review the test coverage" --target report --ke
 
 Open `http://127.0.0.1:8000/operator/` to watch it. To run the work, set up a runner and start a muster as described in [Install Phalanx](docs/install.md), which also covers macOS and Linux, repository trust and the GitHub token.
 
+**One-time repository trust:** the owner must grant trust in the worker runtime before work can run.
+In the GitHub Copilot app, also approve the per-project repository trust card in the project's session;
+a checkout path in the runtime's `trustedFolders` configuration does not approve that app-level card.
+For direct sessions, approve the configured shared worktrees project (`session_workspace`), rather than
+registering a project for each worktree. Only the owner grants trust. A Captain that finds a pending
+trust approval notifies the owner and keeps the same writer/session blocked until approval, rather than
+relaunching it.
+
 ## Resume an existing install
 
 After a restart or reboot, don't rerun the quickstart: it would create new tokens and could start an empty database. Follow [Resume an existing install](docs/resume.md) with your recorded muster directory, database path and stored tokens.

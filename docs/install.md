@@ -93,9 +93,11 @@ Fetch the desired origin branch into each mapped checkout before the first muste
 
 ### Grant repository trust once
 
-Grant the Captain's runtime standing access to each mapped checkout before the first muster. A runtime that gates a repository on owner trust (the GitHub Copilot app asks once per repository) denies every worker tool until trust is granted, so an untrusted checkout would stop a worker mid-stage. For the GitHub Copilot app and CLI, choose "trust for future sessions" once per checkout, or add the checkout's path to the `trustedFolders` array in `~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)).
+Grant the Captain's runtime standing access to each mapped checkout before the first muster. A runtime that gates a repository on owner trust prevents a worker from running until trust is granted. For Copilot CLI path trust, choose "trust for future sessions" once per checkout, or add the checkout's path to the `trustedFolders` array in `~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)). The GitHub Copilot app also has a per-project repository trust card: the owner must approve it in the project's session even when the path is already trusted in runtime configuration. For direct sessions, approve the configured shared worktrees project (`session_workspace`); do not register a separate project for each worktree.
 
 Only the owner grants trust; a Captain or worker never edits it. The Captain checks trust while serving `resolve_project`. An untrusted mapping is reported in the loop's `mappings` status and gets no workers, while other mappings keep running. Once trust is granted, the next check verifies the mapping and admission resumes.
+
+On the direct path there is no `resolve_project` relay check. The Captain inspects runtime-reported repository trust immediately after launching or finding a writer session and on every wake. A pending trust approval is a visible owner blocker with the runtime's reason and an owner notification, not a stopped or failed writer. The Captain retains the same writer/session without relaunching, continues unrelated work, and resumes it after the runtime confirms owner approval.
 
 ## Start the first muster
 
