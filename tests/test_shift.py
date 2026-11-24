@@ -63,6 +63,22 @@ class CharterTest(unittest.TestCase):
             with self.subTest(path=path), self.assertRaisesRegex(shift.ShiftError, "outside every checkout"):
                 self.charter(CHARTER, path)
 
+    def test_checks_environment_config_requires_non_empty_text_when_present(self):
+        path = self.root / "shift.json"
+        mapping = self.config["repositories"]["repo"]
+        for value in ("", " \t", None, ["python"], 1):
+            with self.subTest(value=value):
+                mapping["checks_environment"] = value
+                path.write_text(json.dumps(self.config), encoding="utf-8")
+                with self.assertRaisesRegex(shift.ShiftError, "repo checks_environment must be non-empty text"):
+                    shift.load_config(path)
+        mapping["checks_environment"] = "uv run --no-sync python"
+        path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.assertEqual(shift.load_config(path), self.config)
+        del mapping["checks_environment"]
+        path.write_text(json.dumps(self.config), encoding="utf-8")
+        self.assertEqual(shift.load_config(path), self.config)
+
     def test_draft_kickoff_never_instructs_promotion_or_auto_merge(self):
         item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Review only",
                 "execution": {"id": "execution", "state": {"publication_mode": "draft"}}}
@@ -163,6 +179,22 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         with self.assertRaisesRegex(shift.ShiftError, "outside the charter"):
             shift.launch(self.api, self.config, self.charter, captain, self.item("other")["id"])
+
+    def test_launch_kickoff_names_the_repository_checks_environment_or_its_absence(self):
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        item = self.item()
+        mapping = self.config["repositories"]["repo"]
+        for environment in (None, r'& "C:\checks env\Scripts\python.exe"', "uv run --no-sync python"):
+            with self.subTest(environment=environment):
+                if environment is not None:
+                    mapping["checks_environment"] = environment
+                prompt = shift.launch(self.api, self.config, self.charter, captain, item["id"])["kickoff"]
+                expected = (f"`{environment}`" if environment is not None
+                            else "Not configured. Do not guess an interpreter or command prefix.")
+                self.assertIn(f"Checks environment (interpreter or command prefix): {expected}", prompt)
+                self.assertIn("Never borrow another checkout's environment or install packages.", prompt)
+                self.assertIn("python -m phalanx work question", prompt)
+                self.assertIn("It is separate from the Phalanx command.", prompt)
 
     def test_refused_launch_leaves_the_live_credential_untouched(self):
         first = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]

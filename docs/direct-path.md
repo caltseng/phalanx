@@ -47,16 +47,23 @@ The Captain's commands are `python -m phalanx shift ...`. They need `PHALANX_RUN
   "work_command": "python -m phalanx work",
   "shift_command": "python -m phalanx shift --config C:\\phalanx\\shift.json",
   "repositories": {
-    "phalanx-pilot-py": {"checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py", "base_branch": "main"}
+    "phalanx-pilot-py": {
+      "checkout": "C:\\phalanx\\checkouts\\phalanx-pilot-py",
+      "base_branch": "main",
+      "checks_environment": "& \"C:\\phalanx\\checks\\phalanx-pilot-py\\Scripts\\python.exe\""
+    }
   }
 }
 ```
 
 - `repositories` uses the runner configuration's mapping.
+- Each repository may also set `checks_environment`, a non-empty string naming its prepared checks interpreter or command prefix, with any quoting or shell invocation syntax the writer needs. Use an absolute interpreter path or a prefix that runs from the item's worktree (for example `uv run --no-sync python` with an already prepared environment). Writers append the repository's test or check arguments. This is separate from `work_command`: it supplies the project's check dependencies, not the Phalanx CLI.
 - `worktrees` is the root for item worktrees, and must be separate from any runner's.
 - `work_command` is how a worker session runs `phx work` from its worktree. The default is `python -m phalanx work`.
 - `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.
 - `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
+
+`shift launch` includes that repository's exact `checks_environment` in the writer kickoff. When omitted, the kickoff explicitly says it is not configured; it never guesses a Python or environment. The worker prompt requires checks to use that environment from the item's worktree, forbids borrowing another checkout's environment or installing packages, and tells the writer to report the validation gap and request the correct environment with `phx work question` if it is missing or unusable.
 
 ### Charter
 

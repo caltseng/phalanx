@@ -41,6 +41,11 @@ def load_config(path):
                if not config.get(key)]
     if missing:
         raise ShiftError(f"Shift config {path} needs {', '.join(missing)}")
+    for repository, mapping in config["repositories"].items():
+        if "checks_environment" in mapping:
+            environment = mapping["checks_environment"]
+            if not isinstance(environment, str) or not environment.strip():
+                raise ShiftError(f"Repository {repository} checks_environment must be non-empty text")
     return config
 
 
@@ -197,7 +202,7 @@ def _read_credential(path):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
-def kickoff(item, worktree, nonce, work_command, base):
+def kickoff(item, worktree, nonce, work_command, base, checks_environment=None):
     criteria = item.get("acceptance_criteria") or []
     mode = item["execution"]["state"].get("publication_mode", "ready")
     if mode == "draft":
@@ -220,6 +225,8 @@ def kickoff(item, worktree, nonce, work_command, base):
         item_id=item["id"], execution_id=item["execution"]["id"], repository=item["repository_id"],
         target=item["target"], goal=item["goal"], worktree=worktree, nonce=nonce, work=work_command,
         base=base, publication=publication, publication_mode=mode,
+        checks_environment=(f"`{checks_environment}`" if checks_environment is not None
+                            else "Not configured. Do not guess an interpreter or command prefix."),
         criteria="\n".join(f"- {entry}" for entry in criteria) or "- None beyond the goal",
     )
 
@@ -283,7 +290,7 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
         "session_workspace": config.get("session_workspace"),
         "session_name": f"phx {item_id[:8]} {nonce}",
         "kickoff": kickoff(item, workspace.path, nonce, config.get("work_command", "python -m phalanx work"),
-                           base),
+                           base, mapping.get("checks_environment")),
     }
 
 
