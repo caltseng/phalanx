@@ -439,13 +439,21 @@ def close_failure(db, item_id, execution_id, payload):
 def request_stop(db, item_id, execution_id, payload, event):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     details = {"reason": payload.reason}
+    scheduled = db.execute(
+        "SELECT 1 FROM external_rechecks WHERE execution_id=? AND version=?",
+        (execution_id, row["version"]),
+    ).fetchone()
     updated = apply(db, row, state, event, details=details)
-    # A scheduled external wait has released its attempt and has no outstanding effects.
+    # Delivery writers can still push or merge without an open attempt. Only an explicit
+    # scheduled wait, or the absence of both attempt and writer, proves an effect-free wait.
     if state.status == Status.WAITING_FOR_EXTERNAL:
         active = db.execute(
             "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
         ).fetchone()
-        if active is None:
+        writer = db.execute(
+            "SELECT 1 FROM writers WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
+        ).fetchone()
+        if active is None and (scheduled is not None or writer is None):
             row, state = check_current(db, item_id, execution_id, updated["version"])
             return apply(db, row, state, Event.STOP_CONFIRMED, details=details)
     return updated
