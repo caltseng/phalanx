@@ -26,7 +26,12 @@ global runner setting. Row 71 records the original defaults: the persisted dispa
 `max_writers` setting now enforces the workspace concurrent-writer budget at registration,
 and a scoped writer credential spans separately fenced attempts, not just one attempt.
 Row 59's local-read allowlist now also covers Captain and flag reads for the direct
-board; it still never authorizes intake or other writes.
+board. Caleb's local-dashboard amendment (2026-11-24: "If the dashboard is local only,
+we shouldn't need to put a token in") additionally authorizes narrowly wired
+`/operator/api/` actions with explicit local-board mode, a direct loopback peer, local Host
+and same-origin writes. Forwarding headers and untrusted/null origins cannot grant local
+authority; `/v1` write authorization stays unchanged. The service owner verifies the
+loopback-only listener and explicit configuration before rollout; review/merge is not deployment.
 
 | # | Area | Decision | Why | Decided by |
 | --- | --- | --- | --- | --- |

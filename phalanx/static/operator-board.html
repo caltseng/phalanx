@@ -33,10 +33,6 @@
         <p id="operator-capacity-help">Shared across all repositories and Captains. Building must not
           exceed Total. Delivery and external waits retain Total; PR fixes must reacquire Building.
           Lowering either limit preserves existing sessions and blocks affected admissions.</p>
-        <div id="operator-settings-auth">
-          <label for="operator-settings-token">Owner token (required to save)</label>
-          <input id="operator-settings-token" type="password" autocomplete="off">
-        </div>
         <button type="submit">Save concurrency</button>
       </form>
       <p id="operator-settings-status" role="status"></p>
@@ -59,12 +55,6 @@
       <h2 id="operator-create-heading">New work item</h2>
       <button id="operator-create-close" type="button" aria-label="Close new work item">Close</button>
     </div>
-    <form id="operator-create-auth">
-      <p>Creating work requires owner access. The local board remains read-only.</p>
-      <label for="operator-create-token">Owner token</label>
-      <input id="operator-create-token" type="password" autocomplete="off" required>
-      <button type="submit">Unlock creation</button>
-    </form>
     <form id="operator-create-form" hidden>
       <fieldset id="operator-create-fields">
         <label for="new-repository">Repository</label>

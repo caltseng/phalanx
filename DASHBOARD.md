@@ -49,7 +49,7 @@ If every one of those had been a Phalanx work item, the dashboard would have nee
 | Interrupted work | PH-V1 gate 4 stopped the server mid-stage and held workers past lease expiry. | A disconnected or stale banner while the server is down. After a restart, recovering items stay visible and show "recovering". History stays complete. |
 | Several repositories | phalanx, phalanx-pilot-py and phalanx-pilot-web. | A repository column and filter, with counts for each repository. |
 
-This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Running work uses an inline SVG pikehead (`[pike]` below). Captain rows and references use a crested centurion helmet (`[helmet]` below), retaining their live, stale, ended or unavailable state colors and accessible labels. Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); their existing status labels remain distinct for screen readers. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor (the pennant uses the light/dark `--flag` token), and need no external assets. The other status glyphs (`!`, `✓`, `✕`, `–`) and transition/recovery arrows are unchanged.
+This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Running work uses the selected D inline SVG three-spear formation, with a taller center spear (`[pike]` below). Its 12-by-16px row silhouette uses broad leaf heads and legible shafts; only the spears wave vertically by 2px over 2.2 seconds, staggered by .22 seconds from left to center to right. The icon frame, row and text stay still, refreshes retain the wave phase, and reduced motion leaves a static formation. Captain rows and references use a crested centurion helmet (`[helmet]` below), retaining their live, stale, ended or unavailable state colors and accessible labels. Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); their existing status labels remain distinct for screen readers. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor (the pennant uses the light/dark `--flag` token), and need no external assets. The other status glyphs (`!`, `✓`, `✕`, `–`) and transition/recovery arrows are unchanged. D1 owner visual acceptance remains open.
 
 ```text
 Ⓐ PHALANX Scribe  ● Live updated 4s ago   1 needs you  4 active  6 queued  2 flags  1/1 Captains live   ◐ Auto  Refresh
@@ -133,7 +133,7 @@ dispatch is informational, not evidence that a Captain stopped.
 9. **Times are honest.** Show relative times, with the absolute local time and UTC on hover. Always show the age of the data.
 10. **Neutral wording.** Say "worker chat", "runner" and "Captain", never the name of a specific agent runtime or operating system. This follows the runtime and platform neutrality rules in [AGENTS.md](AGENTS.md).
 11. **Accessible.** Full keyboard navigation, visible focus, WCAG 2.2 AA contrast, screen-reader labels, and respect for reduced motion. On the board, ↑/↓ or j/k move between rows, Enter expands a row and Escape collapses it.
-12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running rows march in step, waiting shields stay steady, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
+12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running work's three spears wave in formation, waiting shields stay steady, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
 13. **Nothing secret or third-party in the browser.** No tokens in storage, and no third-party scripts, fonts or analytics. Keep the strict CSP.
 
 Reading layouts keep expanded wait reasons, questions and approval text full-width below
@@ -184,7 +184,7 @@ and filters remain visible as text and counted button badges even with both pane
 unapplied edits survive closing/reopening without being presented as applied state.
 When the host supplies writer-concurrency settings, the toolbar reparents that same native
 disclosure/form behind one settings icon. It does not duplicate settings, create a second
-write path or change the host's owner-token lifecycle.
+write path or change the host's dashboard authorization lifecycle.
 
 Filters use compact, initially closed dropdowns. Each trigger shows its label and current
 value (or **Any**), including edits before Apply filters; opening a dropdown exposes the
@@ -237,12 +237,14 @@ goal, acceptance criteria (one per line), target, priority, optional label, publ
 and optional dependencies (one item ID and optional API milestone per line). Target defaults
 to intake's `checked_in`, displayed as **Merged** using the board's display-label mapping.
 
-Creation uses the existing `POST /v1/items` owner bearer-token route and its validation,
-not another intake service. An owner-connected board reuses its in-memory credential.
-The anonymous local read board asks for an owner token inside the modal and verifies owner
-access before loading `GET /v1/repositories`; closing discards that write credential.
-No token is placed in browser storage, URLs or cookies, and anonymous/runner reads never
-become writes. Browser-origin intake requires an exact same Origin (scheme, host and port)
+Creation uses `/operator/api/items`, a narrow adapter to existing intake validation and
+idempotency, not another intake service. With explicit `PHALANX_LOCAL_BOARD=1`, a verified
+direct loopback peer and local Host can load `/operator/api/repositories` and create work
+without entering a credential. The form opens directly, with no unlock step. Forwarding
+headers cannot grant local authority. Nonlocal boards require an owner connection and
+reuse its in-memory credential; `/v1` writes still require their existing bearer roles.
+No server credential is injected into the browser or placed in storage, URLs or cookies.
+Tokenless intake requires an exact same Origin (scheme, host and port)
 and, when supplied, `Sec-Fetch-Site: same-origin`; opaque, cross-site, and same-site-but-not-
 same-origin requests are rejected. Non-browser bearer clients without browser headers
 remain supported. There is no CORS grant or cookie-based write path.
@@ -321,7 +323,7 @@ and owner-authenticated intake are described explicitly here and in [work items]
 
 - **Origin:** the hosted API origin serves the dashboard ([PH-20](IMPLEMENTATION_PLAN.md)), so it needs no CORS and no separate API base URL.
 - **Sign-in:** Google sign-in from PH-27. The session cookie is HttpOnly, Secure and SameSite=Lax. Sessions expire, and sign-out deletes the session on the server.
-- **Local board:** until PH-27, a local server started with `PHALANX_LOCAL_BOARD=1` serves the board read routes without a token to loopback clients with a loopback `Host` ([decision 59](docs/decisions.md)). This does not authorize `+` intake: it always needs an owner bearer token and same-origin browser checks. A hosted server leaves the flag unset.
+- **Local board:** a directly accessed server started with `PHALANX_LOCAL_BOARD=1` serves board reads and narrow `/operator/api/` actions without a token to verified loopback peers with local Host. Creation and canonical settings writes additionally require exact same-origin browser checks; forwarding headers cannot grant local authority. `/v1` writes keep their existing bearer roles. A hosted server, proxy or tunnel leaves the flag unset. See the [local-dashboard amendment](docs/decisions.md).
 - **Workspace scope:** every dashboard request is scoped to the signed-in user's selected workspace and checked against their role on the server. The browser only hides controls for convenience; it never enforces access.
 - **Write actions (D2):** the cookie authorizes owner write routes only with CSRF protection, using an Origin check plus a required custom header. Destructive actions ask for confirmation. Each action records the signed-in email in the item timeline, the same way reply authors are recorded today. Runner routes never accept the cookie.
 - **Caching:** static assets have hashed names and cache for a long time. Conditional board reads use `private, no-cache`; other API responses are `no-store`.
@@ -337,14 +339,17 @@ and owner-authenticated intake are described explicitly here and in [work items]
 
 ## API additions
 
-These operator routes are read-only; the merged local `+` form uses the existing owner
-intake route, and later D2 actions will also reuse existing routes. The D1 server reads
+The `/v1/operator` routes are read-only; the local `+` form uses a narrowly authorized
+`/operator/api` adapter to existing intake, and later D2 actions will also reuse existing logic.
+The D1 server reads
 (PH-29a) target the local board at `/operator/` only, with existing authentication unchanged:
 no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data)
 lists the routes. Persisted dispatch `max_writers` is enforced atomically at writer registration.
 The **Writer concurrency** disclosure shows active sessions and the effective maximum
-(initially 5); owners can save a new positive integer. Local read-only viewers must supply
-an owner token to save. Saves preserve pause/aging settings and survive reload/restart.
+(initially 5); trusted local boards save through `/operator/api/dispatch/settings` without
+another token gate. Nonlocal boards reuse the owner connection. This adapter uses the same
+canonical settings implementation and trusted-local helper as creation, not another setting
+or authentication mechanism. Saves preserve pause/aging settings and survive reload/restart.
 Lowering below usage preserves existing sessions and blocks new admissions. Refresh capacity
 reads current server values; charter settings cannot undo dashboard edits.
 

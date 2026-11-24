@@ -200,6 +200,9 @@ waiting writers count. `shift launch` supplies no separate limit, and charters r
 bounds. This is **not** five building writers plus ten total. Shipped code does not
 prove installation state: coordinate removal of an existing charter concurrency
 entry with service deployment; do not treat approval or an open PR as deployment.
-Likewise loopback board reads are optionally tokenless, but intake/replies/settings
-and other writes still require their documented bearer credentials. No tokenless
-localhost write path is implied.
+Likewise tokenless local-board actions require both shipped code and verified deployment:
+explicit `PHALANX_LOCAL_BOARD=1`, a loopback-only listener, direct loopback peer and local
+Host, with exact same-origin writes and no forwarding headers. Narrow `/operator/api/`
+creation and canonical settings adapters share this authorization helper; `/v1` intake,
+replies, settings and other writes retain their documented bearer roles. The server never
+injects its owner credential into the browser. See [local-board setup](work-items.md#operator-work-board).

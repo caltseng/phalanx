@@ -154,25 +154,28 @@
     return {
       owner: signal => read("/v1/owner/status", signal),
       boardAccess: signal => read(EXECUTIONS + "?limit=1", signal),
-      capacity: signal => read("/v1/dispatch/settings", signal),
+      capacity: signal => read("/operator/api/dispatch/settings", signal),
       async saveCapacity(building, maximum) {
-        const response = await fetch("/v1/dispatch/settings", {
+        const headers = { Accept: "application/json", "Content-Type": "application/json" };
+        if (token) headers.Authorization = "Bearer " + token;
+        const response = await fetch("/operator/api/dispatch/settings", {
           method: "PUT", redirect: "error", cache: "no-store", credentials: "omit",
           signal: AbortSignal.timeout(12000),
-          headers: { Accept: "application/json", "Content-Type": "application/json",
-            Authorization: "Bearer " + token },
+          headers,
           body: JSON.stringify({ max_building_writers: building, max_writers: maximum })
         });
         if (!response.ok) throw new Error("Save rejected (HTTP " + response.status + ").");
         return response.json();
       },
-      repositories: signal => read("/v1/repositories", signal),
+      repositories: signal => read("/operator/api/repositories", signal),
       async create(payload, key) {
-        const response = await fetch("/v1/items", {
+        const headers = { Accept: "application/json", "Content-Type": "application/json",
+          "Idempotency-Key": key };
+        if (token) headers.Authorization = "Bearer " + token;
+        const response = await fetch("/operator/api/items", {
           method: "POST", redirect: "error", cache: "no-store", credentials: "omit",
           signal: AbortSignal.timeout(12000),
-          headers: { Accept: "application/json", "Content-Type": "application/json",
-            Authorization: "Bearer " + token, "Idempotency-Key": key },
+          headers,
           body: payload
         });
         if (!response.ok) {
@@ -267,13 +270,12 @@
   let clearSettings;
   let reportRead;
 
-  function concurrency(source, authenticated) {
+  function concurrency(source) {
     const panel = document.querySelector("#operator-settings");
     const home = panel.parentElement;
     const form = document.querySelector("#operator-settings-form");
     const maximum = document.querySelector("#operator-max-writers");
     const building = document.querySelector("#operator-max-building-writers");
-    const token = document.querySelector("#operator-settings-token");
     const capacity = document.querySelector("#operator-capacity");
     const status = document.querySelector("#operator-settings-status");
     const refresh = document.querySelector("#operator-settings-refresh");
@@ -282,7 +284,6 @@
     let busy = false;
     let generation = 0;
     panel.hidden = false;
-    document.querySelector("#operator-settings-auth").hidden = authenticated;
     function display(value) {
       capacity.textContent = "Building " + value.building_writers + "/" + value.max_building_writers +
         " | Delivering " + value.delivering_writers + " | Total " + value.active_writers + "/" + value.max_writers;
@@ -314,20 +315,13 @@
         building.focus();
         return;
       }
-      const secret = token.value.trim();
-      token.value = "";
-      if (!authenticated && !TOKEN.test(secret)) {
-        status.textContent = "Enter a valid Phalanx owner token to save.";
-        token.focus();
-        return;
-      }
       busy = true;
       generation++;
       submit.disabled = true;
       refresh.disabled = true;
       status.textContent = "Saving concurrency...";
       try {
-        const result = await (authenticated ? source : client(secret)).saveCapacity(buildValue, value);
+        const result = await source.saveCapacity(buildValue, value);
         if (disposed) return;
         display(result);
         status.textContent = "Concurrency saved.";
@@ -349,7 +343,6 @@
       disposed = true;
       generation++;
       panel.hidden = true;
-      token.value = "";
       maximum.value = "";
       building.value = "";
       panel.removeEventListener("toggle", toggle);
@@ -360,10 +353,8 @@
     };
   }
 
-  function newItem(source, authenticated) {
+  function newItem(source) {
     const modal = document.querySelector("#operator-create");
-    const auth = document.querySelector("#operator-create-auth");
-    const password = document.querySelector("#operator-create-token");
     const form = document.querySelector("#operator-create-form");
     const fields = document.querySelector("#operator-create-fields");
     const submit = document.querySelector("#operator-create-submit");
@@ -379,7 +370,6 @@
       option.textContent = label(value);
       return option;
     }));
-    let writer = authenticated ? source : null;
     let pending = null;
     let busy = false;
     let generation = 0;
@@ -413,14 +403,11 @@
       if (modal.open) errors.focus({ preventScroll: true });
     }
 
-    async function unlock() {
+    async function loadRepositories() {
       const current = ++generation;
-      auth.querySelector("button").disabled = true;
       status.textContent = "Loading registered repositories...";
       try {
-        const access = writer;
-        await access.owner(AbortSignal.timeout(12000));
-        const rows = await access.repositories(AbortSignal.timeout(12000));
+        const rows = await source.repositories(AbortSignal.timeout(12000));
         if (disposed || generation !== current || !modal.open) return;
         const selected = repository.value;
         repository.replaceChildren(...rows.map(row => {
@@ -430,7 +417,6 @@
           return option;
         }));
         if (rows.some(row => row.id === selected)) repository.value = selected;
-        auth.hidden = true;
         form.hidden = false;
         fields.disabled = Boolean(pending);
         submit.disabled = busy || !rows.length;
@@ -439,12 +425,8 @@
         if (!busy) (pending ? submit : repository).focus({ preventScroll: true });
       } catch (error) {
         if (disposed || generation !== current || !modal.open) return;
-        writer = authenticated ? source : null;
-        auth.hidden = authenticated;
         form.hidden = true;
-        status.textContent = "Could not unlock creation. " + error.message + " Close and try again.";
-      } finally {
-        auth.querySelector("button").disabled = false;
+        status.textContent = "Could not load creation options. " + error.message + " Close and try again.";
       }
     }
 
@@ -453,29 +435,14 @@
       acknowledge = onCreated;
       clearErrors();
       status.textContent = "";
-      auth.hidden = Boolean(writer);
       form.hidden = true;
       modal.showModal();
-      if (writer) unlock();
-      else password.focus({ preventScroll: true });
-    }
-
-    function onAuth(event) {
-      event.preventDefault();
-      const token = password.value.trim();
-      password.value = "";
-      if (!TOKEN.test(token)) {
-        status.textContent = "Enter a valid Phalanx owner token.";
-        password.focus();
-        return;
-      }
-      writer = client(token);
-      unlock();
+      loadRepositories();
     }
 
     async function onSubmit(event) {
       event.preventDefault();
-      if (busy || !writer) return;
+      if (busy) return;
       clearErrors();
       if (!pending) {
         const lines = value => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -497,7 +464,7 @@
       submit.disabled = true;
       status.textContent = "Queuing work item...";
       try {
-        const item = await writer.create(pending.payload, pending.key);
+        const item = await source.create(pending.payload, pending.key);
         if (disposed) return;
         pending = null;
         form.reset();
@@ -527,27 +494,21 @@
     function onClose() {
       if (modal.open) return;
       generation++;
-      password.value = "";
-      if (!authenticated) writer = null;
       trigger?.focus({ preventScroll: true });
     }
     const closeModal = () => modal.close();
     close.addEventListener("click", closeModal);
     modal.addEventListener("close", onClose);
-    auth.addEventListener("submit", onAuth);
     form.addEventListener("submit", onSubmit);
     source.openNewItem = open;
     return () => {
       disposed = true;
       generation++;
       modal.close();
-      writer = null;
-      password.value = "";
       pending = null;
       form.reset();
       close.removeEventListener("click", closeModal);
       modal.removeEventListener("close", onClose);
-      auth.removeEventListener("submit", onAuth);
       form.removeEventListener("submit", onSubmit);
     };
   }
@@ -586,10 +547,10 @@
     }
   }
 
-  function show(source, authenticated = false) {
+  function show(source) {
     source.openReport = output => openReport(source, output);
-    clearCreate = newItem(source, authenticated);
-    clearSettings = concurrency(source, authenticated);
+    clearCreate = newItem(source);
+    clearSettings = concurrency(source);
     const cursorName = kind => page === "home" ? kind + "_cursor" : "cursor";
     unmount = window.PhalanxOperatorBoard.mount(board, source, {
       page,
@@ -630,7 +591,7 @@
       const source = client(token);
       const access = await source.owner(AbortSignal.timeout(12000));
       if (access.role !== "owner") throw new Error("Owner access required.");
-      show(source, true);
+      show(source);
       disconnect.hidden = false;
     } catch {
       status.textContent = "Could not verify owner access. Check the token and server, then try again.";

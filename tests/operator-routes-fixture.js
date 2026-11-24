@@ -177,6 +177,59 @@
     assert(app.doc.querySelector(".sec-queued [data-item]") && !app.doc.querySelector(".sec-active"),
       "Full queue includes running work, without home sections");
     assert(app.doc.querySelector('input[name="repository"]').value === "example", "URL filters populate controls");
+    const formation = app.doc.querySelector(".mark-run");
+    const spears = [...formation.querySelectorAll(".spear")];
+    const reduced = app.win.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    assert(spears.length === 3, "Running dashboard item renders the selected three-spear formation");
+    for (const width of [1280, 390, 320]) {
+      frame.style.width = width + "px";
+      for (const theme of ["light", "dark"]) {
+        app.doc.documentElement.dataset.theme = theme;
+        await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+        const bounds = formation.getBoundingClientRect();
+        assert(Math.abs(bounds.width - 12) < .1 && Math.abs(bounds.height - 16) < .1,
+          "Formation remains legible at actual row-icon size: " + width + "px " + theme);
+        assert(app.doc.documentElement.scrollWidth <= width, "Formation adds no horizontal overflow");
+        const animations = spears.map(spear => spear.getAnimations()[0]);
+        if (reduced) {
+          assert(animations.every(animation => !animation), "Reduced motion leaves all three spears static");
+        } else {
+          assert(animations.every(animation => animation?.effect.getTiming().duration === 2200),
+            "Each spear has a 2.2-second wave");
+          const delays = animations.map(animation => animation.effect.getTiming().delay);
+          assert(Math.abs(delays[2] - delays[0] - 220) < 1 &&
+            Math.abs(delays[1] - delays[0] - 440) < 1, "Wave starts left, center, right at .22-second intervals");
+          const line = formation.closest(".line");
+          const title = line.querySelector(".title");
+          const stationary = [formation, line, title].map(node => node.getBoundingClientRect().top);
+          for (let index = 0; index < spears.length; index++) {
+            const animation = animations[index];
+            const delay = animation.effect.getTiming().delay;
+            animation.pause();
+            animation.currentTime = delay + 2200;
+            const rest = spears[index].getBoundingClientRect();
+            animation.currentTime = delay + 2860;
+            const peak = spears[index].getBoundingClientRect();
+            assert(Math.abs(rest.top - peak.top - 2) < .1 && Math.abs(rest.left - peak.left) < .1,
+              "Spear travels 2 rendered pixels vertically, without the old horizontal march");
+            assert(peak.top >= bounds.top && rest.bottom <= bounds.bottom,
+              "The complete wave stays inside the icon frame without clipping");
+            assert([formation, line, title].every((node, at) =>
+              Math.abs(node.getBoundingClientRect().top - stationary[at]) < .1),
+            "Icon frame, row and neighboring title stay stationary");
+            animation.play();
+          }
+        }
+        assert([...app.doc.querySelectorAll(".mark-captain, .mark-idle, .mark-wait")].every(icon =>
+          icon.getAnimations().length === 0), "Non-work icons do not inherit the work animation");
+      }
+    }
+    frame.style.width = "100%";
+    if (preview === "formation") {
+      result.textContent = "Formation checks passed (" + (reduced ? "reduced motion" : "animated") + "); preview retained.";
+      result.dataset.status = "passed";
+      return;
+    }
     const filterTrigger = app.doc.querySelector('[data-action="filters"]');
     const searchTrigger = app.doc.querySelector('[data-action="search"]');
     const filterPanel = app.doc.getElementById(filterTrigger.getAttribute("aria-controls"));
@@ -432,6 +485,6 @@
       " Page: " + frame.contentDocument.body.textContent.slice(0, 200);
     result.dataset.status = "failed";
   } finally {
-    if (result.dataset.status === "passed") frame.remove();
+    if (result.dataset.status === "passed" && preview !== "formation") frame.remove();
   }
 })();
