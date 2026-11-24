@@ -36,6 +36,7 @@ flowchart TD
     ReportReview -->|Changes required| Draft
     ReportReview -->|Exact revision reviewed| Store[Report storage]
     Store -->|Artifact recorded| Done
+    Done -.->|Later verified owner merge enriches output| Done
 ```
 
 | Stage | Required event or evidence | Next stage or disposition |
@@ -53,7 +54,8 @@ flowchart TD
 For ready publication the writer marks a reused draft ready and enables GitHub auto-merge
 **only** for `checked_in`. A `ready_for_check_in` item is never merged by its writer. Steering
 between PR targets is allowed while open, including delivery; the writer re-reads the target
-and disables auto-merge when retargeted to ready-only. Completed work requires a rerun.
+and disables auto-merge when retargeted to ready-only. New work on a completed item requires
+a rerun; recording a later verified owner merge only enriches its existing final output.
 
 An open primary PR on the correct base, ready for review, at a head whose required checks
 are green, with no unresolved feedback or conflict reaches `ready_for_check_in`. That

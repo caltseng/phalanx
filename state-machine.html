@@ -34,7 +34,8 @@
       <desc id="graph-description">PR work goes from development through self review,
         publication and delivery to completion. Review findings return to development.
         Delivery fixes stay on the same PR; a draft head change returns to self review.
-        Reports go through drafting, exact-revision review and storage to completion.</desc>
+        Reports go through drafting, exact-revision review and storage to completion.
+        A later verified owner merge enriches a completed ready PR without reopening work.</desc>
       <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
         <polygon points="0,0 8,4 0,8" fill="#738599"></polygon>
       </marker></defs>
@@ -45,6 +46,8 @@
       <rect x="790" y="95" width="160" height="55"></rect><text x="870" y="128">Completed</text>
       <path d="M170 122H205"></path><path d="M365 122H400"></path>
       <path d="M560 122H595"></path><path d="M755 122H790"></path>
+      <path class="recovery" d="M850 95V55H925V95"></path>
+      <text class="label" x="870" y="43">Later verified owner merge</text>
       <path class="recovery" d="M285 95V55H90V95"></path>
       <text class="label" x="188" y="43">Findings: revise candidate</text>
       <path class="recovery" d="M675 95V15H285V95"></path>
@@ -71,6 +74,10 @@
     <p>A verified merge by anyone, via merge, squash or rebase, into the target completes
       either PR target. Failed checks, feedback and conflicts remain actionable writer flags.
       Closed without merge asks for input; never silently replace the PR.</p>
+    <p>A completed ready PR can later record a verified merge at its ready head or a proven
+      descendant into the target. Enrich its existing output with final revision, merge commit
+      and merged time, then refresh dependents. It stays completed, with no new writer or
+      merge authority. Unrelated heads, draft outputs and wrong-base merges do not qualify.</p>
   </details>
   <h2>Execution status</h2>
   <table>
@@ -84,7 +91,8 @@
       <tr><td>Waiting for external</td><td>Observation/recheck resumes work or verifies delivery;
         report finalization retries independently.</td></tr>
       <tr><td>Completed / failed / cancelled</td><td>Exactly one verified PR or stored Markdown
-        report. A rerun creates a linked execution.</td></tr>
+        report. A rerun creates a linked execution for new work; a completed ready PR can
+        record its later verified merge without reopening.</td></tr>
     </tbody>
   </table>
   <details>
