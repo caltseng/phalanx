@@ -185,7 +185,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         result = subprocess.run(
             [sys.executable, "-m", "phalanx", "server", command, str(argument)],
             env=dict(os.environ, PHALANX_DB=str(database)),
-            capture_output=True, text=True, timeout=REQUEST_TIMEOUT,
+            capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
