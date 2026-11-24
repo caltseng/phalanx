@@ -135,9 +135,10 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.api = shift.API(self.config)
         self.charter = shift.load_charter(self.config)
 
-    def item(self, repository="repo"):
+    def item(self, repository="repo", **options):
         status, item = self.request("/v1/items", OWNER, {"repository_id": repository, "goal": "Write the report",
-                                                         "target": "report", "acceptance_criteria": ["Cite files"]})
+                                                         "target": "report", "acceptance_criteria": ["Cite files"],
+                                                         **options})
         self.assertEqual(status, 201, item)
         return item
 
@@ -342,15 +343,16 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         exact = json.loads(phx("--config", str(config), "status", "--captain", captain))
         self.assertEqual(exact["captain"]["id"], captain)
 
-    def ended_writer(self):
+    def ended_writer(self, *, push=True, **options):
         captain = shift.start(self.api, self.charter, "creator")["captain"]["id"]
-        item = self.item()
+        item = self.item(**options)
         launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
         route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
         self.api(route, method="PATCH", body={
             "captain_id": captain, "writer_id": launched["writer"]["id"], "session_id": "worker"})
         worktree = Path(launched["worktree"])
-        git(worktree, "push", "-q", "origin", "HEAD")
+        if push:
+            git(worktree, "push", "-q", "origin", "HEAD")
         base_url, token = credential(worktree)
         binding = request(base_url, token, "/v1/writer")
         report = "# Finished\n"
@@ -416,13 +418,73 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertFalse(self.check_archive(item)["can_archive"])
         self.assertEqual((worktree / "notes.txt").read_text(encoding="utf-8"), "preserve me\n")
 
+    def test_report_only_clean_worktree_without_remote_branch_can_archive(self):
+        _, item, worktree = self.ended_writer(push=False)
+        checked = self.check_archive(item)
+        self.assertTrue(checked["can_archive"], checked)
+        (worktree / "report-notes.md").write_text("Keep these notes\n", encoding="utf-8")
+        checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("local changes", checked["reason"])
+
+    def test_never_pushed_local_commit_blocks_then_fresh_base_allows_retry(self):
+        _, item, worktree = self.ended_writer(push=False)
+        (worktree / "README.md").write_text("Unpublished work\n", encoding="utf-8")
+        git(worktree, "commit", "-qam", "Local work")
+        checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("not pushed to origin/main", checked["reason"])
+        self.assertEqual(self.api("/v1/session-archives?session_id=worker")["record"]["outcome"], "blocked")
+        checkout = Path(self.config["repositories"]["repo"]["checkout"])
+        stale_base = shift._git(worktree, "rev-parse", "refs/remotes/origin/main").strip()
+        git(checkout, "push", "-q", "origin", f"{shift._git(worktree, 'rev-parse', 'HEAD').strip()}:main")
+        git(worktree, "update-ref", "refs/remotes/origin/main", stale_base)
+        self.assertTrue(shift._git(worktree, "rev-list", "HEAD", "--not", "refs/remotes/origin/main").strip())
+        checked = self.check_archive(item)
+        self.assertTrue(checked["can_archive"], checked)
+        shift.archive_result(self.api, "worker", "archived", "Creator archived after retry", "creator")
+        self.assertEqual(self.api("/v1/session-archives?session_id=worker")["record"]["outcome"], "archived")
+
+    def test_missing_topic_uses_item_target_branch_not_mapping_default(self):
+        checkout = Path(self.config["repositories"]["repo"]["checkout"])
+        git(checkout, "checkout", "-qb", "release")
+        (checkout / "README.md").write_text("Release-only work\n", encoding="utf-8")
+        git(checkout, "commit", "-qam", "Release base")
+        git(checkout, "push", "-q", "origin", "release")
+        _, item, _ = self.ended_writer(push=False, target_branch="release")
+        checked = self.check_archive(item)
+        self.assertTrue(checked["can_archive"], checked)
+        git(checkout, "push", "-q", "origin", "--delete", "release")
+        checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("fetch", checked["reason"])
+
     def test_missing_remote_branch_cannot_use_stale_tracking_ref(self):
         _, item, worktree = self.ended_writer()
+        (worktree / "README.md").write_text("Only on the deleted topic\n", encoding="utf-8")
+        git(worktree, "commit", "-qam", "Published topic work")
+        git(worktree, "push", "-q", "origin", "HEAD")
         branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=worktree, text=True).strip()
         git(Path(self.config["repositories"]["repo"]["checkout"]), "push", "-q", "origin", "--delete", branch)
         checked = self.check_archive(item)
         self.assertFalse(checked["can_archive"])
-        self.assertIn("fetch", checked["reason"])
+        self.assertIn("not pushed to origin/main", checked["reason"])
+
+    def test_archive_remote_lookup_and_fetch_failures_block(self):
+        _, item, _ = self.ended_writer(push=False)
+        original_git = shift._git
+        for operation in ("ls-remote", "fetch"):
+            with self.subTest(operation=operation):
+                def failing_git(path, *args):
+                    if args[0] == operation:
+                        raise shift.WorkspaceError(f"Git {operation} failed: temporary network failure")
+                    return original_git(path, *args)
+
+                with mock.patch.object(shift, "_git", side_effect=failing_git):
+                    checked = self.check_archive(item)
+                self.assertFalse(checked["can_archive"])
+                self.assertIn(f"Git {operation} failed: temporary network failure", checked["reason"])
+        self.assertTrue(self.check_archive(item)["can_archive"])
 
     def test_refused_archive_persists_reason_and_flag_without_retry(self):
         captain, item, _ = self.ended_writer()
