@@ -23,10 +23,14 @@
   </div>
   <main id="operator-board" class="phalanx-board" hidden></main>
   <dialog id="operator-report" aria-labelledby="operator-report-heading">
-    <h2 id="operator-report-heading">Field report</h2>
-    <button type="button">Close</button>
-    <p id="operator-report-status" role="status"></p>
-    <div id="operator-report-content"></div>
+    <div class="report-heading">
+      <h2 id="operator-report-heading">Field report</h2>
+      <button type="button" aria-label="Close field report"><span aria-hidden="true">&#215;</span></button>
+    </div>
+    <div id="operator-report-body">
+      <p id="operator-report-status" role="status"></p>
+      <div id="operator-report-content"></div>
+    </div>
   </dialog>
   <dialog id="operator-create" class="phalanx-board" aria-labelledby="operator-create-heading">
     <div class="create-heading">

@@ -156,6 +156,7 @@ body { margin: 0; }
 .repo, .stage, .writer, .stat { color: var(--muted); }
 .age, .dur, .pr { font-variant-numeric: tabular-nums; text-align: right; }
 .age { color: var(--muted); }
+.closed .age { text-align: left; }
 .reason { color: var(--muted); }
 .t-attn .reason, .t-fail .reason { color: var(--ink); }
 .writer.w-busy { color: var(--run); }
@@ -200,14 +201,14 @@ body { margin: 0; }
 /* Inline detail: keeps the row in place. */
 .detail {
   padding: .6rem .9rem .8rem 2.3rem; background: var(--raised); border-top: 1px dashed var(--line);
-  display: grid; gap: .6rem;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: .6rem;
 }
 .goal {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 10.5em; overflow: auto;
   padding: .45rem .6rem; background: var(--surface); border: 1px solid var(--line); border-radius: 6px;
 }
 .facts {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .15rem 1.25rem; margin: 0;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(15rem, 100%), 1fr)); gap: .15rem 1.25rem; margin: 0;
 }
 .facts > div { display: grid; grid-template-columns: 6.5rem 1fr; gap: .5rem; min-width: 0; }
 .facts dt { color: var(--faint); }
@@ -215,11 +216,13 @@ body { margin: 0; }
 .block h4 {
   margin: 0 0 .25rem; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint);
 }
+.block { min-width: 0; overflow-wrap: anywhere; }
+.block > .pre { margin: 0; }
 .block .plain { margin: 0; padding: 0; list-style: none; display: grid; gap: .15rem; }
 .ask { padding: .5rem .6rem; border-left: 3px solid var(--attn); background: var(--attn-bg); border-radius: 0 6px 6px 0; }
 .ask p { margin: .2rem 0; }
 .options { display: flex; flex-wrap: wrap; gap: .3rem; margin: .3rem 0; padding: 0; list-style: none; }
-.options li { padding: .05rem .5rem; border: 1px solid var(--line-strong); border-radius: 99px; background: var(--surface); }
+.options li { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding: .05rem .5rem; border: 1px solid var(--line-strong); border-radius: 99px; background: var(--surface); }
 .options li.default { border-color: var(--ink); font-weight: 600; }
 .cmd { display: inline-block; padding: .15rem .4rem; background: var(--surface); border-radius: 4px; overflow-wrap: anywhere; }
 .rail { display: flex; flex-wrap: wrap; gap: .25rem; margin: 0; padding: 0; list-style: none; }
@@ -271,10 +274,20 @@ body { margin: 0; }
 #operator-connect h1 { flex-basis: 100%; margin: 0 0 .25rem; font-size: 15px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
 #operator-connect[hidden] { display: none; }
 #operator-report {
-  width: min(52rem, 92vw); max-height: 84vh; color: var(--ink); background: var(--surface);
-  border: 1px solid var(--line-strong); border-radius: 10px; padding: 1rem 1.25rem;
+  box-sizing: border-box; width: min(52rem, calc(100vw - 1rem)); max-height: 84dvh;
+  overflow: hidden; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: 10px; padding: 0;
 }
-#operator-report h2 { margin: 0 0 .5rem; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+#operator-report[open] { display: flex; flex-direction: column; }
+.report-heading {
+  display: flex; flex: none; align-items: center; justify-content: space-between; gap: 1rem;
+  padding: .5rem .75rem .5rem 1.25rem; border-bottom: 1px solid var(--line);
+}
+#operator-report h2 { margin: 0; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+#operator-report .report-heading button { flex: none; width: 44px; height: 44px; padding: 0; font-size: 24px; }
+#operator-report .report-heading button:hover { background: var(--hover); }
+#operator-report-body { min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 0 1.25rem 1rem; }
+#operator-report-status:empty { display: none; }
 #operator-report :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 #operator-report::backdrop { background: #0008; }
 #operator-report-content { overflow-wrap: anywhere; font: 13px/1.5 system-ui, sans-serif; }

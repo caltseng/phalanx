@@ -463,6 +463,7 @@
     reportRead = request;
     reportStatus.textContent = "Loading report…";
     dialog.showModal();
+    document.querySelector("#operator-report-body").scrollTop = 0;
     try {
       const signal = AbortSignal.any([request.signal, AbortSignal.timeout(12000)]);
       const markdown = await source.report(output, signal);

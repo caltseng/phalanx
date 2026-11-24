@@ -120,6 +120,11 @@ RECENTLY CLOSED 25+
 12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running rows march in step, waiting shields stay steady, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
 13. **Nothing secret or third-party in the browser.** No tokens in storage, and no third-party scripts, fonts or analytics. Keep the strict CSP.
 
+Reading layouts keep expanded wait reasons, questions and approval text full-width below
+compact metadata, preserving multiline text and wrapping long links. Field reports scroll
+inside a separate body beneath a persistent heading and labeled 44px close button.
+Recently closed ages start at the same column edge regardless of relative-time length.
+
 ## Pages
 
 Every page reads state through the API. Filters live in the URL: repository, label, status, stage, outcome, time range and a text query. A global search accepts an item ID, an execution ID, a PR number or URL, or text from the title.

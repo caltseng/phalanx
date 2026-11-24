@@ -3,6 +3,7 @@
   if (new URLSearchParams(location.search).has("child")) return;
   const result = document.querySelector("#result");
   const frame = document.querySelector("#app");
+  const preview = new URLSearchParams(location.search).get("preview");
   const assert = (value, message) => { if (!value) throw new Error(message); };
   const until = async predicate => {
     const deadline = Date.now() + 5000;
@@ -25,7 +26,15 @@
     "<script>window.reportExecuted=true</script><img src=x onerror=alert(1)>",
     '<svg onload="alert(1)"><a href="javascript:alert(1)">HTML link</a></svg>', "",
     "```html", "<img src=x onerror=alert(1)>", "```"
-  ].join("\n");
+  ].join("\n") + ("\n\n## More findings\n\n" + "Long report paragraph. ".repeat(30)).repeat(50);
+  const approval = "Approve the following draft?\n\n" +
+    "- Keep the complete first requirement.\n- Preserve the second requirement.\n\n" +
+    "https://example.com/" + "long-path-".repeat(40) + "\n\n" + "long-filename-".repeat(40) + ".md\n\n" +
+    "A detailed approval paragraph with all of its context. ".repeat(40) + "\n\nEnd of approval draft.";
+  let readingLayout = false;
+  let ageOffset = 0;
+  const waitingRow = () => ({ ...row, status: "waiting_for_input", outcome: null, output: null,
+    stage: "development", version: 3, wait_reason: approval, resume_trigger: approval });
   let calls = [];
   let fail = false;
   let shell;
@@ -38,6 +47,8 @@
     });
     const win = frame.contentWindow;
     const doc = win.document;
+    const clock = win.Date.now.bind(win.Date);
+    win.Date.now = () => clock() + ageOffset * 60000;
     win.history.replaceState(null, "", path);
     doc.open();
     win.onerror = message => errors.push(message);
@@ -53,7 +64,8 @@
       if (path.startsWith("/v1/operator/executions/" + execution + "/timeline?")) {
         if (fail) return json({}, 404);
         const cursor = new URL(path, location.origin).searchParams.get("cursor");
-        return json({ item: row, attempt: null, prerequisites: [], question: null,
+        return json({ item: readingLayout ? waitingRow() : row, attempt: null, prerequisites: [],
+          question: readingLayout ? { prompt: approval, options: [approval], proposed_default: approval } : null,
           previous_execution_id: previous, next_execution_id: null,
           events: [{ created_at: now, stage: "report_storage", status: "completed", event: "result" }],
           next_cursor: cursor ? null : "history_cursor" });
@@ -61,8 +73,11 @@
       if (path.startsWith("/v1/operator/executions?")) {
         const params = new URL(path, location.origin).searchParams;
         const cursor = params.get("cursor");
-        return json({ items: params.get("q") === "no matches" && !cursor ? [] : params.get("kind") === "closed" ? [row] : [
-          { ...row, status: "running", outcome: null, output: null, stage: "development" }
+        return json({ items: params.get("q") === "no matches" && !cursor ? [] : params.get("kind") === "closed" ?
+          (readingLayout ? [9, 12, 180, 2880].map((minutes, index) => ({ ...row,
+            id: String(index + 1).repeat(32), closed_at: new Date(Date.parse(now) - minutes * 60000).toISOString()
+          })) : [row]) : [
+          readingLayout ? waitingRow() : { ...row, status: "running", outcome: null, output: null, stage: "development" }
         ], next_cursor: cursor ? null : "next_cursor" });
       }
       if (path.endsWith("/report")) return new win.Response(report, { headers: { "content-type": "text/plain" } });
@@ -92,6 +107,7 @@
     app = await load("/operator/executions/" + execution);
     await until(() => app.doc.querySelector(".detail-links"));
     assert(!calls.some(path => path.startsWith("/v1/operator/items/")), "Execution route preserves exact execution");
+    app.doc.querySelector("[data-report]").focus();
     app.doc.querySelector("[data-report]").click();
     await until(() => app.doc.querySelector("#operator-report-content h1"));
     const content = app.doc.querySelector("#operator-report-content");
@@ -101,6 +117,51 @@
     assert(!content.querySelector("script, img, svg, iframe, style") && !app.win.reportExecuted, "Report HTML never becomes DOM");
     assert(!content.querySelector('a[href^="javascript:"]') && content.querySelector("a").protocol === "https:",
       "Only safe generated links survive");
+    for (const width of [1280, 390, 320]) {
+      frame.style.width = width + "px";
+      frame.style.height = "600px";
+      await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+      const dialog = app.doc.querySelector("#operator-report");
+      const body = app.doc.querySelector("#operator-report-body");
+      const close = dialog.querySelector("button");
+      const initial = close.getBoundingClientRect();
+      assert(close.getAttribute("aria-label") === "Close field report" && close.textContent.trim() === "×",
+        "Report has an explicitly labeled X button");
+      assert(initial.width >= 44 && initial.height >= 44, "Close touch target at " + width);
+      assert(body.scrollHeight > body.clientHeight * 3, "Actual report is long enough to scroll");
+      for (const fraction of [0, .5, 1]) {
+        body.scrollTop = (body.scrollHeight - body.clientHeight) * fraction;
+        await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+        const bounds = close.getBoundingClientRect();
+        const modal = dialog.getBoundingClientRect();
+        assert(Math.abs(bounds.top - initial.top) < 1 && Math.abs(bounds.right - initial.right) < 1,
+          "Report close stays anchored at " + width + "px, scroll " + fraction);
+        assert(bounds.top >= modal.top && bounds.right <= modal.right && bounds.bottom <= body.getBoundingClientRect().top,
+          "Close is visible above report text and scrollbar");
+        assert(body.scrollWidth <= body.clientWidth && app.doc.documentElement.scrollWidth <= width,
+          "Report does not overflow horizontally at " + width);
+        assert(app.doc.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)?.closest("button") === close,
+          "Close remains clickable above the scrolling report");
+      }
+      close.focus();
+      assert(app.doc.activeElement === close && [...app.doc.styleSheets].some(sheet =>
+        [...sheet.cssRules].some(rule => rule.selectorText === "#operator-report :focus-visible" &&
+          rule.style.outline.includes("solid"))), "Close retains focus and a visible keyboard focus outline");
+    }
+    const opener = app.doc.querySelector("[data-report]");
+    if (preview === "report") {
+      result.textContent = "Report layout checks passed; preview retained.";
+      return;
+    }
+    app.doc.querySelector("#operator-report button").click();
+    await until(() => !app.doc.querySelector("#operator-report").open);
+    assert(app.doc.activeElement === opener, "Closing report returns focus to opener");
+    opener.click();
+    await until(() => app.doc.querySelector("#operator-report-content h1"));
+    assert(app.doc.querySelector("#operator-report-body").scrollTop === 0, "Reopened report starts at the beginning");
+    app.doc.querySelector("#operator-report").close();
+    frame.style.width = "100%";
+    frame.style.height = "900px";
 
     app = await load("/operator/queue?repository=example&label=PH-29c&stage=development&status=running&q=search&cursor=saved_cursor");
     await until(() => app.doc.querySelector("[data-item]"));
@@ -177,6 +238,55 @@
     "Long selected values stay available without horizontal overflow");
     frame.style.width = "100%";
 
+    readingLayout = true;
+    app = await load("/operator/");
+    await until(() => app.doc.querySelector(".sec-needs [data-item]"));
+    app.doc.querySelector(".sec-needs [data-item]").click();
+    await until(() => app.doc.querySelector(".ask"));
+    for (const width of [1280, 390, 320]) {
+      frame.style.width = width + "px";
+      await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+      const detail = app.doc.querySelector(".detail");
+      const facts = detail.querySelector(".facts");
+      for (const heading of ["Wait reason", "Resumes on", "Question for the owner"]) {
+        const block = [...detail.querySelectorAll(".block")].find(node => node.querySelector("h4")?.textContent === heading);
+        const text = block.querySelector(".pre");
+        assert(text.textContent === approval, "Complete multiline approval retained in " + heading);
+        assert(block.parentElement === detail && block.getBoundingClientRect().top >= facts.getBoundingClientRect().bottom,
+          heading + " is beneath compact metadata");
+        assert(text.getBoundingClientRect().width >= facts.getBoundingClientRect().width * .85,
+          heading + " uses available detail width at " + width);
+        assert(app.win.getComputedStyle(text).whiteSpace === "pre-wrap", "Paragraphs and lists retain line breaks");
+      }
+      assert(detail.querySelector(".cmd")?.textContent.includes('"ANSWER"'), "Existing reply command retained");
+      assert(!detail.querySelector("img") && app.doc.documentElement.scrollWidth <= width,
+        "Long approval options, URLs and text fit at " + width);
+    }
+    frame.style.width = "1280px";
+    await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+    const closedStarts = () => [...app.doc.querySelectorAll(".closed .age")].map(cell => {
+      const range = app.doc.createRange();
+      range.selectNodeContents(cell);
+      return range.getBoundingClientRect().left;
+    });
+    const before = closedStarts();
+    assert(before.length === 4 && Math.max(...before) - Math.min(...before) < 1,
+      "Closed label starts align for single/double-digit minutes, hours and days");
+    assert([...app.doc.querySelectorAll(".closed .age time")].every(time => time.title && time.getAttribute("aria-label")),
+      "Closed ages retain absolute-time accessibility");
+    ageOffset = 1;
+    app.doc.querySelector('[data-action="refresh"]').click();
+    await until(() => app.doc.querySelector(".closed .age").textContent.includes("10m"));
+    const after = closedStarts();
+    assert(after.every((left, index) => Math.abs(left - before[index]) < 1),
+      "Closed start alignment survives live relative-time refresh");
+    if (preview === "needs") {
+      result.textContent = "Needs-you and timestamp layout checks passed; preview retained.";
+      return;
+    }
+    readingLayout = false;
+    frame.style.width = "100%";
+
     for (const query of [id, execution, "#42", "https://github.com/a/b/pull/42", "title words"]) {
       app = await load("/operator/?q=" + encodeURIComponent(query));
       await until(() => app.doc.querySelector(".sec-closed [data-item]"));
@@ -213,6 +323,6 @@
       " Page: " + frame.contentDocument.body.textContent.slice(0, 200);
     result.dataset.status = "failed";
   } finally {
-    frame.remove();
+    if (result.dataset.status === "passed") frame.remove();
   }
 })();
