@@ -155,13 +155,13 @@
       owner: signal => read("/v1/owner/status", signal),
       boardAccess: signal => read(EXECUTIONS + "?limit=1", signal),
       capacity: signal => read("/v1/dispatch/settings", signal),
-      async saveCapacity(maximum) {
+      async saveCapacity(building, maximum) {
         const response = await fetch("/v1/dispatch/settings", {
           method: "PUT", redirect: "error", cache: "no-store", credentials: "omit",
           signal: AbortSignal.timeout(12000),
           headers: { Accept: "application/json", "Content-Type": "application/json",
             Authorization: "Bearer " + token },
-          body: JSON.stringify({ max_writers: maximum })
+          body: JSON.stringify({ max_building_writers: building, max_writers: maximum })
         });
         if (!response.ok) throw new Error("Save rejected (HTTP " + response.status + ").");
         return response.json();
@@ -272,6 +272,7 @@
     const home = panel.parentElement;
     const form = document.querySelector("#operator-settings-form");
     const maximum = document.querySelector("#operator-max-writers");
+    const building = document.querySelector("#operator-max-building-writers");
     const token = document.querySelector("#operator-settings-token");
     const capacity = document.querySelector("#operator-capacity");
     const status = document.querySelector("#operator-settings-status");
@@ -283,8 +284,10 @@
     panel.hidden = false;
     document.querySelector("#operator-settings-auth").hidden = authenticated;
     function display(value) {
-      capacity.textContent = value.active_writers + " active / " + value.max_writers + " maximum writer sessions.";
+      capacity.textContent = "Building " + value.building_writers + "/" + value.max_building_writers +
+        " | Delivering " + value.delivering_writers + " | Total " + value.active_writers + "/" + value.max_writers;
       maximum.value = String(value.max_writers);
+      building.value = String(value.max_building_writers);
     }
     async function load() {
       if (busy) return;
@@ -304,9 +307,11 @@
       event.preventDefault();
       if (busy) return;
       const value = Number(maximum.value);
-      if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) {
-        status.textContent = "Enter a whole number from 1 to 2147483647.";
-        maximum.focus();
+      const buildValue = Number(building.value);
+      if (![value, buildValue].every(limit => Number.isSafeInteger(limit) && limit >= 1 && limit <= 2147483647) ||
+          buildValue > value) {
+        status.textContent = "Enter whole numbers from 1 to 2147483647, with Building no greater than Total.";
+        building.focus();
         return;
       }
       const secret = token.value.trim();
@@ -322,7 +327,7 @@
       refresh.disabled = true;
       status.textContent = "Saving concurrency...";
       try {
-        const result = await (authenticated ? source : client(secret)).saveCapacity(value);
+        const result = await (authenticated ? source : client(secret)).saveCapacity(buildValue, value);
         if (disposed) return;
         display(result);
         status.textContent = "Concurrency saved.";
@@ -346,6 +351,7 @@
       panel.hidden = true;
       token.value = "";
       maximum.value = "";
+      building.value = "";
       panel.removeEventListener("toggle", toggle);
       refresh.removeEventListener("click", load);
       form.removeEventListener("submit", save);

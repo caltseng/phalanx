@@ -21,14 +21,18 @@
     <p id="operator-session-status" role="status">Loading…</p>
     <details id="operator-settings" hidden>
       <summary>Writer concurrency</summary>
-      <p id="operator-capacity" role="status">Open to load the effective limit.</p>
+      <p id="operator-capacity" role="status">Open to load Building, Delivering and Total capacity.</p>
       <button id="operator-settings-refresh" type="button">Refresh capacity</button>
       <form id="operator-settings-form">
-        <label for="operator-max-writers">Maximum writer sessions</label>
+        <label for="operator-max-building-writers">Building writers</label>
+        <input id="operator-max-building-writers" name="max_building_writers" type="number" min="1" max="2147483647" step="1" required
+               aria-describedby="operator-capacity-help">
+        <label for="operator-max-writers">Total writers</label>
         <input id="operator-max-writers" name="max_writers" type="number" min="1" max="2147483647" step="1" required
                aria-describedby="operator-capacity-help">
-        <p id="operator-capacity-help">Shared across all repositories and Captains. Lowering the limit
-          preserves existing sessions and blocks new writers until capacity is available.</p>
+        <p id="operator-capacity-help">Shared across all repositories and Captains. Building must not
+          exceed Total. Delivery and external waits retain Total; PR fixes must reacquire Building.
+          Lowering either limit preserves existing sessions and blocks affected admissions.</p>
         <div id="operator-settings-auth">
           <label for="operator-settings-token">Owner token (required to save)</label>
           <input id="operator-settings-token" type="password" autocomplete="off">

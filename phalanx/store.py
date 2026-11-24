@@ -10,7 +10,9 @@ from .direct_schema import (
     CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, DIRECT_SCHEMA,
     SESSION_ARCHIVE_SCHEMA,
 )
-from .dispatch_schema import ADOPTION_SCHEMA, CONCURRENCY_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
+from .dispatch_schema import (
+    ADOPTION_SCHEMA, CONCURRENCY_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA, WRITER_CAPACITY_SCHEMA,
+)
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
 from .operator_schema import BLOCKER_SCHEMA, DASHBOARD_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
@@ -119,6 +121,7 @@ MIGRATIONS = (
     ),
     CAPTAIN_COMPACTION_SCHEMA,
     CONCURRENCY_SCHEMA,
+    WRITER_CAPACITY_SCHEMA,
 )
 
 
@@ -180,6 +183,8 @@ def migrate(path: Path) -> None:
             for statement in statements:
                 db.execute(statement)
             db.execute(f"PRAGMA user_version = {next_version}")
+        if version == 0:
+            db.execute("UPDATE dispatch_settings SET max_writers=10 WHERE id=1")
 
 
 def snapshot(source: Path, destination: Path) -> None:

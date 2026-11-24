@@ -51,3 +51,16 @@ CONCURRENCY_SCHEMA = (
     "ALTER TABLE dispatch_settings ADD COLUMN max_writers INTEGER NOT NULL DEFAULT 5 "
     "CHECK (typeof(max_writers) = 'integer' AND max_writers > 0)",
 )
+
+
+WRITER_CAPACITY_SCHEMA = (
+    "ALTER TABLE dispatch_settings ADD COLUMN max_building_writers INTEGER NOT NULL DEFAULT 5 "
+    "CHECK (typeof(max_building_writers) = 'integer' AND max_building_writers > 0)",
+    "UPDATE dispatch_settings SET max_building_writers=min(5, max_writers)",
+    # Conservatively keep every existing worker allocated until it follows the new handoff protocol.
+    "ALTER TABLE writers ADD COLUMN building INTEGER NOT NULL DEFAULT 1 CHECK (building IN (0, 1))",
+    "ALTER TABLE writers ADD COLUMN building_requested_at TEXT",
+    "ALTER TABLE writers ADD COLUMN capacity_revision INTEGER NOT NULL DEFAULT 0",
+    """CREATE INDEX waiting_writer_builds ON writers(building_requested_at, id)
+       WHERE ended_at IS NULL AND building=0 AND building_requested_at IS NOT NULL""",
+)

@@ -70,6 +70,8 @@ def add_work_command(commands):
     actions = work.add_subparsers(dest="work_command", required=True)
     actions.add_parser("status", help="show this writer, its execution and open attempt")
     actions.add_parser("next", help="open the next stage's attempt, or show the open one")
+    capacity = actions.add_parser("capacity", help="acquire Building before rework, or return to delivery")
+    capacity.add_argument("phase", choices=("building", "delivering"))
     progress = actions.add_parser("progress", help="record progress, with an optional note")
     progress.add_argument("--note")
     result = actions.add_parser("result", help="post the open attempt's stage result")
@@ -92,6 +94,11 @@ def run_work(args):
         result = request(base_url, token, "/v1/writer")
     elif args.work_command == "next":
         result = request(base_url, token, "/v1/writer/attempt", method="POST")
+    elif args.work_command == "capacity":
+        current = request(base_url, token, "/v1/writer")
+        result = request(base_url, token, "/v1/writer/capacity",
+                         body={"phase": args.phase,
+                               "expected_revision": current["writer"]["capacity_revision"]})
     elif args.work_command == "progress":
         result = request(base_url, token, "/v1/writer/progress", body={"note": args.note})
     elif args.work_command == "result":

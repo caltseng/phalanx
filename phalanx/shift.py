@@ -97,7 +97,7 @@ def load_charter(config):
     if unmapped:
         raise ShiftError(f"Charter repositories without a checkout mapping: {', '.join(unmapped)}")
     shift = charter.get("shift", {})
-    if isinstance(shift, dict) and "max_writers" in shift:
+    if isinstance(shift, dict) and {"max_writers", "max_building_writers"} & shift.keys():
         raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
     if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
@@ -198,6 +198,9 @@ def status(api, charter, captain_id=None):
         "items": scoped,
         "active_writers": capacity["active_writers"],
         "max_writers": capacity["max_writers"],
+        "building_writers": capacity["building_writers"],
+        "max_building_writers": capacity["max_building_writers"],
+        "delivering_writers": capacity["delivering_writers"],
         "out_of_scope_open_items": sum(item["repository_id"] not in scope for item in items),
         **({"captain": api(f"/v1/captains/{_q(captain_id)}")} if captain_id else {}),
     }
