@@ -30,7 +30,11 @@ and optional `notify_command`. It never reads an execution-runner config.
 
 ### Existing Windows muster rollout
 
-The operator maintains the host launcher outside the repository. Before deploying this
+Reusable launch behavior is now [versioned deployment tooling](deployment.md); retained
+host wrappers should only delegate to it. The service owner must review and coordinate
+adoption, retaining current paths, credentials, active writers and capacity. The following
+explicit command remains compatible; it is not permission to restart the live service.
+Before deploying this
 revision, create `C:\phalanx-muster\reconciler.json` with the API URL, existing reconciler
 identity as `reconciler_id`, verified repository mappings and any validation/notification
 settings. Preserve credentials in the existing private environment; never put tokens in JSON.
@@ -135,8 +139,9 @@ To provision or refresh this layout, the **operator**, not a writer:
    `PLAYWRIGHT_BROWSERS_PATH` set to the external `ms-playwright` directory (for this
    repository, `npx playwright install chromium`).
 3. Records the lowercase SHA-256 of the provisioned lockfile after normalizing CRLF to
-   LF, as UTF-8 without a BOM, in `lock.sha256`; maintains `checks.ps1` and puts the exact
-   command prefix in the shift config. The inspected snapshot's hash is
+   LF, as UTF-8 without a BOM, in `lock.sha256`; makes any retained `checks.ps1` a shim
+   delegating to the pinned tracked `scripts/checks.ps1 -EnvironmentRoot <prepared environment>`
+   and puts the exact prefix in the shift config. The inspected snapshot's hash is
    `6a51aa579c5fa36c4b5a7ebf309e91d2c8d364d779ebb36602ceb3263158c1c5`.
 
 Before any check, the wrapper hashes the **worktree's** `package-lock.json` with the same
@@ -191,9 +196,9 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 | `shift prompt captain\|keeper\|worker` | Prints the Captain prompt (the fixed wake loop), the keeper prompt, or the worker prompt template, which a Captain quotes when a writer's kickoff predates a change. Needs no config |
 | `shift charter` | Validates the charter and prints it with its revision |
 | `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
-| `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session ID NAME]... [--no-sessions] [--handoff-note]` | Re-reads the charter and heartbeats. `--session` reports each of the runtime's `phx ` sessions, and the server flags any that no writer or Captain owns. Omitted fields keep their last value. Prints `shift.handoff_due` once a shift bound is reached |
+| `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session ID NAME]... [--session-writer ID NONCE]... [--no-sessions] [--handoff-note]` | Re-reads the charter and heartbeats. Reports all Phalanx sessions, including task-first and renamed sessions, with the full verified writer nonce separately. The server flags any that no writer or Captain owns. Omitted inventory keeps its last value, including nonces. Prints `shift.handoff_due` once a shift bound is reached |
 | `shift status [--captain ID]` | Flags, Captains and the charter's open items with their writers; `--captain` also reads that exact Captain and its cleanup, even outside the recent list |
-| `shift launch --captain ID --item ITEM [--replaces WRITER]` | Prepares the item worktree, saves the writer credential in its Git directory and registers the writer intent. Prints `session_name`, which holds the nonce, and the worker's `kickoff` prompt. A rerun reuses the saved nonce, so a lost reply never launches twice |
+| `shift launch --captain ID --item ITEM [--replaces WRITER]` | Prepares the item worktree, saves the writer credential in its Git directory and registers the writer intent. Prints a task-first `session_name` (at most 40 characters, ending in `[phx]`), structured `session_identity` (item ID, writer ID and full writer nonce), and the worker's `kickoff`. A rerun reuses the saved nonce; verify it in an existing session's kickoff/metadata before confirming or relaunching |
 | `shift writer --captain --item --execution --writer [--session-id] [--session-url] [--state] [--abandon]` | Confirms a launched session or reports its state |
 | `shift withdraw --captain --item --execution --writer --reason [--stopped]` | Ends a writer whose session is stopped or never launched |
 | `shift action --captain --item --action --reason` | Puts a Captain action on the item's timeline |
@@ -268,7 +273,11 @@ A successor does not inherit creator-only runtime authority.
    - `name` set to `session_name`;
    - kickoff `prompt` set to `kickoff`, which names the item worktree, with mode `autopilot`.
 
-   It confirms the session with `shift writer --session-id <session ID> --session-url ghapp://sessions/<session ID>`. `list_sessions_and_chats` finds a lost launch by its name, which holds the nonce.
+   It confirms the session with `shift writer --session-id <session ID> --session-url ghapp://sessions/<session ID>`.
+   To recover a lost launch, list the full inventory, including task-first and legacy names, then
+   inspect candidate kickoffs/metadata for the exact `session_identity.writer_nonce`. Names and
+   goals may collide and titles may change; neither is identity. If inspection is unavailable or
+   inconclusive, retain the intent and report the blocker instead of launching twice.
 4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." Before any early exit, it checks cleanup of Captain sessions that this keeper session created. It starts no new Captain when a live one exists, the most recent ended less than 10 minutes ago without a successor yet, or it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run that can't schedule itself creates the Captain with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`. That same keeper creator must retain a cleanup wake or child-ended notification until its Captain hands off cleanly; a fresh scheduled keeper session has no creator authority over it.
 5. The app may let only a session's creator archive it. Captains clean up their own writers and helpers; keeper runs clean up their own Captain children. All use the preservation check and durable result above, not repeated attempts by successors. Missing authority is recorded and escalated once, with `orphan_session` left visible.
 

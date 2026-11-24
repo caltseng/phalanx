@@ -12,14 +12,17 @@ from importlib import resources
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 from string import Template
 import subprocess
 import tomllib
+import unicodedata
 from urllib.parse import quote, urlencode
 
 from .work_cli import CREDENTIAL, request
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
+from .display_text import reason_text, short_title
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
 # Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
@@ -145,7 +148,8 @@ def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, s
     """Post a heartbeat with the charter's current revision. Omitted fields keep their last value."""
     current = api(f"/v1/captains/{_q(captain_id)}")
     if sessions is None:
-        sessions = [{"id": session["id"], "name": session["name"]} for session in current["sessions"]]
+        sessions = [{key: value for key, value in session.items() if key != "first_seen"}
+                    for session in current["sessions"]]
     body = {
         "charter_revision": charter["revision"],
         "wake_count": current["wake_count"] + int(wake),
@@ -251,6 +255,16 @@ def kickoff(item, worktree, nonce, work_command, base, checks_environment=None):
     )
 
 
+def writer_session_name(goal):
+    """Task words first; the suffix identifies Phalanx sessions, never individual writers."""
+    text = goal if isinstance(goal, str) else ""
+    text = re.sub(r"\S+://\S+", "[redacted]", text)
+    text = "".join(" " if unicodedata.category(char).startswith("C") else char for char in text)
+    text = reason_text(text, max(len(text), 40))
+    text = re.sub(r"(?i)^(?:(?:please|give|provide|newly|created|the|a|an)\s+)+", "", text)
+    return short_title(text or "Phalanx task", limit=34) + " [phx]"
+
+
 def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     """Prepare the item's worktree and register a writer intent, ready for its session to launch.
 
@@ -310,7 +324,8 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
         "stage": binding["state"]["stage"], "status": binding["state"]["status"], "writer": binding["writer"],
         "worktree": str(workspace.path), "repository": {"id": repository, **mapping},
         "session_workspace": config.get("session_workspace"),
-        "session_name": f"phx {item_id[:8]} {nonce}",
+        "session_name": writer_session_name(item.get("goal")),
+        "session_identity": {"item_id": item_id, "writer_id": binding["writer"]["id"], "writer_nonce": nonce},
         "kickoff": kickoff(item, workspace.path, nonce, config.get("work_command", "python -m phalanx work"),
                            base, mapping.get("checks_environment")),
     }
@@ -431,7 +446,9 @@ def add_shift_command(commands):
     beat.add_argument("--state", choices=["active", "ending", "ended"])
     beat.add_argument("--focus", nargs="*", help="item IDs this wake acts on")
     beat.add_argument("--session", nargs=2, action="append", dest="sessions", metavar=("ID", "NAME"),
-                      help="a visible native session named `phx ...`; repeat for each")
+                      help="a visible Phalanx session (task-first or legacy name); repeat for each")
+    beat.add_argument("--session-writer", nargs=2, action="append", metavar=("ID", "NONCE"),
+                      help="a reported session's full writer nonce, verified from its kickoff; repeat for each")
     beat.add_argument("--no-sessions", action="store_true", help="report that no such session is visible")
     beat.add_argument("--handoff-note")
     show_status = actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
@@ -499,10 +516,15 @@ def run_shift(args):
     elif args.shift_command == "start":
         result = start(API(config), charter, args.session_ref, args.parent)
     elif args.shift_command == "heartbeat":
-        if args.no_sessions and args.sessions:
+        if args.no_sessions and (args.sessions or args.session_writer):
             raise ShiftError("Pass --session or --no-sessions, not both")
         sessions = [] if args.no_sessions else args.sessions and [
             {"id": session_id, "name": name} for session_id, name in args.sessions]
+        by_id = {session["id"]: session for session in sessions or []}
+        for session_id, nonce in args.session_writer or []:
+            if session_id not in by_id:
+                raise ShiftError("--session-writer requires a matching --session")
+            by_id[session_id]["writer_nonce"] = nonce
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
                            compaction_count=args.compaction_count)

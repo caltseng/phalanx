@@ -48,8 +48,12 @@ Do these steps in order and keep each wake short:
    failed writer; handle it as below instead of reporting `stopped` or `error`. Report other changes with
    `phx shift writer --captain <id> --item <item> --execution <execution> --writer <writer> --state busy|idle|stopped|error`.
 4. **Act on a bounded batch.** Handle at most 5 items per wake, oldest first:
-   - **Unconfirmed launch** (the writer has no `session_id`): use your session tools to search for a session
-     named with the writer's nonce. If you find one, confirm it with
+   - **Unconfirmed launch** (the writer has no `session_id`): search the full native session inventory,
+     not just names starting with `phx `. New writer names start with task words and end in
+     `[phx]`; old names contain the full nonce. Inspect candidate sessions' kickoff
+     prompts or structured runtime metadata for the exact full writer nonce. A title,
+     goal or worktree alone is not identity: duplicate goals produce identical names.
+     If you find the exact nonce, confirm it with
      `phx shift writer ... --session-id <ID> [--session-url <link>]` and check its runtime trust status
      as after a new launch below. If you are sure no such session
      exists, withdraw it with `phx shift withdraw ... --reason "never launched"` and launch afresh. Only
@@ -60,7 +64,11 @@ Do these steps in order and keep each wake short:
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
         If the charter's `max_writers` cap refuses it, wait for a place to open and continue
         other coordination. Record the hold below. This is a normal wait, not a flag or an escalation.
-     2. Search your sessions for the returned `session_name`. If one exists, confirm that one instead.
+     2. Search the full inventory for the returned `session_name` and legacy names containing
+        `session_identity.writer_nonce`. Verify the full nonce in the kickoff or structured runtime
+        metadata before confirming an existing session. If the title changed, inspect other
+        Phalanx sessions too. If inspection is unavailable or inconclusive, retain the intent and
+        report a recovery blocker; never assume it was not launched and create a duplicate.
      3. Otherwise create one new worker session with your session tools. It runs autonomously, is named
         `session_name` and gets `kickoff` as its first prompt, which names the item's `worktree`. Open it
         in the returned `session_workspace`: one runtime workspace for the whole worktrees folder, which
@@ -108,8 +116,14 @@ Do these steps in order and keep each wake short:
    30 minutes, when you become stale or end, or when the version changes. Holds explain waits on the
    board and suppress idle-with-work flags; they do not prevent another Captain from launching work.
 6. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
-   `--session <native session ID> "<name>"` for every unarchived session whose name starts with `phx `,
-   or `--no-sessions` if there are none. The server flags sessions that no writer or Captain owns.
+   `--session <native session ID> "<name>"` for every unarchived Phalanx session: task-first names
+   ending in `[phx]`, legacy names starting with `phx `, registered session IDs, and sessions
+   identified by their Phalanx kickoff/metadata even if renamed. For writers also pass
+   `--session-writer <native session ID> <full writer nonce>` after verifying that nonce in the
+   kickoff/metadata (never the writer credential or token). Preserve item and writer IDs from
+   `session_identity`/the binding for diagnostics. Use `--no-sessions` only if none are visible.
+   The server matches registered IDs and full nonces, retains legacy-name matching, and flags
+   unknown or duplicate sessions. Titles alone never establish ownership.
 
 ## Creator-owned cleanup
 

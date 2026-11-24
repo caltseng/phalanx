@@ -103,6 +103,36 @@ class CharterTest(unittest.TestCase):
         self.assertNotIn("open one ready", prompt)
         self.assertNotIn("mark it ready", prompt)
 
+    def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
+        for goal, prefix in (
+                ("Fix writer recovery", "Fix writer recovery"),
+                ("# Fix writer recovery\nWith more context", "Fix writer recovery"),
+                ("Fix writer recovery " * 100, "Fix writer recovery"),
+                ("Give newly created Phalanx worker sessions concise human-readable task names",
+                 "Phalanx worker sessions"),
+                ("Implement unified concurrency configuration", "Implement unified concurrency"),
+                ("x" * 100, "x" * 20),
+                (None, "Phalanx task"), (" \n\t", "Phalanx task"),
+                ("\x00Fix\u202ewriter\t recovery", "Fix writer recovery"),
+                ("修复会话名称", "修复会话名称")):
+            with self.subTest(goal=goal):
+                name = shift.writer_session_name(goal)
+                self.assertTrue(name.startswith(prefix), name)
+                self.assertTrue(name.endswith(" [phx]"), name)
+                self.assertLessEqual(len(name), 40)
+        self.assertEqual(shift.writer_session_name("Fix recovery"), "Fix recovery [phx]")
+
+    def test_writer_names_redact_secrets_before_truncating(self):
+        for goal, secret in (
+                ("Fix ghp_1234567890abcdef leakage", "ghp_1234567890abcdef"),
+                ("Fix token=private-value exposure", "private-value"),
+                ("Fix Bearer private-value exposure", "private-value"),
+                ("Fix https://user:private-value@example.test/token leakage", "private-value")):
+            with self.subTest(goal=goal):
+                name = shift.writer_session_name(goal)
+                self.assertTrue(name.startswith("Fix [redacted]"), name)
+                self.assertNotIn(secret, name)
+
 
 class ShiftTest(ServerFixture, unittest.TestCase):
     def setUp(self):
@@ -153,7 +183,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
         writer = launched["writer"]
         self.assertEqual((launched["status"], writer["state"], writer["captain_id"]), ("running", "launching", captain))
-        self.assertEqual(launched["session_name"], f"phx {item['id'][:8]} {writer['nonce']}")
+        self.assertEqual(launched["session_name"], "Write the report [phx]")
+        self.assertEqual(launched["session_identity"], {
+            "item_id": item["id"], "writer_id": writer["id"], "writer_nonce": writer["nonce"]})
         self.assertLessEqual(len(launched["session_name"]), 40)
         self.assertEqual(launched["session_workspace"], "ws-1")
         worktree = Path(launched["worktree"])
@@ -165,6 +197,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
 
         replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
         self.assertEqual((replay["writer"]["id"], replay["writer"]["nonce"]), (writer["id"], writer["nonce"]))
+        self.assertEqual(replay["session_name"], launched["session_name"])
+        self.assertNotIn(token, launched["session_name"])
+        self.assertNotIn(token, json.dumps(launched["session_identity"]))
         route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
         self.api(route + "/withdraw", body={"captain_id": captain, "writer_id": writer["id"],
                                             "reason": "never launched"})
@@ -350,6 +385,21 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(beat["captain"]["compaction_count"], 1)
         self.assertEqual([(entry["id"], entry["name"]) for entry in beat["captain"]["sessions"]],
                          [("s-1", "phx 1234abcd nonce"), ("s-2", "phx captain")])
+        beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
+                              "--session", "s-task", "Fix recovery [phx]",
+                              "--session-writer", "s-task", "abcdef0123456789"))
+        session = beat["captain"]["sessions"][0]
+        self.assertEqual(session["writer_nonce"], "abcdef0123456789")
+        repeated = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain))
+        self.assertEqual(repeated["captain"]["sessions"], [session])
+        for arguments in (("--session-writer", "missing", "nonce"),
+                          ("--no-sessions", "--session-writer", "s-task", "nonce")):
+            result = subprocess.run(
+                [sys.executable, "-m", "phalanx", "shift", "--config", str(config),
+                 "heartbeat", "--captain", captain, *arguments],
+                env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True, text=True, timeout=30)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--session", result.stderr)
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain, "--no-sessions"))
         self.assertEqual(beat["captain"]["sessions"], [])
         self.assertEqual(beat["captain"]["compaction_count"], 1)
@@ -366,6 +416,13 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertFalse(checked["can_archive"])
         exact = json.loads(phx("--config", str(config), "status", "--captain", captain))
         self.assertEqual(exact["captain"]["id"], captain)
+
+    def test_captain_prompt_recovers_task_first_and_renamed_sessions_by_full_nonce(self):
+        prompt = shift.prompt("captain")
+        for text in ("not just names starting with `phx `", "exact full writer nonce",
+                     "session_identity.writer_nonce", "--session-writer",
+                     "If inspection is unavailable or inconclusive", "even if renamed"):
+            self.assertIn(text, prompt)
 
     def ended_writer(self, *, push=True, **options):
         captain = shift.start(self.api, self.charter, "creator")["captain"]["id"]

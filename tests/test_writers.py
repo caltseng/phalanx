@@ -790,6 +790,78 @@ class WriterTest(ServerFixture, unittest.TestCase):
         with connect(self.path) as db:
             self.assertNotIn("reconciler_stale", {entry["kind"] for entry in flags.all_flags(db, later)["flags"]})
 
+    def test_task_first_inventory_uses_full_nonce_not_duplicate_titles(self):
+        first_item, first_execution = self.item()
+        second_item, second_execution = self.item()
+        first, _, _ = self.register(first_item, first_execution, nonce="abcdef" + "1" * 16)
+        second, _, _ = self.register(second_item, second_execution, nonce="abcdef" + "2" * 16)
+        name = shift.writer_session_name("Fix recovery")
+        sessions = [
+            {"id": "first", "name": name, "writer_nonce": first["writer"]["nonce"]},
+            {"id": "second", "name": name, "writer_nonce": second["writer"]["nonce"]},
+            {"id": "unknown", "name": name},
+            {"id": "title-only", "name": f"phx {first_item[:8]} {first['writer']['nonce']} [phx]"},
+            {"id": "ended", "name": f"phx {first_item[:8]} {first['writer']['nonce']}",
+             "writer_nonce": "abcdef" + "3" * 16},
+        ]
+
+        def beat():
+            return self.ok(f"/v1/captains/{self.captain['id']}", RUNNER, {
+                "charter_revision": "c1", "wake_count": 1, "state": "active", "sessions": sessions},
+                method="PUT")
+
+        def found():
+            return {(entry["kind"], entry["reason"].split()[1]): entry
+                    for entry in self.ok("/v1/flags", OWNER)["flags"]
+                    if entry["kind"] in ("orphan_session", "duplicate_writer")}
+
+        reported = beat()["sessions"]
+        self.assertEqual(reported[0]["writer_nonce"], first["writer"]["nonce"])
+        self.assertEqual(set(found()), {
+            ("orphan_session", "unknown"), ("orphan_session", "ended"), ("orphan_session", "title-only")})
+        self.ok(f"/v1/items/{first_item}/executions/{first_execution}/writer", RUNNER, {
+            "captain_id": self.captain["id"], "writer_id": first["writer"]["id"], "session_id": "first"},
+            method="PATCH")
+        sessions[0]["name"] = "Renamed without any marker"
+        sessions[1]["name"] = "Also renamed"
+        sessions.append({"id": "duplicate", "name": "Different task words",
+                         "writer_nonce": first["writer"]["nonce"]})
+        beat()
+        result = found()
+        self.assertEqual(set(result), {
+            ("orphan_session", "unknown"), ("orphan_session", "ended"),
+            ("orphan_session", "title-only"), ("duplicate_writer", "duplicate")})
+        self.assertEqual(result["duplicate_writer", "duplicate"]["item_id"], first_item)
+        self.assertEqual(result["duplicate_writer", "duplicate"]["execution_id"], first_execution)
+        self.assertEqual(beat()["sessions"][0]["first_seen"], reported[0]["first_seen"])
+
+    def test_new_inventory_metadata_supersedes_an_older_captains_name_only_report(self):
+        item_id, execution_id = self.item()
+        binding, _, _ = self.register(item_id, execution_id)
+        name = "Fix recovery [phx]"
+        older = self.ok(f"/v1/captains/{self.captain['id']}", RUNNER, {
+            "charter_revision": "c1", "wake_count": 1, "state": "active",
+            "sessions": [{"id": "lost-launch", "name": name}]}, method="PUT")
+        successor = self.ok("/v1/captains", RUNNER, {
+            "session_ref": "successor", "charter_revision": "c1"}, 201)
+        self.ok(f"/v1/captains/{successor['id']}", RUNNER, {
+            "charter_revision": "c1", "wake_count": 1, "state": "active",
+            "sessions": [{"id": "lost-launch", "name": name, "writer_nonce": binding["writer"]["nonce"]}]},
+            method="PUT")
+        self.assertFalse(any(entry["kind"] in ("orphan_session", "duplicate_writer")
+                             for entry in self.ok("/v1/flags", OWNER)["flags"]))
+        self.ok(f"/v1/captains/{self.captain['id']}", RUNNER, {
+            "charter_revision": "c1", "wake_count": 2, "state": "active",
+            "sessions": [{"id": "lost-launch", "name": name}]}, method="PUT")
+        self.assertFalse(any(entry["kind"] in ("orphan_session", "duplicate_writer")
+                             for entry in self.ok("/v1/flags", OWNER)["flags"]))
+        self.ok(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER, {
+            "captain_id": self.captain["id"], "writer_id": binding["writer"]["id"], "session_id": "actual"},
+            method="PATCH")
+        duplicate = next(entry for entry in self.ok("/v1/flags", OWNER)["flags"]
+                         if entry["kind"] == "duplicate_writer")
+        self.assertEqual(duplicate["first_seen"], older["sessions"][0]["first_seen"])
+
     def test_held_action_requires_reason_and_appears_as_board_and_item_wait(self):
         item_id, execution_id = self.item()
         action = {"captain_id": self.captain["id"], "action": "held"}

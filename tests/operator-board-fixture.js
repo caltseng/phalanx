@@ -71,6 +71,7 @@
   });
 
   const source = {
+    concurrencyControl: document.querySelector("#operator-settings"),
     async list({ kind, cursor, limit }) {
       calls.push([kind, cursor, limit]);
       if (offline) throw new Error("API offline");
@@ -105,10 +106,30 @@
   const section = id => root.querySelector(".sec-" + id);
   const status = () => root.querySelector('[role="status"]').textContent;
   const refresh = () => root.querySelector('[data-action="refresh"]').click();
-  const unmount = window.PhalanxOperatorBoard.mount(root, source);
+  let unmount = window.PhalanxOperatorBoard.mount(root, source);
 
   try {
     await tick();
+    const concurrency = source.concurrencyControl;
+    const settingsSummary = concurrency.querySelector("summary");
+    const settingsInput = concurrency.querySelector("input");
+    assert(root.querySelector(".actions #operator-settings") === concurrency &&
+      settingsSummary.getAttribute("aria-label") === "Writer concurrency settings",
+    "Toolbar reparents the canonical settings node instead of duplicating settings");
+    settingsSummary.click();
+    await tick();
+    assert(concurrency.open && document.activeElement === settingsInput, "Settings disclosure focuses its existing input");
+    assert(concurrency.querySelector("p").getBoundingClientRect().bottom <=
+      concurrency.querySelector("form").getBoundingClientRect().top, "Canonical settings body stays in one non-overlapping panel");
+    settingsInput.value = "7";
+    root.querySelector('[data-action="search"]').click();
+    assert(!concurrency.open, "Opening search closes canonical settings");
+    settingsSummary.click();
+    await tick();
+    assert(root.querySelector("#board-search").hidden && settingsInput.value === "7",
+      "Settings closes search and retains its canonical form state");
+    settingsInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert(!concurrency.open && document.activeElement === settingsSummary, "Settings Escape restores summary focus");
     const lists = calls.filter(call => call[0] === "open" || call[0] === "closed");
     assert(lists.length === 2 && lists.every(call => call[2] > 0 && call[2] <= 100), "Initial reads are bounded lists");
     assert(section("needs").contains(item("wait")) && section("needs").textContent.includes(waiting.waitReason), "Input wait needs the owner");
@@ -215,6 +236,12 @@
     refresh();
     await tick();
     assert(status() === "Connected." && !root.textContent.includes("Disconnected"), "Refresh recovers");
+    unmount();
+    unmount = window.PhalanxOperatorBoard.mount(root, source);
+    settingsSummary.click();
+    await tick();
+    assert(concurrency.open, "Reusing canonical settings after unmount does not duplicate toggle handlers");
+    concurrency.open = false;
     result.textContent = "PASS";
     result.dataset.status = "passed";
   } catch (error) {

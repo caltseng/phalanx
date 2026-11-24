@@ -37,6 +37,7 @@ class Session(Payload):
     """A native session the Captain can see, by its runtime ID and display name."""
     id: Short
     name: Short
+    writer_nonce: Short | None = None
 
 
 class Heartbeat(Payload):
@@ -210,7 +211,7 @@ def heartbeat(db, captain_id, payload):
     now = intake.timestamp()
     # Each session keeps the time it was first reported, so its flags keep their first_seen.
     seen = {session["id"]: session["first_seen"] for session in json.loads(row["sessions_json"])}
-    sessions = [{**session.model_dump(), "first_seen": seen.get(session.id, now)}
+    sessions = [{**session.model_dump(exclude_none=True), "first_seen": seen.get(session.id, now)}
                 for session in payload.sessions]
     ending_at = row["ending_at"] or (now if payload.state == "ending" else None)
     # Native counters are cumulative for this session; retries and older reports cannot add or undo one.
