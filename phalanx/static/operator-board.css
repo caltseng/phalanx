@@ -221,6 +221,8 @@ body { margin: 0; }
 }
 .c-attn { color: var(--attn); background: var(--attn-bg); }
 .c-warn { color: var(--wait); background: var(--wait-bg); }
+.c-info { color: var(--muted); background: var(--raised); }
+.t-info { color: var(--muted); }
 .c-good { color: var(--ok); background: var(--raised); }
 
 .glyph > [aria-hidden] { display: inline-block; line-height: 1; }

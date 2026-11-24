@@ -243,7 +243,8 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
     active only while it is the latest Captain action on the queued execution's current version,
     is less than 30 minutes old, and its Captain is live and not ended. The board and item view show
     its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
-    suppress idle-with-work flags but do not change dispatch eligibility or reserve capacity.
+    suppress dispatch-overdue warnings but do not change dispatch eligibility or reserve capacity.
+    Full-capacity backlog remains visible even with an active hold.
   - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, legacy `phx …` names, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` by registered session ID and full nonce, falling back to legacy item-prefix/nonce name words only when structured identity is absent. Titles never establish ownership for task-first sessions. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
   - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
@@ -264,7 +265,8 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | --- | --- | --- |
 | `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
 | `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
-| `captain_idle_with_work` | Live Captains, but a runnable item has had no writer for 30 min and no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
+| `captain_idle_with_work` | **Dispatch overdue** (legacy API kind retained): live Captains, dispatch enabled, free writer capacity, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
+| `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while assigned writers fill the canonical dispatch limit (counts included), or dispatch is paused. Informational, including when a Captain recorded a hold; never a stopped/failed Captain signal | Wait for writer capacity, or for the owner to resume dispatch. Existing writer-health flags remain independent |
 | `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
 | `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |

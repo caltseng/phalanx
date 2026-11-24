@@ -13,7 +13,8 @@
   const STAGES = ["development", "self_review", "publication", "delivery",
     "report_drafting", "report_review", "report_storage"];
   const GLYPH = { attn: "!", ok: "✓", fail: "✕", muted: "–" };
-  const DISPLAY_LABEL = { checked_in: "Merged" };
+  const DISPLAY_LABEL = { checked_in: "Merged", queue_backlogged: "Queue backlogged",
+    captain_idle_with_work: "Dispatch overdue" };
   const absolute = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
 
   function h(tag, props = {}, ...children) {
@@ -666,8 +667,9 @@
 
     function chips(flags) {
       return flags.map(flag => h("span", { class: "chip " +
-        (flag.kind === "deployed" ? "c-good" : flag.notifyOwner ? "c-attn" : "c-warn"),
-        title: flag.reason + " · " + flag.recovery }, flagGlyph(flag.notifyOwner), " ",
+        (flag.kind === "deployed" ? "c-good" : flag.notifyOwner ? "c-attn" :
+          flag.kind === "queue_backlogged" ? "c-info" : "c-warn"),
+        title: flag.reason + " · " + flag.recovery }, flagGlyph(flag.notifyOwner, flag.kind === "queue_backlogged"), " ",
         h("span", { text: label(flag.kind) })));
     }
 
@@ -677,10 +679,11 @@
         h("span", { class: "sr-only", text }));
     }
 
-    function flagGlyph(notify) {
-      const text = notify ? "notifies owner" : "flag";
+    function flagGlyph(notify, informational = false) {
+      const text = notify ? "notifies owner" : informational ? "information" : "flag";
       return h("span", { class: "glyph flag-mark", title: text },
-        mark(notify ? "notify" : "flag"), h("span", { class: "sr-only", text }));
+        informational && !notify ? h("span", { "aria-hidden": "true", text: "i" }) :
+          mark(notify ? "notify" : "flag"), h("span", { class: "sr-only", text }));
     }
 
     function captainReference(id) {
@@ -909,11 +912,13 @@
         groups.get(flag.kind).push(flag);
       }
       const ordered = [...groups.entries()].sort((a, b) =>
-        Number(b[1].some(flag => flag.notifyOwner)) - Number(a[1].some(flag => flag.notifyOwner)) || b[1].length - a[1].length);
+        Number(b[1].some(flag => flag.notifyOwner)) - Number(a[1].some(flag => flag.notifyOwner)) ||
+        Number(a[0] === "queue_backlogged") - Number(b[0] === "queue_backlogged") || b[1].length - a[1].length);
       return ordered.map(([kind, members]) => {
         const notify = members.some(flag => flag.notifyOwner);
+        const informational = kind === "queue_backlogged" && !notify;
         const oldest = Math.min(...members.map(flag => epoch(flag.firstSeen) ?? now));
-        const group = h("details", { class: "fgroup t-" + (notify ? "attn" : "wait"), "data-kind": kind });
+        const group = h("details", { class: "fgroup t-" + (notify ? "attn" : informational ? "info" : "wait"), "data-kind": kind });
         if (state.flagGroups.has(kind)) group.open = true;
         group.addEventListener("toggle", () => {
           if (group.open) state.flagGroups.add(kind);
@@ -921,7 +926,7 @@
         });
         const reasons = [...new Set(members.map(flag => flag.reason))];
         group.append(h("summary", { class: "line", "data-focus": "flag:" + kind },
-          flagGlyph(notify),
+          flagGlyph(notify, informational),
           h("span", { class: "name" }, h("strong", { text: label(kind) }), h("span", { class: "faint", text: " ×" + members.length })),
           h("span", { class: "reason", title: reasons.join("\n"), text: reasons.length === 1 ? reasons[0] : reasons.length + " distinct reasons" }),
           h("span", { class: "age" }, ago(oldest, now, { title: "Oldest first seen " + stamp(oldest) }))));
@@ -929,7 +934,11 @@
           const subject = titles.get(flag.executionId) || titles.get(flag.itemId) ||
             (flag.itemId ? "item " + short(flag.itemId) : flag.captainId ? "Captain " + short(flag.captainId) : "system");
           return h("li", { class: "line" }, h("span", {}),
-            h("span", { class: "name", title: subject }, flag.captainId ? captainReference(flag.captainId) : subject),
+            h("span", { class: "name", title: subject }, flag.captainId ? captainReference(flag.captainId) :
+              flag.executionId || flag.itemId ? h("a", {
+                href: "/operator/" + (flag.executionId ? "executions/" + encodeURIComponent(flag.executionId) :
+                  "items/" + encodeURIComponent(flag.itemId)), text: subject
+              }) : subject),
             h("span", { class: "reason", title: flag.reason + "\nRecovery: " + flag.recovery,
               text: flag.reason + " → " + flag.recovery }),
             ago(flag.firstSeen, now, { class: "age" }));
@@ -1036,7 +1045,8 @@
       sections.push(section("needs", "Needs you", needs.length + looseNotify.length,
         needs.length + looseNotify.length ? "attn" : "", needContent));
       if (enabled.flags) {
-        sections.push(section("flags", "Flags", otherFlags.length, otherFlags.length ? "wait" : "",
+        sections.push(section("flags", "Flags", otherFlags.length,
+          otherFlags.some(flag => flag.kind !== "queue_backlogged") ? "wait" : "",
           otherFlags.length ? h("div", { class: "rows flags" }, flagGroups(otherFlags, titles, now))
             : h("p", { class: "empty", text: state.flags.failed ? "Flags unavailable." : "No flags. Nothing has drifted." })));
       }
@@ -1092,7 +1102,8 @@
         h("li", { class: needs.length + looseNotify.length ? "t-attn" : "" }, h("strong", { text: String(needs.length + looseNotify.length) }), " needs you"),
         h("li", {}, h("strong", { text: active.length + (active.length ? more : "") }), " active"),
         h("li", {}, h("strong", { text: queued.length + (queued.length ? more : "") }), " queued"),
-        enabled.flags ? h("li", { class: state.flags.rows.length ? "t-wait" : "" }, h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
+        enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || flag.kind !== "queue_backlogged") ? "t-wait" : "" },
+          h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
         enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
       renderHealth();
       if (page !== "home") counts.replaceChildren();
