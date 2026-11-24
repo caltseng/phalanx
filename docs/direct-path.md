@@ -95,6 +95,21 @@ Example explicit shift config:
 - `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.
 - `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
 
+For `copilot-app` and `codex`, `shift start` records a UUID native session reference
+as `ghapp://sessions/<UUID>` or `codex://threads/<UUID>` respectively, so Scribe can
+link to the correct app without guessing. Other runtimes and legacy opaque references
+are preserved. Canonical references still match the native ID for ownership and cleanup.
+The server never opens an app or starts a conversation for a link.
+
+After an explicit native session lookup, a heartbeat may report
+`--session-availability ID present|missing|deleted` alongside its matching `--session ID NAME`.
+The API stores this optional evidence in the existing session inventory. Scribe labels
+present as last reported, disables known missing/deleted links, and labels other recorded
+links unverified. Do not infer missing/deleted from an incomplete session listing or from
+writer termination. Keep an explicit unavailable entry in subsequent inventories until
+native inspection supersedes it. The CLI includes the configured runtime on inventory
+entries so observations never cross host apps that happen to use the same native ID.
+
 `shift launch` includes that repository's exact `checks_environment` in the writer kickoff.
 It takes the target from the **current execution's** `state.target`, not the original intake
 request, so reruns and target steering are reflected. When the environment is omitted, the
@@ -169,10 +184,14 @@ notes = "Optional context for every Captain."
 [shift]
 max_hours = 4
 max_wakes = 48
+max_compactions = 5
 ```
 
-`[shift]` is optional. Its positive-integer settings default to `max_hours = 4` and
-`max_wakes = 48` (D7). Configure concurrency with Scribe's **Writer concurrency**
+`[shift]` is optional. Its positive-integer settings default to `max_hours = 4`,
+`max_wakes = 48` and `max_compactions = 5` (D7, as amended for compaction handoff).
+The compaction threshold uses only cumulative successful native telemetry; ordinary
+compaction below it is a checkpoint. Missing telemetry stays unknown, with no hidden
+first-compaction fallback. Configure concurrency with Scribe's **Writer concurrency**
 control or owner-authenticated `PUT /v1/dispatch/settings`
 (`{"max_building_writers": 5, "max_writers": 10}`), not in the charter or `allowed_actions`
 prose. Building and Total default to 5/10 on new installs; existing stores preserve Total
@@ -201,16 +220,17 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 
 | Command | Does |
 | --- | --- |
-| `shift prompt captain\|keeper\|worker` | Prints the Captain prompt (the fixed wake loop), the keeper prompt, or the worker prompt template, which a Captain quotes when a writer's kickoff predates a change. Needs no config |
+| `shift prompt captain\|keeper\|worker\|forwarding` | Prints the Captain/keeper prompt (including durable off-shift forwarding), worker template, or just the forwarding section for retained chats. Needs no config |
 | `shift charter` | Validates the charter and prints it with its revision |
 | `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
 | `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session ID NAME]... [--session-writer ID NONCE]... [--no-sessions] [--handoff-note]` | Re-reads the charter and heartbeats. Reports all Phalanx sessions, including task-first and renamed sessions, with the full verified writer nonce separately. The server flags any that no writer or Captain owns. Omitted inventory keeps its last value, including nonces. Prints `shift.handoff_due` once a shift bound is reached |
-| `shift status [--captain ID]` | Flags, Captains and the charter's open items with their writers; `--captain` also reads that exact Captain and its cleanup, even outside the recent list |
+| `shift status [--captain ID]` | Flags, Captains, configured `dashboard_url` and the charter's open items with their writers; `--captain` also reads that exact Captain and its cleanup, even outside the recent list |
+| `shift current` | Reads all registrations to resolve a unique live active Captain and native `session_ref`, or returns null with the precise reason. Native tools must verify the conversation and return its link |
 | `shift launch --captain ID --item ITEM [--replaces WRITER]` | Prepares the item worktree, saves the writer credential in its Git directory and registers the writer intent. Prints a task-first `session_name` (at most 40 characters, ending in `[phx]`), structured `session_identity` (item ID, writer ID and full writer nonce), and the worker's `kickoff`. A rerun reuses the saved nonce; verify it in an existing session's kickoff/metadata before confirming or relaunching |
 | `shift writer --captain --item --execution --writer [--session-id] [--session-url] [--state] [--abandon]` | Confirms a launched session or reports its state |
 | `shift withdraw --captain --item --execution --writer --reason [--stopped]` | Ends a writer whose session is stopped or never launched |
 | `shift action --captain --item --action --reason` | Puts a Captain action on the item's timeline |
-| `shift handoff --captain ID --note NOTE` | Starts ending the shift. Prints the open intents still owned, the successor's `session_name` and `kickoff`, and any registered successors |
+| `shift handoff --captain ID --note NOTE` | Starts ending the shift. Prints owned open intents, successor launch `session_name` (predecessor-derived nonce, not the new Captain ID), `kickoff`, registered successors and durable `off_shift_instructions` |
 | `shift retire-reconciler RUNNER_ID` | Deletes a decommissioned reconciler's heartbeat, which clears its `reconciler_stale` flag |
 | `shift archive-check --session ID --by SESSION (--item ITEM \| --worktree PATH \| --no-worktree)` | Checks whether the session's writer/handoff has ended and local work is preserved. Fetches the actual origin branch (or the item's origin base when its branch is absent) and refuses dirty worktrees or unpushed commits. Does not archive |
 | `shift archive-result --session ID --by SESSION --outcome archived\|blocked\|refused --reason REASON` | Records the runtime outcome durably. A block or refusal keeps `orphan_session`; only verified archival clears it. Refusals suppress further attempts |
@@ -293,6 +313,54 @@ A successor does not inherit creator-only runtime authority.
 4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." Before any early exit, it checks cleanup of Captain sessions that this keeper session created. It starts no new Captain when a live one exists, the most recent ended less than 10 minutes ago without a successor yet, or it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run that can't schedule itself creates the Captain with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`. That same keeper creator must retain a cleanup wake or child-ended notification until its Captain hands off cleanly; a fresh scheduled keeper session has no creator authority over it.
 5. The app may let only a session's creator archive it. Captains clean up their own writers and helpers; keeper runs clean up their own Captain children. All use the preservation check and durable result above, not repeated attempts by successors. Missing authority is recorded and escalated once, with `orphan_session` left visible.
 
-A Captain's shift ends when the charter's `[shift]` bounds are reached, at its first compaction or when it degrades. It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
+A Captain's shift ends when the charter's `[shift]` age, wake or successful-compaction
+bound is reached, or independently on actual degradation/failure (three failed actions
+in a row, a self-raised deviation flag, or a missed heartbeat noticed on waking).
+`shift heartbeat` returns the effective `max_compactions` and compares it with the
+server's cumulative known total; repeated/omitted reports do not reset or add to it.
+It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
+
+### Retained chats and owner-message forwarding
+
+Each new Captain, including a handoff successor, opens the dashboard in the runtime's available
+browser canvas by default. `shift status` returns `dashboard_url` from the configured API base URL
+plus `/operator/`, preserving the installation's host, port and path. Reuse/focus an existing
+dashboard canvas rather than duplicating it each wake. If browser canvas support or opening fails,
+state that condition and provide the configured link; never claim it opened or pass credentials
+in the browser URL/page.
+
+An off-shift Captain explicitly says it is no longer on shift; a keeper identifies itself as keeper.
+It does not continue as the live Captain. On every new owner message or forwarded interaction,
+`shift current` resolves the unique live `active` registration across all history. Do not follow
+only the immediate successor: it may already be off shift too. Inspect the returned `session_ref`
+in its native provider, verify the unarchived conversation and use only its returned clickable
+conversation URL. Re-read `shift current` immediately before forwarding if inspection took place.
+No unique active registration, a stale/missing/archived native binding, a missing conversation URL,
+an unavailable lookup or an unsupported provenance path is reported precisely, never replaced with
+a guessed ID/link or duplicate dispatch.
+
+Forward the original input verbatim through the runtime's supported original-message provenance
+path, with guidance separately attributed. In the Copilot app, supply the relevant current
+`source_user_message` for a coordinated user relay when required; use the matching provider's IDs.
+An expired/unavailable source is not reconstructed from history or silently replaced by agent
+guidance: direct the owner to send fresh input at the verified conversation. Report queue acceptance,
+failure or uncertainty honestly; inspect uncertain receipt before retrying. Forwarding grants no
+new permissions and does not change repository trust or scoped credentials.
+
+After registration, use the new Captain's own ID in its display name where native rename is
+supported; label its `parent_id` as predecessor. An ended chat can be named
+`Off-shift <own ID prefix> [phx]`. When renaming is unavailable, explicit role wording in replies
+is required. Preserve the predecessor-derived launch nonce in kickoff/history for recovery.
+Never detach or reparent chats as a naming fix. Existing creator cleanup, writer bindings,
+five-minute Captain wakes, thirty-minute keeper recovery and retirement rules are unchanged.
+
+**Deployment boundary:** forwarding is tracked in `phalanx/prompts/forwarding.md`, composed into
+`shift prompt captain` and `shift prompt keeper`, and included in generated handoffs.
+Deploy both API and client from the reviewed revision through the normal service-owner rollout;
+an old server will not serve `shift current`. No private muster instruction patch is required.
+Existing chats do not retroactively receive new prompts: explicitly relay the changed section
+verbatim from `shift prompt forwarding` to retained Captain/keeper chats via supported messaging.
+Do not claim that merge/deployment updated those chats or that the relay was delivered without
+runtime evidence. This item does not itself grant authority to edit unrelated retained chats.
 
 Watch the run on the [operator board](work-items.md#operator-work-board), which shows each item's writer, the live Captains and the flags. `GET /v1/captains` and `GET /v1/flags` return the same data.

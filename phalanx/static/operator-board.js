@@ -87,6 +87,47 @@
     return null;
   }
 
+  function sessionTarget(record = {}) {
+    if (["missing", "deleted"].includes(record.sessionAvailability)) {
+      return { url: null, reason: "session " + record.sessionAvailability };
+    }
+    const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+    const prefixes = new Map([["copilot-app", "ghapp://sessions/"], ["codex", "codex://threads/"]]);
+    const reference = record.sessionUrl || record.sessionRef;
+    const prefix = prefixes.get(record.runtime);
+    let url = null;
+    if (reference) {
+      const native = new RegExp("^(ghapp://sessions/|codex://threads/)(" + uuid + ")$").exec(reference);
+      if (native && (!prefix || prefix === native[1]) &&
+          (!record.sessionId || record.sessionId.toLowerCase() === native[2].toLowerCase())) {
+        url = reference;
+      } else if (typeof reference === "string" && /^https:\/\/[^\s\\]+$/.test(reference)) {
+        try {
+          const parsed = new URL(reference);
+          if (!parsed.username && !parsed.password) url = parsed.href;
+        } catch {
+          // A malformed recorded URL is unavailable, not a reason to guess another app.
+        }
+      } else if (!record.sessionUrl && prefix && new RegExp("^" + uuid + "$").test(reference) &&
+          (!record.sessionId || record.sessionId.toLowerCase() === reference.toLowerCase())) {
+        url = prefix + reference;
+      }
+    } else if (prefix && new RegExp("^" + uuid + "$").test(record.sessionId || "")) {
+      url = prefix + record.sessionId;
+    }
+    return { url, reason: !url ? "session unavailable: host or identity unknown, or invalid link"
+      : record.sessionAvailability === "present" ? "session last reported present"
+        : "recorded session; existence unverified" };
+  }
+
+  function sessionNode(record, props, ...children) {
+    const target = sessionTarget(record);
+    const attrs = { ...props, title: [props.title, target.reason].filter(Boolean).join(" · "),
+      "aria-label": (props["aria-label"] || "Open session") + " · " + target.reason };
+    return target.url ? h("a", { ...attrs, href: target.url }, ...children)
+      : h("span", { ...attrs, "aria-disabled": "true" }, ...children);
+  }
+
   function prNumber(url) {
     const match = /\/pull\/(\d+)/.exec(url || "");
     return match ? "#" + match[1] : "PR";
@@ -126,15 +167,22 @@
       path("M6 2.5C5.8 4.2 3.8 5.5 4.3 7L6 8.6 7.7 7C8.2 5.5 6.2 4.2 6 2.5ZM5.3 8H6.7V15H5.3Z",
         { class: "spear spear-center", fill: "currentColor" });
     } else if (kind === "captain") {
-      path("M1 6C1 2.5 4 .5 8 .5S15 2.5 15 6H12.5C12 4 10.5 3 8 3S4 4 3.5 6Z",
+      svg.setAttribute("viewBox", "0 0 64 64");
+      path("M7 29C4 15 15 3 31 3C43 3 52 9 57 17L50 22C43 14 35 12 28 15C21 18 19 23 19 29Z",
         { fill: "currentColor" });
-      path("M3 8A5 5 0 0 1 13 8V9H10V11L12 12 11 15 7 13V9H5V14H2L3 10Z",
+      path("M17 33C17 23 24 17 33 17C44 17 50 24 50 34V36H37V43L46 47L41 61L24 52L29 37H16Z",
+        { fill: "currentColor" });
+      path("M14 37H23L18 52H9Z",
         { fill: "currentColor" });
     } else if (kind === "flag" || kind === "notify") {
       path("M3 15V1", { stroke: "currentColor", "stroke-width": "1.5" });
       path("M4 2Q7 0 10 2T15 2L12 6 15 9Q12 11 9 9T4 9Z",
-        { class: "pennant", fill: kind === "notify" ? "var(--flag)" : "none",
-          stroke: "var(--flag)", "stroke-width": "1.5" });
+        { class: "pennant", fill: kind === "notify" ? "currentColor" : "none",
+          stroke: "currentColor", "stroke-width": "1.5" });
+    } else if (kind === "handoff") {
+      path("M9 2A6 6 0 1 0 13.5 10M8 5L12 8L8 11M4 8H12",
+        { fill: "none", stroke: "currentColor", "stroke-width": "1.7",
+          "stroke-linecap": "round", "stroke-linejoin": "round" });
     } else {
       path("M8 1 14 3V7Q14 12 8 15 2 12 2 7V3Z",
         { fill: "none", stroke: "currentColor", "stroke-width": "1.5" });
@@ -146,6 +194,7 @@
   function tone(item) {
     if (item.outcome) {
       const outcome = outcomeKey(item);
+      if (["draft_published", "ready_for_check_in"].includes(outcome)) return "handoff";
       return outcome === "failed" ? "fail" : outcome === "cancelled" ? "muted" : "ok";
     }
     if (item.status === "waiting_for_input") return "attn";
@@ -643,12 +692,14 @@
     function writerCell(item) {
       const writer = item.writer;
       if (!writer) return h("span", { class: "writer faint", text: "no writer" });
-      const text = writer.state === "launching" ? "unconfirmed" : label(writer.state);
+      const target = sessionTarget(writer);
+      const text = (writer.state === "launching" ? "unconfirmed" : label(writer.state)) +
+        (target.url ? "" : " · " + target.reason);
       const attrs = { class: "writer w-" + (writer.state || "unknown"),
         title: "Writer " + label(writer.state) + " · " + (writer.runtime || "runtime unknown") +
           (writer.captainId ? " · Captain " + short(writer.captainId) : "") };
-      const url = safeUrl(writer.sessionUrl);
-      return url ? h("a", { ...attrs, href: url, text, "data-focus": "writer:" + item.id }) : h("span", { ...attrs, text });
+      return sessionNode(writer, { ...attrs, "aria-label": "Writer session for " + item.title,
+        "data-focus": "writer:" + item.id }, text);
     }
 
     function prCell(item) {
@@ -680,7 +731,7 @@
 
     function glyph(kind, text, markKind) {
       return h("span", { class: "glyph t-" + kind, title: text },
-        markKind || ["run", "wait", "idle"].includes(kind) ? mark(markKind || kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
+        markKind || ["run", "wait", "idle", "handoff"].includes(kind) ? mark(markKind || kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
         h("span", { class: "sr-only", text }));
     }
 
@@ -695,8 +746,11 @@
       const captain = state.captains.rows.find(row => row.id === id);
       const word = captain?.live ? "live" : captain?.stale ? "stale" : captain?.state === "ended" ? "ended" : "status unavailable";
       return h("span", { class: "captain-ref" + (word === "ended" ? " captain-ended" : "") },
-        glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word, "captain"),
-        " Captain " + short(id) + " · " + word);
+        sessionNode(captain, { "aria-label": "Open Captain " + short(id) },
+          glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word, "captain")),
+        sessionNode(captain, { "aria-label": "Open Captain " + short(id) },
+          " Captain " + short(id) + " · " + word),
+        !sessionTarget(captain).url && h("span", { class: "faint", text: " · session unavailable" }));
     }
 
     function itemRow(item, kind, index, now) {
@@ -714,7 +768,8 @@
         h("span", { class: "dur", title: "Intake " + stamp(item.createdAt) + " · Closed " + stamp(item.closedAt) },
           epoch(item.createdAt) && epoch(item.closedAt) ? "took " + span(epoch(item.closedAt) - epoch(item.createdAt)) : "—",
           h("span", { class: "sr-only", text: " · Intake " + stamp(item.createdAt) + " · Closed " + stamp(item.closedAt) })),
-        h("span", { class: "reason faint", text: shortfall(item) })
+        h("span", { class: "reason faint" }, item.writer && writerCell(item),
+          item.writer && shortfall(item) ? " " : "", shortfall(item))
       ] : [
         h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status),
           text: label(item.stage) + (item.publicationMode === "draft" ? " · draft only" : "") }),
@@ -782,7 +837,6 @@
       }
       const item = { ...row, ...data.item };
       const writer = item.writer;
-      const sessionUrl = safeUrl(writer?.sessionUrl);
       const pr = safeUrl(item.primaryPrUrl || (item.output?.kind === "pr" ? item.output.url : null));
       const links = h("nav", { class: "detail-links", "aria-label": "Detail links" },
         item.itemId && h("a", { href: "/operator/items/" + encodeURIComponent(item.itemId), text: "Current item" }),
@@ -807,7 +861,8 @@
         ["Writer", writer && h("span", {}, label(writer.state), " · ", writer.runtime || "runtime unknown",
           writer.captainId ? h("span", {}, " · ", captainReference(writer.captainId)) : "",
           writer.sessionId ? h("code", { text: " " + short(writer.sessionId), title: writer.sessionId }) : "",
-          sessionUrl ? h("span", {}, " · ", h("a", { href: sessionUrl, text: "session" })) : "")],
+          h("span", {}, " · ", sessionNode(writer, { "aria-label": "Open writer session" },
+            sessionTarget(writer).url ? "session" : sessionTarget(writer).reason)))],
         ["PR", pr && h("a", { href: pr, text: prNumber(pr) + " ↗" })],
         ["Delivery", delivery(item, now)],
         ["Output", item.output?.kind === "report" ? prCell(item) : null],
@@ -923,7 +978,7 @@
         const notify = members.some(flag => flag.notifyOwner);
         const informational = kind === "queue_backlogged" && !notify;
         const oldest = Math.min(...members.map(flag => epoch(flag.firstSeen) ?? now));
-        const group = h("details", { class: "fgroup t-" + (notify ? "attn" : informational ? "info" : "wait"), "data-kind": kind });
+        const group = h("details", { class: "fgroup t-" + (notify ? "attn" : informational ? "info" : kind === "deployed" ? "ok" : "wait"), "data-kind": kind });
         if (state.flagGroups.has(kind)) group.open = true;
         group.addEventListener("toggle", () => {
           if (group.open) state.flagGroups.add(kind);
@@ -957,9 +1012,13 @@
       const word = captain.live ? "live" : captain.stale ? "stale" : label(captain.state);
       const focus = (captain.focus || []).map(id => titles.get(id) || short(id));
       return h("li", { class: "row t-" + health + (captain.state === "ended" ? " captain-ended" : "") }, h("div", { class: "line" },
-        glyph(health, word, "captain"),
-        h("span", { class: "name" }, h("strong", { text: "Captain " + short(captain.id) }),
-          h("span", { class: "faint", text: " " + word })),
+        sessionNode(captain, { "aria-label": "Open Captain " + short(captain.id),
+          "data-focus": "captain-helmet:" + captain.id }, glyph(health, word, "captain")),
+        h("span", { class: "name" },
+          sessionNode(captain, { "aria-label": "Open Captain " + short(captain.id),
+            "data-focus": "captain:" + captain.id }, h("strong", { text: "Captain " + short(captain.id) })),
+          h("span", { class: "faint", text: " " + word +
+            (sessionTarget(captain).url ? "" : " · " + sessionTarget(captain).reason) })),
         h("span", { class: "stat" }, h("span", { class: captain.live ? "beat" : "", "aria-hidden": "true", text: "♥" }),
           " heartbeat ", ago(captain.heartbeatAt, now)),
         h("span", { class: "stat", text: "wakes " + (captain.wakeCount ?? 0) }),
@@ -1022,7 +1081,7 @@
       for (const item of state.open.rows) {
         const flags = flagsFor(index, item);
         if (item.status === "waiting_for_input" || item.status === "failed" || flags.some(flag => flag.notifyOwner)) needs.push(item);
-        else if (item.status === "running" || item.writer) active.push(item);
+        else if (item.status === "running" || (item.writer && item.writer.state !== "ended")) active.push(item);
         else queued.push(item);
       }
       for (const item of needs) for (const flag of flagsFor(index, item)) shown.add(flag);
@@ -1051,7 +1110,7 @@
         needs.length + looseNotify.length ? "attn" : "", needContent));
       if (enabled.flags) {
         sections.push(section("flags", "Flags", otherFlags.length,
-          otherFlags.some(flag => flag.kind !== "queue_backlogged") ? "wait" : "",
+          otherFlags.some(flag => !["queue_backlogged", "deployed"].includes(flag.kind)) ? "wait" : "",
           otherFlags.length ? h("div", { class: "rows flags" }, flagGroups(otherFlags, titles, now))
             : h("p", { class: "empty", text: state.flags.failed ? "Flags unavailable." : "No flags. Nothing has drifted." })));
       }
@@ -1107,7 +1166,7 @@
         h("li", { class: needs.length + looseNotify.length ? "t-attn" : "" }, h("strong", { text: String(needs.length + looseNotify.length) }), " needs you"),
         h("li", {}, h("strong", { text: active.length + (active.length ? more : "") }), " active"),
         h("li", {}, h("strong", { text: queued.length + (queued.length ? more : "") }), " queued"),
-        enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || flag.kind !== "queue_backlogged") ? "t-wait" : "" },
+        enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || !["queue_backlogged", "deployed"].includes(flag.kind)) ? "t-wait" : "" },
           h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
         enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
       renderHealth();
@@ -1167,5 +1226,5 @@
     };
   }
 
-  window.PhalanxOperatorBoard = { mount, label };
+  window.PhalanxOperatorBoard = { mount, label, sessionTarget };
 })();

@@ -55,7 +55,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.start_server(self.path)
         self.assertEqual(self.get(route, OWNER), (200, saved))
 
-    def test_upgrade_adds_one_capacity_without_changing_dispatch_or_resetting_on_restart(self):
+    def test_pre_limit_upgrade_keeps_five_total_without_resetting_on_restart(self):
         path = self.path.parent / "legacy.sqlite3"
         with write_transaction(path, create=True) as db:
             for version, statements in enumerate(MIGRATIONS[:MIGRATIONS.index(CONCURRENCY_SCHEMA)], 1):
@@ -66,7 +66,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         migrate(path)
         with connect(path) as db:
             self.assertEqual(tuple(db.execute(
-                "SELECT paused, aging_seconds, max_writers FROM dispatch_settings").fetchone()), (1, 99, 10))
+                "SELECT paused, aging_seconds, max_writers FROM dispatch_settings").fetchone()), (1, 99, 5))
             db.execute("UPDATE dispatch_settings SET max_writers=8")
         migrate(path)
         with connect(path) as db:

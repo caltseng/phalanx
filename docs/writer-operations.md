@@ -57,6 +57,12 @@ checks, conflicts and actionable feedback on the same PR while it waits. Reposit
 reviews gate merging. Trusted local checks run from reconciler policy and raise flags, not an
 extra Phalanx gate. See [publication and delivery](direct-sessions.md#pr-publication-and-delivery).
 
+If cancellation or forced failure sets `state.stopping`, stop new work and reconcile any
+in-flight GitHub effects. Delivery has no open attempt, but its writer is still live:
+the Captain stops that exact native session and uses `shift withdraw --stopped` to confirm
+the stop. A verified primary-PR merge into the target observed before confirmation delivers
+the PR instead of recording a cancellation or failure.
+
 Reports use `report_drafting`, `report_review`, `report_storage`; results carry the exact
 content-addressed draft revision. Server finalization retries storage without redrafting.
 

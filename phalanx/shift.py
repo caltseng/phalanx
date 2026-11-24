@@ -23,10 +23,11 @@ from urllib.parse import quote, urlencode
 from .work_cli import CREDENTIAL, request
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 from .display_text import reason_text, short_title
+from .session_links import session_reference
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
-# Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
-SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48}
+# Shift bounds (D7). Actual degradation remains an independent reason to hand off.
+SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48, "max_compactions": 5}
 # A launch's staged intent. It becomes the live credential once the server accepts its nonce.
 PENDING = "phalanx-writer.pending.json"
 
@@ -101,7 +102,7 @@ def load_charter(config):
         raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
     if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
-        raise ShiftError("Charter [shift] takes positive integers max_hours and max_wakes")
+        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes and max_compactions")
     return {**charter, "shift": {**SHIFT_DEFAULTS, **shift},
             "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
@@ -130,13 +131,15 @@ def shift_bounds(captain, charter, now=None):
         due.append(f"shift age reached {bounds['max_hours']} h")
     if captain["wake_count"] >= bounds["max_wakes"]:
         due.append(f"wake count reached {bounds['max_wakes']}")
-    if captain.get("compaction_count"):
-        due.append("session compacted")
+    compactions = captain.get("compaction_count")
+    if compactions is not None and compactions >= bounds["max_compactions"]:
+        due.append(f"successful compaction count reached {bounds['max_compactions']}")
     return {"age_minutes": int(age.total_seconds() // 60), "wakes": captain["wake_count"], **bounds,
-            "handoff_due": due}
+            "compaction_count": compactions, "handoff_due": due}
 
 
-def start(api, charter, session_ref, parent_id=None):
+def start(api, charter, session_ref, parent_id=None, *, runtime=None):
+    session_ref = session_reference(session_ref, runtime)
     body = {"session_ref": session_ref, "charter_revision": charter["revision"]}
     if parent_id:
         body["parent_id"] = parent_id
@@ -169,6 +172,8 @@ def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, s
 
 def _summary(item):
     writer = item["writer"]
+    if writer and writer["state"] == "ended":
+        writer = None
     return {
         "item_id": item["item_id"], "execution_id": item["id"], "version": item["version"],
         "repository_id": item["repository_id"], "title": item["title"], "stage": item["stage"],
@@ -337,7 +342,10 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
 
 
 def prompt(name):
-    return resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
+    text = resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
+    if name in {"captain", "keeper"}:
+        text += "\n" + prompt("forwarding")
+    return text
 
 
 def archive_result(api, session_id, outcome, reason, reported_by):
@@ -415,7 +423,10 @@ def handoff(api, charter, captain_id, note, command):
         "open_intents": captain["open_intents"],
         "successors": successors,
         "session_name": captain["successor_name"],
-        "kickoff": (f"You succeed Phalanx Captain {captain_id}. In this chat, `phx shift` means `{command}`. "
+        "session_name_identity": "Launch nonce derived from the predecessor, not the new Captain's ID",
+        "off_shift_instructions": prompt("forwarding"),
+        "kickoff": (f"You succeed predecessor Phalanx Captain {captain_id}; that is not your Captain ID. "
+                    f"In this chat, `phx shift` means `{command}`. "
                     f"On your first wake, run "
                     f"`phx shift start --session-ref <your native session ID> --parent {captain_id}`.\n\n"
                     + prompt("captain")),
@@ -437,8 +448,8 @@ def add_shift_command(commands):
     shift.add_argument("--home", help="existing muster directory (otherwise PHALANX_HOME or user locator)")
     actions = shift.add_subparsers(dest="shift_command", required=True)
     show = actions.add_parser("prompt", parents=[shared],
-                              help="print the Captain or keeper prompt, or the worker prompt template")
-    show.add_argument("name", choices=["captain", "keeper", "worker"])
+                              help="print Captain, keeper, worker or retained-chat forwarding instructions")
+    show.add_argument("name", choices=["captain", "keeper", "worker", "forwarding"])
     actions.add_parser("charter", parents=[shared], help="validate the charter and show its revision")
     begin = actions.add_parser("start", parents=[shared], help="register this chat as a Captain")
     begin.add_argument("--session-ref", required=True, help="this chat's native session ID or link")
@@ -454,10 +465,14 @@ def add_shift_command(commands):
                       help="a visible Phalanx session (task-first or legacy name); repeat for each")
     beat.add_argument("--session-writer", nargs=2, action="append", metavar=("ID", "NONCE"),
                       help="a reported session's full writer nonce, verified from its kickoff; repeat for each")
+    beat.add_argument("--session-availability", nargs=2, action="append", metavar=("ID", "STATE"),
+                      help="explicit native lookup result: present, missing or deleted; requires --session")
     beat.add_argument("--no-sessions", action="store_true", help="report that no such session is visible")
     beat.add_argument("--handoff-note")
     show_status = actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
     show_status.add_argument("--captain", help="also read this Captain, including ended-writer cleanup")
+    actions.add_parser("current", parents=[shared],
+                       help="resolve the unique live active Captain and native session binding")
     act = actions.add_parser("action", parents=[shared], help="record an action on the item's timeline")
     act.add_argument("--captain", required=True)
     act.add_argument("--item", required=True)
@@ -519,22 +534,29 @@ def run_shift(args):
     if args.shift_command == "charter":
         result = charter
     elif args.shift_command == "start":
-        result = start(API(config), charter, args.session_ref, args.parent)
+        result = start(API(config), charter, args.session_ref, args.parent, runtime=config["runtime"])
     elif args.shift_command == "heartbeat":
-        if args.no_sessions and (args.sessions or args.session_writer):
+        if args.no_sessions and (args.sessions or args.session_writer or args.session_availability):
             raise ShiftError("Pass --session or --no-sessions, not both")
         sessions = [] if args.no_sessions else args.sessions and [
-            {"id": session_id, "name": name} for session_id, name in args.sessions]
+            {"id": session_id, "name": name, "runtime": config["runtime"]} for session_id, name in args.sessions]
         by_id = {session["id"]: session for session in sessions or []}
         for session_id, nonce in args.session_writer or []:
             if session_id not in by_id:
                 raise ShiftError("--session-writer requires a matching --session")
             by_id[session_id]["writer_nonce"] = nonce
+        for session_id, availability in args.session_availability or []:
+            if session_id not in by_id or availability not in ("present", "missing", "deleted"):
+                raise ShiftError("--session-availability requires a matching --session and present, missing or deleted")
+            by_id[session_id]["availability"] = availability
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
                            compaction_count=args.compaction_count)
     elif args.shift_command == "status":
-        result = status(API(config), charter, args.captain)
+        result = {**status(API(config), charter, args.captain),
+                  "dashboard_url": config["base_url"].rstrip("/") + "/operator/"}
+    elif args.shift_command == "current":
+        result = API(config)("/v1/captains/current")
     elif args.shift_command == "action":
         result = API(config)(f"/v1/items/{_q(args.item)}/captain-actions", body={
             "captain_id": args.captain, "action": args.action, "reason": args.reason})

@@ -125,7 +125,8 @@
           runtime: row.writer.runtime,
           captainId: row.writer.captain_id,
           sessionId: row.writer.session_id,
-          sessionUrl: httpsUrl(row.writer.session_url),
+          sessionUrl: row.writer.session_url,
+          sessionAvailability: row.writer.session_availability,
           lastProgressAt: row.writer.last_progress_at,
           progressNote: row.writer.progress_note
         } : null
@@ -135,6 +136,7 @@
     function captain(row) {
       return {
         id: row.id, sessionRef: row.session_ref, state: row.state, live: row.live === true,
+        sessionAvailability: row.session_availability,
         stale: row.stale === true, heartbeatAt: row.heartbeat_at, wakeCount: row.wake_count,
         compactionCount: Number.isSafeInteger(row.compaction_count) && row.compaction_count >= 0
           ? row.compaction_count : null,

@@ -67,7 +67,13 @@ class DeploymentTest(unittest.TestCase):
         config["repositories"] = {"repo": {"checkout": str(self.root / "checkout")}}
         charter = shift.load_charter(config)
         self.assertEqual(charter["repositories"], ["repo"])
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 48})
+        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 48, "max_compactions": 5})
+        now = shift.datetime.now(shift.UTC)
+        captain = {"created_at": now.isoformat(), "wake_count": 0}
+        for count in (4, 5, 6):
+            with self.subTest(count=count):
+                bounds = shift.shift_bounds(dict(captain, compaction_count=count), charter, now)
+                self.assertEqual(bool(bounds["handoff_due"]), count >= 5)
 
     def test_init_refuses_existing_directory_without_touching_contents(self):
         home = self.install()

@@ -13,6 +13,17 @@ not configured), live `captains`, registered open `writers`, `reconcilers` with 
 contains no credentials and performs no local client database reads. See
 [muster discovery and status](../README.md#direct-muster-discovery-and-status).
 
+## Current Captain routing
+
+`GET /captains/current` uses the same board-read authentication as Captain detail/list reads.
+It resolves across all registrations, independent of the recent-history page limit, and returns
+`observed_at`, `candidates` (live `active` registrations as `{id, session_ref}`), `captain` (the
+unique candidate, or null), and an explicit `reason`. Ending, ended and stale registrations
+are excluded; multiple active candidates or an absent native binding cannot yield a destination.
+This is a routing snapshot, not an exclusive Captain lease or a native link verifier. The caller
+must freshly inspect the exact `session_ref` in its native provider, obtain its conversation URL
+there, and re-read this snapshot before forwarding. No URL is synthesized by the API.
+
 ## Captain compaction telemetry
 
 `PUT /captains/{id}` accepts optional `compaction_count`: the native session's cumulative
@@ -29,7 +40,12 @@ Charter revision, wake counts and liveness retain their existing contracts.
 
 `phx shift heartbeat --captain <id> --compaction-count <count>` reports the same counter;
 normal dashboard refreshes display it as `compactions N` or `compactions unavailable`.
-A known positive count also marks the existing first-compaction handoff as due.
+`shift heartbeat` compares the persisted known count with the current charter's
+`[shift].max_compactions` (default 5), returning the threshold, `compaction_count`
+and `handoff_due` in `shift`. At/above the threshold a handoff is due; below it,
+ordinary compaction is a checkpoint. Unknown telemetry does not trigger a count-based
+handoff or a first-compaction fallback. Elapsed-time/wake and actual degradation/failure
+safeguards remain independent. The server stores telemetry, not a second threshold.
 
 ## Session archival records
 

@@ -4,6 +4,9 @@
   const result = document.querySelector("#result");
   const now = new Date().toISOString();
   const hourAgo = new Date(Date.now() - 3600000).toISOString();
+  const nativeId = "12345678-1234-1234-1234-123456789abc";
+  const copilotUrl = "ghapp://sessions/" + nativeId;
+  const codexUrl = "codex://threads/" + nativeId;
   const waiting = {
     id: "wait", itemId: "item-wait", title: "<img src=x> Choose deployment target",
     goal: "<img src=x> Choose deployment target.\nTwo targets match.", repo: "example/service",
@@ -14,7 +17,7 @@
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
     primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
-    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1" },
+    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId },
     historicalWorker: { workerRef: "opaque-worker-7" }
   };
   const queued = {
@@ -22,6 +25,8 @@
     stage: "development", status: "queued", lastAdvancedAt: hourAgo, publicationMode: "draft"
   };
   const external = { ...queued, id: "external", title: "Await CI", status: "waiting_for_external" };
+  const resumed = { ...queued, id: "resumed", title: "Resumed work",
+    writer: { state: "ended", runtime: "codex", sessionId: nativeId } };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report_drafting",
     status: "failed", outcome: "failed", target: "checked_in", closedAt: now, createdAt: hourAgo,
@@ -30,6 +35,7 @@
   const success = {
     ...failure, id: "done", title: "Verify rollout", status: "completed", outcome: "checked_in",
     output: { kind: "pr", url: "https://example.com/pull/1" },
+    writer: { state: "ended", runtime: "codex", sessionId: nativeId },
     delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
   const draft = {
@@ -56,8 +62,8 @@
   ];
   const captains = [
     { id: "cap-ended", state: "ended", live: false, stale: false, heartbeatAt: hourAgo, compactionCount: 2 },
-    { id: "cap-stale", state: "active", live: false, stale: true, heartbeatAt: hourAgo },
-    { id: "cap-1", sessionRef: "s", state: "active", live: true, stale: false, heartbeatAt: now,
+    { id: "cap-stale", sessionRef: codexUrl, state: "active", live: false, stale: true, heartbeatAt: hourAgo },
+    { id: "cap-1", sessionRef: copilotUrl, state: "active", live: true, stale: false, heartbeatAt: now,
       wakeCount: 3, compactionCount: 0, charterRevision: "abcdef1234", focus: ["item-run"] }
   ];
   let offline = false;
@@ -81,7 +87,7 @@
       calls.push([kind, cursor, limit]);
       if (offline) throw new Error("API offline");
       if (kind === "open") {
-        return { items: cursor ? [queued] : [waiting, running, queued, external], nextCursor: cursor ? null : "more-open" };
+        return { items: cursor ? [queued] : [waiting, running, queued, external, resumed], nextCursor: cursor ? null : "more-open" };
       }
       return { items: cursor ? [] : [success, observed, ready, short, failure, draft, cancelled, report], nextCursor: cursor ? null : "older-closed" };
     },
@@ -111,10 +117,111 @@
   const section = id => root.querySelector(".sec-" + id);
   const status = () => root.querySelector('[role="status"]').textContent;
   const refresh = () => root.querySelector('[data-action="refresh"]').click();
+  const contrastEvidence = [];
+  function checkPalette() {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    const luminance = color => {
+      context.clearRect(0, 0, 1, 1);
+      context.fillStyle = color;
+      context.fillRect(0, 0, 1, 1);
+      const rgb = [...context.getImageData(0, 0, 1, 1).data].slice(0, 3)
+        .map(value => value / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+      return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
+    };
+    const ratio = (a, b) => {
+      const x = luminance(a), y = luminance(b);
+      return (Math.max(x, y) + .05) / (Math.min(x, y) + .05);
+    };
+    const background = node => {
+      for (let parent = node; parent; parent = parent.parentElement) {
+        const color = getComputedStyle(parent).backgroundColor;
+        if (color !== "rgba(0, 0, 0, 0)" && color !== "transparent") return color;
+      }
+      throw new Error("Missing actual icon surface");
+    };
+    const priorTheme = document.documentElement.dataset.theme;
+    const surface = document.createElement("span");
+    root.append(surface);
+    for (const theme of ["light", "dark"]) {
+      document.documentElement.dataset.theme = theme;
+      const colors = selector => getComputedStyle(root.querySelector(selector)).color;
+      assert(colors(".captains .t-run .mark-captain") !== colors(".mark-run"), theme + ": Captain is not Active blue");
+      surface.style.color = theme === "light" ? "#886000" : "#ecc46d";
+      assert(colors(".captains .t-run .mark-captain") === getComputedStyle(surface).color, theme + ": approved gold reaches the live helmet");
+      surface.style.color = theme === "light" ? "#1d5fbf" : "#79b8ff";
+      assert(colors(".mark-run") === getComputedStyle(surface).color, theme + ": approved blue reaches Active spears");
+      assert(colors(".glyph.t-wait") === colors(".glyph.t-idle") &&
+        colors(".glyph.t-wait") !== colors(".glyph.t-attn"), theme + ": automatic waits are quiet, not attention");
+      assert(colors(".glyph.t-handoff") !== colors(".glyph.t-ok") &&
+        colors(".glyph.t-fail") !== colors(".glyph.t-attn"), theme + ": handoff/success and failure/attention differ");
+      let iconMinimum = Infinity, textMinimum = Infinity;
+      for (const glyph of root.querySelectorAll(".rows .glyph")) {
+        const icon = glyph.querySelector("svg") || glyph;
+        const color = getComputedStyle(icon).color;
+        const adjacent = [background(glyph)];
+        for (const token of ["--bg", "--surface", "--raised", "--hover"]) {
+          surface.style.background = "var(" + token + ")";
+          adjacent.push(getComputedStyle(surface).backgroundColor);
+        }
+        for (const bg of adjacent) {
+          const value = ratio(color, bg);
+          iconMinimum = Math.min(iconMinimum, value);
+          assert(value >= 3, theme + ": " + glyph.title + " icon contrast " + value.toFixed(2));
+        }
+      }
+      for (const node of root.querySelectorAll(".stage, .stat, .repo, .writer, .reason, .chip, .faint, .count, .counts")) {
+        if (!node.getClientRects().length || !node.textContent.trim()) continue;
+        const value = ratio(getComputedStyle(node).color, background(node));
+        textMinimum = Math.min(textMinimum, value);
+        assert(value >= 4.5, theme + ": text contrast " + value.toFixed(2) + " for " + node.className);
+      }
+      contrastEvidence.push({ theme, iconMinimum, textMinimum });
+    }
+    surface.remove();
+    if (priorTheme) document.documentElement.dataset.theme = priorTheme;
+    else delete document.documentElement.dataset.theme;
+  }
   let unmount = window.PhalanxOperatorBoard.mount(root, source);
 
   try {
     await tick();
+    const target = window.PhalanxOperatorBoard.sessionTarget;
+    assert(target({ runtime: "copilot-app", sessionId: nativeId }).url === copilotUrl &&
+      target({ runtime: "codex", sessionId: nativeId }).url === codexUrl, "Known native IDs route only to their host");
+    for (const reference of [nativeId, "javascript:alert(1)", "file:///tmp/chat", "unknown://sessions/" + nativeId,
+      "ghapp://sessions/" + nativeId + "?run=1", "ghapp://sessions/" + nativeId + "#x",
+      "ghapp://sessions/../" + nativeId, "ghapp://user@sessions/" + nativeId,
+      "ghapp://sessions/" + nativeId + "/", "ghapp://sessions/%31" + nativeId,
+      " ghapp://sessions/" + nativeId, "https://user:pass@example.com/chat", "https://[bad",
+      "https://example.com/\\chat", "/operator/new", "codex://threads/not-a-thread"]) {
+      assert(!target({ runtime: "copilot-app", sessionId: nativeId, sessionUrl: reference }).url,
+        "Unsafe or malformed recorded link is not replaced: " + reference);
+    }
+    assert(!target({ sessionId: nativeId }).url && !target({ sessionRef: nativeId }).url &&
+      !target({ runtime: "copilot-cli", sessionId: nativeId }).url, "Legacy identity never guesses its provider");
+    assert(!target({ runtime: "copilot-app", sessionUrl: codexUrl }).url &&
+      !target({ sessionUrl: copilotUrl, sessionId: "other" }).url, "Provider and identity conflicts never translate sessions");
+    for (const availability of ["missing", "deleted"]) {
+      assert(!target({ sessionUrl: copilotUrl, sessionAvailability: availability }).url &&
+        target({ sessionUrl: copilotUrl, sessionAvailability: availability }).reason.includes(availability),
+      "Known " + availability + " session is explicitly unavailable");
+    }
+    assert(target({ sessionUrl: copilotUrl }).reason.includes("unverified"), "Recorded URL does not claim verified existence");
+    const captainLinks = root.querySelectorAll('a[href="' + copilotUrl + '"]');
+    assert(captainLinks.length >= 3 && [...captainLinks].every(link => link.tabIndex === 0),
+      "Helmet, Captain name and writer are native keyboard-accessible links");
+    const helmetLink = [...captainLinks].find(link => link.querySelector(".mark-captain"));
+    helmetLink.focus();
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    helmetLink.dispatchEvent(enter);
+    assert(document.activeElement === helmetLink && !enter.defaultPrevented,
+      "Keyboard activation retains native browser external-app confirmation");
+    assert(item("run").closest("li").querySelector('a.writer[href="' + copilotUrl + '"]') &&
+      item("resumed").closest(".sec-queued").querySelector('a.writer[href="' + codexUrl + '"]') &&
+      item("done").closest("li").querySelector('a.writer[href="' + codexUrl + '"]') &&
+      !item("queue").closest("li").querySelector("a.writer"), "Active, resumed and closed sessions link; unlaunched queue stays unlinked");
     const concurrency = source.concurrencyControl;
     const settingsSummary = concurrency.querySelector("summary");
     const settingsInput = concurrency.querySelector("input");
@@ -160,6 +267,13 @@
     assert(!section("flags").querySelector("h2 .t-wait") &&
       [...root.querySelectorAll(".counts li")].find(node => node.textContent.includes(" flags")).className === "",
       "Backlog alone does not turn the section or summary count into a warning");
+    flags[0] = savedFlags.find(flag => flag.kind === "deployed");
+    refresh();
+    await tick();
+    assert(!section("flags").querySelector("h2 .t-wait") &&
+      [...root.querySelectorAll(".counts li")].find(node => node.textContent.includes(" flags")).className === "" &&
+      section("flags").querySelector(".fgroup.t-ok .mark-flag"),
+      "Successful deployment flags retain their shape without warning severity");
     flags[0] = { ...capacityFlag, kind: "captain_idle_with_work", reason: "Dispatch overdue: capacity released" };
     refresh();
     await tick();
@@ -198,6 +312,12 @@
       const glyph = row.querySelector(".glyph");
       const helmet = glyph.querySelector("svg.mark-captain");
       assert(helmet && helmet.getAttribute("aria-hidden") === "true" &&
+        helmet.getAttribute("viewBox") === "0 0 64 64" &&
+        [...helmet.querySelectorAll("path")].map(path => path.getAttribute("d")).join(";") ===
+          "M7 29C4 15 15 3 31 3C43 3 52 9 57 17L50 22C43 14 35 12 28 15C21 18 19 23 19 29Z;" +
+          "M17 33C17 23 24 17 33 17C44 17 50 24 50 34V36H37V43L46 47L41 61L24 52L29 37H16Z;" +
+          "M14 37H23L18 52H9Z" &&
+        [...helmet.querySelectorAll("path")].every(path => path.getAttribute("fill") === "currentColor") &&
         helmet.getAttribute("focusable") === "false" &&
         glyph.classList.contains("t-" + health) && glyph.title === word &&
         glyph.querySelector(".sr-only").textContent === word,
@@ -205,13 +325,41 @@
     }
     assert(item("queue").closest("li").querySelector(".mark-idle") &&
       item("external").closest("li").querySelector(".mark-wait"), "Queued and waiting have distinct shields");
+    for (const id of ["ready", "short", "draft"]) {
+      const glyph = item(id).closest("li").querySelector(".glyph");
+      assert(glyph.querySelector(".mark-handoff") && glyph.querySelector(".sr-only").textContent ===
+        (id === "draft" ? "draft published" : "ready for check in"), "Unmerged handoff keeps its outcome label: " + id);
+    }
+    for (const id of ["done", "observed", "report"]) {
+      assert(item(id).closest("li").querySelector(".glyph.t-ok")?.textContent.includes("✓"),
+        "Verified success retains the check mark: " + id);
+    }
+    assert(item("cancelled").closest("li").querySelector(".glyph.t-muted"), "Cancelled stays muted");
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const spears = [...formation.querySelectorAll(".spear")].map(node => getComputedStyle(node));
+    assert(spears.every(style => style.animationName === (reduced ? "none" : "formation")),
+      "Active formation respects the actual reduced-motion preference");
+    if (!reduced) {
+      assert(spears.every(style => style.animationDuration === "2.2s") &&
+        Math.abs(parseFloat(spears[1].animationDelay) - parseFloat(spears[0].animationDelay) - .44) < .001 &&
+        Math.abs(parseFloat(spears[2].animationDelay) - parseFloat(spears[0].animationDelay) - .22) < .001,
+      "Existing restrained wave retains its duration and left/center/right stagger");
+    }
+    assert(Math.abs(formation.getBoundingClientRect().width - 12) < .05 &&
+      Math.abs(formation.getBoundingClientRect().height - 16) < .05,
+      "Active keeps its normal dashboard size");
+    checkPalette();
+    assert(document.documentElement.scrollWidth <= innerWidth + 1, "Integrated icon rows do not widen the viewport");
+    result.dataset.contrast = JSON.stringify(contrastEvidence);
+    result.dataset.motion = reduced ? "reduced" : "normal";
+    result.dataset.width = innerWidth;
     assert(root.querySelector(".fgroup .mark-notify") && root.querySelector(".fgroup .mark-flag") &&
       item("run").closest("li").querySelector(".chip .mark-flag"), "Red flags on both group kinds and chips");
     for (const id of ["done", "observed", "ready", "report"]) {
-      assert(!item(id).closest("li").querySelector(".line > .reason").textContent, "Met target has no shortfall: " + id);
+      assert(!item(id).closest("li").querySelector(".line > .reason").textContent.includes("wanted:"), "Met target has no shortfall: " + id);
     }
     assert(item("observed").closest("li").querySelector(".stage").textContent === "Merged", "Observed merged PR overrides ready outcome");
-    assert(item("short").closest("li").querySelector(".reason").textContent === "wanted: merged", "Ready shortfall visible");
+    assert(item("short").closest("li").querySelector(".reason").textContent.endsWith("wanted: merged"), "Ready shortfall visible");
     assert(item("fail").closest("li").querySelector(".reason").textContent === "wanted: merged", "Failed shortfall visible");
     assert(item("cancelled").closest("li").querySelector(".reason").textContent === "wanted: merged", "Cancelled shortfall visible");
     assert(root.querySelector(".fgroup .captain-ref.captain-ended .t-muted .mark-captain") &&

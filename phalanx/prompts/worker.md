@@ -41,6 +41,11 @@ environment with `$work question`; do not improvise one.
 4. Repeat from step 1 until the execution is `completed`, `failed` or `cancelled`, or a command
    returns HTTP 401, which means your writer has ended. Then stop.
 
+If `state.stopping` is set, stop new work, including delivery fixes, and reconcile in-flight
+effects. Notify the Captain to stop this exact native session and withdraw the writer with
+`--stopped`. Delivery has no open attempt; do not treat that as proof the session has stopped.
+A verified primary-PR merge into the target observed before stop confirmation still delivers it.
+
 If a decision needs a human, run
 `$work question "<question>" --attempt <attempt ID> --handoff "<context a fresh session needs>"`,
 optionally with `--option` and `--default`. Then wait. Run `$work status` until the execution is queued

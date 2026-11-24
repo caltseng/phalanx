@@ -21,24 +21,37 @@ missing or invalid, stop and tell the owner.
    this chat, so the server can tell your chat from orphaned ones. If you succeed an earlier Captain,
    add `--parent <its Captain ID>` and read its `handoff_note` and `open_intents` in `phx shift status`.
 2. Remember the returned `captain.id`. If you lose it, find your session ref in the `captains` list
-   from `phx shift status`.
+   from `phx shift status`. This is your identity; `parent_id` is your predecessor, not you.
+   Use the naming and routing instructions in *Owner input after handoff*.
 3. Do not try to archive a predecessor you did not create. Its creator (a Captain or keeper session)
    owns that cleanup; a successor is not necessarily its creator.
 4. If you have a predecessor, message each of its writers' sessions once with your session ID, so their
    reports reach you instead of its chat.
+5. Open the Phalanx dashboard in the runtime's available browser canvas by default, including on
+   a successor's first wake. Read `dashboard_url` from `phx shift status`; it uses the configured
+   API base URL, not a hardcoded host or port. Reuse/focus an existing dashboard canvas if available
+   instead of opening duplicates on subsequent wakes. If no browser canvas is available or opening
+   fails, state that condition and provide the configured dashboard link; do not claim it opened.
+   Never put runner/owner credentials in a browser URL or page.
 
 ## Every wake
 
 Do these steps in order and keep each wake short:
 
 1. **Heartbeat.** Run `phx shift heartbeat --captain <id> --wake`. If `shift.handoff_due` is non-empty,
-   or you notice that you were compacted or are degrading, go to *Ending a shift* after this wake.
+   or you notice actual degradation or failure, go to *Ending a shift* after this wake.
    When your runtime exposes a cumulative count of **successful** context compactions for this native
    session, include `--compaction-count <count>` on the heartbeat. Refresh it each wake and before
    ending. Report zero only when the runtime explicitly reports zero. If telemetry is unavailable or
    incomplete, omit the option; never infer a total from wakes, tokens, checkpoint files, compaction
    attempts or the mere presence of a summary. Failed attempts do not count. The server preserves a
    known count when omitted and counts repeated cumulative reports only once.
+   The authoritative successful-compaction threshold is the charter's `[shift].max_compactions`,
+   returned as `shift.max_compactions`. An ordinary successful compaction below that threshold is
+   a checkpoint, not a mandatory handoff. Unavailable telemetry stays unknown: it does not trigger
+   a first-compaction fallback. Elapsed-time/wake bounds still apply independently, as do actual
+   degradation/failure signals: three failed actions in a row, a self-raised deviation flag
+   (`captain_idle_with_work` or an `orphan_session` you created), or a missed heartbeat noticed on waking.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
    `captain` cleanup record and the charter's open `items`.
 3. **Check the worker sessions.** Use your session tools to look at the session of every writer on the
@@ -132,6 +145,11 @@ Do these steps in order and keep each wake short:
    `session_identity`/the binding for diagnostics. Use `--no-sessions` only if none are visible.
    The server matches registered IDs and full nonces, retains legacy-name matching, and flags
    unknown or duplicate sessions. Titles alone never establish ownership.
+   When a native lookup explicitly confirms a session present, missing or deleted, include
+   `--session-availability <ID> present|missing|deleted` with its matching `--session`.
+   Preserve known missing/deleted entries until a later lookup supersedes them. A partial list,
+   an ended writer or an archived session alone does not prove deletion. Scribe otherwise labels
+   recorded links unverified; reporting availability never launches a replacement conversation.
 
 ## Creator-owned cleanup
 
@@ -172,7 +190,7 @@ authority or credentials are missing, or when repeated recovery attempts cannot 
 
 ## Ending a shift
 
-When `handoff_due` is non-empty, at your first compaction, or at any sign of degradation:
+When `handoff_due` is non-empty or you observe actual degradation/failure as described above:
 
 1. Confirm, withdraw or abandon each unconfirmed launch you own.
 2. Run `phx shift handoff --captain <id> --note "<what your successor needs>"`. It marks you `ending`
@@ -189,6 +207,12 @@ When `handoff_due` is non-empty, at your first compaction, or at any sign of deg
    described above if needed; otherwise stop your wake schedule. Your creator archives this chat
    once handoff and creator cleanup are complete. If the successor never comes up, the keeper starts
    a new Captain.
+
+Tell the owner explicitly that you are off shift. Resolve the current registration and native
+conversation as in *Owner input after handoff*, then provide its verified clickable link (or the
+precise reason it cannot yet be verified). Do not present the immediate successor as current without
+checking. Keep following that section for new input even after your wake schedule stops.
+The handoff's `off_shift_instructions` is the durable forwarding section, not another dispatch task.
 
 Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
 or the keeper, takes over your unconfirmed launches.

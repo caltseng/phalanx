@@ -2,87 +2,150 @@
 
 <img src="docs/phalanx-logo.svg" alt="Phalanx logo: an ivory spear-shaped mark on a crimson shield with a gold rim" width="96" height="96">
 
-Phalanx is an agentic orchestrator for work across repositories. Work items live in an API-backed queue. Captain chats launch registered writer sessions in parallel to deliver a Markdown report or a pull request.
+**Use Phalanx to delegate outcomes, not keep prompting agents.** A coding agent handles a task; Phalanx is meant to keep a queue of tasks moving across repositories—from clear acceptance criteria through implementation, review, checks and merge.
 
-1. File a work item for a registered repository with a goal, enough context to execute it, and the expected output.
-2. Start a **muster**, a batch of eligible work launched from the Captain chat. Agents work in parallel, use isolated checkouts for changes, and verify their results.
-3. Follow each item through its lifecycle. The writer develops, self-reviews, pushes and opens its PR. The reconciler observes GitHub and flags problems for the writer to fix. GitHub's required checks and reviews gate merging. Draft-only work stops at a verified draft; ready-only work stops at a ready PR. Report work ends with a verified **field report** in Markdown.
+Its value is durable ownership: work shouldn’t disappear when a chat ends, a Captain changes, CI fails or a decision blocks progress. You should see what’s moving, what’s genuinely blocked and what needs you.
 
-**Phalanx advancing** means a work item has met the conditions to move to its next stage. Every closed work item has a final output: if it ends without the requested deliverable, Phalanx stores a field report explaining what happened and what remains.
+**For one small change, a normal coding chat is simpler.** Phalanx earns its place when coordinating several workstreams costs more than writing the code. If you still have to chase dispatches, decipher Captain identities or repeatedly unblock internal machinery, it isn’t delivering that value reliably yet. The goal is less supervision—not more agents to supervise.
 
-The HTTP API server and durable store run locally, with visible worker sessions launched by Captain chats through their runtime's native tools. Phalanx is runtime-neutral: Codex, GitHub Copilot CLI or app, Claude Code, or any runtime with visible sessions can follow the [direct-session contract](docs/direct-sessions.md). The same server is intended to move to cloud hosting while agents keep running locally.
+Phalanx orchestrates agent work across repositories, from a queued goal to a merged pull
+request or a Markdown report. A local HTTP API keeps durable work state, **Captain chats**
+coordinate visible writer sessions, and **Scribe** provides the work board.
+
+1. File a work item for a registered repository with a goal, context and acceptance criteria.
+2. Start a **muster**: the Captain selects eligible work under an operator-owned charter
+   and launches registered writers in parallel, each with an isolated item worktree.
+3. Writers implement, check, self-review and publish their work. An independent reconciler
+   follows GitHub, flags actionable problems and supplies the evidence for verified delivery.
+
+PR work defaults to **`checked_in` (merged)**, subject to the repository's required checks,
+reviews and merge rules. Choose `ready_for_check_in` for a ready PR with owner-controlled
+merging, `report` for a Markdown **field report**, or draft publication for a verified draft.
+Every closed execution records a verified PR or stored report; failure and cancellation
+reports preserve what happened, partial results and recovery context.
+
+Phalanx is runtime-neutral. Codex, GitHub Copilot CLI or app, Claude Code, and other runtimes
+with visible sessions can follow the [direct-session contract](docs/direct-sessions.md).
+The CLI, Captain/writer clients and reconciler support Windows, macOS and Linux.
 
 ## Architecture
 
-**Relay-free, not server-free:** the retired relay transported requests for the old
-Captain loop. The HTTP API and Scribe remain. See the [implementation map and ownership,
-sequence and deployment diagrams](docs/architecture.md) for the audited architecture.
+| Component | Responsibility |
+| --- | --- |
+| **HTTP API and SQLite** | Own repositories, items, dependencies, executions, fenced attempts, questions/replies, reports, Captain/writer bindings, history and timestamped observations. The server applies lifecycle transitions and finalizes outputs. |
+| **Scribe** | Serves the work board at `/operator/` for intake, item timelines, questions, flags and dispatch settings. |
+| **Captain chat** | Reads its charter, API state and native session inventory; prepares worktrees, registers writer intents, launches visible sessions and coordinates recovery and handoff. |
+| **Writer session** | Implements, checks, self-reviews and publishes its item, then fixes checks, feedback and conflicts on its primary PR through delivery. |
+| **GitHub reconciler** | Independently reads GitHub/git, posts observations and heartbeats, and runs trusted local checks serially in scratch worktrees. The API uses its evidence to derive flags and verify delivery. |
+| **Runtime keeper** | Uses the runtime's schedule and session tools to start a Captain when one is needed, preserving existing writers. |
 
-The HTTP API server owns the SQLite queue, executions, attempts, questions, reports and
-timestamped evidence. It also serves **Scribe**, the local work board at `/operator/`.
-Clients reach queue state only through the API; Git checkouts and credentials stay on
-their host. `python -m phalanx reconcile` independently reads GitHub and git, posts
-observations and heartbeats, and lets the server derive flags and verify delivery.
+Clients access durable work state through the authenticated API. The execution host keeps
+checkout mappings, isolated worktrees, prepared checks environments, artifacts, configuration
+and credentials. Owner and runner bearer tokens authorize their respective API operations;
+each writer uses its own scoped credential stored in the item's Git directory.
 
-The operator supplies a charter file outside every repository. A native **Captain chat**
-runs `phx shift` (shorthand for the configured `python -m phalanx shift` command), re-reads
-that charter each wake, and chooses work within its repository scope and lane order.
+The operator keeps a charter outside mapped repositories. On each wake, the Captain uses
+`python -m phalanx shift` commands, re-reads the charter and chooses work within its repository scope
+and lane policy.
 The owner's persisted Building (`max_building_writers`, initially 5) and Total (`max_writers`,
 initially 10 on new installs) limits, editable together under **Writer concurrency** in Scribe,
 apply across all Captains and repositories. Existing installs retain their approved Total until
 [coordinated activation](docs/deployment.md#two-limit-writer-activation).
-The Captain launches one registered
-**writer session** per item in an isolated
-worktree. In the Copilot app all writers open in the shared worktrees folder project,
-`session_workspace`, rather than one project per worktree. Writers run `phx work` from
-their own worktree with a scoped credential. A runtime-scheduled **keeper** starts a
-Captain when none is live, including after a stale Captain, without restarting its writers.
-See [the direct-path operating guide](docs/direct-path.md).
+Registration enforces both limits atomically; waiting writers retain Total.
+
+Captains launch and confirm sessions through their runtime's native tools. In the Copilot
+app, writers share the configured worktrees folder project, `session_workspace`, and run
+`python -m phalanx work` from their own item worktree. The guides use `phx` as a configured
+local shorthand for the installed Python command.
 
 ```text
 Owner CLI / Scribe intake -----> HTTP API -----> server SQLite
                                    ^
 Charter -> Captain (shift) ---------| bindings / actions / heartbeat
 Keeper  -> fresh Captain           |
-              | native launch      |
-              v                    |
+              | native launch     |
+              v                   |
         Writer (work) -------------| scoped stage results / questions
-              |                    |
-        Item worktree -> GitHub PR |
+              |                   |
+        Item worktree -> GitHub PR  |
                           |        |
                           +-> Reconciler -- observations -> API
 ```
 
-Intake defaults to `checked_in`; choose `ready_for_check_in` for owner-only merging or
-`report` for Markdown. Runner affinity is retained request metadata, not a direct-session
-routing gate; no `direct-hold` sentinel is required. Charter lanes are Captain policy,
-explained by refreshed `held` actions, not
-server queues or reserved slots. PR work flows through `development`, `self_review`,
-`publication` and `delivery`. For ready-only work, the writer opens a ready PR, required
-checks pass, and the reconciler verifies completion. The owner merges; a later reconciler
-observation records that merge and releases check-in dependents. For `checked_in`, the
-writer enables GitHub auto-merge under repository rules. Reports instead use drafting,
-review and storage; draft-only publication is a separate ceiling.
+The API and execution host can run on the same machine. The configurable API URL keeps
+their responsibilities separate; hosted operation requires HTTPS, persistent storage,
+authentication and backups. See the [implementation map and diagrams](docs/architecture.md)
+for code ownership and recovery boundaries, and [Direct path](docs/direct-path.md) for
+charters, runtime schedules and configuration.
 
-Native Captain/writer sessions and the reconciler are the only execution path. Clients
-keep worktrees, configuration, credentials, artifacts and OS locks; all durable execution
-and observation records live behind the API. There are no client SQLite queues or journals.
+## Work lifecycle
+
+PR work follows `development -> self_review -> publication -> delivery`. Each stage has a
+separately fenced attempt, and self-review is bound to the exact candidate commit.
+Publication records one primary PR. **Publishing a PR or releasing a writer is distinct
+from verified delivery**: during normal delivery waits the writer stays registered,
+fixes actionable problems on that PR and follows its current target.
+
+- **`checked_in` (default):** the writer enables GitHub auto-merge under repository rules.
+  Completion requires the reconciler to observe a verified merge into the target branch.
+- **`ready_for_check_in`:** completion requires a ready PR on the target base with the
+  policy's required checks satisfied, actionable feedback addressed and conflicts resolved.
+  The owner controls merging. A later verified owner merge updates the output and releases
+  check-in dependencies.
+- **Draft publication:** `--publication-mode draft` sets a ceiling for either PR target.
+  Delivery verifies an open draft at the self-reviewed candidate and target base, then ends
+  the writer with a draft output. The writer preserves that ceiling.
+- **`report`:** `report_drafting -> report_review -> report_storage` binds review and
+  storage to the exact Markdown draft, which the server finalizes durably.
+
+GitHub owns PR facts and merging. Its required checks, reviews and rulesets apply throughout;
+writer self-review complements those safeguards. Reconciler local-check failures raise
+visible flags for the writer to address. Trusted validation policy defines required ready
+checks. Owners and Captains can steer an open PR item's completion target; the writer
+re-reads it and enables auto-merge only for ready-mode `checked_in` work.
+
+Questions, dependency waits, external waits and retries retain the writer and its context.
+Accepted evidence advances the item to its next stage; verified completion ends the writer.
+Stopped-writer replacement preserves local work and reconciles external effects. See
+[Writer operations](docs/writer-operations.md), the [state machine](STATE_MACHINE.md) and
+[Recovery](docs/recovery.md) for the detailed contracts.
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| [`phalanx/api.py`](phalanx/api.py), [`store.py`](phalanx/store.py), [`transitions.py`](phalanx/transitions.py) | FastAPI application, durable transactions and lifecycle decisions. |
+| [`phalanx/__main__.py`](phalanx/__main__.py) | CLI entry point for intake, inspection, replies, onboarding, sessions, reconciliation and administration. |
+| [`phalanx/shift.py`](phalanx/shift.py), [`writers.py`](phalanx/writers.py), [`work_cli.py`](phalanx/work_cli.py) | Captain client, server writer bindings and scoped writer commands. |
+| [`phalanx/reconciler.py`](phalanx/reconciler.py), [`reconciliation.py`](phalanx/reconciliation.py) | GitHub observation client and server-side evidence/flag handling. |
+| [`phalanx/prompts/`](phalanx/prompts/), [`phalanx/static/`](phalanx/static/) | Native-session prompts and Scribe browser assets. |
+| [`phalanx/deployment.py`](phalanx/deployment.py), [`muster.py`](phalanx/muster.py), [`scripts/`](scripts/) | Installation/service entrypoints, existing-muster discovery and prepared-checks helpers. |
+| [`tests/`](tests/), [CI workflow](.github/workflows/ci.yml) | Standard-library unittest suite, HTTP/Git fixtures and cross-platform CI. |
+| [`.agents/skills/`](.agents/skills/) | Reusable agent skills: [PR review](.agents/skills/pr-review/SKILL.md) and [complexity-killer](.agents/skills/complexity-killer/SKILL.md) for evidence-based complexity and blocking audits. |
+| [`docs/`](docs/), [`SPEC.md`](SPEC.md), [`STATE_MACHINE.md`](STATE_MACHINE.md) | Operating guides, implementation map and authoritative design/lifecycle references. |
 
 ## Quickstart: new install
 
-Use CPython 3.12 or later (3.14 for deployment). For reproducible setup, use
-[`python -m phalanx deploy init`](docs/deployment.md): it creates credential-free templates
-under `~/.phalanx_muster` by default, never overwrites an existing directory, and starts
-nothing. Configure the generated files, then use the tracked foreground service entrypoints.
-Existing `phalanx-muster` installations keep their paths; adopt tooling only through the
-[service-owner rollout](docs/deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
-
-The following manual alternative creates new tokens and a new database. In PowerShell, from the repository root:
+Use CPython 3.12 or later (3.14 for deployment), Git, and a runtime with native visible
+sessions. Install the package and locked dependencies from the repository root:
 
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.lock -e .
+```
+
+For reproducible setup, use
+[`python -m phalanx deploy init`](docs/deployment.md): it creates credential-free templates
+under a new `~/.phalanx_muster` directory by default. Configure the private environment,
+charter, runtime workspace, repository mappings and prepared checks environments before
+using its foreground service entrypoints. The [deployment guide](docs/deployment.md)
+covers initialization and service ownership.
+
+For a manual new install, generate and privately store the owner and runner tokens once.
+The following starts the API with a new database in PowerShell:
+
+```powershell
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_DB = Join-Path $HOME ".phalanx_muster\db\phalanx.sqlite3"
@@ -90,37 +153,44 @@ $env:PHALANX_LOCAL_BOARD = "1"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
-Store both tokens privately and record the `PHALANX_DB` path: you need them to resume. The optional [direct muster locator](#direct-muster-discovery-and-status) finds existing configuration; it never creates a database. Then, from a second shell with the owner token set, check `http://127.0.0.1:8000/health`, register a repository and file work:
+Record the database path and API URL with the stored tokens in a private runbook.
+From a second shell with the same environment activated and the stored owner token set,
+check health, register a repository and file work:
 
 ```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
 python -m phalanx register example https://github.com/example/project.git
 python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
+# PR work defaults to checked_in:
+python -m phalanx intake example "Add regression tests for the parser" --key parser-tests-1
 ```
 
 Open `http://127.0.0.1:8000/operator/` to view and create work without pasting a token on
 this explicitly enabled, directly accessed loopback-only board. `/v1` writes still require
 their bearer credentials; leave local-board mode off behind proxies/tunnels or on hosted
 servers. See [local-board security and rollout](docs/work-items.md#operator-work-board).
-To run the work, set up a runner and start a muster as described in [Install Phalanx](docs/install.md), which also covers macOS and Linux, repository trust and the GitHub token.
-
-`intake` and `ingest-issue` default to `--target checked_in`. On the direct path the writer
-enables GitHub auto-merge only for that target; required reviews, checks and rulesets still gate
-the merge. Use `--target ready_for_check_in` to stop at a ready PR or `--target report` for a
-Markdown report. Owners and Captains can steer an open PR item between the two PR targets,
-including during direct delivery. After ready completion, an owner's merge of the primary PR at
-the verified head or a descendant is recorded automatically and releases check-in dependencies.
+To execute the work, follow [Install Phalanx](docs/install.md) and
+[Direct path](docs/direct-path.md): configure the runner and GitHub observation tokens,
+reconciler mappings and validation policy, then start `python -m phalanx reconcile`.
+Prepare the shift config, charter, shared worktrees workspace and per-repository
+`checks_environment`. Use `python -m phalanx shift prompt captain` to obtain the instructions
+for a native Captain chat, then attach Captain and keeper schedules through the runtime.
+The install guide includes macOS/Linux commands and GitHub credential setup.
 
 **One-time repository trust:** the owner must grant trust in the worker runtime before work can run.
 In the GitHub Copilot app, also approve the per-project repository trust card in the project's session;
 a checkout path in the runtime's `trustedFolders` configuration does not approve that app-level card.
-For direct sessions, approve the configured shared worktrees project (`session_workspace`), rather than
-registering a project for each worktree. Only the owner grants trust. A Captain that finds a pending
-trust approval notifies the owner and keeps the same writer/session blocked until approval, rather than
-relaunching it.
+For direct sessions, approve the configured shared worktrees project (`session_workspace`).
+Only the owner grants trust. A Captain that finds a pending trust approval notifies the owner
+and retains the same blocked writer/session until approval.
 
 ## Resume an existing install
 
-After a restart or reboot, don't rerun the quickstart: it would create new tokens and could start an empty database. Follow [Resume an existing install](docs/resume.md) with your recorded muster directory, database path and stored tokens.
+After a restart or reboot, follow [Resume an existing install](docs/resume.md) with your
+recorded muster directory, database path and stored tokens. Preserve these paths and
+credentials when adopting deployment tooling; coordinate service changes through the
+[service-owner rollout](docs/deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
+Reserve the new-install steps above for a new database and credentials.
 
 ## Direct muster discovery and status
 
@@ -167,19 +237,19 @@ Start the intended API yourself with `PHALANX_HOME` set to this directory, along
 **existing** database path and credentials. Authenticated `GET /v1/muster/status` reports the
 API's configured home identity, live Captains, registered open writers, each reconciler's
 last heartbeat/age/staleness (15 minutes), and dispatch pause. `muster status` reads this API,
-prints JSON, and fails nonzero if it is unavailable or its home identity differs. No recorded
-reconcilers are reported as an empty list, not as evidence that one is running. Writer presence
-is registration state, not an independent runtime process probe. No local database is opened.
-There is deliberately no `muster start`: discovery/status never launch processes or run server
-startup migrations. Existing installs with another layout can keep their explicit config paths;
-do not move live state to adopt the locator.
+prints JSON, and fails nonzero if it is unavailable or its home identity differs. An empty
+reconciler list means none has recorded a heartbeat. Writer presence reports registration
+state; inspect native sessions separately to verify process liveness. Status reads the API.
+Use the [deployment entrypoints](docs/deployment.md#new-installation) to start services
+explicitly and runtime schedules to wake Captain/keeper sessions. Existing installs can
+keep their explicit config paths and live state locations when adopting the locator.
 
 To retrieve one item's correlated timeline through the supported API, see the [paginated example and backward-transition fixture](docs/api.md#read-one-items-correlated-timeline).
 
 ## Documentation
 
 - [Install Phalanx](docs/install.md): first-time setup, credentials, runner setup and repository trust.
-- [Deployment tooling](docs/deployment.md): versioned setup, service entrypoints and reviewed legacy adoption.
+- [Deployment tooling](docs/deployment.md): installation templates, service entrypoints and service-owner rollout.
 - [Resume an existing install](docs/resume.md): restart order, single-instance checks and status.
 - [Writer operations](docs/writer-operations.md): direct writers, publication, validation flags and delivery.
 - [Direct path](docs/direct-path.md): the GitHub reconciler and a Captain on the direct path.
@@ -190,4 +260,4 @@ To retrieve one item's correlated timeline through the supported API, see the [p
 - [API reference](docs/api.md) and [developing Phalanx](docs/development.md): scoped attempts, routes, transactions and tests.
 - [Validation policy](docs/validation-policy.md), [GitHub observations](docs/direct-path.md#run-the-github-reconciler), [pilot reports](docs/pilots/) and [decision log](docs/decisions.md).
 
-Design: the [spec](SPEC.md), [state machine](STATE_MACHINE.md), [roadmap](ROADMAP.md) and [implementation plan](IMPLEMENTATION_PLAN.md). Open [state-machine.html](state-machine.html) locally in a browser for the lifecycle diagram and execution status reference. Its inline SVG is maintained by hand alongside the Markdown Mermaid source; there is no generated diagram bundle.
+Design: the [spec](SPEC.md), [state machine](STATE_MACHINE.md), [roadmap](ROADMAP.md) and [implementation plan](IMPLEMENTATION_PLAN.md). Open [state-machine.html](state-machine.html) locally in a browser for the lifecycle diagram and execution status reference. Its inline SVG is maintained by hand alongside the Markdown Mermaid source.

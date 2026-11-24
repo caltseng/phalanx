@@ -100,6 +100,11 @@ class WriterTest(ServerFixture, unittest.TestCase):
     def test_report_finalization_ends_the_writer(self):
         item_id, execution_id = self.item()
         binding, token, _ = self.register(item_id, execution_id)
+        native = "12345678-1234-1234-1234-123456789abc"
+        route = f"/v1/items/{item_id}/executions/{execution_id}/writer"
+        self.ok(route, RUNNER, {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                               "session_id": native, "session_url": "codex://threads/" + native},
+                method="PATCH")
         binding = self.submit(token, binding, report_markdown="# Report\n")
         binding = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
         self.assertEqual(binding["state"]["stage"], "report_storage")
@@ -109,6 +114,48 @@ class WriterTest(ServerFixture, unittest.TestCase):
             writer = db.execute("SELECT * FROM writers WHERE id=?", (binding["writer"]["id"],)).fetchone()
         self.assertIsNotNone(writer["ended_at"])
         self.assertEqual((writer["end_reason"], writer["attempt_id"]), ("closed as completed", None))
+        for url in (f"/v1/operator/items/{item_id}",
+                    f"/v1/operator/executions/{execution_id}/timeline"):
+            recorded = self.ok(url, OWNER)["item"]["writer"]
+            self.assertEqual((recorded["state"], recorded["session_id"], recorded["session_url"],
+                              recorded["session_availability"]),
+                             ("ended", native, "codex://threads/" + native, "unverified"))
+        history = self.ok("/v1/operator/executions?kind=closed", OWNER)["items"]
+        self.assertEqual(history[0]["writer"]["session_id"], native)
+        observer = self.ok("/v1/captains", RUNNER,
+            {"session_ref": "observer", "charter_revision": "c1"}, 201)
+        for availability in ("missing", "deleted"):
+            self.ok(f"/v1/captains/{observer['id']}", RUNNER, {
+                "charter_revision": "c1", "wake_count": 1, "state": "active",
+                "sessions": [{"id": native, "name": "Ended writer [phx]", "availability": availability,
+                              "runtime": "any-runtime"}],
+            }, method="PUT")
+            recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]["writer"]
+            self.assertEqual(recorded["session_availability"], availability)
+
+    def test_queued_writer_history_is_not_an_active_writer_or_a_replacement_session(self):
+        item_id, execution_id = self.item()
+        binding, _, _ = self.register(item_id, execution_id)
+        route = f"/v1/items/{item_id}/executions/{execution_id}/writer"
+        writer_id = binding["writer"]["id"]
+        self.ok(route, RUNNER, {"captain_id": self.captain["id"], "writer_id": writer_id,
+                               "session_id": "recorded-session"}, method="PATCH")
+        self.ok(route + "/withdraw", RUNNER, {"captain_id": self.captain["id"],
+                "writer_id": writer_id, "stopped": True, "reason": "Resume later"})
+        recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
+        self.assertEqual((recorded["status"], recorded["writer"]["state"]), ("queued", "ended"))
+        self.assertEqual(recorded["writer"]["session_id"], "recorded-session")
+        self.assertEqual(recorded["wait_reason"], "Awaiting a direct Captain")
+        self.assertIsNone(shift._summary(recorded)["writer"])
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
+        self.assertIn("Building capacity exhausted", recorded["wait_reason"])
+        self.assertEqual(recorded["writer"]["session_id"], "recorded-session")
+        self.withdraw_binding(builds[0])
+        replacement, _, _ = self.register(item_id, execution_id)
+        recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]["writer"]
+        self.assertEqual(recorded["id"], replacement["writer"]["id"])
+        self.assertIsNone(recorded["session_id"])
 
     def test_concurrent_registrations_without_charter_limits_do_not_overfill(self):
         self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
@@ -757,6 +804,87 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((output["merge_commit"], output["merge_method"], output["revision"]["head"]),
                          (MERGE, "squash_or_rebase", OTHER))
         self.assertTrue(output["merged_at"].startswith("2026-11-24T06:33:57"))
+        self.ok("/v1/writer", token, code=401)
+
+    def test_delivery_stop_waits_for_the_registered_writer_without_an_attempt(self):
+        for action, disposition in (("cancel", "cancelled"), ("close-failure", "failed")):
+            with self.subTest(action=action):
+                binding, token = self.publish("checked_in")
+                binding = self.submit(token, binding, pr_url=PR_URL)
+                route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+                writer = binding["writer"]
+                self.ok(route + "/writer", RUNNER, {
+                    "captain_id": self.captain["id"], "writer_id": writer["id"],
+                    "session_id": f"delivery-{action}",
+                }, method="PATCH")
+                stopping = self.ok(route + "/" + action, OWNER, {
+                    "expected_version": binding["version"], "reason": "Stop delivery",
+                })
+                self.assertEqual((stopping["state"]["status"], stopping["state"]["stopping"]),
+                                 ("waiting_for_external", disposition))
+                self.assertIsNone(stopping["state"]["final_output"])
+                self.assertIsNone(self.ok("/v1/writer/attempt", token, method="POST")["writer"]["attempt_id"])
+                self.assertEqual(self.observe(binding)["version"], stopping["version"])
+                self.assertEqual(self.observe(binding, state="closed", merged=True, base_ref="other",
+                                              merge_commit=MERGE)["version"], stopping["version"])
+                self.register(binding["item_id"], binding["id"], replaces=writer["id"],
+                              replaced_stopped=True, code=409)
+                withdrawal = {"captain_id": self.captain["id"], "writer_id": writer["id"],
+                              "reason": "Session stopped; PR effects reconciled"}
+                self.ok(route + "/writer/withdraw", RUNNER, withdrawal, 409)
+                ended = self.ok(route + "/writer/withdraw", RUNNER, dict(withdrawal, stopped=True))
+                self.assertEqual((ended["state"]["stopping"], ended["state"]["pending_output"],
+                                  ended["writer"]["state"]), (None, disposition, "ended"))
+                closed = finalization.attempt(self.path, binding["id"])
+                self.assertEqual(closed["state"]["status"], disposition)
+                with store.read_transaction(self.path) as db:
+                    markdown = intake.report(db, binding["item_id"], binding["id"])
+                self.assertIn("Stop delivery", markdown)
+                self.assertIn(PR_URL, markdown)
+                self.ok("/v1/writer", token, code=401)
+
+    def test_a_verified_delivery_merge_wins_over_a_pending_stop(self):
+        for action in ("cancel", "close-failure"):
+            with self.subTest(action=action):
+                binding, token = self.publish("checked_in")
+                binding = self.submit(token, binding, pr_url=PR_URL)
+                route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+                self.ok(route + "/" + action, OWNER, {
+                    "expected_version": binding["version"], "reason": "Stop raced with merge",
+                })
+                merged = self.observe(binding, state="closed", merged=True, merge_commit=MERGE,
+                                      merge_method="merge", merged_at="2026-11-24T21:00:00Z")
+                self.assertEqual((merged["state"]["status"], merged["state"]["stopping"],
+                                  merged["state"]["pending_output"]), ("completed", None, None))
+                self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+                self.assertEqual(merged["state"]["final_output"]["url"], PR_URL)
+                self.assertEqual(self.observe(binding, state="closed", merged=True,
+                                              merge_commit=MERGE, code=409)["version"], merged["version"])
+                self.ok("/v1/writer", token, code=401)
+
+    def test_stopped_delivery_rework_releases_only_its_own_allocation(self):
+        other, other_token, _ = self.register(*self.item())
+        binding, token = self.publish("checked_in")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.capacity(token, "building")
+        self.capacity(token, "delivering", head=OTHER)
+        self.capacity(token, "building")
+        route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+        self.ok(route + "/cancel", OWNER, {
+            "expected_version": binding["version"], "reason": "Stop local PR rework"})
+        withdrawal = {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                      "reason": "Stopped rework and reconciled effects", "stopped": True}
+        ended = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
+        replay = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
+        self.assertEqual(ended, replay)
+        self.assertEqual(ended["state"]["pending_output"], "cancelled")
+        self.assertFalse(ended["writer"]["building"])
+        self.assertIsNone(ended["writer"]["handoff_head"])
+        capacity = self.ok("/v1/dispatch/settings", OWNER)
+        self.assertEqual((capacity["building_writers"], capacity["active_writers"]), (1, 1))
+        current = self.ok("/v1/writer", other_token)
+        self.assertEqual(current["writer"]["id"], other["writer"]["id"])
+        self.assertTrue(current["writer"]["building"])
         self.ok("/v1/writer", token, code=401)
 
     def test_a_rerun_is_delivered_only_by_the_pr_its_writer_published(self):

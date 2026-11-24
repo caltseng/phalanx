@@ -24,6 +24,14 @@ config and environment that printed this prompt: for example
    archive in a loop; subsequent archive checks suppress it. Never try to archive another creator's
    Captain just because it is listed here.
 2. If any Captain has `"live": true`, say "A live Captain exists" and stop. Don't start anything.
+   For owner input, also follow *Owner input after handoff*: disclose that you are the keeper,
+   resolve `phx shift current`, and link/forward only through the verified native binding.
+   A live `ending` Captain prevents recovery launch here but is not an active forwarding destination.
+   Do not replace a live Captain merely because it compacted. The charter's
+   `[shift].max_compactions` is the authoritative successful-compaction handoff threshold;
+   below it, ordinary compaction is a checkpoint, not a mandatory handoff. Unknown telemetry
+   is not zero or a first-compaction fallback. Captain elapsed-time/wake bounds and actual
+   degradation/failure safeguards remain independent. New Captains load the current Captain prompt.
    Also stop if the most recent Captain is `ended` with no `successors` and its `heartbeat_at` is less
    than 10 minutes ago: its successor may still be starting, and the next keeper run checks again.
    And stop if the most recent Captain is `ended` with a `handoff_note` that starts

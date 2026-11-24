@@ -180,7 +180,8 @@ def _advance(db, row, url, body, target_base, stamp):
     pull = body.pr
     # Only the PR this execution's writer published moves it; an earlier execution's PR on the
     # shared item branch is recorded and flagged, never delivered.
-    if (state.stage is not Stage.DELIVERY or state.primary_pr != url or state.stopping
+    if (state.stage is not Stage.DELIVERY or state.primary_pr != url
+            or (state.stopping and not (pull.merged and pull.base_ref == target_base))
             or state.pending_output or (pull.merged and pull.merge_commit is None)):
         return
     pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,

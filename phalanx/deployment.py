@@ -10,6 +10,7 @@ import sys
 from urllib.parse import urlsplit
 
 from .muster import _unique, read_environment, resolve_home
+from .shift import SHIFT_DEFAULTS
 from .workspaces import any_file_lock
 
 DEFAULT_HOME = ".phalanx_muster"
@@ -63,7 +64,8 @@ def initialize(home=None, *, api_url=None, port=8000):
         'goal = "SET_GOAL"\nrepositories = []\n'
         'allowed_actions = ["Implement scoped work and publish PRs under repository rules"]\n'
         'escalate = ["Missing authority or credentials"]\nstop_when = ["Owner stops the muster"]\n'
-        '[shift]\nmax_hours = 4\nmax_wakes = 48\n', encoding="utf-8")
+        '[shift]\n' + "".join(f"{key} = {value}\n" for key, value in SHIFT_DEFAULTS.items()),
+        encoding="utf-8")
     return root
 
 

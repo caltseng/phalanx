@@ -183,6 +183,8 @@ def migrate(path: Path) -> None:
             for statement in statements:
                 db.execute(statement)
             db.execute(f"PRAGMA user_version = {next_version}")
+        if version == 0 and WRITER_CAPACITY_SCHEMA in MIGRATIONS:
+            db.execute("UPDATE dispatch_settings SET max_writers=10 WHERE id=1")
 
 
 def snapshot(source: Path, destination: Path) -> None:

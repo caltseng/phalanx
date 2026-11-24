@@ -12,12 +12,13 @@ from fastapi.responses import PlainTextResponse, Response
 
 from . import dispatch
 from .auth import authenticate_board_read
-from .captains import active_holds
+from .captains import active_holds, availability_reports
 from .display_text import reason_text, short_title
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
+from .session_links import session_key
 from .store import read_transaction
 from .transitions import Stage, Status
 
@@ -51,7 +52,7 @@ SUMMARY = """
            writer.id AS writer_id, writer.state AS writer_state, writer.runtime AS writer_runtime,
            writer.captain_id AS writer_captain_id, writer.session_id AS writer_session_id,
            writer.session_url AS writer_session_url, writer.last_progress_at AS writer_progress_at,
-           writer.progress_note AS writer_progress_note,
+           writer.progress_note AS writer_progress_note, writer.ended_at AS writer_ended_at,
            writer.building AS writer_building, writer.building_requested_at,
            (SELECT json_extract(observation.observation_json, '$.deployment')
             FROM github_observations AS observation WHERE observation.execution_id = execution.id
@@ -72,7 +73,10 @@ SUMMARY = """
         SELECT attempt.id FROM attempts AS attempt WHERE attempt.execution_id = execution.id
         ORDER BY attempt.started_at DESC, attempt.id DESC LIMIT 1
     )
-    LEFT JOIN writers AS writer ON writer.execution_id = execution.id AND writer.ended_at IS NULL
+    LEFT JOIN (
+        SELECT execution_id, max(rowid) AS latest_row FROM writers GROUP BY execution_id
+    ) AS latest_writer ON latest_writer.execution_id = execution.id
+    LEFT JOIN writers AS writer ON writer.rowid = latest_writer.latest_row
 """
 
 
@@ -164,6 +168,7 @@ def dispatch_context(db, now):
     capacity = dispatch.settings(db)
     return {"paused": capacity["paused"],
             "holds": active_holds(db, now),
+            "session_reports": availability_reports(db),
             "admission_waits": {stage: dispatch.admission_wait(db, stage, capacity=capacity) for stage in Stage},
             "building_waits": {row["id"]: dispatch.building_wait(db, row["id"], capacity=capacity) or
                               "Building capacity available; retry acquisition"
@@ -183,7 +188,8 @@ def conditional_read(request, response, db, now):
         (int(now.timestamp() * 1000), now.timestamp(), stamp(now - timedelta(days=1))),
     ).fetchone())
     holds = tuple(sorted(active_holds(db, now)))
-    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}"
+    sessions = tuple(sorted(availability_reports(db).items(), key=repr))
+    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, no-cache"
@@ -204,7 +210,7 @@ def queued_wait(row, now_ms, context):
     hold = context.get("holds", {}).get(row["id"])
     if hold:
         return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}
-    if row["writer_id"] is None:
+    if row["writer_id"] is None or row["writer_ended_at"] is not None:
         capacity_wait = context.get("admission_waits", {}).get(row["stage"])
         if capacity_wait:
             return {"reason": capacity_wait, "trigger": "Capacity becomes available; a Captain retries admission"}
@@ -326,14 +332,18 @@ def summary(row, now, context):
         "output_revision": output_revision,
         "delivery": delivery,
         "deployment": json.loads(row["deployment_json"]) if row["deployment_json"] else None,
-        # The registered native worker session that holds this item, if any.
-        "writer": None if row["writer_id"] is None or output is not None else {
-            "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],
+        # Ending a writer does not delete its host-app session.
+        "writer": None if row["writer_id"] is None else {
+            "id": row["writer_id"],
+            "state": "ended" if row["writer_ended_at"] else row["writer_state"],
+            "runtime": row["writer_runtime"], "ended_at": row["writer_ended_at"],
             "captain_id": row["writer_captain_id"], "session_id": row["writer_session_id"],
             "session_url": row["writer_session_url"], "last_progress_at": row["writer_progress_at"],
             "progress_note": row["writer_progress_note"],
             "building": bool(row["writer_building"]),
             "building_requested_at": row["building_requested_at"],
+            "session_availability": context.get("session_reports", {}).get(
+                session_key(row["writer_session_id"], row["writer_runtime"]), "unverified"),
         },
     }
 

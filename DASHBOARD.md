@@ -49,7 +49,26 @@ If every one of those had been a Phalanx work item, the dashboard would have nee
 | Interrupted work | PH-V1 gate 4 stopped the server mid-stage and held workers past lease expiry. | A disconnected or stale banner while the server is down. After a restart, recovering items stay visible and show "recovering". History stays complete. |
 | Several repositories | phalanx, phalanx-pilot-py and phalanx-pilot-web. | A repository column and filter, with counts for each repository. |
 
-This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Running work uses the selected D inline SVG three-spear formation, with a taller center spear (`[pike]` below). Its 12-by-16px row silhouette uses broad leaf heads and legible shafts; only the spears wave vertically by 2px over 2.2 seconds, staggered by .22 seconds from left to center to right. The icon frame, row and text stay still, refreshes retain the wave phase, and reduced motion leaves a static formation. Captain rows and references use a crested centurion helmet (`[helmet]` below), retaining their live, stale, ended or unavailable state colors and accessible labels. Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); their existing status labels remain distinct for screen readers. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor (the pennant uses the light/dark `--flag` token), and need no external assets. The other status glyphs (`!`, `✓`, `✕`, `–`) and transition/recovery arrows are unchanged. D1 owner visual acceptance remains open.
+This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Running work uses the selected D inline SVG three-spear formation, with a taller center spear (`[pike]` below). Its 12-by-16px row silhouette uses broad leaf heads and legible shafts; only the spears wave vertically by 2px over 2.2 seconds, staggered by .22 seconds from left to center to right. The icon frame, row and text stay still, refreshes retain the wave phase, and reduced motion leaves a static formation. Captain rows and references use the owner-selected A Roman side-profile helmet (`[helmet]` below): the approved three filled paths in a 64-by-64 viewBox, rendered at the existing em size. Live Captain marks are gold; stale marks retain attention styling, and ended/unavailable marks stay muted, with unchanged accessible state labels. Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); both stay quiet, with distinct screen-reader labels. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Informational capacity markers stay neutral, and successful deployment flags use success green. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor and need no external assets. Unmerged ready/draft outcomes use a teal handoff arrow, not a green check. Verified merged work and stored reports retain the green `✓`; human attention (`!`) is amber, failures (`✕`) red, and cancellation (`–`) muted. Transition/recovery arrows are unchanged. D1 overall dashboard visual acceptance remains open.
+
+The semantic palette follows the retained Palette A reference, with the owner's latest
+gold Captain override (not the superseded purple or teal Active alternative):
+
+| Theme token | Meaning | Light | Dark |
+| --- | --- | --- | --- |
+| `--captain` | Live Captain | `#886000` | `#ecc46d` |
+| `--run` | Active work | `#1d5fbf` | `#79b8ff` |
+| `--idle` | Queue, automatic wait, cancelled/ended | `#70675d` | `#ada49a` |
+| `--attn` | Human attention | `#9a5700` | `#f3bf62` |
+| `--flag` | Problem/owner-notification flags and failure | `#b3261e` | `#ff8985` |
+| `--handoff` | Unmerged handoff | `#007477` | `#79d7dc` |
+| `--ok` | Verified success | `#187345` | `#a2d7a4` |
+
+These are integrated with Scribe's actual warm light/dark surfaces, not the preview's
+backgrounds. The browser fixture checks at least 3:1 icon contrast on the background,
+row, raised and hover surfaces and at least 4.5:1 for adjacent status text. It also checks
+the exact helmet geometry, distinct handoff/success shapes and native reduced-motion
+behavior at normal icon sizes.
 
 ```text
 Ⓐ PHALANX Scribe  ● Live updated 4s ago   1 needs you  4 active  6 queued  2 flags  1/1 Captains live   ◐ Auto  Refresh
@@ -78,6 +97,24 @@ RECENTLY CLOSED 25+
 Captain rows show the native session's reported successful compaction count, or
 `compactions unavailable` when telemetry is unknown (including historical Captains).
 The charter revision remains in the API for enforcement, not in the main row.
+
+Captain helmets and names link to their recorded host-app session. Native links are
+restricted to canonical `ghapp://sessions/<UUID>` and `codex://threads/<UUID>` targets;
+an existing HTTPS session URL is also usable. Activation is an ordinary browser link,
+retaining external-app confirmation, never a server-side app launch or new conversation.
+Opaque legacy Captain references without a known host remain unchanged and show
+`session unavailable`. New `shift start` registrations encode a known app runtime in
+the session reference; existing records are not rewritten or assigned a guessed host.
+
+Work rows and details retain the latest writer's session association across active,
+queued/resumed and closed executions, including history and execution permalinks.
+An ended writer is not evidence that its app session was deleted. A newly registered
+replacement without an identity does not borrow its predecessor's session.
+Recorded links say existence is unverified unless native inspection explicitly reported
+the session present; present means last reported, not a live availability guarantee.
+Explicit missing/deleted reports disable the link with that reason. An omitted session
+in a partial inventory is not evidence of deletion. Unsafe or conflicting identities
+remain unlinked.
 
 Long queue waits remain visible after 30 minutes. **Queue backlogged** uses a neutral
 information marker and **Waiting for writer capacity**, including occupied/maximum
@@ -224,7 +261,7 @@ Every section is a list of one-line rows. A section shows its count in its headi
 1. **Top bar** (sticky): the Scribe mark, data health (Live, Partial, Stale or Disconnected, with the age of the oldest displayed read), counts for each section, the theme toggle and Refresh. A failed or stale read turns the health pill amber or red and keeps the last loaded rows on screen. Later: dispatch on or paused, the age of the oldest queued item, and default-branch CI for each repository.
 2. **Needs you.** Items waiting for input, failed items, and items with a flag that notifies the owner, plus owner-notify flags that name no visible item. Expanding a question row shows the prompt, the options, the proposed default and the exact `reply` command. D2 replaces the command with a reply form. Later, it also takes PRs that need a human merge and duplicate PRs to review.
 3. **Flags.** The remaining derived flags from `GET /v1/flags`, grouped by kind. Each group shows its count, its reason (or the number of distinct reasons) and the age of its oldest flag, and expands to one line per flag with its recovery. Each item row also carries its own flags as chips.
-4. **Captains.** Live Captains always appear expanded first with a centurion helmet and "live" label, then stale Captains with the same helmet in the attention color and a "stale" label. Muted ended rows retain the helmet and live below them in a native, keyboard-accessible `Ended (N)` disclosure, closed by default; its state survives board refreshes and opening/closing item details. Liveness is the server's `captains.is_live`, already exposed as `live` / `stale` by `GET /v1/captains`, never recomputed in the browser. Captain references in flags and item details use the same helmet, state colors and labels (or explicit "status unavailable" if outside the bounded read). Rows show `heartbeat 3m ago`, wake count, charter revision and handoff/focus.
+4. **Captains.** Live Captains always appear expanded first with the gold A Roman side-profile helmet and "live" label, then stale Captains with the same helmet in the attention color and a "stale" label. Muted ended rows retain the helmet and live below them in a native, keyboard-accessible `Ended (N)` disclosure, closed by default; its state survives board refreshes and opening/closing item details. Liveness is the server's `captains.is_live`, already exposed as `live` / `stale` by `GET /v1/captains`, never recomputed in the browser. Captain references in flags and item details use the same helmet, state colors and labels (or explicit "status unavailable" if outside the bounded read). Rows show `heartbeat 3m ago`, wake count, compaction count and handoff/focus.
 5. **Active.** Items that are running or have a writer.
 6. **Queued and waiting.** Everything else that is open: queued stages, external waits and prerequisite waits, with the open-work pager.
 7. **Recently closed.** Newest first, with the closed-work pager. Each row shows the outcome and links to its PR or report.

@@ -48,7 +48,7 @@ STAGE_QUEUE_SCHEMA = (
 
 
 CONCURRENCY_SCHEMA = (
-    "ALTER TABLE dispatch_settings ADD COLUMN max_writers INTEGER NOT NULL DEFAULT 10 "
+    "ALTER TABLE dispatch_settings ADD COLUMN max_writers INTEGER NOT NULL DEFAULT 5 "
     "CHECK (typeof(max_writers) = 'integer' AND max_writers > 0)",
 )
 

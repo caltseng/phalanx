@@ -202,10 +202,16 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
 - **Shift end.** A shift ends on the first of these:
   - a fixed age (4 h);
   - a wake count (48);
-  - the Captain's first observed context compaction;
+  - the Captain's cumulative successful-compaction count reaching the charter's
+    `[shift].max_compactions` (default 5);
   - a degradation signal: three failed actions in a row, a deviation flag it raised against itself (`captain_idle_with_work`, `orphan_session` it created), or a missed heartbeat it notices on waking.
 
-  The bounds are charter settings (D7).
+  The bounds are positive-integer charter settings (D7, amended for compaction handoff).
+  Ordinary compaction below the threshold is a checkpoint, not a mandatory handoff.
+  Only trustworthy cumulative successful native telemetry counts. Repeated reports are
+  idempotent and omissions preserve known totals. Unavailable telemetry remains unknown,
+  never a fabricated count or a first-compaction fallback; age/wake and actual
+  degradation/failure safeguards still apply independently.
 - **Handoff.**
   1. The outgoing Captain sets `ending` and posts a handoff note: open decisions, its unconfirmed intents and anything it was midway through. The note is a hint. The successor verifies every point against the server, GitHub and session status and never trusts it as state.
   2. It launches the successor with the charter, the parent Captain ID and a nonce, using the same at-most-once launch rule as writers.
@@ -236,6 +242,19 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
 
   As built in step 4:
   - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
+  - Off-shift chats disclose their role and route each new owner/forwarded interaction through
+    `shift current` (`GET /v1/captains/current`), not a remembered immediate successor. That
+    read examines all registrations and requires one live `active` Captain. Native tools verify
+    its exact `session_ref` and supply the clickable conversation link; a second read before
+    forwarding detects intervening succession. Missing, stale, ambiguous or unavailable evidence
+    is reported explicitly, never repaired by guessed links, duplicate dispatch or fabricated
+    owner provenance. Original-message forwarding preserves permission boundaries.
+    A registered Captain's name uses its own ID where native renaming is supported; off-shift
+    names/replies say so. The predecessor-derived launch nonce remains recovery context, not
+    current identity. No runtime nesting or archive ownership changes.
+    The tracked forwarding section is composed into Captain/keeper prompts and generated
+    handoffs; retained chats require an explicit verbatim relay after normal deployment.
+    See [forwarding and rollout](direct-path.md#retained-chats-and-owner-message-forwarding).
   - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
   - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
     The reserved action `held` requires a reason describing the charter lane order, writer cap or
@@ -326,5 +345,5 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
 | D6 | Enforce dispatch pause and persisted workspace Building (`max_building_writers`, initially 5) and Total (`max_writers`, initially 10 on new installs) atomically. Publication handoff releases Building, not Total; publication/delivery fixes must reacquire Building before editing or substantial tests. Eligible waiting PR fixes precede new builds. Owner edits persist through reload/restart; existing installations activate separately. |
-| D7 | Shift bounds: four hours, 48 wakes, first compaction or degradation, configurable in charter. |
+| D7 | Shift bounds: four hours, 48 wakes, five successful compactions or actual degradation/failure. Age, wakes and compaction threshold are configurable in charter. The original first-compaction default is superseded by the compaction-handoff work item. |
 | D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |

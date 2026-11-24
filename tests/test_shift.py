@@ -1,7 +1,11 @@
+from argparse import Namespace
+from contextlib import closing
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -50,7 +54,7 @@ class CharterTest(unittest.TestCase):
     def test_charter_is_validated_and_revisioned(self):
         charter = self.charter(CHARTER + "[shift]\nmax_wakes = 2\n")
         self.assertEqual(charter["revision"], hashlib.sha256(Path(self.config["charter"]).read_bytes()).hexdigest())
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2})
+        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2, "max_compactions": 5})
         for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the queue is empty"]', "[]"),
                      CHARTER.replace('["repo"]', '["repo", "other"]'), CHARTER + "[shift]\nmax_hours = 0\n",
                      CHARTER + "[shift]\nmax_hours = true\n", "goal = [\n"):
@@ -64,6 +68,38 @@ class CharterTest(unittest.TestCase):
                         shift.ShiftError,
                         "concurrency moved to dispatch settings; remove it from the charter"):
                     self.charter(CHARTER + f"[shift]\n{field} = {value}\n")
+
+    def test_compaction_threshold_is_a_positive_integer_charter_setting(self):
+        for value in ("0", "-1", "true", "1.5", '"5"'):
+            with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "max_compactions"):
+                self.charter(CHARTER + f"[shift]\nmax_compactions = {value}\n")
+        for threshold in (1, 3, 8):
+            with self.subTest(threshold=threshold):
+                charter = self.charter(CHARTER + f"[shift]\nmax_compactions = {threshold}\n")
+                now = datetime.now(UTC)
+                captain = {"created_at": now.isoformat(), "wake_count": 0}
+                for count in (threshold - 1, threshold, threshold + 1):
+                    result = shift.shift_bounds(dict(captain, compaction_count=count), charter, now)
+                    self.assertEqual(bool(result["handoff_due"]), count >= threshold)
+                    self.assertEqual(result["max_compactions"], threshold)
+
+    def test_shift_bounds_keep_unknown_counts_and_independent_age_and_wake_limits(self):
+        charter = self.charter(CHARTER)
+        now = datetime.now(UTC)
+        captain = {"created_at": now.isoformat(), "wake_count": 0}
+        for count in (None, 0, 1, 4, 5, 6):
+            with self.subTest(count=count):
+                current = dict(captain, compaction_count=count)
+                bounds = shift.shift_bounds(current, charter, now)
+                self.assertEqual(bounds["compaction_count"], count)
+                self.assertEqual(bounds["handoff_due"],
+                                 ["successful compaction count reached 5"] if count in (5, 6) else [])
+                for key, value, reason in (
+                        ("created_at", (now - timedelta(hours=4)).isoformat(), "shift age reached 4 h"),
+                        ("wake_count", 48, "wake count reached 48")):
+                    due = shift.shift_bounds(dict(current, **{key: value}), charter, now)["handoff_due"]
+                    self.assertIn(reason, due)
+        self.assertIsNone(shift.shift_bounds(captain, charter, now)["compaction_count"])
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
         for path in (self.checkout / "c.toml", self.root / "worktrees" / "c.toml"):
@@ -135,6 +171,17 @@ class CharterTest(unittest.TestCase):
                 self.assertTrue(name.startswith("Fix [redacted]"), name)
                 self.assertNotIn(secret, name)
 
+    def test_dashboard_link_preserves_configured_endpoint_instead_of_localhost_default(self):
+        config = {"base_url": "https://muster.example.test:8443/team/"}
+        with (mock.patch.object(shift, "load_config", return_value=config),
+              mock.patch.object(shift, "load_charter", return_value={}),
+              mock.patch.object(shift, "API"),
+              mock.patch.object(shift, "status", return_value={"items": []}),
+              mock.patch("builtins.print") as output):
+            shift.run_shift(Namespace(shift_command="status", config="shift.json", captain=None))
+        self.assertEqual(json.loads(output.call_args.args[0]),
+                         {"items": [], "dashboard_url": "https://muster.example.test:8443/team/operator/"})
+
 
 class ShiftTest(ServerFixture, unittest.TestCase):
     def setUp(self):
@@ -142,6 +189,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         database = root / "queue.sqlite3"
+        self.database = database
         migrate(database)
         self.start_server(database)
         bare, checkout = root / "origin.git", root / "checkout"
@@ -173,6 +221,33 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                                                          **options})
         self.assertEqual(status, 201, item)
         return item
+
+    def test_captain_reference_records_host_without_rewriting_legacy_identities(self):
+        native = "12345678-1234-1234-1234-123456789abc"
+        for runtime, prefix in (("copilot-app", "ghapp://sessions/"), ("codex", "codex://threads/"),
+                                ("unknown", "")):
+            with self.subTest(runtime=runtime):
+                captain = shift.start(self.api, self.charter, native, runtime=runtime)["captain"]
+                self.assertEqual(captain["session_ref"], prefix + native)
+                self.assertEqual(captain["session_availability"], "unverified")
+                heartbeat = shift.heartbeat(self.api, self.charter, captain["id"],
+                    sessions=[{"id": native, "name": "Captain [phx]", "availability": "present"}])
+                self.assertEqual(heartbeat["captain"]["session_availability"], "present")
+                flags = self.api("/v1/flags")["flags"]
+                self.assertFalse(any(flag["kind"] == "orphan_session" for flag in flags))
+                archived = self.api("/v1/session-archives?session_id=" + native)
+                self.assertTrue(archived["active"])
+        preserved = shift.start(self.api, self.charter, "legacy-opaque")["captain"]
+        self.assertEqual(preserved["session_ref"], "legacy-opaque")
+
+    def test_new_host_reference_does_not_reuse_an_ended_legacy_captain(self):
+        native = "abcdefab-1234-1234-1234-123456789abc"
+        ended = shift.start(self.api, self.charter, native)["captain"]
+        shift.heartbeat(self.api, self.charter, ended["id"], state="ended")
+        fresh = shift.start(self.api, self.charter, native, runtime="copilot-app")["captain"]
+        self.assertNotEqual(fresh["id"], ended["id"])
+        self.assertEqual(fresh["state"], "active")
+        self.assertEqual(shift.heartbeat(self.api, self.charter, fresh["id"], wake=True)["captain"]["wake_count"], 1)
 
     def test_captain_launches_a_replayable_writer_and_counts_wakes(self):
         started = shift.start(self.api, self.charter, "chat-1")
@@ -235,17 +310,45 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=0)
         self.assertEqual(beat["captain"]["compaction_count"], 0)
         self.assertEqual(beat["shift"]["handoff_due"], [])
-        for count in (2, 2, 1, None):
+        for count in (4, 4, 1, None):
             with self.subTest(count=count):
                 beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=count)
-                self.assertEqual(beat["captain"]["compaction_count"], 2)
+                self.assertEqual(beat["captain"]["compaction_count"], 4)
                 self.assertEqual(beat["captain"]["wake_count"], 1)
-                self.assertEqual(beat["shift"]["handoff_due"], ["session compacted"])
+                self.assertEqual(beat["shift"]["handoff_due"], [])
+        for count, expected in ((5, 5), (5, 5), (None, 5), (6, 6), (4, 6), (None, 6)):
+            with self.subTest(count=count, expected=expected):
+                beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=count)
+                self.assertEqual(beat["captain"]["compaction_count"], expected)
+                self.assertEqual(beat["shift"]["handoff_due"], ["successful compaction count reached 5"])
         ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
-        self.assertEqual(ended["compaction_count"], 2)
+        self.assertEqual(ended["compaction_count"], 6)
         successor = shift.start(self.api, self.charter, "new-native-session", captain)["captain"]
         self.assertIsNone(successor["compaction_count"])
-        self.assertEqual(shift.status(self.api, self.charter, captain)["captain"]["compaction_count"], 2)
+        self.assertEqual(shift.status(self.api, self.charter, captain)["captain"]["compaction_count"], 6)
+
+    def test_heartbeat_rereads_changed_compaction_threshold_without_resetting_known_total(self):
+        captain = shift.start(self.api, self.charter, "native-session")["captain"]["id"]
+        beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=4)
+        self.assertEqual(beat["shift"]["handoff_due"], [])
+        Path(self.config["charter"]).write_text(CHARTER + "[shift]\nmax_compactions = 3\n", encoding="utf-8")
+        changed = shift.load_charter(self.config)
+        beat = shift.heartbeat(self.api, changed, captain)
+        self.assertEqual(beat["captain"]["compaction_count"], 4)
+        self.assertEqual(beat["captain"]["charter_revision"], changed["revision"])
+        self.assertEqual(beat["shift"]["handoff_due"], ["successful compaction count reached 3"])
+
+    def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
+        captain = " ".join(shift.prompt("captain").split())
+        keeper = " ".join(shift.prompt("keeper").split())
+        for prompt in (captain, keeper):
+            self.assertIn("[shift].max_compactions", prompt)
+            self.assertIn("checkpoint, not a mandatory handoff", prompt)
+            self.assertIn("first-compaction fallback", prompt)
+            self.assertNotIn("at your first compaction", prompt)
+        for signal in ("three failed actions in a row", "self-raised deviation flag",
+                       "missed heartbeat noticed on waking", "Elapsed-time/wake bounds still apply"):
+            self.assertIn(signal, captain)
 
     def test_launch_refuses_out_of_charter_repositories(self):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
@@ -369,12 +472,87 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn(f"--parent {captain}", handoff["kickoff"])
         self.assertIn("`phx shift` means `phx-test shift`", handoff["kickoff"])
         self.assertIn("# Phalanx Captain", handoff["kickoff"])
+        self.assertIn("not your Captain ID", handoff["kickoff"])
+        self.assertIn("predecessor", handoff["session_name_identity"])
+        self.assertEqual(handoff["off_shift_instructions"], shift.prompt("forwarding"))
+        self.assertIn(handoff["off_shift_instructions"], handoff["kickoff"])
+        self.assertIn("browser canvas by default", handoff["kickoff"])
         successor = shift.start(self.api, self.charter, "chat-2", captain)["captain"]["id"]
         again = shift.handoff(self.api, self.charter, captain, "Item X waits on review", "phx-test shift")
         self.assertEqual([entry["id"] for entry in again["successors"]], [successor])
         self.assertEqual(again["captain"]["ending_at"], handoff["captain"]["ending_at"])
         with self.assertRaisesRegex(ValueError, "HTTP 409"):
             shift.heartbeat(self.api, self.charter, captain, state="active")
+
+    def test_current_captain_follows_successor_chain_not_parent_or_latest_registration(self):
+        first = shift.start(self.api, self.charter, "first-chat")["captain"]["id"]
+        shift.heartbeat(self.api, self.charter, first, state="ended")
+        second = shift.start(self.api, self.charter, "second-chat", first)["captain"]["id"]
+        shift.heartbeat(self.api, self.charter, second, state="ended")
+        third = shift.start(self.api, self.charter, "third-chat", second)["captain"]["id"]
+        stale = shift.start(self.api, self.charter, "newer-but-stale-chat", third)["captain"]["id"]
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                       ("2000-01-01T00:00:00+00:00", stale))
+        current = self.api("/v1/captains/current")
+        self.assertEqual(current["captain"], {"id": third, "session_ref": "third-chat"})
+        self.assertEqual(current["candidates"], [current["captain"]])
+        self.assertNotIn("session_url", current["captain"])
+        self.assertEqual(self.api(f"/v1/captains/{first}")["successors"], [second])
+        shift.heartbeat(self.api, self.charter, third, state="ended")
+        fourth = shift.start(self.api, self.charter, "fourth-chat", third)["captain"]["id"]
+        self.assertEqual(self.api("/v1/captains/current")["captain"],
+                         {"id": fourth, "session_ref": "fourth-chat"})
+
+    def test_current_captain_refuses_missing_ambiguous_and_ending_destinations(self):
+        self.assertIsNone(self.api("/v1/captains/current")["captain"])
+        self.assertIn("No live active Captain", self.api("/v1/captains/current")["reason"])
+        first = shift.start(self.api, self.charter, "first-chat")["captain"]["id"]
+        second = shift.start(self.api, self.charter, "second-chat", first)["captain"]["id"]
+        ambiguous = self.api("/v1/captains/current")
+        self.assertIsNone(ambiguous["captain"])
+        self.assertIn("2 live active Captains", ambiguous["reason"])
+        self.assertEqual({entry["id"] for entry in ambiguous["candidates"]}, {first, second})
+        shift.heartbeat(self.api, self.charter, first, state="ending")
+        self.assertEqual(self.api("/v1/captains/current")["captain"]["id"], second)
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("UPDATE captains SET session_ref='' WHERE id=?", (second,))
+        missing = self.api("/v1/captains/current")
+        self.assertIsNone(missing["captain"])
+        self.assertIn("no native session binding", missing["reason"])
+        shift.heartbeat(self.api, self.charter, second, state="ended")
+        self.assertIsNone(self.api("/v1/captains/current")["captain"])
+        self.assertEqual(self.request("/v1/captains/current")[0], 401)
+
+    def test_current_captain_is_not_limited_to_recent_history(self):
+        current = shift.start(self.api, self.charter, "active-chat")["captain"]["id"]
+        now = datetime.now(UTC).isoformat(timespec="microseconds")
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.executemany(
+                """INSERT INTO captains
+                   (id, session_ref, charter_revision, state, created_at, heartbeat_at, ending_at)
+                   VALUES (?, ?, ?, 'ending', ?, ?, ?)""",
+                [(f"{index:032x}", f"ending-chat-{index}", self.charter["revision"], now, now, now)
+                 for index in range(100)])
+        self.assertNotIn(current, {entry["id"] for entry in self.api("/v1/captains?limit=100")["captains"]})
+        self.assertEqual(self.api("/v1/captains/current")["captain"],
+                         {"id": current, "session_ref": "active-chat"})
+
+    def test_generated_prompts_preserve_off_shift_routing_and_provenance(self):
+        forwarding = shift.prompt("forwarding")
+        for name in ("captain", "keeper"):
+            self.assertIn(forwarding, shift.prompt(name))
+        self.assertIn("browser canvas", shift.prompt("captain"))
+        self.assertIn("dashboard_url", shift.prompt("captain"))
+        for instruction in (
+                "I am no longer on shift", "phx shift current", "session_ref",
+                "Immediately before forwarding", "current source reference",
+                "Do not reconstruct provenance", "not execution", "uncertain send",
+                "exact runtime-returned conversation URL", "Do not change runtime nesting",
+                "creator-owned archive authority"):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, " ".join(forwarding.split()))
+        self.assertNotIn(forwarding, shift.prompt("worker"))
 
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
@@ -386,6 +564,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
 
         self.assertIn("# Phalanx Captain", phx("prompt", "captain"))
         self.assertIn("# Phalanx keeper", phx("prompt", "keeper"))
+        self.assertEqual(phx("prompt", "forwarding").strip(), shift.prompt("forwarding").strip())
         self.assertIn("# Phalanx work item $item_id", phx("prompt", "worker"))
         config = Path(self.config["charter"]).parent / "shift.json"
         config.write_text(json.dumps(self.config), encoding="utf-8")
@@ -394,6 +573,8 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             with self.subTest(arguments=arguments):
                 self.assertEqual(json.loads(phx(*arguments))["revision"], self.charter["revision"])
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        self.assertEqual(json.loads(phx("--config", str(config), "current"))["captain"],
+                         {"id": captain, "session_ref": "chat-1"})
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
                               "--session", "s-1", "phx 1234abcd nonce", "--session", "s-2", "phx captain",
                               "--compaction-count", "1"))
@@ -402,13 +583,17 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                          [("s-1", "phx 1234abcd nonce"), ("s-2", "phx captain")])
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
                               "--session", "s-task", "Fix recovery [phx]",
-                              "--session-writer", "s-task", "abcdef0123456789"))
+                              "--session-writer", "s-task", "abcdef0123456789",
+                              "--session-availability", "s-task", "missing"))
         session = beat["captain"]["sessions"][0]
         self.assertEqual(session["writer_nonce"], "abcdef0123456789")
+        self.assertEqual(session["availability"], "missing")
         repeated = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain))
         self.assertEqual(repeated["captain"]["sessions"], [session])
         for arguments in (("--session-writer", "missing", "nonce"),
-                          ("--no-sessions", "--session-writer", "s-task", "nonce")):
+                          ("--no-sessions", "--session-writer", "s-task", "nonce"),
+                          ("--session-availability", "missing", "deleted"),
+                          ("--session", "s-task", "Task", "--session-availability", "s-task", "unknown")):
             result = subprocess.run(
                 [sys.executable, "-m", "phalanx", "shift", "--config", str(config),
                  "heartbeat", "--captain", captain, *arguments],
@@ -431,6 +616,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertFalse(checked["can_archive"])
         exact = json.loads(phx("--config", str(config), "status", "--captain", captain))
         self.assertEqual(exact["captain"]["id"], captain)
+        self.assertEqual(exact["dashboard_url"], self.url + "/operator/")
 
     def test_captain_prompt_recovers_task_first_and_renamed_sessions_by_full_nonce(self):
         prompt = shift.prompt("captain")

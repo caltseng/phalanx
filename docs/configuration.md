@@ -63,7 +63,9 @@ The pair updates atomically; omitted settings remain unchanged. Both must be str
 and blocks affected admissions; raising takes effect on the next admission/acquisition retry.
 `GET /v1/dispatch/settings` shows both limits, `building_writers`, `delivering_writers` and
 `active_writers` (Total usage), all derived from registered allocations.
-Charter `[shift]` accepts only `max_hours` and `max_wakes`; either concurrency key is
+Charter `[shift]` accepts positive integers `max_hours` (default 4), `max_wakes`
+(default 48) and `max_compactions` (default 5). `max_compactions` is the authoritative
+successful-compaction handoff threshold, not a writer limit. Either concurrency key is
 rejected with guidance to remove it and use dispatch settings instead. Remove that entry
 in the same deployment cutover that introduces this implementation, leaving the live
 charter unchanged until then. Upgrading an existing store preserves its saved Total and
