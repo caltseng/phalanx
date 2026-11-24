@@ -4,6 +4,11 @@ Phalanx lets its users dispatch work across registered repositories and have loc
 
 **Decided replacement:** [docs/direct-sessions.md](docs/direct-sessions.md) replaces the Captain relay, attended slots, admission gating and runner-local SQLite stores with direct sessions, a GitHub reconciler and shift-based Captains (decisions 68–71). Until it is implemented, this spec describes the running system.
 
+Direct components discover an existing muster through `--home`, then `PHALANX_HOME`, then
+the single per-user `~/.phalanx/muster.json` locator. Discovery is read-only and never repairs,
+initializes or migrates state. Authenticated `muster status` reads API identity, live Captains,
+open writers, reconciler freshness and dispatch pause. See the [layout and precedence](README.md#direct-muster-discovery-and-status).
+
 ## Work items and repositories
 
 - Direct writer sessions support intake `publication_mode: "draft"` (default `"ready"`) as a

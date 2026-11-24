@@ -429,13 +429,21 @@ def command_notifier(argv):
 def add_reconcile_command(commands):
     parser = commands.add_parser(
         "reconcile", help="observe GitHub and git for open items, run pre-PR checks, and notify on flags")
-    parser.add_argument("--config", required=True, type=Path, help="runner configuration JSON")
-    parser.add_argument("--state", required=True, type=Path, help="scratch directory outside every checkout")
+    parser.add_argument("--config", type=Path, help="runner configuration JSON (otherwise discover muster)")
+    parser.add_argument("--state", type=Path, help="scratch directory outside every checkout")
+    parser.add_argument("--home", help="existing muster directory (otherwise PHALANX_HOME or user locator)")
     parser.add_argument("--interval-seconds", type=float, default=PASS_SECONDS)
     parser.add_argument("--once", action="store_true", help="run one pass and exit")
 
 
 def run_reconcile(args):
+    if args.config is None or getattr(args, "home", None) is not None:
+        from .muster import direct_config
+        home, args.config = direct_config("runner", getattr(args, "home", None))
+        if args.state is None:
+            args.state = home / "reconciler"
+    if args.state is None:
+        raise ReconcilerError("Pass --state with an explicit --config")
     config = json.loads(args.config.read_text(encoding="utf-8-sig"))
     github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
     if not github_token:

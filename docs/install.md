@@ -4,7 +4,7 @@ This guide sets up a **new** install: it creates tokens, a database, a runner st
 
 ## Choose and record your muster directory
 
-Phalanx has no install locator. There is no `PHALANX_HOME` or per-user config file. The server reads `PHALANX_DB` and its tokens from the environment, and every runner command takes explicit `--config` and `--state` paths. Pick one muster directory now and record these in a private local runbook outside the repository:
+The server reads `PHALANX_DB` and its tokens from the environment. Legacy runner commands take explicit `--config` and `--state` paths. Direct `shift` and `reconcile` commands also support the optional [per-user muster locator](../README.md#direct-muster-discovery-and-status): `--home`, then `PHALANX_HOME`, then `~/.phalanx/muster.json`. It only finds existing configuration; it never creates or migrates state. Pick one muster directory now and record these in a private local runbook outside the repository:
 
 - the muster directory and the Phalanx checkout and virtual environment you run from;
 - the absolute `PHALANX_DB` path;

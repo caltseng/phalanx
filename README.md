@@ -25,7 +25,7 @@ $env:PHALANX_LOCAL_BOARD = "1"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
-Store both tokens privately and record the `PHALANX_DB` path: Phalanx has no install locator, so you need them to resume. Then, from a second shell with the owner token set, check `http://127.0.0.1:8000/health`, register a repository and file work:
+Store both tokens privately and record the `PHALANX_DB` path: you need them to resume. The optional [direct muster locator](#direct-muster-discovery-and-status) finds existing configuration; it never creates a database. Then, from a second shell with the owner token set, check `http://127.0.0.1:8000/health`, register a repository and file work:
 
 ```powershell
 python -m phalanx register example https://github.com/example/project.git
@@ -51,6 +51,57 @@ relaunching it.
 ## Resume an existing install
 
 After a restart or reboot, don't rerun the quickstart: it would create new tokens and could start an empty database. Follow [Resume an existing install](docs/resume.md) with your recorded muster directory, database path and stored tokens.
+
+## Direct muster discovery and status
+
+For an existing direct muster, discovery uses `--home <absolute directory>` first, then
+`PHALANX_HOME`, then exactly one locator: `~/.phalanx/muster.json` (`~` is the current user's
+home on Windows, macOS and Linux). Create that locator yourself, containing only:
+
+```json
+{"home": "/absolute/path/to/existing/muster"}
+```
+
+On Windows use a JSON path such as `"C:\\muster"`. Arrays, extra fields, duplicate `home`
+fields, relative paths and missing directories fail; Phalanx never scans for another muster
+or falls back after an invalid override. Discovery never initializes, migrates, moves or deletes
+state. It is optional: existing explicit config commands still work without a locator.
+
+The selected directory contains `shift.json`, `charter.toml`, `runner.json` and `private.env`.
+The shift config can omit `charter` or use `charter.toml` (an absolute path to that same file
+also works). Other config paths, such as checkout and worktree mappings, should be absolute.
+`private.env` holds literal `KEY=VALUE` lines for `PHALANX_RUNNER_TOKEN`,
+`PHALANX_GITHUB_TOKEN`, optionally `PHALANX_OWNER_TOKEN`, `PHALANX_DB` and
+`PHALANX_LOCAL_BOARD`. Blank lines and whole-line `#` comments are allowed; matching outer
+single/double quotes are removed, without escapes, interpolation, inline comments or shell
+execution. Duplicate/unknown keys and empty values fail. Protect this file with your OS's
+private-file permissions; never commit it. Existing environment values take precedence.
+Tokens are loaded only into the environment and never included in status output.
+
+```text
+python -m phalanx muster status
+python -m phalanx muster status --home <absolute directory>
+python -m phalanx shift status
+python -m phalanx reconcile
+```
+
+Without explicit configs, `shift` derives `shift.json` and the charter, and `reconcile` derives
+`runner.json` and its scratch directory `<muster>/reconciler` (overridable with `--state`).
+Both accept `--home`; `shift` accepts it before or after its action. Explicit `--config`
+and `PHALANX_SHIFT_CONFIG` retain their existing behavior without loading `private.env`;
+an explicit `--home` instead selects the muster layout. Explicit reconciler configs still need
+`--state`. `shift prompt` remains usable without any configuration.
+
+Start the intended API yourself with `PHALANX_HOME` set to this directory, alongside its
+**existing** database path and credentials. Authenticated `GET /v1/muster/status` reports the
+API's configured home identity, live Captains, registered open writers, each reconciler's
+last heartbeat/age/staleness (15 minutes), and dispatch pause. `muster status` reads this API,
+prints JSON, and fails nonzero if it is unavailable or its home identity differs. No recorded
+reconcilers are reported as an empty list, not as evidence that one is running. Writer presence
+is registration state, not an independent runtime process probe. No local database is opened.
+There is deliberately no `muster start`: discovery/status never launch processes or run server
+startup migrations. Existing installs with another layout can keep their explicit config paths;
+do not move live state to adopt the locator.
 
 ## Documentation
 
