@@ -121,7 +121,7 @@ Persist the worker session ID before relying on its result. When Captain monitor
 
 Keep the work packet and result contract independent of the runtime. An execution adapter starts an item in its workspace, reports progress and a session reference when available, and normalizes the final result or question. The runner handles claims, retries, and handoffs across all adapters. Keep native session IDs on the attempt and preserve enough workspace and handoff context to resume without them. A headless run can expose logs or a native session reference according to its runtime’s capabilities.
 
-Keep one adapter per runtime. A Captain adapter is the procedure a Captain chat in that runtime follows to serve the relay. The README documents the generic procedure and the Codex desktop app adapter; the GitHub Copilot app or CLI and Claude Code serve the same contract. Keep runtime selection in runner configuration and runtime-specific invocation details inside the adapters. Every runtime uses the same backend, queue, work packet, and result contract.
+Keep one adapter per runtime. A Captain adapter is the procedure a Captain chat in that runtime follows to serve the relay. [Captain relay and bridge](docs/captain-relay.md) documents the generic procedure and each runtime's mapping; the GitHub Copilot app or CLI and Claude Code serve the same contract. Keep runtime selection in runner configuration and runtime-specific invocation details inside the adapters. Every runtime uses the same backend, queue, work packet, and result contract.
 
 **P2:** Add subprocess bridge adapters for runtimes that can launch and observe visible sessions without a Captain chat.
 
