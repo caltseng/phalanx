@@ -808,6 +808,32 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(wait, "Charter mutual exclusion" if lapse == "none"
                                  else "Awaiting a direct Captain")
 
+    def test_latest_hold_lookup_does_not_scan_unrelated_executions(self):
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/e/r.git")
+            for index in range(1000):
+                item = intake.create(db, Intake(repository_id="repo", goal=f"Work {index}", target="report"))
+            captain = captains.register(db, captains.CaptainRegistration(
+                session_ref="holder", charter_revision="c1"))
+            now = datetime.now(UTC)
+            for action, reason in (("held", "First hold"), ("released", "Released"), ("held", "New hold")):
+                with patch("phalanx.intake.timestamp", return_value=now.isoformat(timespec="microseconds")):
+                    captains.record_action(db, item["id"], captains.Action(
+                        captain_id=captain["id"], action=action, reason=reason))
+                steps = 0
+
+                def budget():
+                    nonlocal steps
+                    steps += 1000
+                    return steps > 5000
+
+                db.set_progress_handler(budget, 1000)
+                try:
+                    expected = {item["execution"]["id"]: reason} if action == "held" else {}
+                    self.assertEqual(captains.active_holds(db, now), expected)
+                finally:
+                    db.set_progress_handler(None, 0)
+
     def test_expired_hold_invalidates_board_cache_without_a_write(self):
         from fastapi import Response
         from starlette.requests import Request

@@ -485,6 +485,26 @@ class Probe:
         )
         with self.lock:
             self.in_use.discard(claim["item_id"])
+        if status == 401 and stage == "report_storage" and body["outcome"] == "succeeded":
+            # A restart can lose the final reply after committing and ending the writer.
+            observed, events = client.call(
+                "result_confirmation", "GET",
+                f"/v1/items/{claim['item_id']}/executions/{execution['id']}/timeline", OWNER,
+            )
+            accepted = observed == 200 and any(
+                event["event"] == "result" and event["attempt_id"] == claim["attempt_id"]
+                and event["version"] == execution["version"] + 1
+                and all(event["details"].get(key) == body[key]
+                        for key in ("stage", "outcome", "report_revision"))
+                for event in events
+            )
+            if accepted:
+                completed = self.item(client, claim["item_id"])["execution"]
+                if (completed["id"] == execution["id"]
+                        and completed["state"]["status"] == "completed"
+                        and completed["state"]["report_draft"] == body["report_revision"]):
+                    status, result = 200, completed
+                    self.metrics.count("completed_results_confirmed_after_401")
         if status != 200:
             self.violation(f"Result for {claim['item_id']} at {stage} returned {status}: {result}")
             return None
@@ -980,6 +1000,8 @@ class Probe:
             "seconds": round(seconds, 1), "offered_requests_per_second": round(offered / seconds, 1),
             "completed_requests_per_second": round(completed / seconds, 1),
             "worker_stage_results": self.metrics.counts["worker_stages"],
+            "completed_results_confirmed_after_401":
+                self.metrics.counts["completed_results_confirmed_after_401"],
             "claim_outcomes": {name.split(":", 1)[1]: count for name, count in self.metrics.counts.items()
                                if name.startswith("claim:")},
             "routes": routes,

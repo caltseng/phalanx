@@ -96,6 +96,8 @@ Captains with a combined budget of 24 writers, one extra polling actor per Capta
 same intake/read/fault timing. `--captains` and `--max-writers` control the synthetic budget.
 Interrupted review now exercises explicit stopped-writer replacement, preserved draft and
 revoked-token rejection, not clock mutation. Report stages continue under the same writer.
+If restart loses the last storage reply, the owner read APIs must confirm that exact
+attempt, version and report revision completed; the ended writer token stays revoked.
 There is no local reservation database. The probe checks charter admission and one open
 attempt per execution. It measures free-writer delay separately from saturated backlog.
 
