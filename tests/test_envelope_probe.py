@@ -1,11 +1,48 @@
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import envelope_probe
 
 
 class EnvelopeProbeTest(unittest.TestCase):
+    def test_continuation_uses_the_result_binding_only_while_its_version_is_current(self):
+        for changed in (False, True):
+            with self.subTest(changed=changed):
+                probe = envelope_probe.Probe(envelope_probe.parse([]), Path("unused"))
+                probe.captains["captain"] = {"id": "captain"}
+                probe.writer_tokens["item"] = "writer-token"
+                claim = {
+                    "item_id": "item", "attempt_id": "attempt",
+                    "execution": {"id": "execution", "version": 6,
+                                  "state": {"stage": "report_review", "report_draft": "revision"}},
+                }
+                continued = {
+                    "id": "execution", "version": 7,
+                    "writer": {"id": "writer", "attempt_id": "next-attempt"},
+                    "state": {"stage": "report_storage", "status": "running"},
+                }
+                client = Mock()
+                client.call.return_value = (200, continued)
+                probe.in_use.add("item")
+                probe.finish_stage(client, claim, "writer-token")
+                self.assertNotIn("item", probe.in_use)
+                client.reset_mock()
+                row = {"item_id": "item", "id": "execution", "version": 8 if changed else 7,
+                       "writer_id": "writer", "captain_id": "captain"}
+                with patch("envelope_probe.read_store") as read:
+                    db = read.return_value.__enter__.return_value
+                    db.execute.return_value.fetchall.side_effect = [[], [row]]
+                    db.execute.return_value.fetchone.return_value = ['{"dependencies": []}']
+                    following, token = probe.claim(client, "captain", ["repo"])
+                self.assertEqual(following["attempt_id"], "next-attempt")
+                self.assertEqual(token, "writer-token")
+                if changed:
+                    client.call.assert_called_once_with(
+                        "claim", "POST", "/v1/writer/attempt", "writer-token")
+                else:
+                    client.call.assert_not_called()
+
     def test_lost_terminal_reply_requires_exact_committed_result_before_confirmation(self):
         for case in ("committed", "other-attempt", "other-revision", "wrong-version", "not-completed"):
             with self.subTest(case=case):

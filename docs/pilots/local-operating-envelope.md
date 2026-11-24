@@ -100,6 +100,11 @@ If restart loses the last storage reply, the owner read APIs must confirm that e
 attempt, version and report revision completed; the ended writer token stays revoked.
 There is no local reservation database. The probe checks charter admission and one open
 attempt per execution. It measures free-writer delay separately from saturated backlog.
+An accepted result already contains the next attempt's binding, so the synthetic writer
+uses it while its version remains current instead of posting another claim. Claim HTTP
+latency measures registration or explicit resumption; automatic continuation is included
+in result latency. Main's historical claim timings also include empty polls and are not
+an identical request mix.
 
 ```powershell
 .\.venv\Scripts\python.exe -B tests\envelope_probe.py --json-out envelope.json

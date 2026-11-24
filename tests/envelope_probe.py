@@ -218,6 +218,7 @@ class Probe:
         self.clients = []
         self.captains = {}
         self.writer_tokens = {}
+        self.writer_bindings = {}
         self.in_use = set()
 
     # Setup -----------------------------------------------------------------------------------
@@ -446,10 +447,14 @@ class Probe:
                 return None, None
             self.writer_tokens[item_id] = token
         else:
-            status, binding = client.call(label, "POST", "/v1/writer/attempt", token)
-            if status != 200:
-                self.violation(f"Writer next attempt returned {status}: {binding}")
-                return None, None
+            binding = self.writer_bindings.get(item_id)
+            if not (binding and binding["version"] == selected["version"]
+                    and binding["writer"]["id"] == selected["writer_id"]
+                    and binding["writer"]["attempt_id"] is not None):
+                status, binding = client.call(label, "POST", "/v1/writer/attempt", token)
+                if status != 200:
+                    self.violation(f"Writer next attempt returned {status}: {binding}")
+                    return None, None
         if binding["writer"]["attempt_id"] is None:
             with self.lock:
                 self.in_use.discard(item_id)
@@ -483,8 +488,6 @@ class Probe:
             "result", "POST", f"/v1/items/{claim['item_id']}/executions/{execution['id']}/result", lease,
             body, {"Idempotency-Key": f"{claim['attempt_id']}-result"},
         )
-        with self.lock:
-            self.in_use.discard(claim["item_id"])
         if status == 401 and stage == "report_storage" and body["outcome"] == "succeeded":
             # A restart can lose the final reply after committing and ending the writer.
             observed, events = client.call(
@@ -505,6 +508,12 @@ class Probe:
                         and completed["state"]["report_draft"] == body["report_revision"]):
                     status, result = 200, completed
                     self.metrics.count("completed_results_confirmed_after_401")
+        with self.lock:
+            if status == 200 and result["state"]["status"] == "running":
+                self.writer_bindings[claim["item_id"]] = result
+            else:
+                self.writer_bindings.pop(claim["item_id"], None)
+            self.in_use.discard(claim["item_id"])
         if status != 200:
             self.violation(f"Result for {claim['item_id']} at {stage} returned {status}: {result}")
             return None

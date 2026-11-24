@@ -266,6 +266,44 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         migrate(self.path)
         self.start_server(self.path)
 
+    def test_closed_runner_stage_still_loads_lists_and_reconciles(self):
+        api = API(self.url, RUNNER)
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Historical work", "target": "checked_in"})
+        self.assertEqual(status, 201, item)
+        primary = "https://github.com/example/repo/pull/7"
+        merged_at = datetime.now(UTC).isoformat()
+        revision = Revision(HEAD, BASE)
+        closed = Execution(
+            Target.MERGED, Stage.PR_RECONCILIATION, Status.COMPLETED, candidate=HEAD,
+            primary_pr=primary, ready_revision=revision,
+            final_output=OutputPR(primary, revision, merge_commit=BASE,
+                                  merge_method="merge", merged_at=merged_at))
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                       (json.dumps(asdict(closed)), item["execution"]["id"]))
+        loaded = api.call(f"/items/{item['id']}")["execution"]["state"]
+        self.assertEqual((loaded["stage"], loaded["status"]), ("pr_reconciliation", "completed"))
+        row, = api.call("/operator/executions?kind=closed&outcome=checked_in")["items"]
+        self.assertEqual(row["stage"], "pr_reconciliation")
+        timeline = api.call(f"/operator/executions/{row['id']}/timeline")
+        self.assertEqual(timeline["item"]["id"], row["id"])
+        merged = replace(pull_request(HEAD, item_branch(item["id"]), state="closed"),
+                         merged=True, merge_commit_sha=BASE, merged_at=merged_at)
+        github = FakeGitHub([merged])
+        config = {"runner_id": "local", "repositories": {
+            "repo": {"base_branch": "main", "post_merge_check": "deploy"}}}
+        reconciler = Reconciler(config, self.root / "state", api, github_token="token",
+                                github_client=lambda *args, **kwargs: github)
+        with patch.object(github, "get_commit_checks", create=True,
+                          return_value=CommitChecks(BASE, (), ())):
+            self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
+        self.assertEqual(api.call(f"/items/{item['id']}")["execution"]["state"], loaded)
+        row, = api.call("/operator/executions?kind=closed&outcome=checked_in")["items"]
+        self.assertEqual(row["deployment"]["state"], "pending")
+
     def test_real_operator_summary_advances_a_merged_ready_execution_to_checked_in(self):
         api = API(self.url, RUNNER)
         self.assertEqual(self.request("/v1/repositories", OWNER, {
