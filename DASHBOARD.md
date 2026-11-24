@@ -157,6 +157,19 @@ The global search form always searches both open and closed work on Home, using 
 form preserves that query. Status filters show only the matching open/closed kind; an
 outcome or closure-time filter shows only closed work.
 
+The sticky header is one wrapping toolbar: branding, honest freshness, Home/Queue/History,
+an explicitly labeled **+ New** entry point, search/filter icon disclosures, theme and refresh
+icons, and the existing summary/attention counts. Icon buttons have accessible names and
+hover/keyboard-focus descriptions; navigation marks the current page. Search and filters
+start collapsed, open one panel at a time, and focus their first control. Escape closes a
+panel and returns focus to its button (an open filter dropdown closes first). These are
+nonmodal disclosures, not menus: normal Tab navigation remains available. Applied search
+and filters remain visible as text and counted button badges even with both panels closed;
+unapplied edits survive closing/reopening without being presented as applied state.
+When the host supplies writer-concurrency settings, the toolbar reparents that same native
+disclosure/form behind one settings icon. It does not duplicate settings, create a second
+write path or change the host's owner-token lifecycle.
+
 Filters use compact, initially closed dropdowns. Each trigger shows its label and current
 value (or **Any**), including edits before Apply filters; opening a dropdown exposes the
 existing text field, so repository IDs, labels and ISO closure times retain their exact
@@ -165,6 +178,22 @@ focus to its trigger. Apply filters preserves search and resets pagination, whil
 resets the page's filters and search. Triggers, fields, Apply filters and Clear retain
 44px minimum touch targets, wrapping onto short rows on narrow screens. This layout
 does not constitute D1 acceptance or owner visual approval.
+
+Complete default header/control-area measurements, from board top to section container
+top, using the real renderer and stylesheet in a 900px-high browser viewport:
+
+| Viewport width | Before toolbar | After toolbar | Reduction |
+| --- | --- | --- | --- |
+| 1280px | 184.66px | 86.90px | 53% |
+| 390px | 402.72px | 182.53px | 55% |
+| 320px | 501.76px | 182.53px | 64% |
+
+Both measurements use the same unfiltered Home data: five active, five queued, 19 flags,
+one of 20 Captains live, and intake available. Default panels are closed. Toolbar/navigation
+targets remain at least 44 by 44px without horizontal overflow. The route browser fixture
+checks the complete header height, disclosure/focus/Escape behavior, applied and pending
+state, theme cycle, refresh, global search, URL filters and pagination. The separate intake
+fixture exercises the real modal and owner-authentication client flows.
 
 Stored reports render in the existing report dialog as a local, dependency-free Markdown
 subset: headings, paragraphs, emphasis, links, lists, quotes, tables and fenced/inline code.

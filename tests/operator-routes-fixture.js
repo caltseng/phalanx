@@ -172,6 +172,21 @@
     assert(app.doc.querySelector(".sec-queued [data-item]") && !app.doc.querySelector(".sec-active"),
       "Full queue includes running work, without home sections");
     assert(app.doc.querySelector('input[name="repository"]').value === "example", "URL filters populate controls");
+    const filterTrigger = app.doc.querySelector('[data-action="filters"]');
+    const searchTrigger = app.doc.querySelector('[data-action="search"]');
+    const filterPanel = app.doc.getElementById(filterTrigger.getAttribute("aria-controls"));
+    const searchPanel = app.doc.getElementById(searchTrigger.getAttribute("aria-controls"));
+    assert(filterPanel.hidden && searchPanel.hidden &&
+      filterTrigger.getAttribute("aria-expanded") === "false", "Secondary controls start collapsed");
+    assert(filterTrigger.getAttribute("aria-label") === "Work filters (4 applied)" &&
+      searchTrigger.getAttribute("aria-label") === "Search all work (1 applied)" &&
+      app.doc.querySelector(".toolbar-applied").textContent.includes("PH-29c"),
+    "Collapsed toolbar exposes applied filters and search, independent of pending edits");
+    assert(app.doc.querySelector('.board-navigation a[aria-current="page"]').textContent === "Queue",
+      "Navigation marks the current page");
+    filterTrigger.click();
+    assert(!filterPanel.hidden && filterTrigger.getAttribute("aria-expanded") === "true" &&
+      app.doc.activeElement === filterPanel.querySelector("summary"), "Filters disclosure moves focus into controls");
     const dropdowns = [...app.doc.querySelectorAll(".filter-dropdown")];
     assert(dropdowns.length === 4 && dropdowns.every(dropdown => !dropdown.open),
       "Queue filters start collapsed");
@@ -190,6 +205,21 @@
     labelInput.dispatchEvent(new app.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert(!dropdowns[1].open && app.doc.activeElement === dropdowns[1].querySelector("summary"),
       "Escape closes dropdown and returns keyboard focus");
+    dropdowns[1].querySelector("summary").dispatchEvent(
+      new app.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert(filterPanel.hidden && app.doc.activeElement === filterTrigger &&
+      filterTrigger.getAttribute("aria-expanded") === "false", "Second Escape closes filters and restores its trigger");
+    filterTrigger.click();
+    searchTrigger.click();
+    assert(filterPanel.hidden && !searchPanel.hidden && app.doc.activeElement === searchPanel.querySelector("input"),
+      "Opening search closes filters and focuses search");
+    searchPanel.querySelector("input").dispatchEvent(
+      new app.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert(searchPanel.hidden && app.doc.activeElement === searchTrigger, "Escape returns from search to its trigger");
+    assert(app.win.getComputedStyle(searchTrigger, "::after").display === "none",
+      "Escape also dismisses the focus description without moving focus");
+    filterTrigger.click();
+    assert(labelInput.value === "draft filter", "Disclosure changes preserve unapplied filter edits");
     assert(app.doc.querySelector(".board-filters > a").getAttribute("href") === "/operator/queue",
       "Clear resets queue filters and search");
     app.doc.querySelector(".pager button").click();
@@ -220,16 +250,47 @@
 
     app = await load("/operator/");
     await until(() => app.doc.querySelector("[data-item]"));
-    for (const [width, maxHeight] of [[1280, 44], [600, 140], [390, 150], [320, 195]]) {
+    const heights = [];
+    for (const [width, maxHeight] of [[1280, 100], [600, 200], [390, 210], [320, 210]]) {
       frame.style.width = width + "px";
       await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+      const headerHeight = app.doc.querySelector(".sections").getBoundingClientRect().top -
+        app.doc.querySelector("#operator-board").getBoundingClientRect().top;
+      heights.push({ width, height: headerHeight });
+      assert(headerHeight <= maxHeight, "Complete default header/control area stays compact at " + width + "px");
+      const controls = [...app.doc.querySelectorAll(".bar .actions > button, .bar .actions > details > summary, .board-navigation a")]
+        .filter(control => control.getBoundingClientRect().height);
+      assert(controls.every(control => {
+        const box = control.getBoundingClientRect();
+        return box.width >= 44 && box.height >= 44 &&
+          (control.getAttribute("aria-label") || control.textContent.trim());
+      }), "Toolbar and navigation have named 44px touch targets");
+      assert(controls.every((control, index) => controls.slice(index + 1).every(other => {
+        const a = control.getBoundingClientRect(), b = other.getBoundingClientRect();
+        return a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
+      })), "Toolbar controls do not overlap at " + width + "px");
+      const toggles = [...app.doc.querySelectorAll('.bar button[aria-controls]')];
+      assert(toggles.every(trigger => app.doc.getElementById(trigger.getAttribute("aria-controls")).hidden),
+        "Default controls do not reserve space for collapsed panels");
+      app.doc.querySelector('[data-action="filters"]').click();
       const filters = app.doc.querySelector(".board-filters");
-      assert(filters.getBoundingClientRect().height <= maxHeight,
-        "Six collapsed filters stay compact at " + width + "px");
       assert([...filters.querySelectorAll("summary, button, a")].every(control =>
         control.getBoundingClientRect().height >= 44), "Filter touch targets stay at least 44px");
+      filters.querySelector("summary").click();
+      await until(() => filters.querySelector("details").open);
+      assert(filters.querySelector("input").getBoundingClientRect().height >= 44,
+        "Expanded filter input keeps its touch target");
+      assert(app.doc.documentElement.scrollWidth <= width, "Expanded filters do not overflow at " + width + "px");
+      app.doc.querySelector('[data-action="filters"]').click();
+      const searchToggle = app.doc.querySelector('[data-action="search"]');
+      searchToggle.click();
+      assert(app.doc.querySelector('.board-search input').getBoundingClientRect().height >= 44 &&
+        app.doc.documentElement.scrollWidth <= width, "Expanded search fits and retains its touch target");
+      searchToggle.click();
       assert(app.doc.documentElement.scrollWidth <= width, "Filters do not cause horizontal overflow");
     }
+    result.dataset.headerHeights = JSON.stringify(heights);
+    app.doc.querySelector('[data-action="filters"]').click();
     const longLabel = app.doc.querySelector('.board-filters input[name="label"]');
     longLabel.value = "long-label-".repeat(9);
     longLabel.dispatchEvent(new app.win.Event("input", { bubbles: true }));
@@ -237,6 +298,19 @@
       longLabel.closest("details").querySelector("summary").title.endsWith(longLabel.value),
     "Long selected values stay available without horizontal overflow");
     frame.style.width = "100%";
+    app.doc.querySelector('[data-action="filters"]').click();
+    const themeButton = app.doc.querySelector('[data-action="theme"]');
+    const initialTheme = app.win.localStorage.getItem("phalanx-board-theme") || "auto";
+    const nextTheme = { auto: "dark", dark: "light", light: "auto" };
+    let expectedTheme = initialTheme;
+    for (let index = 0; index < 3; index++) {
+      themeButton.click();
+      expectedTheme = nextTheme[expectedTheme];
+      await until(() => themeButton.getAttribute("aria-label").startsWith("Theme: " + expectedTheme + "."));
+      assert(app.win.localStorage.getItem("phalanx-board-theme") === expectedTheme &&
+        (app.doc.documentElement.dataset.theme || "auto") === expectedTheme,
+      "Theme cycles and persists without changing its semantics");
+    }
 
     readingLayout = true;
     app = await load("/operator/");
