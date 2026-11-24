@@ -22,6 +22,14 @@ $criteria
 Run every command from the worktree. `$work` is your Phalanx command. It authenticates with the writer
 credential the Captain saved in the worktree's Git directory. Never print, copy or commit that file.
 
+Checks environment (interpreter or command prefix): $checks_environment
+
+Run the repository's tests and other local checks from this worktree with the checks environment
+above, appending the repository's check arguments. It is separate from the Phalanx command.
+Never borrow another checkout's environment or install packages. If no checks environment is
+configured or it cannot run the required checks, report the validation gap and request the correct
+environment with `$work question`; do not improvise one.
+
 1. Run `$work status`. If it shows no open attempt (`writer.attempt_id` is null), run `$work next`.
    The execution's `state.stage` is the stage you're working on.
 2. Do that stage's work. Run `$work progress --note "<short note>"` at least every 30 minutes.
