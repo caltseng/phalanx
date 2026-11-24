@@ -66,7 +66,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         migrate(path)
         with connect(path) as db:
             self.assertEqual(tuple(db.execute(
-                "SELECT paused, aging_seconds, max_writers FROM dispatch_settings").fetchone()), (1, 99, 5))
+                "SELECT paused, aging_seconds, max_writers FROM dispatch_settings").fetchone()), (1, 99, 10))
             db.execute("UPDATE dispatch_settings SET max_writers=8")
         migrate(path)
         with connect(path) as db:

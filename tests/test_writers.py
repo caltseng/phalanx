@@ -235,9 +235,12 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 {"expected_version": self.version(item_id), "priority": "urgent"}, method="PATCH")
         with write_transaction(self.path) as db:
             db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (execution_id,))
+            dispatch.set_dispatch(db, DispatchSettings(paused=True))
         attempt = self.ok("/v1/writer/attempt", token, method="POST")
         self.assertEqual(attempt["state"]["status"], "running")
         self.assertIsNotNone(attempt["writer"]["attempt_id"])
+        following = self.submit(token, attempt, report_markdown="# Continue while paused\n")
+        self.assertEqual((following["state"]["stage"], following["state"]["status"]), ("report_review", "running"))
 
     def test_pause_replacement_ownership_and_withdrawal(self):
         item_id, execution_id = self.item()
@@ -511,12 +514,40 @@ class WriterTest(ServerFixture, unittest.TestCase):
             "phase": "delivering", "expected_revision": current["writer"]["capacity_revision"]}, 409)
         self.capacity(token, "delivering", head=OTHER)
         migrate(self.path)
-        self.withdraw_binding(delivery)
-        delivery, token, _ = self.register(delivery["item_id"], delivery["id"])
-        self.assertEqual(delivery["writer"]["handoff_head"], OTHER)
         self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_external")
+        drift = next(flag for flag in self.ok("/v1/writer", token)["flags"] if flag["kind"] == "head_drift")
+        self.assertIn(f"publication handoff {OTHER}", drift["reason"])
+        board = self.ok("/v1/operator/executions?kind=open", OWNER)["items"]
+        self.assertIn("publication handoff", board[0]["wait_reason"])
         self.assertEqual(self.observe(delivery, head_sha=OTHER)["state"]["status"], "completed")
         self.ok("/v1/writer", token, code=401)
+
+    def test_merge_is_authoritative_during_building_or_mismatched_publication_handoff(self):
+        for phase in ("building", "delivering"):
+            with self.subTest(phase=phase):
+                publication, token = self.publish("checked_in")
+                delivery = self.submit(token, publication, pr_url=PR_URL)
+                self.capacity(token, "building")
+                if phase == "delivering":
+                    self.capacity(token, "delivering", head=OTHER)
+                merged = self.observe(delivery, state="closed", merged=True, merge_commit=MERGE)
+                self.assertEqual(merged["state"]["status"], "completed")
+                self.ok("/v1/writer", token, code=401)
+                with connect(self.path) as db:
+                    self.assertIsNone(db.execute("SELECT handoff_head FROM executions WHERE id=?",
+                                                 (delivery["id"],)).fetchone()[0])
+
+    def test_withdrawal_clears_superseded_handoff_and_recovers_delivery(self):
+        publication, token = self.publish("ready_for_check_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        self.capacity(token, "building")
+        self.capacity(token, "delivering", head=OTHER)
+        self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_external")
+        self.withdraw_binding(delivery)
+        self.assertEqual(self.observe(delivery)["state"]["status"], "completed")
+        with connect(self.path) as db:
+            self.assertIsNone(db.execute("SELECT handoff_head FROM executions WHERE id=?",
+                                         (delivery["id"],)).fetchone()[0])
 
     def test_capacity_cli_fences_the_reviewed_head_at_publication_handoff(self):
         publication, token = self.publish("ready_for_check_in")

@@ -194,7 +194,7 @@ def _advance(db, row, url, body, target_base, stamp):
     following = decide(state, Event.PR_OBSERVED, evidence=evidence)
     if following == state:
         return
-    if following.status in TERMINAL and (
+    if not pull.merged and following.status in TERMINAL and (
             row["handoff_head"] is not None and row["handoff_head"] != pull.head_sha or db.execute(
                 """SELECT 1 FROM writers WHERE execution_id=? AND ended_at IS NULL
                    AND (building=1 OR building_requested_at IS NOT NULL)""", (row["id"],)).fetchone()):
@@ -290,7 +290,8 @@ def observation_flags(db, now):
     flags = []
     for row in db.execute(
         f"""WITH latest AS (
-                SELECT observation.*, execution.item_id, execution.state_json, execution.updated_at AS closed_at,
+                SELECT observation.*, execution.item_id, execution.state_json, execution.handoff_head,
+                       execution.updated_at AS closed_at,
                        row_number() OVER (PARTITION BY observation.execution_id
                            ORDER BY observation.last_observed_at DESC, observation.observed_at DESC) AS rank
                 FROM github_observations AS observation
@@ -367,25 +368,30 @@ def _observed(row, observation):
     url = pull["url"]
     state = json.loads(row["state_json"])
     candidate = state.get("candidate")
+    handoff = row["handoff_head"]
     if state.get("publication_mode") == "draft" and pull["state"] == "open" and not pull["draft"]:
         flags.append(_flag(
             "draft_required", row, f"{url} is ready, but this item requires draft-only publication",
             "The writer disables auto-merge and converts the PR to draft; never promote or merge it", seen,
             notify_owner=True,
         ))
-    # Conflict and check results describe the observed head. When it isn't the recorded candidate
+    # Conflict and check results describe the observed head. When it isn't the expected head
     # (typically a writer pushed and recorded a fix the reconciler hasn't seen yet), they would be stale
     # blockers, so only head_drift reports the mismatch until GitHub is observed at the candidate.
-    current = not candidate or pull["head_sha"] == candidate
+    expected_head = handoff or candidate
+    current = not expected_head or pull["head_sha"] == expected_head
     if not current:
-        recovery = (
-            "Informational: delivery returns the writer to self-review at the new head"
-            if state.get("publication_mode") == "draft"
-            else "Informational: the writer records the new head with its next result"
-        )
+        if handoff:
+            recovery = ("Publish the reviewed handoff; if superseded, reacquire Building and review the current head, "
+                        "or stop and withdraw the writer to clear the handoff")
+        elif state.get("publication_mode") == "draft":
+            recovery = "Informational: delivery returns the writer to self-review at the new head"
+        else:
+            recovery = "Informational: the writer records the new head with its next result"
+        recorded = f"publication handoff {handoff}" if handoff else f"recorded candidate {candidate}"
         flags.append(_flag(
             "head_drift", row,
-            f"{url} head {pull['head_sha']} differs from the recorded candidate {candidate}",
+            f"{url} head {pull['head_sha']} differs from the {recorded}",
             recovery, seen,
         ))
     if pull["state"] == "closed" and not pull["merged"]:

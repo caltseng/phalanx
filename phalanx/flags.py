@@ -104,7 +104,7 @@ def captain_idle_with_work(db, now):
                  AND NOT EXISTS (SELECT 1 FROM writers
                                  WHERE execution_id = execution.id AND ended_at IS NULL)
                ORDER BY ready_since, id""", (cutoff,)):
-        waiting = dispatch.admission_wait(db, row["stage"])
+        waiting = dispatch.admission_wait(db, row["stage"], capacity=capacity)
         if waiting:
             kind = "queue_backlogged"
             reason = (f"{waiting}; Building {capacity['building_writers']}/{capacity['max_building_writers']}, "

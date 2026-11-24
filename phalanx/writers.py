@@ -123,8 +123,7 @@ def claim_next(db, writer, *, continued_from=None):
     now = time()
     claim = None
     if (state.status == Status.QUEUED and state.stopping is None and state.pending_output is None
-            and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)
-            and not db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()[0]):
+            and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)):
         if not dispatch.needs_building(state.stage) or acquire_building(db, writer):
             claim = intake.claim_attempt(
                 db, row, state, runner_id=WRITER_RUNNER_ID, lease_digest=writer["token_digest"],
@@ -201,6 +200,7 @@ def release(db, writer, reason):
             intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
                          details=details)
     release_building(db, writer["id"])
+    db.execute("UPDATE executions SET handoff_head=NULL WHERE id=?", (writer["execution_id"],))
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
 

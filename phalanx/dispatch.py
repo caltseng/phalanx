@@ -2,6 +2,8 @@
 
 from time import time
 
+from . import intake
+
 
 def needs_building(stage):
     return stage not in ("publication", "delivery")
@@ -42,8 +44,8 @@ def first_rework(db):
     ).fetchone()
 
 
-def building_wait(db, writer_id=None):
-    capacity = settings(db)
+def building_wait(db, writer_id=None, *, capacity=None):
+    capacity = settings(db) if capacity is None else capacity
     if capacity["paused"]:
         return "Dispatch is paused"
     if capacity["building_writers"] >= capacity["max_building_writers"]:
@@ -54,18 +56,16 @@ def building_wait(db, writer_id=None):
     return None
 
 
-def admission_wait(db, stage):
-    capacity = settings(db)
+def admission_wait(db, stage, *, capacity=None):
+    capacity = settings(db) if capacity is None else capacity
     if capacity["paused"]:
         return "Dispatch is paused"
     if capacity["active_writers"] >= capacity["max_writers"]:
         return f"Total capacity exhausted: max_writers={capacity['max_writers']}"
-    return building_wait(db) if needs_building(stage) else None
+    return building_wait(db, capacity=capacity) if needs_building(stage) else None
 
 
 def set_dispatch(db, payload):
-    from . import intake
-
     changes = payload.model_dump(exclude_unset=True)
     current = settings(db)
     building = changes.get("max_building_writers", current["max_building_writers"])

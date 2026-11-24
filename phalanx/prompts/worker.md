@@ -62,7 +62,9 @@ launch a replacement to bypass the limit, or infer permission from spare Total c
 After fixes and their local review/checks finish, run `$work capacity delivering` before pushing
 or returning to GitHub observation. This releases only Building, not the writer or Total.
 Commit the reviewed changes first: the command records HEAD as the publication handoff, so
-an observation of the previous green PR head cannot end this writer before its push arrives.
+an observation of the previous green open PR head cannot end this writer before its push arrives.
+A verified GitHub merge remains authoritative. If another push supersedes the handoff,
+review and hand off that head, or ask the Captain to stop/withdraw this writer for recovery.
 On an uncertain response or restart, read `$work status` and retry; never assume acquisition.
 
 ## PR title convention

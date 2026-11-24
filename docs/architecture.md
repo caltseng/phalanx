@@ -129,7 +129,7 @@ name the exact content-addressed draft. The server stores the reviewed report an
 terminal output atomically, retrying finalization without redrafting.
 
 Status is separate from stage. Input, dependency, retry and external waits retain
-the writer; pause blocks new registrations/attempts, not an existing attempt's result.
+the writer; pause blocks new registrations and Building acquisitions, not an allocated writer's stage continuation.
 Writer bindings have no timed expiry. Nonce replay, expected versions and stopped-session
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
 
@@ -200,8 +200,9 @@ pair by the owner. `writers.building` is the authoritative allocation; `building
 persists rework waits and FIFO preference for eligible PR fixes. Registration/acquisition and
 release run inside the same SQLite write transaction as writer/stage changes. Successful
 self-review releases Building into publication; delivery fixes explicitly reacquire it.
-`executions.handoff_head` fences the reviewed commit awaiting publication across writer
-withdrawal/replacement and restart; an older-head observation cannot finish that execution.
+`executions.handoff_head` fences the reviewed commit awaiting publication across restart.
+A mismatched open head has a visible `head_drift` flag and board wait. GitHub merges remain
+authoritative; ending/withdrawing/replacing the writer clears the handoff for recovery.
 Counts, board waits and dispatch-overdue/backlog reporting use `dispatch`'s same state/helpers,
 not stage-derived guesses or a second budget. Intents and waiting writers retain Total.
 `shift launch` supplies no limit, and charters reject concurrency keys; `deploy init` writes

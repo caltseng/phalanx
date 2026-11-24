@@ -37,7 +37,7 @@ SHA = re.compile(r"[0-9a-f]{7,64}")
 
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
-           execution.stage, execution.status, execution.state_json, execution.retry_at,
+           execution.stage, execution.status, execution.state_json, execution.retry_at, execution.handoff_head,
            execution.ready_since, item.created_at AS item_created_at, item.label,
            item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
            json_extract(item.request_json, '$.target') AS target,
@@ -161,10 +161,11 @@ def stamp(moment):
 
 
 def dispatch_context(db, now):
-    return {"paused": bool(db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]),
+    capacity = dispatch.settings(db)
+    return {"paused": capacity["paused"],
             "holds": active_holds(db, now),
-            "admission_waits": {stage: dispatch.admission_wait(db, stage) for stage in Stage},
-            "building_waits": {row["id"]: dispatch.building_wait(db, row["id"]) or
+            "admission_waits": {stage: dispatch.admission_wait(db, stage, capacity=capacity) for stage in Stage},
+            "building_waits": {row["id"]: dispatch.building_wait(db, row["id"], capacity=capacity) or
                               "Building capacity available; retry acquisition"
                               for row in db.execute(
                                   "SELECT id FROM writers WHERE ended_at IS NULL AND building=0 "
@@ -264,6 +265,13 @@ def summary(row, now, context):
     if row["runner_blocker"] and not wait:
         wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     status = row["status"]
+    if row["stage"] == Stage.DELIVERY and status == Status.WAITING_FOR_EXTERNAL:
+        if row["writer_building"]:
+            wait = {"reason": "Writer is building or reviewing PR rework",
+                    "trigger": "The writer commits reviewed work and releases Building for publication"}
+        elif row["handoff_head"] and row["pr_head_sha"] != row["handoff_head"]:
+            wait = {"reason": f"Awaiting publication handoff {row['handoff_head']}",
+                    "trigger": "Publish the reviewed head, review a superseding head, or stop and withdraw the writer"}
     if (row["building_requested_at"] and not row["writer_building"] and not blocked_count
             and status in (Status.RUNNING, Status.QUEUED, Status.WAITING_FOR_EXTERNAL)):
         wait = {"reason": context.get("building_waits", {}).get(row["writer_id"]),
