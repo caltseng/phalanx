@@ -103,6 +103,56 @@ There is deliberately no `muster start`: discovery/status never launch processes
 startup migrations. Existing installs with another layout can keep their explicit config paths;
 do not move live state to adopt the locator.
 
+## Read one item's correlated timeline
+
+Use the authenticated API, not direct database queries. Inspect the item to find its
+current `execution.id` (`GET /v1/items/ITEM_ID`); use
+`GET /v1/items/ITEM_ID/executions` to find earlier executions after a rerun.
+Then page that execution's existing operator timeline:
+
+```powershell
+$base = "http://127.0.0.1:8000"
+$headers = @{ Authorization = "Bearer $env:PHALANX_OWNER_TOKEN" }
+$item = Invoke-RestMethod "$base/v1/items/ITEM_ID" -Headers $headers
+$route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100"
+do {
+    $page = Invoke-RestMethod $route -Headers $headers
+    $page.events | Select-Object version, attempt_id, worker_reference, from_stage, stage, reason, pr_url, candidate
+    $route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100&cursor=$($page.next_cursor)"
+} while ($page.next_cursor)
+```
+
+The response's `item.item_id` and `item.id` correlate the work item and execution.
+Events are newest first; `attempt_id` and that attempt's `worker_reference` identify
+the worker when recorded (otherwise null). `from_stage` and `stage` show a stage change.
+`pr_url` is the PR recorded on that event, and `candidate` is its full applied
+candidate/head SHA, not the execution's possibly newer revision.
+
+For example, the paginated backward-transition fixture in
+`tests/test_operator.py::test_backward_result_reasons_correlate_the_recorded_attempt_and_revision`
+includes this event (other response fields omitted):
+
+```json
+{
+  "version": 4,
+  "attempt_id": "result-attempt-1",
+  "worker_reference": "worker-1",
+  "from_stage": "pr_promotion",
+  "stage": "development",
+  "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",
+  "pr_url": "https://github.com/a/b/pull/42",
+  "candidate": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
+```
+
+Result reasons derive only from persisted outcome, issue, failed local check names
+and reasons, failure reason, and applied SHA. They are at most 400 characters,
+with bounded check/failure excerpts and a reserved short-SHA suffix. Recognizable
+GitHub tokens, bearer credentials and named secret assignments are redacted before
+truncation. Task bodies, reports, review notes and other arbitrary evidence are
+not copied into these reasons. Existing pause/retry waits are unchanged; no slot,
+capacity or rank-position wait reasons are inferred on the direct path.
+
 ## Documentation
 
 - [Install Phalanx](docs/install.md): first-time setup, credentials, runner setup and repository trust.

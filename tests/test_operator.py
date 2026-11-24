@@ -171,6 +171,88 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])
 
+    def test_backward_result_reasons_correlate_the_recorded_attempt_and_revision(self):
+        candidate, head = "a" * 40, "b" * 40
+        pr_url = "https://github.com/a/b/pull/42"
+        cases = [
+            (Stage.PRE_PR_VALIDATION, {
+                "outcome": "changes_required", "prevalidated_candidate": candidate,
+                "local_checks": [{"name": "unit", "outcome": "failed",
+                                  "reason": "Timed out after 1800 seconds"},
+                                 {"name": "lint", "outcome": "passed"}],
+            }, candidate, "changes_required; local check unit failed: "
+                         "Timed out after 1800 seconds; at aaaaaaaaaaaa"),
+            (Stage.PR_PROMOTION, {
+                "outcome": "changes_required", "issue": "merge_conflict",
+                "pull": {"head_sha": head}, "pr_url": pr_url,
+            }, head, "changes_required; merge_conflict; at bbbbbbbbbbbb"),
+            (Stage.SELF_REVIEW, {
+                "outcome": "changes_required", "reviewed_candidate": candidate,
+            }, candidate, "changes_required; at aaaaaaaaaaaa"),
+        ]
+        with write_transaction(self.path) as db:
+            insert(db, 9000, Execution(Target.READY, cases[0][0]))
+            for index, (stage, details, _, _) in enumerate(cases):
+                version = 2 * index + 2
+                if index:
+                    transition(db, 9000, version - 1, Execution(Target.READY, stage))
+                attempt = f"result-attempt-{index}"
+                db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                           (attempt, identifier(9000), stage, "runner", "lease-digest", 9999, EARLY, LATER))
+                db.execute("INSERT INTO attempt_workers VALUES (?, ?, NULL)", (attempt, f"worker-{index}"))
+                transition(db, 9000, version, Execution(Target.READY, Stage.DEVELOPMENT), attempt=attempt)
+                db.execute("UPDATE transition_history SET details_json=? WHERE execution_id=? AND version=?",
+                           (json.dumps(details), identifier(9000), version))
+        route = f"{BOARD}/{identifier(9000)}/timeline"
+        page = self.page(route + "?limit=2")
+        self.assertEqual((page["item"]["item_id"], page["item"]["id"]),
+                         (identifier(109000), identifier(9000)))
+        events = page["events"]
+        while page["next_cursor"]:
+            page = self.page(f"{route}?limit=2&cursor={page['next_cursor']}")
+            events.extend(page["events"])
+        for index, (stage, _, sha, reason) in enumerate(cases):
+            event = next(row for row in events if row["version"] == 2 * index + 2)
+            self.assertEqual((event["from_stage"], event["stage"]), (stage, "development"))
+            self.assertEqual((event["attempt_id"], event["worker_reference"]),
+                             (f"result-attempt-{index}", f"worker-{index}"))
+            self.assertEqual((event["candidate"], event["reason"]), (sha, reason))
+            self.assertEqual(event["pr_url"], pr_url if index == 1 else None)
+            self.assertNotIn("details", event)
+
+    def test_result_reasons_are_bounded_redacted_and_only_use_cause_fields(self):
+        candidate = "c" * 40
+        secrets = ["ghp_" + "x" * 36, "github_pat_" + "y" * 60, "bearer-value",
+                   "two word secret", "lease-value", "api-value", "runner-value", "json-value"]
+        cause = (f"token={secrets[0]} {secrets[1]} Authorization: Bearer {secrets[2]} "
+                 f'password="{secrets[3]}" lease: {secrets[4]} api_key={secrets[5]} '
+                 f'PHALANX_RUNNER_TOKEN={secrets[6]} "access_token": "{secrets[7]}"')
+        details = {
+            "outcome": "failed", "candidate": candidate, "failure_reason": "Push rejected: " + cause,
+            "local_checks": [{"name": "unit", "outcome": "failed", "reason": cause}],
+            "goal": "PRIVATE TASK BODY", "report_markdown": "PRIVATE REPORT",
+            "review_notes": "PRIVATE REVIEW", "question": {"prompt": "PRIVATE QUESTION"},
+            "credentials": {"token": "PRIVATE CREDENTIAL"}, "lease_token": "PRIVATE LEASE",
+        }
+        with write_transaction(self.path) as db:
+            insert(db, 9000, Execution(Target.READY, Stage.PRE_PR_VALIDATION))
+            for version in (2, 3):
+                transition(db, 9000, version, Execution(Target.READY, Stage.DEVELOPMENT))
+                db.execute("UPDATE transition_history SET details_json=? WHERE execution_id=? AND version=?",
+                           (json.dumps(details), identifier(9000), version))
+                details["failure_reason"] = "Push rejected: " + cause + " " + "failure " * 200
+                details["local_checks"] *= 50
+        events = self.page(f"{BOARD}/{identifier(9000)}/timeline")["events"]
+        for event in events[:2]:
+            reason = event["reason"]
+            self.assertTrue(reason.startswith("failed; local check unit failed: "))
+            self.assertIn("[redacted]", reason)
+            self.assertLessEqual(len(reason), 400)
+            self.assertTrue(reason.endswith("; at cccccccccccc"))
+            for secret in secrets + ["PRIVATE"]:
+                self.assertNotIn(secret, reason)
+            self.assertIn("; Push rejected: [redacted]", reason)
+
     def test_deep_queue_pages_seek_to_cursor(self):
         with write_transaction(self.path) as db:
             for number in range(1000):
