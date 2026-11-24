@@ -389,6 +389,27 @@
     app = await load("/operator/executions/" + execution);
     await until(() => app.doc.querySelector(".sec-detail .warn"));
     assert(app.doc.querySelector(".sec-detail").textContent.includes("may not exist"), "Missing detail has a visible failure");
+    for (const width of [1280, 600, 500, 390, 320]) {
+      frame.style.width = width + "px";
+      await new Promise(resolve => {
+        frame.onload = resolve;
+        frame.src = "operator-board-fixture.html?preview=1";
+      });
+      await until(() => ["passed", "failed"].includes(
+        frame.contentDocument.querySelector("#result")?.dataset.status));
+      const doc = frame.contentDocument;
+      assert(doc.querySelector("#result").dataset.status === "passed", "Canonical settings board fixture passes");
+      doc.querySelector("#operator-settings summary").click();
+      await until(() => doc.querySelector("#operator-settings").open);
+      const panel = doc.querySelector(".toolbar-settings-panel").getBoundingClientRect();
+      assert(panel.left >= 0 && panel.right <= doc.documentElement.clientWidth &&
+        panel.top >= doc.querySelector(".bar").getBoundingClientRect().bottom,
+      "Settings panel fits below the complete toolbar at " + width + "px");
+      assert([...doc.querySelectorAll(".toolbar-settings-panel input, .toolbar-settings-panel button")].every(control => {
+        const box = control.getBoundingClientRect();
+        return box.width >= 44 && box.height >= 44;
+      }), "Canonical settings retains 44px input/save targets");
+    }
     result.textContent = "PASS";
     result.dataset.status = "passed";
   } catch (error) {
