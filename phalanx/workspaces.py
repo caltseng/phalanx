@@ -50,6 +50,15 @@ def _git(path: Path, *args: str, stdin: str | None = None) -> str:
     return stdout
 
 
+def _rev_parse(path: Path, *args: str, count: int) -> list[str]:
+    """Run one rev-parse that prints one line per query, in argument order."""
+    lines = _git(path, "rev-parse", *args).split("\n")
+    if len(lines) != count + 1 or lines[-1]:
+        # Also refuses paths containing newlines, which cannot be split reliably.
+        raise WorkspaceError(f"Unexpected Git rev-parse output in {path}")
+    return lines[:-1]
+
+
 def _status(path: Path, *flags: str) -> str:
     return _git(path, "status", "--porcelain=v1", "-z", "--untracked-files=all",
                 "--ignore-submodules=none", *flags)
@@ -158,7 +167,8 @@ class WorkspaceManager:
         self.root = Path(root).resolve()
 
     def _verify_checkout(self) -> Path:
-        top = _git(self.checkout, "rev-parse", "--show-toplevel").rstrip("\n")
+        top, common = _rev_parse(self.checkout, "--show-toplevel", "--path-format=absolute",
+                                 "--git-common-dir", count=2)
         if Path(top).resolve() != self.checkout:
             # On case-insensitive macOS volumes, a mis-cased configured path lands here.
             raise WorkspaceError(f"Mapped checkout {self.checkout} is not its Git worktree root {top}; "
@@ -168,8 +178,7 @@ class WorkspaceManager:
             raise WorkspaceError(f"Origin of {self.checkout} does not match the registered remote")
         if self.root.is_relative_to(self.checkout):
             raise WorkspaceError("Workspace root must be outside the mapped checkout")
-        common = _git(self.checkout, "rev-parse", "--path-format=absolute", "--git-common-dir")
-        common_path = Path(common.rstrip("\n")).resolve()
+        common_path = Path(common).resolve()
         if self.root.is_relative_to(common_path):
             raise WorkspaceError("Workspace root must be outside Git metadata")
         return common_path
@@ -207,15 +216,17 @@ class WorkspaceManager:
         return found
 
     def _snapshot(self, path: Path, branch: str, common: Path) -> Workspace:
-        top = _git(path, "rev-parse", "--show-toplevel").rstrip("\n")
-        actual_common = _git(path, "rev-parse", "--path-format=absolute", "--git-common-dir")
+        top, actual_common, git_dir, head = _rev_parse(
+            path, "--show-toplevel", "--path-format=absolute", "--git-common-dir",
+            "--absolute-git-dir", "--verify", "HEAD^{commit}", count=4,
+        )
         actual_branch = _git(path, "symbolic-ref", "--no-recurse", "HEAD").rstrip("\n")
-        if (Path(top).resolve() != path or Path(actual_common.rstrip("\n")).resolve() != common
+        if (Path(top).resolve() != path or Path(actual_common).resolve() != common
                 or actual_branch != f"refs/heads/{branch}"):
             raise WorkspaceError(f"Workspace checkout identity changed: {path}")
         # Verify the backlink as well as the shared repository and symbolic branch.
         # A copied .git pointer can otherwise impersonate the registered checkout.
-        git_dir = Path(_git(path, "rev-parse", "--absolute-git-dir").rstrip("\n"))
+        git_dir = Path(git_dir)
         if git_dir.resolve().parent != common / "worktrees":
             raise WorkspaceError(f"Workspace Git metadata is outside the repo's worktrees: {path}")
         try:
@@ -224,7 +235,6 @@ class WorkspaceManager:
             raise WorkspaceError(f"Cannot verify workspace registration for {path}: {exc}") from exc
         if (git_dir / backlink).resolve() != path / ".git":
             raise WorkspaceError(f"Workspace Git metadata points to a different checkout: {path}")
-        head = _git(path, "rev-parse", "--verify", "HEAD^{commit}").strip()
         # Ignored build output cannot change the candidate, so it is not dirty.
         dirty = bool(_status(path))
         return Workspace(path, branch, head, dirty)

@@ -365,7 +365,8 @@
     }
 
     function chips(flags) {
-      return flags.map(flag => h("span", { class: "chip " + (flag.notifyOwner ? "c-attn" : "c-warn"),
+      return flags.map(flag => h("span", { class: "chip " +
+        (flag.kind === "deployed" ? "c-good" : flag.notifyOwner ? "c-attn" : "c-warn"),
         title: flag.reason + " · " + flag.recovery, text: label(flag.kind) }));
     }
 

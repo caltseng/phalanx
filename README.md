@@ -535,6 +535,32 @@ checkout whose configured `origin` URL isn't the registered remote is refused.
 Owner-notify flags are sent once each to `notify_command`. Each pass prints one
 JSON line; `--once` runs a single pass and exits nonzero on any error.
 
+For repositories that deploy from their base branch, optionally set
+`"post_merge_check": "deploy"` in that repository's runner mapping. Use the
+exact check-run name emitted by the post-merge deployment job (for example
+your GitHub Pages deploy job), not a PR build check. The reconciler also
+polls recent executions checked into the mapping's `base_branch` for
+configured repositories and reads that check on each PR's **merge commit**,
+never its PR head or the latest base tip.
+The board shows a derived `deployment_pending`, `deployment_failed` or
+`deployed` flag during the 24-hour observation window after check-in. Missing
+or running checks are pending; only a successful completed run means deployed.
+Other conclusions, including skipped or
+cancelled, mean failed. The newest run wins when a job is rerun before success.
+Polling stops on success or at the end of that window, and closed-page
+enumeration stops at the window boundary instead of walking all history.
+After the window, successful flags disappear, failed flags remain, and a
+still-pending deployment becomes one owner-notifying `deployment_missing`
+flag. Closed executions never raise `observation_stale`.
+Each heartbeat reports the mapped repositories' signal configuration.
+Removing `post_merge_check` retires their previous deployment signals,
+including expired failures, without GitHub reads or changing execution state.
+Unconfigured repositories keep the existing behavior. This is GitHub
+observation only: check-in still completes on merge, dependencies unblock,
+and no deployment stage or agent-runtime integration is added.
+Deployment reads start after check-in is recorded, so even an unavailable
+deployment-check API cannot hold up delivery.
+
 ### Run a Captain on the direct path
 
 A Captain is an agent chat in any runtime that can start visible sessions. It
@@ -844,12 +870,14 @@ Set `PHALANX_OWNER_TOKEN` to the same owner token used by the server. Set `PHALA
 ```powershell
 python -m phalanx register example https://github.com/example/project.git
 python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
+python -m phalanx intake example "Fix the gaps" --target checked_in --after <item_id>:report --priority urgent --context https://example.test/notes --accept "tests pass"
 python -m phalanx inspect <item_id>
 python -m phalanx cancel <item_id> --reason "Superseded by a newer item"
 ```
 
-`cancel` reads the item's current execution and version, then requests cancellation with an idempotency key bound to that version. Retrying it after a lost response is safe: if the first request committed, the retry fails with a visible version conflict instead of cancelling twice.
+`--after ITEM[:MILESTONE]` waits for another item to reach a milestone (default `checked_in`). `--after`, `--context`, and `--accept` repeat; `--priority` is `low`, `normal`, or `urgent`.
 
+`cancel` reads the item's current execution and version, then requests cancellation with an idempotency key bound to that version. Retrying it after a lost response is safe: if the first request committed, the retry fails with a visible version conflict instead of cancelling twice.
 Register the expected remote without credentials. Use `ready_for_check_in` for a reviewed PR or `checked_in` for a verified merge. These are intake targets. The [runner PR observation API](docs/runner-pr-observations.md) records evidence for publication, promotion, and PR validation.
 
 The authenticated API exposes these routes under `/v1`.

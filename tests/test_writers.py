@@ -12,6 +12,7 @@ from phalanx import captains, dispatch, flags, intake, store
 from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
+from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import item_branch
 
@@ -278,6 +279,76 @@ class WriterTest(ServerFixture, unittest.TestCase):
         done = self.observe(second, number=8, state="closed", merged=True, head_sha=OTHER, merge_commit=OTHER)
         self.assertEqual((done["state"]["status"], done["state"]["final_output"]["url"]),
                          ("completed", "https://github.com/e/r/pull/8"))
+
+    def test_deployment_observations_refresh_flags_without_reopening_delivery(self):
+        binding, token = self.publish("checked_in", target_branch="main")
+        self.submit(token, binding, pr_url=PR_URL)
+        path = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+        pull = {"number": 7, "state": "closed", "merged": True, "draft": False,
+                "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD, "base_ref": "main",
+                "base_sha": BASE, "merge_commit": MERGE}
+        body = {"pr": pull, "target_base": "main",
+                "deployment": {"commit": MERGE, "check_name": "deploy", "state": "pending"}}
+
+        def observe(**fields):
+            return self.ok(path + "/github-observation", RUNNER,
+                           dict(body, observed_at=datetime.now(UTC).isoformat(), **fields))
+
+        # A pending deployment doesn't delay completion or keep a writer alive.
+        observe()
+        completed = self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]
+        self.assertEqual(completed["state"]["status"], "completed")
+        self.ok("/v1/writer", token, code=401)
+        for state, kind in (("pending", "deployment_pending"), ("failed", "deployment_failed"),
+                            ("deployed", "deployed"), ("pending", "deployment_pending")):
+            body["deployment"]["state"] = state
+            observe()
+            self.assertFalse(observe()["recorded"])
+            found = [flag for flag in self.ok("/v1/flags", OWNER)["flags"]
+                     if flag["execution_id"] == binding["id"]]
+            self.assertEqual([flag["kind"] for flag in found], [kind])
+            self.assertIn(MERGE, found[0]["reason"])
+            self.assertEqual(self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"], completed)
+            page = self.ok("/v1/operator/executions?kind=closed", OWNER)
+            self.assertEqual((page["items"][0]["outcome"], page["items"][0]["delivery"]["merge_commit"]),
+                             ("checked_in", MERGE))
+            self.assertEqual(page["items"][0]["deployment"]["state"], state)
+            with connect(self.path, mode="ro") as db:
+                later = flags.all_flags(db, datetime.now(UTC) + DEPLOYMENT_WINDOW)["flags"]
+            kinds = {flag["kind"] for flag in later if flag["execution_id"] == binding["id"]}
+            self.assertNotIn("observation_stale", kinds)
+            self.assertEqual(kinds, {"deployment_missing"} if state == "pending"
+                             else {"deployment_failed"} if state == "failed" else set())
+            if state == "pending":
+                missing, = [flag for flag in later if flag["kind"] == "deployment_missing"]
+                self.assertTrue(missing["notify_owner"])
+        # A delayed older snapshot cannot restore a previous failed state.
+        stale = dict(body, deployment=dict(body["deployment"], state="failed"),
+                     observed_at=(datetime.now(UTC) - timedelta(minutes=5)).isoformat())
+        self.ok(path + "/github-observation", RUNNER, stale)
+        self.assertIn("deployment_pending", {flag["kind"] for flag in self.ok("/v1/flags", OWNER)["flags"]})
+        # A closed execution only accepts its own delivered PR, head and merge commit.
+        for fields, code in (
+            ({"deployment": None}, 409),
+            ({"pr": dict(pull, head_sha=OTHER)}, 409),
+            ({"pr": dict(pull, number=8)}, 409),
+            ({"pr": dict(pull, merge_commit=OTHER),
+              "deployment": dict(body["deployment"], commit=OTHER)}, 409),
+            ({"pr": dict(pull, merged=False)}, 422),
+            ({"pr": dict(pull, base_ref="dev"), "target_base": "dev"}, 409),
+        ):
+            self.ok(path + "/github-observation", RUNNER,
+                    dict(body, observed_at=datetime.now(UTC).isoformat(), **fields), code)
+        self.ok("/v1/reconcilers/local/heartbeat", RUNNER, {"deployment_checks": {"repo": None}})
+        self.assertFalse([flag for flag in self.ok("/v1/flags", OWNER)["flags"]
+                          if flag["execution_id"] == binding["id"]])
+        self.assertEqual(self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"], completed)
+        self.ok("/v1/reconcilers/local/heartbeat", RUNNER, {"deployment_checks": {"repo": None}})
+        self.assertEqual(self.ok("/v1/operator/executions?kind=closed", OWNER)["items"][0]["deployment"]["state"],
+                         "disabled")
+        with connect(self.path, mode="ro") as db:
+            later = flags.all_flags(db, datetime.now(UTC) + DEPLOYMENT_WINDOW)["flags"]
+        self.assertFalse([flag for flag in later if flag["execution_id"] == binding["id"]])
 
     def test_a_pr_into_another_base_never_delivers(self):
         binding, token = self.publish("ready_for_check_in")
