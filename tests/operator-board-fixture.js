@@ -11,7 +11,7 @@
     waitReason: "Two targets match the work request.", primaryPrUrl: "javascript:alert(1)"
   };
   const running = {
-    id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "merged",
+    id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "pr_revision", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
     primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
     writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1" },
@@ -21,9 +21,10 @@
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
     stage: "development", status: "queued", lastAdvancedAt: hourAgo, publicationMode: "draft"
   };
+  const external = { ...queued, id: "external", title: "Await CI", status: "waiting_for_external" };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report_drafting",
-    status: "failed", outcome: "failed", closedAt: now, createdAt: hourAgo,
+    status: "failed", outcome: "failed", target: "checked_in", closedAt: now, createdAt: hourAgo,
     output: { kind: "report", url: "https://example.com/reports/build" }
   };
   const success = {
@@ -36,13 +37,24 @@
     publicationMode: "draft", delivery: undefined,
     output: { kind: "pr", url: "https://example.com/pull/2" }
   };
+  const observed = { ...success, id: "observed", title: "Ready, now merged on GitHub",
+    outcome: "ready_for_check_in", prState: "merged", delivery: undefined };
+  const ready = { ...observed, id: "ready", title: "Ready-only rerun", target: "ready_for_check_in", prState: "open" };
+  const short = { ...ready, id: "short", title: "Ready but wanted merge", target: "checked_in" };
+  const cancelled = { ...failure, id: "cancelled", title: "Cancelled rollout", outcome: "cancelled", status: "cancelled" };
+  const report = { ...failure, id: "report", title: "Stored report", outcome: "report_stored", target: "report", status: "completed" };
   const flags = [
     { kind: "deployed", executionId: "done", reason: "deploy succeeded", recovery: "Informational", firstSeen: now, notifyOwner: false },
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
-    { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true }
+    { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true },
+    { kind: "captain_session", captainId: "cap-ended", reason: "Ended session", recovery: "Review handoff", firstSeen: now, notifyOwner: false }
   ];
-  const captains = [{ id: "cap-1", sessionRef: "s", state: "busy", live: true, stale: false, heartbeatAt: now,
-    wakeCount: 3, charterRevision: "abcdef1234", focus: ["item-run"] }];
+  const captains = [
+    { id: "cap-ended", state: "ended", live: false, stale: false, heartbeatAt: hourAgo },
+    { id: "cap-stale", state: "active", live: false, stale: true, heartbeatAt: hourAgo },
+    { id: "cap-1", sessionRef: "s", state: "active", live: true, stale: false, heartbeatAt: now,
+      wakeCount: 3, charterRevision: "abcdef1234", focus: ["item-run"] }
+  ];
   let offline = false;
   let pending;
   let pendingSignal;
@@ -63,9 +75,9 @@
       calls.push([kind, cursor, limit]);
       if (offline) throw new Error("API offline");
       if (kind === "open") {
-        return { items: cursor ? [queued] : [waiting, running, queued], nextCursor: cursor ? null : "more-open" };
+        return { items: cursor ? [queued] : [waiting, running, queued, external], nextCursor: cursor ? null : "more-open" };
       }
-      return { items: cursor ? [] : [success, failure, draft], nextCursor: cursor ? null : "older-closed" };
+      return { items: cursor ? [] : [success, observed, ready, short, failure, draft, cancelled, report], nextCursor: cursor ? null : "older-closed" };
     },
     async flags() {
       if (offline) throw new Error("API offline");
@@ -82,7 +94,7 @@
         pendingSignal = signal;
         return new Promise(resolve => { pending = resolve; });
       }
-      return detailData(id === "run" ? running : failure, cursor);
+      return detailData([running, success, observed, ready, short, failure, draft].find(row => row.id === id), cursor);
     }
   };
 
@@ -107,10 +119,35 @@
     assert(item("run").closest("li").textContent.includes("head drift"), "Row carries its flag chip");
     assert(item("run").closest("li").textContent.includes("unconfirmed"), "Launching writer reads as unconfirmed");
     assert(section("captains").textContent.includes("wakes 3") && section("captains").textContent.includes("abcdef1"), "Captain line");
+    const ended = () => section("captains").querySelector(".ended-captains");
+    assert(!ended().open && ended().querySelector("summary").textContent === "Ended (1)", "Ended Captains collapsed by default");
+    assert(section("captains").querySelector(".captains li").textContent.includes("cap-1"), "Live Captains sort first");
+    assert(/heartbeat \d+s ago/.test(section("captains").textContent), "Heartbeat age has context and ago");
+    assert(section("captains").querySelector("time").getAttribute("aria-label").includes("T"), "Absolute time accessible");
+    assert(item("run").closest("li").querySelector(".mark-run") &&
+      section("captains").querySelector(".mark-run"), "Work and live Captains share spearhead");
+    assert(item("queue").closest("li").querySelector(".mark-idle") &&
+      item("external").closest("li").querySelector(".mark-wait"), "Queued and waiting have distinct shields");
+    assert(root.querySelector(".fgroup .mark-notify") && root.querySelector(".fgroup .mark-flag") &&
+      item("run").closest("li").querySelector(".chip .mark-flag"), "Red flags on both group kinds and chips");
+    for (const id of ["done", "observed", "ready", "report"]) {
+      assert(!item(id).closest("li").querySelector(".line > .reason").textContent, "Met target has no shortfall: " + id);
+    }
+    assert(item("observed").closest("li").querySelector(".stage").textContent === "Merged", "Observed merged PR overrides ready outcome");
+    assert(item("short").closest("li").querySelector(".reason").textContent === "wanted: merged", "Ready shortfall visible");
+    assert(item("fail").closest("li").querySelector(".reason").textContent === "wanted: merged", "Failed shortfall visible");
+    assert(item("cancelled").closest("li").querySelector(".reason").textContent === "wanted: merged", "Cancelled shortfall visible");
+    assert(root.querySelector(".fgroup .captain-ref.captain-ended").textContent.includes("ended"), "Flag Captain reference distinguishes ended");
+    assert(/closed \d+s ago/.test(item("done").closest("li").querySelector(".age").textContent) &&
+      item("done").closest("li").querySelector(".dur").textContent.startsWith("took 1h"), "Closed times explain age and duration");
+    ended().open = true;
+    refresh();
+    await tick();
+    assert(ended().open, "Ended expansion survives refresh");
     assert(item("wait").textContent === waiting.title && !root.querySelector("img"), "Untrusted text stays text");
     assert(!root.querySelector('a[href^="javascript:"]'), "Unsafe link omitted");
     assert(root.querySelector('a[href="' + success.output.url + '"]')?.textContent === "#1", "Closed PR link");
-    assert(item("done").closest("li").querySelector(".chip.c-good")?.textContent === "deployed",
+    assert(item("done").closest("li").querySelector(".chip.c-good > span:last-child")?.textContent === "deployed",
            "Successful post-merge deployment is a non-warning chip on the closed row");
     item("wait").click();
     item("run").click();
@@ -123,6 +160,8 @@
     assert(detail() && detail().previousElementSibling.contains(item("run")), "Detail opens in place under its row");
     assert(detail().textContent.includes("pr revision") && detail().textContent.includes("Prerequisites"), "Stage history and dependencies");
     assert(detail().textContent.includes("att2") && detail().textContent.includes("opaque-worker-7"), "Attempt and legacy worker");
+    assert(detail().querySelector(".captain-ref .mark-run") && ended().open, "Captain reference live and Ended state retained in details");
+    assert(detail().textContent.includes("Merged") && detail().querySelector(".chip .mark-flag"), "Mapped target and flag in details");
     assert(!detail().textContent.includes("Which target?"), "Late detail ignored");
     button("Next history page").click();
     button("Next open work page").click();
@@ -152,9 +191,9 @@
       flags[0] = { ...flags[0], kind };
       refresh();
       await tick();
-      assert(item("done").closest("li").querySelector(".chip.c-warn")?.textContent === kind.replaceAll("_", " "),
+      assert(item("done").closest("li").querySelector(".chip.c-warn > span:last-child")?.textContent === kind.replaceAll("_", " "),
              "Deployment refresh updates the closed row without changing its outcome");
-      assert(item("done").closest("li").textContent.includes("checked in"), "Deployment is separate from check-in");
+      assert(item("done").closest("li").textContent.includes("Merged"), "Deployment is separate from check-in");
     }
     offline = true;
     refresh();
@@ -171,6 +210,13 @@
     result.textContent = "FAIL – " + error.message;
     result.dataset.status = "failed";
   } finally {
-    unmount();
+    const preview = new URLSearchParams(location.search);
+    if (!preview.has("preview")) unmount();
+    else {
+      document.documentElement.dataset.theme = preview.get("theme") || "light";
+      document.documentElement.dataset.viewport = innerWidth;
+      const ended = root.querySelector(".ended-captains");
+      if (ended) ended.open = preview.get("ended") === "open";
+    }
   }
 })();

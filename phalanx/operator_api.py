@@ -296,7 +296,7 @@ def summary(row, now, context):
         "title": short_title(row["goal"]),
         "goal": row["goal"],
         "label": row["label"],
-        "target": row["target"],
+        "target": state["target"],
         "publication_mode": state.get("publication_mode", "ready"),
         "repository_id": row["repository_id"],
         "created_at": row["created_at"],

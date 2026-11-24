@@ -114,6 +114,7 @@
             : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null
         },
         primaryPrUrl: httpsUrl(row.primary_pr_url),
+        prState: row.pr?.state,
         closedAt: row.closed_at,
         outcome: row.outcome,
         writer: row.writer ? {
