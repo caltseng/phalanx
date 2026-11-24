@@ -229,15 +229,17 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                                      runner_id="old", lease_digest=intake.digest("x" * 32),
                                      lease_expires_at=253402300799)
             with connect(path) as db:
-                saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
+                saved = {table: ([column[0] for column in db.execute(f"SELECT * FROM {table} LIMIT 0").description],
+                                 [tuple(row) for row in db.execute(f"SELECT * FROM {table}")])
                          for table in ("work_items", "executions", "attempts", "transition_history")}
             migrate(path)
             migrate(path)
             with connect(path) as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 self.assertTrue({"runner_limits", "attempt_adoptions"}.isdisjoint(tables))
-                for table, rows in saved.items():
-                    self.assertEqual([tuple(row) for row in db.execute(f"SELECT * FROM {table}")], rows)
+                for table, (columns, rows) in saved.items():
+                    self.assertEqual([tuple(row) for row in db.execute(
+                        f"SELECT {', '.join(columns)} FROM {table}")], rows)
 
     def test_serialized_transactions_commit_and_roll_back(self):
         with TemporaryDirectory() as directory:

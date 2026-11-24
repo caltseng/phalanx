@@ -77,6 +77,14 @@
       registered. Ready-mode fixes need no stage result; a reply that queues delivery
       requires the writer to act and submit success. Input and external waits do not
       authorize replacing a live writer.</p>
+    <p>Successful self-review releases Building capacity at publication handoff; the same writer
+      retains Total. Publication and external CI/review alone need no Building allocation.
+      Before delivery/publication code changes or substantial tests, request
+      <code>work capacity building</code> and wait for <code>writer.building=true</code>.
+      Eligible waiting PR fixes precede new builds, without preemption. After local work,
+      <code>work capacity delivering</code> releases Building again. Spare Total is not Building
+      headroom; limits are five Building and ten Total on new installs, activated separately
+      on existing installations.</p>
     <p>Draft publication is a ceiling: never promote or merge. Verify the open draft at the
       self-reviewed head, item branch and target base; a changed head returns to review.
       Draft completion satisfies no ready/check-in dependency.</p>

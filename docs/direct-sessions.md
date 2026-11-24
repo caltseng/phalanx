@@ -39,7 +39,7 @@ merging. Config, credentials, worktrees, result artifacts and logs stay on the h
 1. The Captain creates a writer token and launch nonce, writes the credential in the item's
    Git directory, and registers the intent with `POST /v1/items/{item}/executions/{execution}/writer`.
    Registration checks the expected version and atomically enforces one open writer per
-   execution and the owner's persisted dispatch `max_writers` across all repositories.
+   execution and the owner's persisted dispatch Building/Total limits across all repositories.
    Intents and waiting writers count; replacing a writer consumes no extra place. A full
    limit is a normal wait, not an escalation. Dispatch pause refuses new registrations.
 2. The Captain launches one native session with a concise goal-derived name and the full nonce
@@ -265,8 +265,8 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | --- | --- | --- |
 | `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
 | `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
-| `captain_idle_with_work` | **Dispatch overdue** (legacy API kind retained): live Captains, dispatch enabled, free writer capacity, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
-| `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while assigned writers fill the canonical dispatch limit (counts included), or dispatch is paused. Informational, including when a Captain recorded a hold; never a stopped/failed Captain signal | Wait for writer capacity, or for the owner to resume dispatch. Existing writer-health flags remain independent |
+| `captain_idle_with_work` | **Dispatch overdue**: live Captains, dispatch enabled, both admission limits permit the work, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
+| `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while Building or Total admission is exhausted, eligible waiting PR fixes take preference, or dispatch is paused. Counts and precise affected limit included; informational even with a Captain hold, never a stopped/failed Captain signal | Wait for affected capacity, service eligible PR fixes or resume dispatch. Existing writer-health flags remain independent |
 | `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
 | `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |
@@ -325,6 +325,6 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | D3 | Trusted local checks are reconciler flags, not a Phalanx gate. Repository CI gates merging. |
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
-| D6 | Enforce dispatch pause and persisted workspace `max_writers` (initially 5) on new registrations. Owner edits persist through dashboard reloads and Captain heartbeats. |
+| D6 | Enforce dispatch pause and persisted workspace Building (`max_building_writers`, initially 5) and Total (`max_writers`, initially 10 on new installs) atomically. Publication handoff releases Building, not Total; publication/delivery fixes must reacquire Building before editing or substantial tests. Eligible waiting PR fixes precede new builds. Owner edits persist through reload/restart; existing installations activate separately. |
 | D7 | Shift bounds: four hours, 48 wakes, first compaction or degradation, configurable in charter. |
 | D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |

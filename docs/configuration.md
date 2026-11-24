@@ -52,17 +52,24 @@ The reconciler reads `reconciler.json` from muster discovery or an explicit `--c
 
 Keep the reconciler scratch directory outside mapped checkouts and private to its account.
 The [shift config and charter](direct-path.md#run-a-captain-on-the-direct-path) define native
-session launching. The persisted dispatch `max_writers` setting is the only concurrency
-limit, initially 5; there is no per-runner or per-charter admission limit. Change it with
+session launching. Exactly two persisted dispatch settings control writers:
+`max_building_writers` (Building, initially 5) and `max_writers` (Total, initially 10 for a
+new store); there is no delivery, per-runner, per-stage or per-charter quota. Change either with
 Scribe's **Writer concurrency** control (no token prompt on a trusted local-only board),
 or owner-authenticated
-`PUT /v1/dispatch/settings` with `{"max_writers": 5}`. Omitted settings remain unchanged.
-`GET /v1/dispatch/settings` shows the effective limit and active registered sessions.
-Charter `[shift]` accepts only `max_hours` and `max_wakes`; a `max_writers` entry is
+`PUT /v1/dispatch/settings` with `{"max_building_writers": 5, "max_writers": 10}`.
+The pair updates atomically; omitted settings remain unchanged. Both must be strict integers
+1..2147483647, with Building <= Total. Lowering below usage preserves all existing writers
+and blocks affected admissions; raising takes effect on the next admission/acquisition retry.
+`GET /v1/dispatch/settings` shows both limits, `building_writers`, `delivering_writers` and
+`active_writers` (Total usage), all derived from registered allocations.
+Charter `[shift]` accepts only `max_hours` and `max_wakes`; either concurrency key is
 rejected with guidance to remove it and use dispatch settings instead. Remove that entry
 in the same deployment cutover that introduces this implementation, leaving the live
-charter unchanged until then. Upgrading an existing store initializes its canonical limit to 5,
-preserving the approved operational value; subsequent restarts preserve owner edits.
+charter unchanged until then. Upgrading an existing store preserves its saved Total and
+initializes Building to min(5, Total), conservatively charging existing workers Building.
+Subsequent restarts preserve owner edits. Do not raise the live old single limit to 10;
+follow [deployment and separate activation](deployment.md#two-limit-writer-activation).
 The reconciler
 runs local checks serially and never configures publication or merging.
 

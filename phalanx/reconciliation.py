@@ -194,6 +194,13 @@ def _advance(db, row, url, body, target_base, stamp):
     following = decide(state, Event.PR_OBSERVED, evidence=evidence)
     if following == state:
         return
+    if following.status in TERMINAL and (
+            row["handoff_head"] is not None and row["handoff_head"] != pull.head_sha or db.execute(
+                """SELECT 1 FROM writers WHERE execution_id=? AND ended_at IS NULL
+                   AND (building=1 OR building_requested_at IS NOT NULL)""", (row["id"],)).fetchone()):
+        # Preserve local rework and its allocation until the writer acknowledges publication.
+        # The recorded observation is reconsidered on the reconciler's next pass.
+        return
     details = {"pr": url, "pr_state": "merged" if pull.merged else pull.state, "head": pull.head_sha,
                "observed_at": stamp}
     if following.status == Status.WAITING_FOR_INPUT:

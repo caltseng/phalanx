@@ -61,6 +61,7 @@ WRITER_CAPACITY_SCHEMA = (
     "ALTER TABLE writers ADD COLUMN building INTEGER NOT NULL DEFAULT 1 CHECK (building IN (0, 1))",
     "ALTER TABLE writers ADD COLUMN building_requested_at TEXT",
     "ALTER TABLE writers ADD COLUMN capacity_revision INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE executions ADD COLUMN handoff_head TEXT",
     """CREATE INDEX waiting_writer_builds ON writers(building_requested_at, id)
        WHERE ended_at IS NULL AND building=0 AND building_requested_at IS NOT NULL""",
 )

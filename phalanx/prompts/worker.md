@@ -56,11 +56,13 @@ and rework. Publishing and observing GitHub alone do not need Building.
 
 Before any code changes, self-review or substantial local tests during publication or delivery,
 run `$work capacity building`. Proceed **only** when its response has `writer.building=true`.
-Otherwise keep the same session, report `writer.capacity_wait`, and retry the command when
-capacity is available. Waiting PR fixes have preference over new builds; never preempt a build,
+Otherwise keep the same session, report `writer.capacity_wait`, and retry about every 30 seconds.
+Waiting PR fixes have preference over new builds; never preempt a build,
 launch a replacement to bypass the limit, or infer permission from spare Total capacity.
 After fixes and their local review/checks finish, run `$work capacity delivering` before pushing
 or returning to GitHub observation. This releases only Building, not the writer or Total.
+Commit the reviewed changes first: the command records HEAD as the publication handoff, so
+an observation of the previous green PR head cannot end this writer before its push arrives.
 On an uncertain response or restart, read `$work status` and retry; never assume acquisition.
 
 ## PR title convention

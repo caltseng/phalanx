@@ -24,11 +24,15 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                 board = "/operator/api/dispatch/settings"
                 self.assertEqual(self.request(api, OWNER, {"paused": True, "aging_seconds": 99},
                                               method="PUT")[0], 200)
-                self.assertEqual(self.get(board)[1]["max_writers"], 5)
+                self.assertEqual(self.get(board)[1]["max_writers"], 10)
                 headers = {"Origin": self.url, "Sec-Fetch-Site": "same-origin"}
-                status, saved = self.request(board, body={"max_writers": 2}, headers=headers, method="PUT")
+                status, saved = self.request(board, body={"max_writers": 2, "max_building_writers": 1},
+                                             headers=headers, method="PUT")
                 self.assertEqual((status, saved["max_writers"], saved["paused"], saved["aging_seconds"]),
                                  (200, 2, True, 99))
+                self.assertEqual(saved["max_building_writers"], 1)
+                self.assertEqual(self.request(board, body={"max_building_writers": 3},
+                                              headers=headers, method="PUT")[0], 409)
                 for value in (0, -1, None, True, 2.5, "2"):
                     self.assertEqual(self.request(board, body={"max_writers": value},
                                                   headers=headers, method="PUT")[0], 422)
@@ -123,7 +127,8 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                 for token, status in ((None, 401), (RUNNER, 403), (OWNER, 200)):
                     self.assertEqual(self.get("/operator/api/dispatch/settings", token)[0], status)
                     self.assertEqual(self.request("/operator/api/dispatch/settings", token,
-                                                  {"max_writers": 3}, method="PUT")[0], status)
+                                                  {"max_writers": 3, "max_building_writers": 2},
+                                                  method="PUT")[0], status)
                 self.assertEqual(self.request("/operator/api/items", OWNER, body, {
                     "Host": "hosted.example", "X-Forwarded-For": "203.0.113.8",
                 })[0], 201)
@@ -320,7 +325,7 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                         self.assertEqual(self.get(path)[0], 401)
                 self.assertEqual(self.request("/v1/items", body={"goal": "x"})[0], 401)
                 self.assertEqual(self.request("/v1/writer/attempt", body={}, method="POST")[0], 401)
-                self.assertEqual(self.get("/v1/dispatch/settings")[1]["max_writers"], 5)
+                self.assertEqual(self.get("/v1/dispatch/settings")[1]["max_writers"], 10)
                 self.assertEqual(self.request("/v1/dispatch/settings",
                                               headers={"Host": "evil.example"})[0], 401)
                 self.assertEqual(self.request("/v1/dispatch/settings", body={"max_writers": 9},

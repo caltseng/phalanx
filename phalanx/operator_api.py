@@ -10,6 +10,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
+from . import dispatch
 from .auth import authenticate_board_read
 from .captains import active_holds
 from .display_text import reason_text, short_title
@@ -51,6 +52,7 @@ SUMMARY = """
            writer.captain_id AS writer_captain_id, writer.session_id AS writer_session_id,
            writer.session_url AS writer_session_url, writer.last_progress_at AS writer_progress_at,
            writer.progress_note AS writer_progress_note,
+           writer.building AS writer_building, writer.building_requested_at,
            (SELECT json_extract(observation.observation_json, '$.deployment')
             FROM github_observations AS observation WHERE observation.execution_id = execution.id
             ORDER BY observation.last_observed_at DESC, observation.observed_at DESC LIMIT 1) AS deployment_json,
@@ -160,7 +162,13 @@ def stamp(moment):
 
 def dispatch_context(db, now):
     return {"paused": bool(db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]),
-            "holds": active_holds(db, now)}
+            "holds": active_holds(db, now),
+            "admission_waits": {stage: dispatch.admission_wait(db, stage) for stage in Stage},
+            "building_waits": {row["id"]: dispatch.building_wait(db, row["id"]) or
+                              "Building capacity available; retry acquisition"
+                              for row in db.execute(
+                                  "SELECT id FROM writers WHERE ended_at IS NULL AND building=0 "
+                                  "AND building_requested_at IS NOT NULL")}}
 
 
 def conditional_read(request, response, db, now):
@@ -196,6 +204,9 @@ def queued_wait(row, now_ms, context):
     if hold:
         return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}
     if row["writer_id"] is None:
+        capacity_wait = context.get("admission_waits", {}).get(row["stage"])
+        if capacity_wait:
+            return {"reason": capacity_wait, "trigger": "Capacity becomes available; a Captain retries admission"}
         return {"reason": "Awaiting a direct Captain",
                 "trigger": "A Captain registers and launches this item's writer"}
     return {}
@@ -253,6 +264,10 @@ def summary(row, now, context):
     if row["runner_blocker"] and not wait:
         wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     status = row["status"]
+    if (row["building_requested_at"] and not row["writer_building"] and not blocked_count
+            and status in (Status.RUNNING, Status.QUEUED, Status.WAITING_FOR_EXTERNAL)):
+        wait = {"reason": context.get("building_waits", {}).get(row["writer_id"]),
+                "trigger": "The same writer retries `work capacity building` before any rework"}
     if status == Status.QUEUED and not wait:
         wait = queued_wait(row, int(now.timestamp() * 1000), context)
     next_action = None
@@ -309,6 +324,8 @@ def summary(row, now, context):
             "captain_id": row["writer_captain_id"], "session_id": row["writer_session_id"],
             "session_url": row["writer_session_url"], "last_progress_at": row["writer_progress_at"],
             "progress_note": row["writer_progress_note"],
+            "building": bool(row["writer_building"]),
+            "building_requested_at": row["building_requested_at"],
         },
     }
 

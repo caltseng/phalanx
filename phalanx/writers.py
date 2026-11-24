@@ -17,6 +17,7 @@ from . import captains, dispatch, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
 from .flags import all_flags
 from .intake_models import Identifier, Payload, Text, Versioned
+from .pr_models import SHA
 from .transitions import TERMINAL, Event, Stage, Status
 
 
@@ -67,6 +68,7 @@ class Progress(Payload):
 class Capacity(Payload):
     phase: Literal["building", "delivering"]
     expected_revision: Annotated[int, Field(strict=True, ge=0)]
+    handoff_head: SHA | None = None
 
 
 def writer_row(db, writer_id):
@@ -99,7 +101,9 @@ def binding(db, writer):
             "building": bool(writer["building"]),
             "building_requested_at": writer["building_requested_at"],
             "capacity_revision": writer["capacity_revision"],
-            "capacity_wait": (dispatch.building_wait(db, writer["id"])
+            "handoff_head": execution["handoff_head"],
+            "capacity_wait": (dispatch.building_wait(db, writer["id"]) or
+                              "Building capacity available; retry acquisition"
                               if writer["building_requested_at"] and not writer["building"] else None),
         },
     }
@@ -119,7 +123,8 @@ def claim_next(db, writer, *, continued_from=None):
     now = time()
     claim = None
     if (state.status == Status.QUEUED and state.stopping is None and state.pending_output is None
-            and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)):
+            and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)
+            and not db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()[0]):
         if not dispatch.needs_building(state.stage) or acquire_building(db, writer):
             claim = intake.claim_attempt(
                 db, row, state, runner_id=WRITER_RUNNER_ID, lease_digest=writer["token_digest"],
@@ -162,11 +167,18 @@ def capacity(db, writer_id, payload):
     if payload.phase == "delivering":
         if dispatch.needs_building(state.stage):
             raise intake.Conflict("Development, self-review and report work must retain Building capacity")
+        if writer["building"]:
+            if payload.handoff_head is None:
+                raise intake.Conflict("Returning to delivery requires the reviewed commit's handoff_head")
+            db.execute("UPDATE executions SET handoff_head=? WHERE id=?",
+                       (payload.handoff_head, execution["id"]))
         release_building(db, writer_id)
     else:
         if (state.status == Status.WAITING_FOR_INPUT or execution["dependency_wait_json"] is not None
-                or execution["retry_at"] is not None and execution["retry_at"] > int(time() * 1000)):
-            raise intake.Conflict("Resolve input, dependencies or retry wait before starting building work")
+                or execution["retry_at"] is not None and execution["retry_at"] > int(time() * 1000)
+                or state.status == Status.QUEUED and (
+                    execution["ready_since"] is None or execution["ready_since"] > int(time() * 1000))):
+            raise intake.Conflict("Resolve input, dependencies or scheduling wait before starting building work")
         acquire_building(db, writer)
     return binding(db, writer_row(db, writer_id))
 
@@ -188,6 +200,7 @@ def release(db, writer, reason):
         else:
             intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
                          details=details)
+    release_building(db, writer["id"])
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
 
@@ -314,6 +327,7 @@ def advance(db, writer_id, previous_attempt_id, view):
             if (previous is not None and previous["stage"] == Stage.SELF_REVIEW
                     and view["state"]["stage"] == Stage.PUBLICATION):
                 release_building(db, writer_id)
+                db.execute("UPDATE executions SET handoff_head=NULL WHERE id=?", (writer["execution_id"],))
                 writer = writer_row(db, writer_id)
             claim_next(db, writer, continued_from=previous_attempt_id)
     return binding(db, writer_row(db, writer_id))

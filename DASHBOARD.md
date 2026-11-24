@@ -344,13 +344,19 @@ The `/v1/operator` routes are read-only; the local `+` form uses a narrowly auth
 The D1 server reads
 (PH-29a) target the local board at `/operator/` only, with existing authentication unchanged:
 no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data)
-lists the routes. Persisted dispatch `max_writers` is enforced atomically at writer registration.
-The **Writer concurrency** disclosure shows active sessions and the effective maximum
-(initially 5); trusted local boards save through `/operator/api/dispatch/settings` without
+lists the routes. Exactly two persisted dispatch limits are enforced atomically:
+`max_building_writers` (Building) and `max_writers` (Total).
+The **Writer concurrency** disclosure shows Building used/limit, Delivering count and Total
+used/limit from registered allocations. Both controls save as one atomic pair, with
+Building <= Total (initially 5/10 for new installs; existing installations activate separately).
+Trusted local boards save through `/operator/api/dispatch/settings` without
 another token gate. Nonlocal boards reuse the owner connection. This adapter uses the same
 canonical settings implementation and trusted-local helper as creation, not another setting
 or authentication mechanism. Saves preserve pause/aging settings and survive reload/restart.
-Lowering below usage preserves existing sessions and blocks new admissions. Refresh capacity
+Lowering below usage preserves existing sessions and blocks affected admissions. Building-full
+and Total-full waits are distinct; spare Total never implies another build can start.
+Eligible waiting PR fixes precede new builds; Delivering includes registered rework waiters
+that have not yet acquired Building. Refresh capacity
 reads current server values; charter settings cannot undo dashboard edits.
 
 - An optional `label` on work items, set at intake (`phalanx intake --label`) and by steering. Steering `label: null` clears it. Labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.

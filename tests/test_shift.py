@@ -57,12 +57,13 @@ class CharterTest(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(shift.ShiftError):
                 self.charter(text)
 
-    def test_charter_rejects_max_writers_with_dispatch_settings_guidance(self):
-        for value in ("5", "0", "true", '"4"'):
-            with self.subTest(value=value), self.assertRaisesRegex(
-                    shift.ShiftError,
-                    "concurrency moved to dispatch settings; remove it from the charter"):
-                self.charter(CHARTER + f"[shift]\nmax_writers = {value}\n")
+    def test_charter_rejects_writer_limits_with_dispatch_settings_guidance(self):
+        for field in ("max_writers", "max_building_writers"):
+            for value in ("5", "0", "true", '"4"'):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(
+                        shift.ShiftError,
+                        "concurrency moved to dispatch settings; remove it from the charter"):
+                    self.charter(CHARTER + f"[shift]\n{field} = {value}\n")
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
         for path in (self.checkout / "c.toml", self.root / "worktrees" / "c.toml"):
@@ -252,7 +253,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             shift.launch(self.api, self.config, self.charter, captain, self.item("other")["id"])
 
     def test_writer_cap_counts_intents_and_confirmed_writers_across_captains(self):
-        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         other = shift.start(self.api, self.charter, "chat-2")["captain"]["id"]
         item, queued = self.item(), self.item()
@@ -265,7 +266,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 if session:
                     self.api(route, body={"captain_id": captain, "writer_id": writer["id"],
                                           "session_id": session}, method="PATCH")
-                with self.assertRaisesRegex(ValueError, f"Wait: dispatch max_writers=1.*{writer['id']}"):
+                with self.assertRaisesRegex(ValueError, f"Wait: dispatch Total capacity exhausted: max_writers=1.*{writer['id']}"):
                     shift.launch(self.api, self.config, self.charter, other, queued["id"])
                 status = shift.status(self.api, self.charter, other)
                 self.assertEqual((status["active_writers"], status["max_writers"]), (1, 1))
@@ -278,7 +279,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         shift.launch(self.api, self.config, self.charter, other, queued["id"])
 
     def test_replacement_at_writer_cap_releases_only_the_replaced_writer(self):
-        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         item = self.item()
         launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
@@ -293,7 +294,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
 
     def test_completed_writer_releases_a_place(self):
-        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         launched = shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
         base_url, token = credential(Path(launched["worktree"]))
@@ -313,8 +314,8 @@ class ShiftTest(ServerFixture, unittest.TestCase):
     def test_charter_and_heartbeats_do_not_restore_a_stale_limit(self):
         charter = self.charter
         captain = shift.start(self.api, charter, "chat")["captain"]["id"]
-        self.assertEqual(shift.status(self.api, charter)["max_writers"], 5)
-        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 2}, method="PUT")
+        self.assertEqual(shift.status(self.api, charter)["max_writers"], 10)
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 2, "max_building_writers": 2}, method="PUT")
         shift.heartbeat(self.api, charter, captain, wake=True)
         shift.launch(self.api, self.config, charter, captain, self.item()["id"])
         shift.launch(self.api, self.config, charter, captain, self.item()["id"])

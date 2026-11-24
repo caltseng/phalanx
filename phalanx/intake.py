@@ -367,7 +367,8 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
 
 def end_writers(db, execution_id, status):
     """End every open writer of an execution that closed as the terminal status."""
-    db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL
+    db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL,
+                  building=0, building_requested_at=NULL, capacity_revision=capacity_revision+1
                   WHERE execution_id=? AND ended_at IS NULL""",
                (timestamp(), f"closed as {status}", execution_id))
 

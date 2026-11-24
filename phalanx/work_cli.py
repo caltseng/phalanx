@@ -96,9 +96,15 @@ def run_work(args):
         result = request(base_url, token, "/v1/writer/attempt", method="POST")
     elif args.work_command == "capacity":
         current = request(base_url, token, "/v1/writer")
-        result = request(base_url, token, "/v1/writer/capacity",
-                         body={"phase": args.phase,
-                               "expected_revision": current["writer"]["capacity_revision"]})
+        body = {"phase": args.phase, "expected_revision": current["writer"]["capacity_revision"]}
+        if args.phase == "delivering" and current["writer"]["building"]:
+            try:
+                body["handoff_head"] = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
+                ).stdout.strip()
+            except (OSError, subprocess.CalledProcessError) as error:
+                raise ValueError("Cannot read the reviewed commit for the publication handoff") from error
+        result = request(base_url, token, "/v1/writer/capacity", body=body)
     elif args.work_command == "progress":
         result = request(base_url, token, "/v1/writer/progress", body={"note": args.note})
     elif args.work_command == "result":

@@ -58,8 +58,36 @@ Generated files contain no credentials, database or live state:
   repository mappings, goal and stable reconciler ID. The charter template sets only
   `max_hours = 4` and `max_wakes = 48` under `[shift]`. Fill its repository list and
   corresponding mappings before use. Concurrency comes from persisted
-  `dispatch_settings.max_writers` (initially 5), editable by the owner in Scribe or
+  `dispatch_settings.max_building_writers` (Building, initially 5) and `max_writers`
+  (Total, initially 10 for new installs), editable together by the owner in Scribe or
   through the dispatch settings API, not from the charter.
+
+## Two-limit writer activation
+
+Deployment is not activation. Do not raise the old single live limit to 10 first.
+The service owner (Impl for the current muster) coordinates these steps with the live Captain
+after owner review and merge:
+
+1. Hold new launches and preserve existing workers, sessions, worktrees, attempts and settings.
+   Rehearse the appended migration on a database copy and verify integrity, unchanged Total,
+   Building=min(5, Total), writer identities and all live allocations conservatively Building.
+2. Deploy the API, dashboard, CLI and updated Captain/writer prompts together using the existing
+   drained service procedure. Migration never raises an existing store's Total or resets owner
+   edits on subsequent starts. Do not release Building simply because an old worker is in delivery.
+3. Send the changed protocol verbatim to every live Captain and writer (or safely drain them
+   while retaining work). Confirm that code changes, self-review and substantial tests require
+   a granted `work capacity building`, including delivery-stage fixes. Never release an allocation
+   while that writer is still building. The writer explicitly returns to `capacity delivering`
+   once local work has finished.
+4. Separately authorize activation after the protocol is enforceable. Save the atomic pair
+   `{"max_building_writers": 5, "max_writers": 10}` through Scribe or owner-authenticated
+   `PUT /v1/dispatch/settings`. Preserve any newer owner decision rather than overwriting it.
+   Verify both saved limits and Building/Delivering/Total counts, resume launches and observe
+   full-Building/full-Total waits plus PR-fix reacquisition before declaring activation complete.
+
+If protocol rollout cannot be confirmed, retain the previous Total and conservative allocations;
+report the gap instead of silently enabling the larger pool. No writer is killed or abandoned
+by deployment, lowering settings or waiting for capacity.
 
 See [direct-path configuration](direct-path.md) for mappings, prepared checks environments
 and runtime schedules. Do not put credentials in the JSON configs. Discovery is optional:

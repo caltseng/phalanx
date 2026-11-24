@@ -37,7 +37,8 @@ def first_rework(db):
              AND json_extract(e.state_json, '$.stopping') IS NULL
              AND json_extract(e.state_json, '$.pending_output') IS NULL
              AND e.dependency_wait_json IS NULL AND (e.retry_at IS NULL OR e.retry_at <= ?)
-           ORDER BY w.building_requested_at, w.id LIMIT 1""", (int(time() * 1000),)
+             AND (e.status != 'queued' OR e.ready_since <= ?)
+           ORDER BY w.building_requested_at, w.id LIMIT 1""", (int(time() * 1000),) * 2
     ).fetchone()
 
 
