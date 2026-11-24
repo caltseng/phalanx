@@ -19,7 +19,12 @@ these in a private local runbook outside the repository:
 - the validation policy path, if any;
 - the shift config, charter, Captain wake schedule and keeper schedule.
 
-A typical layout keeps the database, client configs, reconciler scratch directory and validation policy under the muster directory, outside every mapped checkout. [Resume an existing install](resume.md) is written in terms of this runbook.
+New installations default to `~/.phalanx_muster`. The [tracked deployment setup](deployment.md)
+generates consistent absolute paths, a five-writer charter template and configurable service
+entrypoints without starting anything. Keep the database, client configs, reconciler scratch
+directory and validation policy there, outside every mapped checkout. Explicit existing
+locations, including legacy `phalanx-muster` homes, are honored and must not be renamed
+under running workers. [Resume an existing install](resume.md) uses the recorded runbook.
 
 ## Install the package
 
@@ -50,7 +55,7 @@ Generate the owner and runner tokens **once** and store them privately where you
 ```powershell
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
-$env:PHALANX_DB = "C:/muster/db/phalanx.sqlite3"
+$env:PHALANX_DB = Join-Path $HOME ".phalanx_muster\db\phalanx.sqlite3"
 $env:PHALANX_LOCAL_BOARD = "1"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
@@ -60,7 +65,7 @@ In a POSIX shell:
 ```sh
 export PHALANX_OWNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PHALANX_RUNNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-export PHALANX_DB="$HOME/muster/db/phalanx.sqlite3"
+export PHALANX_DB="$HOME/.phalanx_muster/db/phalanx.sqlite3"
 export PHALANX_LOCAL_BOARD=1
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```

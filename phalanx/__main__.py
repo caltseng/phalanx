@@ -8,6 +8,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from .api_client import APIError
+from .deployment import add_deploy_command, run_deploy
 from .github import GitHubError
 from .issue_intake import ingest_issue
 from .muster import add_muster_command, run_muster
@@ -122,9 +123,19 @@ def main() -> None:
     add_reconcile_command(commands)
     add_shift_command(commands)
     add_muster_command(commands)
+    add_deploy_command(commands)
     args = parser.parse_args()
     try:
-        if args.command == "server":
+        if args.command == "deploy":
+            if args.deploy_command == "run" and args.service == "server":
+                from .server_admin import serve
+
+                code = run_deploy(args, serve=serve)
+            else:
+                code = run_deploy(args)
+            if code:
+                parser.exit(code)
+        elif args.command == "server":
             from .server_admin import run_server_command
 
             run_server_command(args)

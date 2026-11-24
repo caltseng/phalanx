@@ -5,6 +5,12 @@ shift config, charter and repository mappings. Never regenerate tokens or initia
 database to recover. The optional [muster locator](../README.md#direct-muster-discovery-and-status)
 only finds existing configuration.
 
+For an install already using [tracked deployment tooling](deployment.md), resume with
+`python -m phalanx deploy run --config <recorded deployment.json> server` and the matching
+`reconciler` command under the recorded single service owner. Never add
+`--initialize-database` during recovery. Do not move a legacy `phalanx-muster` directory
+to `.phalanx_muster`; the new spelling is only the new-install default.
+
 ## Restart in order
 
 1. Check the recorded API's `/health`. If it answers, keep it. Otherwise load the existing

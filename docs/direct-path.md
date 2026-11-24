@@ -30,7 +30,11 @@ and optional `notify_command`. It never reads an execution-runner config.
 
 ### Existing Windows muster rollout
 
-The operator maintains the host launcher outside the repository. Before deploying this
+Reusable launch behavior is now [versioned deployment tooling](deployment.md); retained
+host wrappers should only delegate to it. The service owner must review and coordinate
+adoption, retaining current paths, credentials, active writers and capacity. The following
+explicit command remains compatible; it is not permission to restart the live service.
+Before deploying this
 revision, create `C:\phalanx-muster\reconciler.json` with the API URL, existing reconciler
 identity as `reconciler_id`, verified repository mappings and any validation/notification
 settings. Preserve credentials in the existing private environment; never put tokens in JSON.
@@ -135,8 +139,9 @@ To provision or refresh this layout, the **operator**, not a writer:
    `PLAYWRIGHT_BROWSERS_PATH` set to the external `ms-playwright` directory (for this
    repository, `npx playwright install chromium`).
 3. Records the lowercase SHA-256 of the provisioned lockfile after normalizing CRLF to
-   LF, as UTF-8 without a BOM, in `lock.sha256`; maintains `checks.ps1` and puts the exact
-   command prefix in the shift config. The inspected snapshot's hash is
+   LF, as UTF-8 without a BOM, in `lock.sha256`; makes any retained `checks.ps1` a shim
+   delegating to the pinned tracked `scripts/checks.ps1 -EnvironmentRoot <prepared environment>`
+   and puts the exact prefix in the shift config. The inspected snapshot's hash is
    `6a51aa579c5fa36c4b5a7ebf309e91d2c8d364d779ebb36602ceb3263158c1c5`.
 
 Before any check, the wrapper hashes the **worktree's** `package-lock.json` with the same
