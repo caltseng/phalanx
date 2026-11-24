@@ -705,7 +705,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(route, RUNNER, dict(action, reason="Charter max_writers=1"), 201)
         self.assertEqual(self.ok(timeline, OWNER)["item"]["wait_reason"], "Charter max_writers=1")
         self.ok(route, RUNNER, dict(action, action="released", reason="Capacity available"), 201)
-        self.assertIsNone(self.ok(timeline, OWNER)["item"]["wait_reason"])
+        self.assertEqual(self.ok(timeline, OWNER)["item"]["wait_reason"], "Awaiting a direct Captain")
 
 
 class CaptainFlagTest(ServerFixture, unittest.TestCase):
@@ -805,7 +805,8 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(execution_id in idle, lapse != "none")
                 row = db.execute(SUMMARY + " WHERE execution.id=?", (execution_id,)).fetchone()
                 wait = summary(row, now, dispatch_context(db, now))["wait_reason"]
-                self.assertEqual(wait, "Charter mutual exclusion" if lapse == "none" else None)
+                self.assertEqual(wait, "Charter mutual exclusion" if lapse == "none"
+                                 else "Awaiting a direct Captain")
 
     def test_expired_hold_invalidates_board_cache_without_a_write(self):
         from fastapi import Response
