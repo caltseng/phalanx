@@ -211,18 +211,27 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 migrate(future)
 
     def test_retirement_migration_preserves_items_attempts_and_history(self):
-        from phalanx import intake
+        from phalanx import intake, writers
         from phalanx.intake_models import Intake
 
         with TemporaryDirectory() as directory:
             path = Path(directory) / "upgrade.sqlite3"
-            with patch.object(store, "MIGRATIONS", store.MIGRATIONS[:-2]):
+            retirement = next(index for index, migration in enumerate(store.MIGRATIONS)
+                              if "DROP TABLE runner_limits" in migration)
+            with patch.object(store, "MIGRATIONS", store.MIGRATIONS[:retirement]):
                 migrate(path)
             with write_transaction(path) as db:
                 intake.register(db, "repo", "https://github.com/e/r.git")
                 item = intake.create(db, Intake(repository_id="repo", goal="Keep this", target="report"))
                 db.execute("INSERT INTO runner_limits VALUES ('old', 4)")
-            claim_stage(path, item["id"], "x" * 32)
+                now = intake.timestamp()
+                # Seed the historical Captain format without using today's Captain response schema.
+                db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, created_at,
+                                  heartbeat_at) VALUES ('old-captain', 'chat', 'charter', 'active', ?, ?)""",
+                           (now, now))
+                writers.register(db, item["id"], item["execution"]["id"], writers.Registration(
+                    expected_version=item["execution"]["version"], captain_id="old-captain", runtime="native",
+                    nonce="historical-writer", token_digest=intake.digest("x" * 32)))
             with connect(path) as db:
                 saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
                          for table in ("work_items", "executions", "attempts", "transition_history")}

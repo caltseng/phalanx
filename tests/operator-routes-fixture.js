@@ -59,7 +59,12 @@
         status, headers: { "content-type": "application/json" }
       });
       if (path === "/v1/flags") return json({ flags: [] });
-      if (path.startsWith("/v1/captains?")) return json({ captains: [] });
+      if (path.startsWith("/v1/captains?")) return json({ captains: [
+        { id: "cap-live", state: "active", live: true, stale: false, heartbeat_at: now,
+          wake_count: 7, compaction_count: 4, charter_revision: "opaque-hash", focus: [id] },
+        { id: "cap-stale", state: "active", live: false, stale: true, heartbeat_at: now, compaction_count: null },
+        { id: "cap-ended", state: "ended", live: false, stale: false, heartbeat_at: now, compaction_count: 0 }
+      ] });
       if (path === "/v1/operator/items/" + id) return fail ? json({}, 404) : json({ item: row });
       if (path.startsWith("/v1/operator/executions/" + execution + "/timeline?")) {
         if (fail) return json({}, 404);
@@ -220,6 +225,10 @@
 
     app = await load("/operator/");
     await until(() => app.doc.querySelector("[data-item]"));
+    await until(() => app.doc.querySelector(".sec-captains")?.textContent.includes("compactions 4"));
+    const captainRows = app.doc.querySelector(".sec-captains");
+    assert(captainRows.textContent.includes("compactions unavailable") && captainRows.textContent.includes("compactions 0") &&
+      !captainRows.textContent.includes("opaque-hash"), "HTTP adapter preserves known, zero and unknown native counters");
     for (const [width, maxHeight] of [[1280, 44], [600, 140], [390, 150], [320, 195]]) {
       frame.style.width = width + "px";
       await new Promise(resolve => app.win.requestAnimationFrame(resolve));
@@ -229,6 +238,11 @@
       assert([...filters.querySelectorAll("summary, button, a")].every(control =>
         control.getBoundingClientRect().height >= 44), "Filter touch targets stay at least 44px");
       assert(app.doc.documentElement.scrollWidth <= width, "Filters do not cause horizontal overflow");
+      const captainStats = app.doc.querySelectorAll(".sec-captains > div > .captains .stat");
+      assert(captainStats.length === 6, "Both current Captain rows expose their three telemetry fields");
+      for (const stat of captainStats) {
+        assert(stat.scrollWidth <= stat.clientWidth + 1, "Captain telemetry stays readable at " + width + "px");
+      }
     }
     const longLabel = app.doc.querySelector('.board-filters input[name="label"]');
     longLabel.value = "long-label-".repeat(9);

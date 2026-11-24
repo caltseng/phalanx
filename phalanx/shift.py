@@ -124,6 +124,8 @@ def shift_bounds(captain, charter, now=None):
         due.append(f"shift age reached {bounds['max_hours']} h")
     if captain["wake_count"] >= bounds["max_wakes"]:
         due.append(f"wake count reached {bounds['max_wakes']}")
+    if captain.get("compaction_count"):
+        due.append("session compacted")
     return {"age_minutes": int(age.total_seconds() // 60), "wakes": captain["wake_count"], **bounds,
             "handoff_due": due}
 
@@ -139,7 +141,7 @@ def start(api, charter, session_ref, parent_id=None):
 
 
 def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, sessions=None,
-              handoff_note=None):
+              handoff_note=None, compaction_count=None):
     """Post a heartbeat with the charter's current revision. Omitted fields keep their last value."""
     current = api(f"/v1/captains/{_q(captain_id)}")
     if sessions is None:
@@ -152,6 +154,8 @@ def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, s
         "sessions": sessions,
         "handoff_note": current["handoff_note"] if handoff_note is None else handoff_note,
     }
+    if compaction_count is not None:
+        body["compaction_count"] = compaction_count
     captain = api(f"/v1/captains/{_q(captain_id)}", body=body, method="PUT")
     return {"captain": captain, "charter": charter, "shift": shift_bounds(captain, charter)}
 
@@ -422,6 +426,8 @@ def add_shift_command(commands):
     beat = actions.add_parser("heartbeat", parents=[shared], help="re-read the charter and heartbeat")
     beat.add_argument("--captain", required=True)
     beat.add_argument("--wake", action="store_true", help="count this heartbeat as a wake")
+    beat.add_argument("--compaction-count", type=int,
+                      help="native session's cumulative successful compactions; omit if unavailable")
     beat.add_argument("--state", choices=["active", "ending", "ended"])
     beat.add_argument("--focus", nargs="*", help="item IDs this wake acts on")
     beat.add_argument("--session", nargs=2, action="append", dest="sessions", metavar=("ID", "NAME"),
@@ -498,7 +504,8 @@ def run_shift(args):
         sessions = [] if args.no_sessions else args.sessions and [
             {"id": session_id, "name": name} for session_id, name in args.sessions]
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
-                           focus=args.focus, sessions=sessions, handoff_note=args.handoff_note)
+                           focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
+                           compaction_count=args.compaction_count)
     elif args.shift_command == "status":
         result = status(API(config), charter, args.captain)
     elif args.shift_command == "action":

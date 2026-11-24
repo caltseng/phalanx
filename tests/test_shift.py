@@ -189,6 +189,27 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
         self.assertEqual((ended["state"], ended["handoff_note"], ended["wake_count"]), ("ended", "Pilot running", 2))
 
+    def test_native_compaction_counter_is_optional_cumulative_and_independent_of_wakes(self):
+        started = shift.start(self.api, self.charter, "native-session")["captain"]
+        captain = started["id"]
+        self.assertIsNone(started["compaction_count"])
+        beat = shift.heartbeat(self.api, self.charter, captain, wake=True)
+        self.assertIsNone(beat["captain"]["compaction_count"])
+        beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=0)
+        self.assertEqual(beat["captain"]["compaction_count"], 0)
+        self.assertEqual(beat["shift"]["handoff_due"], [])
+        for count in (2, 2, 1, None):
+            with self.subTest(count=count):
+                beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=count)
+                self.assertEqual(beat["captain"]["compaction_count"], 2)
+                self.assertEqual(beat["captain"]["wake_count"], 1)
+                self.assertEqual(beat["shift"]["handoff_due"], ["session compacted"])
+        ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
+        self.assertEqual(ended["compaction_count"], 2)
+        successor = shift.start(self.api, self.charter, "new-native-session", captain)["captain"]
+        self.assertIsNone(successor["compaction_count"])
+        self.assertEqual(shift.status(self.api, self.charter, captain)["captain"]["compaction_count"], 2)
+
     def test_launch_refuses_out_of_charter_repositories(self):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         with self.assertRaisesRegex(shift.ShiftError, "outside the charter"):
@@ -324,11 +345,14 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(json.loads(phx(*arguments))["revision"], self.charter["revision"])
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
-                              "--session", "s-1", "phx 1234abcd nonce", "--session", "s-2", "phx captain"))
+                              "--session", "s-1", "phx 1234abcd nonce", "--session", "s-2", "phx captain",
+                              "--compaction-count", "1"))
+        self.assertEqual(beat["captain"]["compaction_count"], 1)
         self.assertEqual([(entry["id"], entry["name"]) for entry in beat["captain"]["sessions"]],
                          [("s-1", "phx 1234abcd nonce"), ("s-2", "phx captain")])
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain, "--no-sessions"))
         self.assertEqual(beat["captain"]["sessions"], [])
+        self.assertEqual(beat["captain"]["compaction_count"], 1)
         ending = json.loads(phx("--config", str(config), "handoff", "--captain", captain, "--note", "Bye"))
         self.assertIn(f"`phx shift` means `python -m phalanx shift --config {config.resolve()}`", ending["kickoff"])
         checked = json.loads(phx("--config", str(config), "archive-check", "--session", "helper",

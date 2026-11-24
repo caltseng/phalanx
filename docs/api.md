@@ -13,6 +13,24 @@ not configured), live `captains`, registered open `writers`, `reconcilers` with 
 contains no credentials and performs no local client database reads. See
 [muster discovery and status](../README.md#direct-muster-discovery-and-status).
 
+## Captain compaction telemetry
+
+`PUT /captains/{id}` accepts optional `compaction_count`: the native session's cumulative
+successful context compactions, a nonnegative integer no greater than 9007199254740991.
+The reporting Captain must read an explicit native counter, not infer one from wakes,
+tokens, checkpoints or failed attempts. Omit it when telemetry is unavailable or incomplete;
+only report zero when explicitly known. Existing heartbeat callers need no changes.
+
+Captain detail/list and muster status reads include `compaction_count` (`null` until known).
+The server stores the greatest reported total, so duplicate/out-of-order reports never count
+a compaction twice or reduce the count. Omission or `null` preserves a known value, including
+across service restarts. A successor has its own unknown count, not its parent's total.
+Charter revision, wake counts and liveness retain their existing contracts.
+
+`phx shift heartbeat --captain <id> --compaction-count <count>` reports the same counter;
+normal dashboard refreshes display it as `compactions N` or `compactions unavailable`.
+A known positive count also marks the existing first-compaction handoff as due.
+
 ## Session archival records
 
 The runtime session tools perform archival. The API only records and exposes evidence:

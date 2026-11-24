@@ -22,7 +22,7 @@ from phalanx.reconciler import API, Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
 from phalanx.validation import GateResult, GateState
 from phalanx.workspaces import any_file_lock
-from phalanx.store import MIGRATIONS, connect, migrate, read_transaction, write_transaction
+from phalanx.store import connect, migrate, read_transaction, write_transaction
 from phalanx.transitions import Execution, PullRequest as OutputPR, Revision, Stage, Status, Target, item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
@@ -321,8 +321,9 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                                    (json.dumps(raw), item["execution"]["id"]))
                         db.execute("UPDATE transition_history SET state_json=? WHERE execution_id=?",
                                    (json.dumps(raw), item["execution"]["id"]))
-                        # Model an existing deployment immediately before the appended schema step.
-                        db.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")
+                        # Restore schema v19, before closed-stage normalization and compaction telemetry.
+                        db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
+                        db.execute("PRAGMA user_version=19")
                         saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
                                  for table in ("work_items", "attempts", "transition_history", "reports")}
                         metadata = tuple(db.execute(
@@ -369,7 +370,8 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                     db.execute("UPDATE executions SET state_json=? WHERE id=?",
                                (json.dumps({**asdict(ready), "stage": "pr_reconciliation"}),
                                 item["execution"]["id"]))
-                    db.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")
+                    db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
+                    db.execute("PRAGMA user_version=19")
                 migrate(self.path)
                 rows = api.call("/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]
                 self.assertEqual(len(rows), 1)

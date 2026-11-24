@@ -184,7 +184,7 @@
    * historicalWorker?: {workerRef?, chatUrl?} for preserved attempt evidence.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
    * recovery, firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionRef,
-   * state, live, stale, heartbeatAt, wakeCount, charterRevision?, focus, handoffNote?}]}.
+   * state, live, stale, heartbeatAt, wakeCount, compactionCount?, charterRevision?, focus, handoffNote?}]}.
    * source.detail({id, cursor, limit, signal}) resolves to
    * {item, attempt?, nextAction?, question?, dependencies?, events, nextCursor}.
    * question is {prompt, options, proposedDefault?}. Dependencies are {title, milestone, status, reason?}.
@@ -801,7 +801,9 @@
         h("span", { class: "stat" }, h("span", { class: captain.live ? "beat" : "", "aria-hidden": "true", text: "♥" }),
           " heartbeat ", ago(captain.heartbeatAt, now)),
         h("span", { class: "stat", text: "wakes " + (captain.wakeCount ?? 0) }),
-        h("span", { class: "stat", title: captain.charterRevision || "", text: captain.charterRevision ? "charter " + captain.charterRevision.slice(0, 7) : "no charter" }),
+        h("span", { class: "stat", text: "compactions " +
+          (Number.isSafeInteger(captain.compactionCount) && captain.compactionCount >= 0
+            ? captain.compactionCount : "unavailable") }),
         h("span", { class: "reason", title: [focus.join(", "), captain.handoffNote].filter(Boolean).join("\n"),
           text: captain.handoffNote ? "handoff: " + firstLine(captain.handoffNote)
             : focus.length ? "focus: " + focus.join(", ") : "no focus" })));

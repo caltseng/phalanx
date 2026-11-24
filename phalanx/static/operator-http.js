@@ -136,6 +136,8 @@
       return {
         id: row.id, sessionRef: row.session_ref, state: row.state, live: row.live === true,
         stale: row.stale === true, heartbeatAt: row.heartbeat_at, wakeCount: row.wake_count,
+        compactionCount: Number.isSafeInteger(row.compaction_count) && row.compaction_count >= 0
+          ? row.compaction_count : null,
         charterRevision: typeof row.charter_revision === "string" ? row.charter_revision : null,
         focus: Array.isArray(row.focus) ? row.focus : [], handoffNote: row.handoff_note
       };

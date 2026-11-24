@@ -119,6 +119,31 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
             finally:
                 self.stop_server(server)
 
+    def test_board_compaction_counts_survive_a_server_restart_and_legacy_heartbeat(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "counts.sqlite3"
+            server = self.start_server(path, PHALANX_LOCAL_BOARD="1")
+            try:
+                status, captain = self.request("/v1/captains", RUNNER, {
+                    "session_ref": "native-session", "charter_revision": "charter",
+                })
+                self.assertEqual(status, 201)
+                route = f"/v1/captains/{captain['id']}"
+                beat = {"charter_revision": "charter", "wake_count": 4, "state": "active"}
+                self.assertEqual(self.request(route, RUNNER, dict(beat, compaction_count=2),
+                                              method="PUT")[0], 200)
+            finally:
+                self.stop_server(server)
+            server = self.start_server(path, PHALANX_LOCAL_BOARD="1")
+            try:
+                self.assertEqual(self.request(route, RUNNER, beat, method="PUT")[0], 200)
+                for row in (self.get(route)[1], self.get("/v1/captains")[1]["captains"][0]):
+                    self.assertEqual(row["compaction_count"], 2)
+                    self.assertTrue(row["live"])
+                    self.assertEqual(row["wake_count"], 4)
+            finally:
+                self.stop_server(server)
+
     def test_local_board_reads_without_token_only_for_local_hosts(self):
         board = "/v1/operator/executions"
         report = f"/v1/items/{'0' * 32}/executions/{'1' * 32}/report"
