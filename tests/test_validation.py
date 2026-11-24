@@ -8,46 +8,11 @@ from phalanx.validation import (
     GateResult,
     GateState,
     Phase,
-    PreCheck,
-    PreEvidence,
-    PreOutcome,
     PublishedCandidate,
     PublishedEvidence,
     RequiredCheck,
-    evaluate_pre_validation,
     evaluate_published_checks,
 )
-
-
-class PreValidationTests(unittest.TestCase):
-    def test_current_pass_and_policy_authorized_dispositions(self):
-        requirements = (
-            PreCheck("unit"),
-            PreCheck("platform", allow_inapplicable=True),
-            PreCheck("smoke", allow_skip=True),
-        )
-        observations = (
-            PreEvidence("head", "unit", PreOutcome.PASSED),
-            PreEvidence("head", "platform", PreOutcome.INAPPLICABLE, "Windows only", "repo policy"),
-            PreEvidence("head", "smoke", PreOutcome.SKIPPED, "urgent fix", "dispatch and repo policy"),
-        )
-        self.assertEqual(evaluate_pre_validation("head", requirements, observations).state, GateState.SATISFIED)
-        self.assertEqual(evaluate_pre_validation("new", requirements, observations).state, GateState.WAITING)
-
-    def test_skip_needs_permission_reason_and_authorization(self):
-        evidence = PreEvidence("head", "smoke", PreOutcome.SKIPPED, "urgent fix", "dispatch")
-        for requirement, result in (
-            (PreCheck("smoke"), evidence),
-            (PreCheck("smoke", allow_skip=True), replace(evidence, reason=" ")),
-            (PreCheck("smoke", allow_skip=True), replace(evidence, authorization="")),
-        ):
-            with self.subTest(requirement=requirement, result=result):
-                self.assertEqual(evaluate_pre_validation("head", (requirement,), (result,)).state, GateState.BLOCKED)
-
-    def test_failure_does_not_pass(self):
-        requirement = (PreCheck("unit", allow_skip=True),)
-        failure = PreEvidence("head", "unit", PreOutcome.FAILED)
-        self.assertEqual(evaluate_pre_validation("head", requirement, (failure,)).state, GateState.FAILED)
 
 
 class PublishedValidationTests(unittest.TestCase):

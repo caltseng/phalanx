@@ -1,4 +1,4 @@
-# Runner operations
+# Writer operations
 
 The host runs the API, native Captain and writer sessions, and a GitHub reconciler.
 Use [Direct path](direct-path.md) for shift configuration, the charter, native session
@@ -41,11 +41,10 @@ content-addressed draft revision. Server finalization retries storage without re
 
 ## Host state
 
-Keep config, the charter, credentials, worktrees, result artifacts and logs. Existing unused
-local state files are not deleted by an upgrade. PH-DS5 part 2 removes the remaining
-runner-only PR stage implementations and their local SQLite stores; those stages are not
-scheduled by direct Captains. Their contract reference remains in
-[runner PR observations](runner-pr-observations.md) until that removal.
+Keep config, the charter, credentials, worktrees, result artifacts and logs. The reconciler
+uses `reconciler.json` and a private scratch directory containing locks and temporary
+worktrees, not a local database. Existing unused files are not deleted by an upgrade.
+All durable queue and observation records remain behind the API.
 
 Use [Resume](resume.md) after restart and [Recovery](recovery.md) for uncertain launches or
 stopped writers. Dispatch pause refuses new writer registrations, not progress by existing writers.

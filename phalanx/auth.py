@@ -98,12 +98,6 @@ def require_coordinator(role: Annotated[Role, Depends(authenticate)]) -> Role:
     return role
 
 
-def require_worker(role: Annotated[Role, Depends(authenticate)]) -> Role:
-    if role not in ("runner", "writer"):
-        raise HTTPException(403, "Runner or writer token required")
-    return role
-
-
 def require_writer(role: Annotated[Role, Depends(authenticate)]) -> Role:
     if role != "writer":
         raise HTTPException(403, "Writer token required")

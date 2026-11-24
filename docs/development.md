@@ -30,10 +30,9 @@ bindings have no timed expiry. A committed result ends the attempt and, when imm
 runnable, claims the next stage for the same writer in that transaction.
 
 Questions and waits retain the writer; stopped-writer replacement requires native-session
-evidence and preserved local work, not an expired lease. Remaining runner-only PR stage
-callers still use leases and observation routes until PH-DS5 part 2, but the queue claim and
-expired-attempt recovery endpoints and old CLI scheduler are gone. Use owner cancel/rerun
-for an unschedulable old-stage execution rather than manufacturing a lease.
+evidence and preserved local work, not an expired lease. All stage results use the writer
+binding; no other PR-stage executor or client SQLite journal exists. Closed snapshots with
+retired stage names are normalized once while preserving their timeline and outputs.
 
 The result API accepts scoped stage evidence; trusted reconciler observations verify direct
 PR delivery. The operator API provides bounded history, overview/group/filter reads and

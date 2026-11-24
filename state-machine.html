@@ -105,11 +105,11 @@
       retryable finalization, not a terminal execution without output.</p>
   </details>
   <details>
-    <summary>Remaining runner stages: removal in PH-DS5 part 2</summary>
-    <p>The retained PR creation, validation, promotion, review, revision and check-in stage
-      implementations have no CLI scheduler or queue claim endpoint. Direct writers do not
-      enter them. Their temporary observation/lease contracts and local SQLite stores remain
-      until part 2; see the <a href="STATE_MACHINE.md#remaining-runner-stage-contracts-ph-ds5-part-2">transition source</a>.</p>
+    <summary>Closed execution history</summary>
+    <p>A one-time migration normalizes retired stage names on closed snapshots to delivery,
+      preserving outputs, versions, timestamps, attempts and immutable timeline evidence.
+      Those historical names are not runnable stages. Later verified owner merges still
+      enrich closed ready outputs; see the <a href="STATE_MACHINE.md#closed-execution-history">transition source</a>.</p>
   </details>
   <footer><a href="SPEC.md">Design</a> &middot;
     <a href="docs/direct-sessions.md">Direct session contracts</a></footer>

@@ -6,13 +6,9 @@ from enum import StrEnum
 
 from phalanx.transitions import Revision
 
-# Pending CI rechecks: runner config defaults and the bounds the API and preflight accept.
-CHECK_RECHECK_SECONDS = 30
+# Bounds accepted by the external-wait API.
 CHECK_RECHECK_RANGE = (5, 86400)
-CHECK_WAIT_LIMIT_SECONDS = 2 * 60 * 60
 CHECK_WAIT_LIMIT_RANGE = (60, 30 * 86400)
-# Phalanx never returns a ready PR to draft, so it skips draft-only checks a ready PR lacks.
-DRAFT_SKIP_REASON = "PR already ready; draft-only checks gate only the first promotion"
 
 
 class GateState(StrEnum):
@@ -42,49 +38,6 @@ class PreCheck:
     name: str
     allow_inapplicable: bool = False
     allow_skip: bool = False
-
-
-@dataclass(frozen=True)
-class PreEvidence:
-    candidate: str
-    name: str
-    outcome: PreOutcome
-    reason: str = ""
-    authorization: str = ""
-
-
-def evaluate_pre_validation(
-    candidate: str,
-    required: tuple[PreCheck, ...] | None,
-    observations: Iterable[PreEvidence],
-) -> GateResult:
-    """Evaluate current per-check dispositions. The adapter retains prior attempts."""
-    policy_result = _policy_result(required)
-    if policy_result is not None:
-        return policy_result
-
-    current = {observation.name: observation for observation in observations
-               if observation.candidate == candidate}
-
-    problems = []
-    for check in required:
-        result = current.get(check.name)
-        if result is None:
-            problems.append((GateState.WAITING, f"{check.name} has no result for the candidate"))
-            continue
-        if result.outcome == PreOutcome.PASSED:
-            continue
-        if result.outcome == PreOutcome.FAILED:
-            problems.append((GateState.FAILED, f"{check.name} failed"))
-            continue
-        allowed = (
-            (result.outcome == PreOutcome.INAPPLICABLE and check.allow_inapplicable)
-            or (result.outcome == PreOutcome.SKIPPED and check.allow_skip)
-        )
-        if not (allowed and result.reason.strip() and result.authorization.strip()):
-            problems.append((GateState.BLOCKED, f"{check.name} needs a policy-authorized disposition and reason"))
-
-    return _summarize(problems)
 
 
 class Phase(StrEnum):

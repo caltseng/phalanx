@@ -1,12 +1,11 @@
-"""Runner-side onboarding: do or verify every step that makes a repository dispatchable."""
+"""Configure and verify direct Captain repository mappings."""
 
 import json
 import os
 from pathlib import Path
 
-from .api_client import RunnerAPI
+from .api_client import APIClient, APIError
 from .github import github_repository
-from .runner_errors import RunnerError
 from .workspaces import WorkspaceError, WorkspaceManager, _git
 
 DONE, OK, MISSING, MANUAL = "done", "ok", "missing", "manual"
@@ -55,7 +54,7 @@ def _write_json(path: Path, data: dict) -> None:
 def onboard(config_path: Path, state: Path, repository: str, *, remote=None, checkout=None,
             base_branch=None, project_id=None, host_id=None, owner_token=None, runner_token=None,
             github_token=None, discover=discover_ready_checks) -> dict:
-    """Apply each runner-side onboarding step that has its inputs and report the rest.
+    """Apply each Captain onboarding step that has its inputs and report the rest.
 
     Never overwrites an existing registration, mapping field or validation entry
     the caller did not name. Owner trust in the worker runtime stays manual.
@@ -77,7 +76,7 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
     else:
         try:
             found = {entry["id"]: entry["remote"]
-                     for entry in RunnerAPI(config["base_url"], token).call("/repositories")}
+                     for entry in APIClient(config["base_url"], token).call("/repositories")}
             if repository in found:
                 registered = found[repository]
                 if remote and remote != registered:
@@ -92,15 +91,15 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
                 step("registration", MISSING, "Set PHALANX_OWNER_TOKEN, or run "
                      f"`python -m phalanx register {repository} {remote}` as the owner")
             else:
-                RunnerAPI(config["base_url"], owner_token).call(
+                APIClient(config["base_url"], owner_token).call(
                     "/repositories", {"id": repository, "remote": remote})
                 registered = remote
                 step("registration", DONE, f"registered with remote {remote}")
-        except RunnerError as error:
+        except APIError as error:
             step("registration", MISSING, f"{error}; check base_url {config['base_url']} and the token")
     remote = registered
 
-    # 2. Runner checkout and base branch.
+    # 2. Captain checkout and base branch.
     checkout = checkout or mapping.get("checkout")
     base_branch = base_branch or mapping.get("base_branch")
     checkout_ok = False
@@ -186,7 +185,7 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
                      if value is None]
             if unset:
                 step("validation", MISSING, written + "set " + " and ".join(unset) + " for the repository "
-                     "(a list of checks, or [] when none apply); see docs/runner-validation-policy.md")
+                     "(a list of checks, or [] when none apply); see docs/validation-policy.md")
             else:
                 step("validation", DONE if written else OK, written + f"{policy} configures {repository}")
         except ValidationPolicyError as error:

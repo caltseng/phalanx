@@ -7,7 +7,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from .runner_errors import RunnerError
+from .api_client import APIError
 from .github import GitHubError
 from .issue_intake import ingest_issue
 from .muster import add_muster_command, run_muster
@@ -108,8 +108,8 @@ def main() -> None:
         "onboard", help="register, clone, map and configure validation for a target repository, "
                         "then report what is still missing")
     onboard.add_argument("repository", help="Phalanx repository ID")
-    onboard.add_argument("--config", required=True, type=Path, help="runner config to update")
-    onboard.add_argument("--state", required=True, type=Path, help="runner state directory")
+    onboard.add_argument("--config", required=True, type=Path, help="Captain config to update")
+    onboard.add_argument("--state", required=True, type=Path, help="workspace preparation scratch directory")
     onboard.add_argument("--remote", help="origin URL to register and clone")
     onboard.add_argument("--checkout", help="local clone path; cloned when absent or empty")
     onboard.add_argument("--base-branch", help="default: the existing mapping, then origin/HEAD")
@@ -197,7 +197,7 @@ def main() -> None:
         else:
             result = api_request(args.api_url, f"/v1/items/{quote(args.item_id, safe='')}")
             print(json.dumps(result, indent=2))
-    except (OSError, ValueError, sqlite3.Error, RunnerError, WorkspaceError, GitHubError,
+    except (OSError, ValueError, sqlite3.Error, APIError, WorkspaceError, GitHubError,
             ReconcilerError) as error:
         parser.exit(1, f"phalanx: {error}\n")
 

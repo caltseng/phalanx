@@ -1,4 +1,4 @@
-"""Runner-side GitHub HTTP primitives. Callers own policy and reconciliation."""
+"""Read-only GitHub HTTP primitives for intake and independent reconciliation."""
 
 import http.client
 import json
@@ -11,7 +11,6 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-ATTRIBUTION = "Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)"
 _SHA = re.compile(r"[0-9a-fA-F]{40}")
 _NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
@@ -32,10 +31,6 @@ class GitHubError(Exception):
         self.operation = operation
         self.retry_after_seconds = retry_after_seconds
         super().__init__(f"{operation}: {reason}")
-
-
-class UncertainGitHubWrite(GitHubError):
-    """The operation may have taken effect. Reconcile before retrying."""
 
 
 @dataclass(frozen=True)
@@ -234,30 +229,26 @@ class GitHubClient:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload).encode()
         request = Request(url, data=body, headers=headers, method=method)
-        error_type = GitHubError if method == "GET" else UncertainGitHubWrite
         try:
             response = self._transport(request, self._timeout)
         except (OSError, http.client.HTTPException) as error:
-            raise error_type(
+            raise GitHubError(
                 operation, f"transport failure ({type(error).__name__})",
                 retry_after_seconds=0 if method == "GET" else None,
             ) from None
         if response.status != expected:
-            # A timeout or unexpected success/redirect/server error can hide a write.
-            rejected = 400 <= response.status < 500 and response.status != 408
-            failure = GitHubError if rejected else error_type
-            raise failure(
+            raise GitHubError(
                 operation, f"GitHub returned HTTP {response.status}", response.status,
                 retry_after_seconds=_read_retry_delay(response) if method == "GET" else None,
             )
         try:
             return json.loads(response.body), response.headers
         except (ValueError, UnicodeError):
-            raise error_type(operation, "invalid JSON response", response.status) from None
+            raise GitHubError(operation, "invalid JSON response", response.status) from None
 
     def _pages(
         self, operation: str, url: str, key: str | None = None, *,
-        authorize: Callable[[], None] | None = None, page_limit: int | None = None,
+        page_limit: int | None = None,
     ) -> Iterator[dict]:
         origin = urlsplit(url)
         visited = set()
@@ -267,8 +258,6 @@ class GitHubClient:
             if page_limit is not None and len(visited) >= page_limit:
                 raise GitHubError(operation, "pagination limit reached")
             visited.add(url)
-            if authorize is not None:
-                authorize()
             data, headers = self._request(operation, "GET", url)
             records = data if key is None else (data.get(key) if isinstance(data, dict) else None)
             if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
@@ -349,7 +338,7 @@ class GitHubClient:
 
     def list_matching_pull_requests(
         self, *, head_owner: str, head: str, base: str | None = None,
-        authorize: Callable[[], None] | None = None, page_limit: int | None = None,
+        page_limit: int | None = None,
     ) -> tuple[PullRequest, ...]:
         """Include closed PRs. Omit base to find PRs retargeted within the repo."""
         operation = "list matching pull requests"
@@ -360,7 +349,7 @@ class GitHubClient:
         matches = []
         for data in self._pages(
             operation, f"{self._repo_url}/pulls?{query}",
-            authorize=authorize, page_limit=page_limit,
+            page_limit=page_limit,
         ):
             try:
                 pull = _pull_request(data)
@@ -376,74 +365,6 @@ class GitHubClient:
                 matches.append(pull)
         return tuple(matches)
 
-    def create_draft(self, *, head: str, base: str, title: str, body: str) -> PullRequest:
-        operation = "create draft"
-        head_owner, separator, head_ref = head.rpartition(":")
-        head_owner = head_owner if separator else self._repository.split("/")[0]
-        lines = [line for line in body.splitlines() if line.strip() != ATTRIBUTION]
-        description = "\n".join(lines).rstrip()
-        payload = {
-            "head": head,
-            "base": base,
-            "title": title,
-            "body": f"{description}\n\n{ATTRIBUTION}" if description else ATTRIBUTION,
-            "draft": True,
-        }
-        data, _ = self._request(operation, "POST", f"{self._repo_url}/pulls",
-                                payload=payload, expected=201)
-        try:
-            pull = _pull_request(data)
-            if (
-                pull.state != "open" or not pull.draft or pull.base_ref != base
-                or pull.head_ref != head_ref
-                or pull.head_owner is None or pull.head_owner.casefold() != head_owner.casefold()
-                or pull.base_repository.casefold() != self._repository.casefold()
-            ):
-                raise ValueError("unexpected draft")
-        except (AttributeError, KeyError, TypeError, ValueError):
-            raise UncertainGitHubWrite(operation, "invalid draft response", 201) from None
-        return pull
-
-    def mark_ready(self, node_id: str) -> None:
-        """Promote by node ID. Read the exact PR before and after this write."""
-        if not node_id.strip():
-            raise ValueError("a PR node ID is required")
-        operation = "mark pull request ready"
-        query = """
-            mutation ($id: ID!) {
-              markPullRequestReadyForReview(input: {pullRequestId: $id}) {
-                pullRequest { id isDraft }
-              }
-            }
-        """
-        data, _ = self._request(operation, "POST", self._graphql_url,
-                                payload={"query": query, "variables": {"id": node_id}})
-        try:
-            pull = data["data"]["markPullRequestReadyForReview"]["pullRequest"]
-            if data.get("errors") or pull["id"] != node_id or pull["isDraft"] is not False:
-                raise ValueError("promotion unconfirmed")
-        except (AttributeError, KeyError, TypeError, ValueError):
-            raise UncertainGitHubWrite(operation, "GitHub did not confirm promotion", 200) from None
-
-    def get_pull_request_body(self, number: int) -> str:
-        data, _ = self._request("get pull request description", "GET", self._pull_url(number))
-        body = data.get("body") if isinstance(data, dict) else None
-        return body if isinstance(body, str) else ""
-
-    def update_pull_request_body(self, number: int, body: str) -> None:
-        self._request("update pull request description", "PATCH", self._pull_url(number),
-                      payload={"body": body})
-
-    def list_pull_request_comments(self, number: int, *, page_limit: int = 10) -> tuple[str, ...]:
-        """Return the bodies of the PR's conversation comments."""
-        url = self._pull_url(number).replace("/pulls/", "/issues/") + "/comments?per_page=100"
-        return tuple(str(row.get("body") or "") for row in self._pages(
-            "list pull request comments", url, page_limit=page_limit,
-        ))
-
-    def comment_on_pull_request(self, number: int, body: str) -> None:
-        url = self._pull_url(number).replace("/pulls/", "/issues/") + "/comments"
-        self._request("comment on pull request", "POST", url, payload={"body": body}, expected=201)
 
     def get_actionable_feedback(self, number: int, *, page_limit: int = 10) -> tuple[tuple[str, str], ...]:
         """Return (node ID, text) for requested changes and unresolved current review threads.
@@ -562,22 +483,6 @@ class GitHubClient:
         if status in ("identical", "ahead", "behind", "diverged"):
             return status in ("identical", "ahead")
         raise GitHubError(operation, "invalid comparison response")
-
-    def merge(self, number: int, *, expected_head: str, method: str) -> str:
-        """Request a direct merge. Verify its result by rereading the PR."""
-        if not _SHA.fullmatch(expected_head):
-            raise ValueError("a full expected head SHA is required")
-        if method not in ("merge", "squash", "rebase"):
-            raise ValueError("an explicit GitHub merge method is required")
-        operation = "merge pull request"
-        data, _ = self._request(operation, "PUT", f"{self._pull_url(number)}/merge",
-                                payload={"sha": expected_head, "merge_method": method})
-        try:
-            if data["merged"] is True and _SHA.fullmatch(data["sha"]):
-                return data["sha"]
-        except (KeyError, TypeError):
-            pass
-        raise UncertainGitHubWrite(operation, "GitHub did not confirm the merge", 200)
 
 
 def merge_method(github, merge_commit: str, head: str, base_ref: str) -> tuple[str | None, tuple[str, ...]]:

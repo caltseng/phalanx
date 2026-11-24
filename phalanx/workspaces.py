@@ -1,4 +1,4 @@
-"""Local Git workspaces. The runner owns worker exclusion and lifecycle authority."""
+"""Local Git workspaces prepared by direct Captains; queue authority stays on the server."""
 
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -267,62 +267,6 @@ class WorkspaceManager:
             raise WorkspaceError("The exact origin tracking ref must point to a commit")
         return sha
 
-    def verify_base_ancestry(self, workspace: Workspace, base_sha: str) -> None:
-        """Require the verified candidate to contain the pinned development base."""
-        if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", base_sha):
-            raise WorkspaceError("The development base is not a full Git object ID")
-        try:
-            _git(workspace.path, "--no-replace-objects", "merge-base", "--is-ancestor",
-                 base_sha, workspace.head)
-        except WorkspaceError as exc:
-            raise WorkspaceError("Candidate does not contain the pinned development base") from exc
-
-    def contains_base(self, workspace: Workspace, base_sha: str) -> bool:
-        try:
-            self.verify_base_ancestry(workspace, base_sha)
-        except WorkspaceError:
-            return False
-        return True
-
-    def merged_base(self, workspace: Workspace, candidate: str, base_sha: str) -> bool:
-        """Recognize a merge of the base into the candidate that an earlier submit already made."""
-        parents = _git(workspace.path, "rev-list", "--parents", "-n", "1", workspace.head).split()
-        return parents[1:] == [candidate, base_sha]
-
-    def integrate_base(self, workspace: Workspace, base_sha: str, message: str) -> str | None:
-        """Merge the pinned base into a clean candidate without rewriting history.
-
-        Return None after a clean merge commit, or the Git detail after restoring the candidate.
-        """
-        path = workspace.path
-        if workspace.dirty:
-            raise WorkspaceError("Cannot integrate the development base into a dirty checkout")
-        options = ["-c", "commit.gpgsign=false"]
-        try:
-            _git(path, "var", "GIT_COMMITTER_IDENT")
-        except WorkspaceError:
-            options += ["-c", "user.name=Phalanx runner", "-c", "user.email=phalanx-runner@localhost"]
-        with tempfile.TemporaryDirectory(prefix="phalanx-hooks-") as empty_hooks:
-            options += ["-c", f"core.hooksPath={Path(empty_hooks).as_posix()}"]
-            try:
-                _git(path, *options, "merge", "--no-ff", "--no-edit", "-m", message, base_sha)
-                return None
-            except WorkspaceError as exc:
-                detail = str(exc)
-        conflicts = _git(path, "diff", "--name-only", "--diff-filter=U").split()
-        try:
-            _git(path, "rev-parse", "-q", "--verify", "MERGE_HEAD")
-        except WorkspaceError:
-            pass
-        else:
-            _git(path, "merge", "--abort")
-        head = _git(path, "rev-parse", "--verify", "HEAD^{commit}").strip()
-        if head != workspace.head or _status(path):
-            raise WorkspaceError(f"Could not restore the candidate after a failed base merge: {path}")
-        if conflicts:
-            detail = "Conflicting files: " + ", ".join(conflicts)
-        return detail
-
     def prepare(self, item_id: str, *, base: str) -> Workspace:
         """Create from a local base ref, or return the existing checkout as found."""
         common = self._verify_checkout()
@@ -355,40 +299,3 @@ class WorkspaceManager:
                 except OSError as exc:
                     raise WorkspaceError(f"Cannot prepare workspace at {path}: {exc}") from exc
             return self._snapshot(path, branch, common)
-
-    def cleanup(self, item_id: str, *, closed: bool, expected_head: str) -> bool:
-        """Remove an owned, clean checkout at the recorded head. Keep its branch.
-
-        The runner must confirm the execution is closed and no worker can still write.
-        Return false if the owned checkout is already absent.
-        """
-        if closed is not True:
-            raise WorkspaceError("Workspace cleanup requires a closed execution")
-        common = self._verify_checkout()
-        with _file_lock(common / "phalanx-workspaces.lock"):
-            path, branch, owner_ref = self._location(common, item_id)
-            if not self._registered(path, branch):
-                return False
-            owners = _git(self.checkout, "for-each-ref", "--format=%(refname)", owner_ref)
-            if owner_ref not in owners.splitlines():
-                raise WorkspaceError(f"Cannot verify workspace ownership: {path}")
-            snapshot = self._snapshot(path, branch, common)
-            if snapshot.head != expected_head:
-                raise WorkspaceError(f"Workspace HEAD differs from the recorded checkpoint: {path}")
-            # Removal deletes ignored files too, so keep a checkout that has any.
-            if _status(path, "--ignored=matching"):
-                raise WorkspaceError(f"Workspace has local changes or untracked files: {path}")
-            # Git status can deliberately hide paths marked skip-worktree or
-            # assume-unchanged. Refuse cleanup when the index uses those flags.
-            entries = _git(path, "ls-files", "-v", "-z")
-            if any(not entry.startswith("H ") for entry in entries.split("\0") if entry):
-                raise WorkspaceError(f"Workspace has index entries that can hide local changes: {path}")
-            git_dir = Path(_git(path, "rev-parse", "--absolute-git-dir").rstrip("\n"))
-            operation_files = (
-                "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD",
-                "rebase-merge", "rebase-apply", "sequencer", "BISECT_START",
-            )
-            if any((git_dir / name).exists() for name in operation_files):
-                raise WorkspaceError(f"Workspace has an in-progress Git operation: {path}")
-            _git(self.checkout, "worktree", "remove", "--", str(path))
-            return True

@@ -36,7 +36,7 @@
 - Reuse the item’s worktree across stages on the same machine. Support interdependent work in v1, with explicit upstream milestones and parallel execution when dependencies allow. Campaign grouping, task decomposition, and automatic replanning can come later.
 - Make max concurrency and dispatch pause configurable. Rank eligible stages with priority aging so older work gets a turn during sustained intake. Keep the wait reason visible when an item cannot run.
 - Keep lifecycle transitions explicit and server-owned. Every active state needs a next action, a resume trigger, or a clear recovery path. Bind validation and review evidence to the revision checked, and reconcile GitHub state before retrying publication or check-in.
-- Keep one registered writer on its item across stages, with a fenced attempt per stage. **D1:** writers push and open their own PRs, honoring the item's publication mode and target; the reconciler observes one primary PR. Enable GitHub auto-merge only for `checked_in`, never for draft-only work or `ready_for_check_in`. **D3:** trusted local checks are reconciler flags, not a Phalanx gate; writers still run the repository's required checks and GitHub's checks, reviews and rulesets gate merging.
+- Keep one registered writer on its item across stages, with a fenced attempt per stage. **D1:** writers own development, self-review, publication and fixes during delivery; no separate PR-stage executor or client SQLite journal exists. The reconciler observes one primary PR. Enable GitHub auto-merge only for `checked_in`, never for draft-only work or `ready_for_check_in`. **D3:** trusted local checks run serially in reconciler scratch worktrees and raise flags, not a Phalanx gate; writers still run the repository's required checks and GitHub's checks, reviews and rulesets gate merging.
 - Define transitions in the authoritative Markdown specs, with the detailed rules in [STATE_MACHINE.md](STATE_MACHINE.md). Treat HTML as a visual reference and sync it to the Markdown when transitions change.
 
 ## Working in repositories
@@ -50,7 +50,7 @@
   - Some changes always need their safety tests as well:
     - store, claims, leases, fencing or dispatch: `test_dispatch`, `test_writers`, `test_transitions` and `test_bootstrap`
     - Captain sessions or recovery: `test_shift`, `test_writers` and `test_reconciler`
-    - workspaces, Git publication or check-in: `test_workspaces`, `test_git_publication`, `test_draft_publication` and `test_check_in`
+    - workspaces, Git publication or check-in: `test_workspaces`, `test_writers`, `test_reconciler` and `test_transitions`
   - Run the full suite locally when you change shared test fixtures (`tests/test_bootstrap.py`, `tests/timing.py`, `tests/shard.py`, `tests/envelope_probe.py`), dependencies or the CI workflow.
 - For Phalanx work items, record the report or PR and its verification. Check in only when authorized by the work item or repository policy and after the current PR head satisfies the required checks and approvals.
 - End PR descriptions that Phalanx creates with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Preserve the footer across updates and retries.

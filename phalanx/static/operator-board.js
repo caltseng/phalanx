@@ -10,8 +10,7 @@
   const READ_TIMEOUT_MS = 12000;
   const CHANGED_MS = 2400;
   const THEME_KEY = "phalanx-board-theme";
-  const STAGES = ["development", "pr_creation", "self_review", "pre_pr_validation", "pr_promotion",
-    "pr_validation", "adversarial_review", "pr_reconciliation", "pr_revision", "check_in",
+  const STAGES = ["development", "self_review", "publication", "delivery",
     "report_drafting", "report_review", "report_storage"];
   const GLYPH = { attn: "!", ok: "✓", fail: "✕", muted: "–" };
   const DISPLAY_LABEL = { checked_in: "Merged" };
@@ -146,12 +145,12 @@
   }
 
   function backward(from, to) {
-    return Boolean(from) && (STAGES.indexOf(to) < STAGES.indexOf(from) || to === "pr_revision");
+    return Boolean(from) && (STAGES.indexOf(to) < STAGES.indexOf(from));
   }
 
-  // Remaining runner-stage attempts, pending PH-DS5 part 2.
-  function legacyRunnerFacts(item) {
-    const legacy = item.legacy || {};
+  // Preserved worker references on historical attempts.
+  function historicalWorkerFacts(item) {
+    const legacy = item.historicalWorker || {};
     const chat = safeUrl(legacy.chatUrl);
     return [
       legacy.workerRef && ["Worker", legacy.workerRef],
@@ -182,7 +181,7 @@
    * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
    * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?} and
-   * legacy?: {workerRef?, chatUrl?} for remaining runner-stage attempts.
+   * historicalWorker?: {workerRef?, chatUrl?} for preserved attempt evidence.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
    * recovery, firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionRef,
    * state, live, stale, heartbeatAt, wakeCount, charterRevision?, focus, handoffNote?}]}.
@@ -638,7 +637,7 @@
         ["Output", item.output?.kind === "report" ? prCell(item) : null],
         ["IDs", h("code", { title: "item " + (item.itemId || "?") + " · execution " + item.id,
           text: short(item.itemId) + " / " + short(item.id) })],
-        ...legacyRunnerFacts(item)
+        ...historicalWorkerFacts(item)
       ]));
       if (flags.length) {
         const list = h("ul", { class: "plain" });

@@ -8,9 +8,9 @@ Favor a small API, recoverable execution and flexible work items.
 **Running architecture:** [direct sessions](docs/direct-sessions.md), native Captain chats,
 registered writers and an independent GitHub reconciler (decisions 68-71). Phalanx adds
 visibility and coordination, not a permission gate. GitHub owns PR facts and merges;
-Phalanx owns items, attempts, questions, evidence, flags and observations. PH-DS5 part 1
-has removed the previous session transport/scheduler and admission machinery. Remaining
-runner-only PR stages and local SQLite stores retire in part 2.
+Phalanx owns items, attempts, questions, evidence, flags and observations. Native sessions
+are the only execution path. Clients keep configuration, credentials, artifacts, worktrees
+and OS locks, not SQLite queues or publication journals.
 
 Direct clients discover the existing muster via `--home`, `PHALANX_HOME`, then the single
 per-user `~/.phalanx/muster.json` locator. Discovery is read-only: never initialize or migrate
@@ -109,11 +109,10 @@ A merge into another base asks the owner. Never replace a closed primary PR sile
 repository checks; GitHub checks, reviews and rulesets gate merging. Provider failures produce
 no false observations and back off independently by repo.
 
-Runner-only implementations (`pr_creation`, `pre_pr_validation`, `pr_promotion`,
-`pr_validation`, `adversarial_review`, `pr_reconciliation`, `pr_revision`, `check_in`), their
-evidence routes and local SQLite stores remain for PH-DS5 part 2. They have no CLI scheduler
-or queue claim endpoint. Direct writers never enter them. Their temporary contracts are
-summarized in [the state machine](STATE_MACHINE.md#remaining-runner-stage-contracts-ph-ds5-part-2).
+The reconciler uses its own minimal `reconciler.json`, not an execution-runner config.
+One appended data migration normalizes retired stage names on closed execution snapshots
+to `delivery`. It preserves outputs, versions, timestamps, attempts and immutable history,
+so existing reports, board pages and later owner-merge reconciliation remain readable.
 
 ### Execution status and recovery
 

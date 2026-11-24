@@ -5,12 +5,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import finalization, intake, pr_models, pr_observations, reconciliation, waits
+from . import finalization, intake, reconciliation, waits
 from .auth import (
-    authenticate, require_coordinator, require_owner, require_runner, require_same_origin, require_worker,
+    authenticate, require_coordinator, require_owner, require_runner, require_same_origin, require_writer,
 )
 from .store import read_transaction, write_transaction
-from .transitions import PublicationMode, Stage
+from .transitions import PublicationMode
 from .intake_models import (
     AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
@@ -20,8 +20,6 @@ from .intake_models import (
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 Key = Annotated[str | None, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
 RequiredKey = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=200)]
-# Runners send their lease; a writer's bearer token is its fence, so writers omit it.
-Lease = Annotated[str | None, Header(alias="Phalanx-Lease", pattern=r"^[A-Za-z0-9_-]{32,200}$")]
 BatchLimit = Annotated[int, Query(ge=1, le=100)]
 
 
@@ -129,45 +127,26 @@ def rerun(request: Request, item_id: Identifier, execution_id: Identifier,
                scope=f"rerun:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
 
 
-def fence(request, lease):
-    """The digest an attempt is fenced by: the runner's lease or the writer's bearer token."""
-    writer = getattr(request.state, "writer", None)
-    if writer is not None:
-        return writer["token_digest"]
-    if lease is None:
-        raise HTTPException(422, "Runners must send the Phalanx-Lease header")
-    return intake.digest(lease)
-
-
-def attempt_event(request, operation, item_id, execution_id, body, lease, key):
+def attempt_event(request, operation, item_id, execution_id, body, key):
     from . import writers  # writers' routes import this module
 
-    lease_digest = fence(request, lease)
+    writer = request.state.writer
+    lease_digest = writer["token_digest"]
     payload = body.model_dump(mode="json")
     # Preserve receipt digests for results written before these optional fields existed.
     if isinstance(body, Result):
         for field in (
-            "failure_reason", "question", "retry_after_seconds", "review_notes", "local_checks",
+            "failure_reason", "question", "retry_after_seconds", "review_notes",
             "report_review_notes", "pr_url",
         ):
-            if payload[field] is None:
-                payload.pop(field)
-    if isinstance(body, pr_models.Validation):
-        if not body.schedule_recheck:
-            payload.pop("schedule_recheck")
-        for field in ("retry_after_seconds", "wait_limit_seconds"):
             if payload[field] is None:
                 payload.pop(field)
     if isinstance(body, ExternalWait) and body.wait_limit_seconds is None:
         payload.pop("wait_limit_seconds")
     receipt = {"body": payload, "lease_digest": lease_digest}
-    writer = getattr(request.state, "writer", None)
-
     def perform(db, *args):
         view = operation(db, *args)
-        if writer is not None:
-            return writers.advance(db, writer["id"], body.attempt_id, view)
-        return view
+        return writers.advance(db, writer["id"], body.attempt_id, view)
 
     return run(
         request, perform, item_id, execution_id, body, lease_digest, write=True, finish=True,
@@ -176,17 +155,17 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/result",
-             dependencies=[Depends(require_worker)])
+             dependencies=[Depends(require_writer)])
 def result(request: Request, item_id: Identifier, execution_id: Identifier,
-           body: Result, lease: Lease = None, key: Key = None):
-    return attempt_event(request, intake.result, item_id, execution_id, body, lease, key)
+           body: Result, key: Key = None):
+    return attempt_event(request, intake.result, item_id, execution_id, body, key)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/stop-confirmed",
-             dependencies=[Depends(require_worker)])
+             dependencies=[Depends(require_writer)])
 def stop_confirmed(request: Request, item_id: Identifier, execution_id: Identifier,
-                   body: AttemptEvent, lease: Lease = None, key: Key = None):
-    return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, lease, key)
+                   body: AttemptEvent, key: Key = None):
+    return attempt_event(request, intake.stop_confirmed, item_id, execution_id, body, key)
 
 
 @router.get("/owner/inbox", dependencies=[Depends(require_owner)])
@@ -205,10 +184,10 @@ def reply(request: Request, item_id: Identifier, execution_id: Identifier,
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/external-wait",
-             dependencies=[Depends(require_worker)])
+             dependencies=[Depends(require_writer)])
 def external_wait(request: Request, item_id: Identifier, execution_id: Identifier,
-                  body: ExternalWait, key: RequiredKey, lease: Lease = None):
-    return attempt_event(request, waits.external_wait, item_id, execution_id, body, lease, key)
+                  body: ExternalWait, key: RequiredKey):
+    return attempt_event(request, waits.external_wait, item_id, execution_id, body, key)
 
 
 @router.get("/runner/due-rechecks", dependencies=[Depends(require_runner)])
@@ -247,49 +226,3 @@ def reconciler_heartbeat(request: Request, runner_id: Identifier, body: reconcil
 @router.delete("/reconcilers/{runner_id}", dependencies=[Depends(require_coordinator)])
 def retire_reconciler(request: Request, runner_id: Identifier):
     return run(request, reconciliation.retire, runner_id, write=True)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
-             dependencies=[Depends(require_worker)])
-def pr_publication_claim(request: Request, item_id: Identifier, execution_id: Identifier,
-                         body: pr_models.PublicationClaimCheck, lease: Lease = None):
-    return run(request, pr_observations.check_publication_claim, item_id, execution_id, body,
-               fence(request, lease))
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/pr-observation",
-             dependencies=[Depends(require_worker)])
-def pr_observation(request: Request, item_id: Identifier, execution_id: Identifier,
-                   body: pr_models.Observation,
-                   lease: Lease = None, key: Key = None):
-    return attempt_event(request, pr_observations.submit, item_id, execution_id, body, lease, key)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/pr-publication-blocker",
-             dependencies=[Depends(require_worker)])
-def pr_publication_blocker(request: Request, item_id: Identifier, execution_id: Identifier,
-                           body: pr_models.PublicationBlocker,
-                           lease: Lease = None, key: Key = None):
-    return attempt_event(request, pr_observations.submit_blocker, item_id, execution_id, body, lease, key)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/pr-rework",
-             dependencies=[Depends(require_worker)])
-def pr_rework(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.Rework,
-              lease: Lease = None, key: Key = None):
-    return attempt_event(request, pr_observations.submit_rework, item_id, execution_id, body, lease, key)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/pr-merged",
-             dependencies=[Depends(require_runner)])
-def pr_merged(request: Request, item_id: Identifier, execution_id: Identifier, body: pr_models.ExternalMerge,
-              lease: Lease, key: Key = None):
-    return attempt_event(request, pr_observations.submit_merged, item_id, execution_id, body, lease, key)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/pr-validation-claim",
-             dependencies=[Depends(require_worker)])
-def pr_validation_claim(request: Request, item_id: Identifier, execution_id: Identifier,
-                        body: pr_models.PublishedValidationClaimCheck, lease: Lease = None):
-    return run(request, pr_observations.check_published_validation_claim,
-               item_id, execution_id, body, fence(request, lease))

@@ -22,18 +22,38 @@ OWNER = "o" * 32
 RUNNER = "r" * 32
 
 
-def claim_stage(path, item_id, lease, runner_id="local"):
-    """Seed an attempt for runner-stage tests; production launches use writer registration."""
+def claim_stage(path, item_id, token, session_ref="fixture"):
+    """Register or resume a real direct writer for HTTP lifecycle tests."""
     from phalanx import intake
+    from phalanx import captains, writers
+    from secrets import token_urlsafe
 
     with write_transaction(path) as db:
         row = intake.current_execution(db, item_id)
-        state = intake.STATE.validate_json(row["state_json"])
-        assignment = intake.claim_attempt(
-            db, row, state, runner_id=runner_id, lease_digest=intake.digest(lease),
-            lease_expires_at=int(time.time()) + 300,
-        )
-        return {**assignment, "runner_id": runner_id, "item_id": item_id,
+        writer = writers.open_writer(db, row["id"])
+        if writer is None:
+            captain = captains.register(db, captains.CaptainRegistration(
+                session_ref=session_ref, charter_revision="test"))
+            binding = writers.register(db, item_id, row["id"], writers.Registration(
+                expected_version=row["version"], captain_id=captain["id"], runtime="native",
+                nonce=token_urlsafe(16), token_digest=intake.digest(token)))
+        else:
+            binding = writers.next_attempt(db, writer["id"])
+        assignment = json.loads(db.execute(
+            "SELECT details_json FROM transition_history WHERE attempt_id=? AND event='claim'",
+            (binding["writer"]["attempt_id"],)).fetchone()[0])
+        resume = db.execute(
+            """SELECT event, details_json FROM transition_history
+               WHERE execution_id=? AND version=? AND event IN ('reply', 'recheck')""",
+            (row["id"], binding["version"] - 1)).fetchone()
+        resumed = ({("input_reply" if resume["event"] == "reply" else "external_recheck"):
+                    json.loads(resume["details_json"])} if resume else {})
+        return {"execution": {key: value for key, value in binding.items()
+                              if key not in {"writer", "item_id"}},
+                "attempt_id": binding["writer"]["attempt_id"],
+                "dependencies": assignment["dependencies"],
+                **resumed,
+                "item_id": item_id,
                 "request": json.loads(intake.item_row(db, item_id)["request_json"])}
 # Loaded or hosted machines can stall a single fsync-heavy request or server start.
 # Tests never assert on these timeouts.
@@ -169,17 +189,6 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
-    def test_lease_seconds_defaults_and_rejects_invalid_values(self):
-        from phalanx.config import lease_seconds
-        with patch.dict(os.environ):
-            os.environ.pop("PHALANX_LEASE_SECONDS", None)
-            self.assertEqual(lease_seconds(), 300)
-            os.environ["PHALANX_LEASE_SECONDS"] = "45"
-            self.assertEqual(lease_seconds(), 45)
-            for value in ("0", "-5", "29", "3601", "1.5", "", "five"):
-                os.environ["PHALANX_LEASE_SECONDS"] = value
-                with self.subTest(value=value), self.assertRaises(ValueError):
-                    lease_seconds()
 
     def test_migration_refuses_foreign_old_and_future_databases(self):
         with TemporaryDirectory() as directory:
@@ -207,7 +216,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
         with TemporaryDirectory() as directory:
             path = Path(directory) / "upgrade.sqlite3"
-            with patch.object(store, "MIGRATIONS", store.MIGRATIONS[:-1]):
+            with patch.object(store, "MIGRATIONS", store.MIGRATIONS[:-2]):
                 migrate(path)
             with write_transaction(path) as db:
                 intake.register(db, "repo", "https://github.com/e/r.git")

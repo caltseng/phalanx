@@ -1,6 +1,6 @@
 # Install Phalanx
 
-This guide sets up a **new** install: it creates tokens, a database, a runner state directory and repository trust. To restart or resume an install that already exists, follow [Resume an existing install](resume.md) instead. Running these steps again against an existing install would replace its credentials or database.
+This guide sets up a **new** install: it creates tokens, a database, client configuration and repository trust. To restart or resume an install that already exists, follow [Resume an existing install](resume.md) instead. Running these steps again against an existing install would replace its credentials or database.
 
 ## Choose and record your muster directory
 
@@ -15,11 +15,11 @@ these in a private local runbook outside the repository:
 - the absolute `PHALANX_DB` path;
 - the API base URL and port;
 - where the owner, runner and GitHub tokens are stored (a password manager or other private store, never the repository);
-- the runner config path, runner state directory and runner ID;
+- the reconciler config path, scratch directory and stable reconciler ID;
 - the validation policy path, if any;
 - the shift config, charter, Captain wake schedule and keeper schedule.
 
-A typical layout keeps the database, runner config, runner state and validation policy in sibling subdirectories of the muster directory, outside every mapped checkout. [Resume an existing install](resume.md) is written in terms of this runbook.
+A typical layout keeps the database, client configs, reconciler scratch directory and validation policy under the muster directory, outside every mapped checkout. [Resume an existing install](resume.md) is written in terms of this runbook.
 
 ## Install the package
 
@@ -84,14 +84,14 @@ python -m phalanx intake example "Review the test coverage" --target report --ke
 
 See [Work items](work-items.md) for intake targets, GitHub issue import, answering questions and the operator board.
 
-## Set up a runner
+## Set up the execution host
 
-A runner executes work on one machine. Give it:
+The host runs native Captain/writer sessions and the reconciler. Prepare:
 
 1. **A stable reconciler ID** and private scratch directory outside mapped checkouts.
-2. **A runner config**, such as `C:/muster/runner.json`, mapping each registered repository to its local checkout and runtime project. See [Configuration](configuration.md#runner-config).
+2. **A reconciler config**, such as `C:/muster/reconciler.json`, containing `base_url`, `reconciler_id` and repository checkout/base mappings. Keep native launching and runtime project settings in the Captain's shift config. See [Configuration](configuration.md#reconciler-config).
 3. **`PHALANX_RUNNER_TOKEN`** in Captain/reconciler command environments and **`PHALANX_GITHUB_TOKEN`** for GitHub observation. Native writers use their own configured Git/GitHub credentials.
-4. **A validation policy** defining required ready checks so the reconciler can verify ready delivery, plus optional trusted local checks that raise flags rather than gate direct work. Write it as described in [the validation policy guide](runner-validation-policy.md) at an absolute path outside every checkout. Configure each writer repository's prepared `checks_environment` separately in the shift config.
+4. **A validation policy** defining required ready checks so the reconciler can verify ready delivery, plus optional trusted local checks that raise flags rather than gate direct work. Write it as described in [the validation policy guide](validation-policy.md) at an absolute path outside every checkout. Configure each writer repository's prepared `checks_environment` separately in the shift config.
 5. **Standing repository trust** in the worker runtime, below.
 
 Fetch the desired origin branch into each mapped checkout before the first muster.
@@ -101,11 +101,11 @@ Fetch the desired origin branch into each mapped checkout before the first muste
 Once the config has `base_url` (and `validation_policy`), run:
 
 ```powershell
-python -m phalanx onboard registered-repo-id --config runner.json --state C:\phalanx-runner `
+python -m phalanx onboard registered-repo-id --config captain.json --state C:\muster\onboarding `
   --remote https://github.com/owner/example --checkout C:/enlistments/example --project-id PROJECT
 ```
 
-It registers the remote with the server (with `PHALANX_OWNER_TOKEN`; otherwise it verifies the registration), clones the checkout when it is absent or empty and verifies its origin and base branch (default: origin's HEAD), writes the complete mapping into the config, and adds a validation policy entry whose `ready_checks` list the CI that reported on the base branch tip (with `PHALANX_GITHUB_TOKEN`). `--host-id` defaults to the host the other mappings share. The new entry leaves `local_checks` unset for you to fill in or set to `[]`. The command never overwrites an existing registration, validation entry, or mapping field you did not pass. It prints each step as `done`, `ok`, `missing` (with the action) or `manual`, and exits 1 until nothing is missing. Rerun it to verify. Owner trust stays manual; configure the shared worktrees workspace in the shift config.
+It registers the remote with the server (with `PHALANX_OWNER_TOKEN`; otherwise it verifies the registration), clones the checkout when it is absent or empty and verifies its origin and base branch (default: origin's HEAD), writes the complete mapping into the supplied Captain config, and adds a validation policy entry whose `ready_checks` list the CI that reported on the base branch tip (with `PHALANX_GITHUB_TOKEN`). `--host-id` defaults to the host the other mappings share. Copy the verified checkout/base mapping into the separate reconciler config before observing that repository. The new entry leaves `local_checks` unset for you to fill in or set to `[]`. The command never overwrites an existing registration, validation entry, or mapping field you did not pass. It prints each step as `done`, `ok`, `missing` (with the action) or `manual`, and exits 1 until nothing is missing. Rerun it to verify. Owner trust stays manual; configure the shared worktrees workspace in the shift config.
 
 ### Grant repository trust once
 

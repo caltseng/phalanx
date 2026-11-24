@@ -1,4 +1,4 @@
-"""Trusted local checks from runner configuration, and how to run one on a checkout."""
+"""Trusted local checks from reconciler policy, and how to run one on a checkout."""
 
 import os
 import re
@@ -24,7 +24,7 @@ class CheckCommandError(RuntimeError):
 
 @dataclass(frozen=True)
 class LocalCheck:
-    """One check from trusted runner configuration for the registered repository."""
+    """One check from trusted reconciler policy for the registered repository."""
 
     policy: PreCheck
     argv: tuple[str, ...] = ()

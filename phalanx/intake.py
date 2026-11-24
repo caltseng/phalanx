@@ -14,17 +14,14 @@ from . import dependencies
 from .finalization_schema import enqueue
 from .pr_models import GITHUB_REMOTE
 from .transitions import (
-    Bypass, Event, Evidence, Execution, Outcome, PublicationMode, Stage, Status, Target, TERMINAL, Wait, decide, start,
+    Event, Evidence, Execution, Outcome, PublicationMode, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
 
 
 STATE = TypeAdapter(Execution)
 PRIORITY = {"low": 0, "normal": 1, "urgent": 2}
-# Stages whose findings send the item back to development or revision. Counting
-# pre-PR stages bounds reruns when development keeps the candidate unchanged.
-REWORK_STAGES = {Stage.SELF_REVIEW, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION,
-                 Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.CHECK_IN}
-REWORK_TARGETS = {Stage.DEVELOPMENT, Stage.PR_REVISION}
+REWORK_STAGES = {Stage.SELF_REVIEW}
+REWORK_TARGETS = {Stage.DEVELOPMENT}
 # Rework rounds allowed between owner replies.
 REWORK_LIMIT = 10
 # Development rounds allowed on identical findings before they count as no progress.
@@ -298,7 +295,7 @@ def _stalled_rework(db, execution_id, next_state):
     stages = sorted(REWORK_STAGES)
     rounds = [findings for findings, in db.execute(
         f"""SELECT json_extract(state_json, '$.findings') FROM transition_history
-           WHERE execution_id=? AND event=? AND json_extract(state_json, '$.stage') IN (?, ?)
+           WHERE execution_id=? AND event=? AND json_extract(state_json, '$.stage') = ?
              AND json_extract(details_json, '$.stage') IN ({','.join('?' * len(stages))})
              AND version > COALESCE((SELECT MAX(version) FROM transition_history
                                      WHERE execution_id=? AND event=?), 0)""",
@@ -480,31 +477,17 @@ def result(db, item_id, execution_id, payload, lease_digest):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     check_attempt(db, execution_id, state, payload, lease_digest)
     if payload.review_notes is not None and (
-        state.stage not in {Stage.SELF_REVIEW, Stage.PR_REVISION}
+        state.stage != Stage.SELF_REVIEW
         or state.candidate is None
         or state.candidate != (payload.reviewed_candidate if payload.outcome == Outcome.SUCCEEDED
                                else payload.candidate)
     ):
-        raise Conflict("Review notes require self-review or revision evidence for the current candidate")
-    if payload.local_checks is not None and (
-        state.stage != Stage.PRE_PR_VALIDATION
-        or state.candidate is None
-        or state.candidate != (payload.prevalidated_candidate if payload.outcome == Outcome.SUCCEEDED
-                               else payload.candidate)
-    ):
-        raise Conflict("Local checks require pre-validation evidence for the current candidate")
-    if payload.local_checks is not None and payload.outcome == Outcome.SUCCEEDED:
-        if len({check.name for check in payload.local_checks}) != len(payload.local_checks):
-            raise Conflict("Successful pre-validation requires one disposition per local check")
-        if any(check.outcome == "failed" or (
-            check.outcome != "passed" and not (check.reason and check.authorization)
-        ) for check in payload.local_checks):
-            raise Conflict("Successful pre-validation requires passing checks or documented bypasses")
+        raise Conflict("Review notes require self-review evidence for the current candidate")
     wait = Wait(**payload.wait.model_dump()) if payload.wait else None
     if payload.question is not None:
         wait = Wait(wait.reason if wait else payload.question.prompt, "owner reply")
     excluded = {"report_markdown", "expected_version"}
-    excluded.update(field for field in ("review_notes", "local_checks", "pr_url")
+    excluded.update(field for field in ("review_notes", "pr_url")
                     if getattr(payload, field) is None)
     details = payload.model_dump(mode="json", exclude=excluded)
     publishing = state.stage == Stage.PUBLICATION and payload.outcome == Outcome.SUCCEEDED
@@ -533,9 +516,6 @@ def result(db, item_id, execution_id, payload, lease_digest):
         ).fetchone():
             raise Conflict(f"{published} was already merged for an earlier execution. Publish this "
                            "execution's work in a new PR")
-    # Remaining runner-stage callers keep their contracts until PH-DS5 part 2.
-    direct = db.execute("SELECT 1 FROM writers WHERE attempt_id=? AND ended_at IS NULL",
-                        (payload.attempt_id,)).fetchone() is not None
     retry_at = None
     if payload.retry_after_seconds is not None and payload.failure_reason is None:
         raise Conflict("A retry delay requires a technical failure reason")
@@ -584,25 +564,11 @@ def result(db, item_id, execution_id, payload, lease_digest):
         if draft is None:
             raise Conflict("Reviewed draft Markdown is unavailable")
 
-    findings = bypass = None
-    if payload.outcome == Outcome.CHANGES_REQUIRED and state.stage in {Stage.SELF_REVIEW, Stage.PR_REVISION}:
-        findings = payload.review_notes
-    elif payload.outcome == Outcome.CHANGES_REQUIRED and payload.local_checks:
-        findings = "\n".join(f"Local check {check.name} {check.outcome}: {check.reason or 'no detail'}"
-                             for check in payload.local_checks if check.outcome == "failed")[:16000] or None
-    elif payload.outcome == Outcome.SUCCEEDED and payload.local_checks:
-        skipped = [check for check in payload.local_checks if check.outcome != "passed"]
-        if skipped:
-            bypass = Bypass(tuple(check.name for check in skipped),
-                            "\n".join(f"{check.name} ({check.outcome}): {check.reason}" for check in skipped),
-                            "\n".join(f"{check.name}: {check.authorization}" for check in skipped))
-
+    findings = payload.review_notes if payload.outcome == Outcome.CHANGES_REQUIRED else None
     return apply(
         db, row, state, Event.RESULT, details=details, attempt_id=payload.attempt_id,
         outcome=payload.outcome, wait=wait, retry_at=retry_at, retry_allowed=retry_at is not None,
-        direct=direct,
         evidence=Evidence(candidate=payload.candidate, reviewed_candidate=payload.reviewed_candidate,
-                          prevalidated_candidate=payload.prevalidated_candidate, bypass=bypass,
                           report_draft=draft_revision, reviewed_report=draft_revision,
                           report_review_notes=payload.report_review_notes,
                           findings=findings, published_pr=published),

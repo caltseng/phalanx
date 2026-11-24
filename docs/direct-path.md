@@ -14,10 +14,13 @@ blocking unrelated work.
 The server derives flags from the latest observation of each open execution: `head_drift`, `pr_closed`, `merge_conflict`, `wrong_base` (the PR's base isn't the item's target branch), `checks_failed`, `review_feedback`, `unpublished_branch_merged` (item branch reachable from its base with no PR) and `pre_pr_checks_failed`. An observation older than 15 minutes keeps its flags, marked with when it was seen, and adds `observation_stale`. While the observed head differs from the execution's recorded candidate, only `head_drift` reports it: `merge_conflict`, `checks_failed` and `pre_pr_checks_failed` describe that superseded head, so they wait for an observation of the candidate. Each reconciler with no heartbeat for 15 minutes raises its own `reconciler_stale`. An incomplete GitHub read posts nothing, so earlier flags stand, and backs that repository off until a later pass.
 
 ```powershell
-python -m phalanx reconcile --config runner.json --state C:\phalanx-reconciler
+python -m phalanx reconcile --config reconciler.json --state C:\phalanx-reconciler
 ```
 
-It needs `PHALANX_RUNNER_TOKEN` and `PHALANX_GITHUB_TOKEN`, and reuses the [runner configuration](configuration.md#runner-config)'s `base_url`, `runner_id`, `repositories` (checkout and `base_branch`), optional `validation_policy` and optional `notify_command`.
+It needs `PHALANX_RUNNER_TOKEN` and `PHALANX_GITHUB_TOKEN`, and a minimal
+[reconciler configuration](configuration.md#reconciler-config) with `base_url`,
+`reconciler_id`, `repositories` (checkout and `base_branch`), optional `validation_policy`
+and optional `notify_command`. It never reads an execution-runner config.
 
 - With a validation policy, it reports each open PR's configured GitHub checks and runs the trusted local checks once per PR head, one at a time, in a scratch worktree under `--state`, heartbeating while they run. Results go to their own `local-checks` route, so they never re-assert an older PR snapshot. Failures raise a flag; they never gate the item.
 - Only one reconciler can use a `--state` directory at a time.
@@ -25,9 +28,28 @@ It needs `PHALANX_RUNNER_TOKEN` and `PHALANX_GITHUB_TOKEN`, and reuses the [runn
 - Owner-notify flags are sent once each to `notify_command`.
 - Each pass prints one JSON line; `--once` runs a single pass and exits nonzero on any error.
 
+### Existing Windows muster rollout
+
+The operator maintains the host launcher outside the repository. Before deploying this
+revision, create `C:\phalanx-muster\reconciler.json` with the API URL, existing reconciler
+identity as `reconciler_id`, verified repository mappings and any validation/notification
+settings. Preserve credentials in the existing private environment; never put tokens in JSON.
+Update `C:\phalanx-muster\reconcile.ps1` to load that same private environment and invoke:
+
+```powershell
+& "C:\phalanx-muster\phalanx\.venv\Scripts\python.exe" -P -m phalanx reconcile `
+  --config "C:\phalanx-muster\reconciler.json" --state "C:\phalanx-muster\reconciler"
+```
+
+Stop only the identified previous reconciler process before replacing it. Run the new
+command with `--once`, verify no errors and a fresh heartbeat through `muster status`,
+then restart the persistent launcher. Retire the obsolete execution config only after
+checking that no host launcher references it. Do not delete the API database, artifacts,
+credentials or worktrees. No client SQLite state is imported or recreated.
+
 ### Post-merge deployment status
 
-For a repository that deploys from its base branch, optionally set `"post_merge_check": "deploy"` in its runner mapping. Use the exact check-run name of the post-merge deployment job (for example your GitHub Pages deploy job), not a PR build check. The reconciler then also polls recent executions checked into the mapping's `base_branch` and reads that check on each PR's **merge commit**, never its PR head or the latest base tip.
+For a repository that deploys from its base branch, optionally set `"post_merge_check": "deploy"` in its reconciler mapping. Use the exact check-run name of the post-merge deployment job (for example your GitHub Pages deploy job), not a PR build check. The reconciler then also polls recent executions checked into the mapping's `base_branch` and reads that check on each PR's **merge commit**, never its PR head or the latest base tip.
 
 - During the 24-hour window after check-in, the board shows a derived `deployment_pending`, `deployment_failed` or `deployed` flag. Missing or running checks are pending; only a successful completed run means deployed. Other conclusions, including skipped or cancelled, mean failed. The newest run wins when a job is rerun before success.
 - Polling stops on success or at the end of the window, and closed-page enumeration stops at the window boundary instead of walking all history.
@@ -40,7 +62,7 @@ Unconfigured repositories keep the existing behavior. This is GitHub observation
 
 A Captain is an agent chat in any runtime that can start visible sessions. It launches one native worker session per item, registers it as the item's writer and coordinates it. It never does item work. The worker posts its own stage results with `phx work`, and the reconciler observes GitHub.
 
-The Captain's commands are `python -m phalanx shift ...`. They need `PHALANX_RUNNER_TOKEN` and a shift config, passed with `--config` (before or after the action) or set in `PHALANX_SHIFT_CONFIG`. Alternatively, the [per-user muster locator](../README.md#direct-muster-discovery-and-status) derives `shift.json`, `charter.toml`, `runner.json` and `private.env` from an existing muster directory (`--home`, then `PHALANX_HOME`, then `~/.phalanx/muster.json`). With that layout, `shift status`, `reconcile` and `muster status` need no explicit config paths. Discovery/status never initialize or migrate state.
+The Captain's commands are `python -m phalanx shift ...`. They need `PHALANX_RUNNER_TOKEN` and a shift config, passed with `--config` (before or after the action) or set in `PHALANX_SHIFT_CONFIG`. Alternatively, the [per-user muster locator](../README.md#direct-muster-discovery-and-status) derives `shift.json`, `charter.toml`, `reconciler.json` and `private.env` from an existing muster directory (`--home`, then `PHALANX_HOME`, then `~/.phalanx/muster.json`). With that layout, `shift status`, `reconcile` and `muster status` need no explicit config paths. Discovery/status never initialize or migrate state.
 
 Example explicit shift config:
 
@@ -63,9 +85,9 @@ Example explicit shift config:
 }
 ```
 
-- `repositories` uses the runner configuration's mapping.
+- `repositories` maps registered IDs to verified checkouts and base branches, as in the reconciler config.
 - Each repository may also set `checks_environment`, a non-empty string naming its prepared checks interpreter or command prefix, with any quoting or shell invocation syntax the writer needs. Use an absolute interpreter path or a prefix that runs from the item's worktree (for example `uv run --no-sync python` with an already prepared environment). Writers append the repository's test or check arguments. This is separate from `work_command`: it supplies the project's check dependencies, not the Phalanx CLI.
-- `worktrees` is the root for item worktrees, and must be separate from any runner's.
+- `worktrees` is the root for item worktrees, separate from reconciler scratch worktrees.
 - `work_command` is how a worker session runs `phx work` from its worktree. The default is `python -m phalanx work`.
 - `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.
 - `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.

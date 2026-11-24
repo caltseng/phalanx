@@ -34,10 +34,10 @@ class OnboardingTests(ServerFixture, unittest.TestCase):
         git("add", ".", cwd=source)
         git("commit", "-m", "base", cwd=source)
         git("push", str(self.remote), "trunk", cwd=source)
-        self.config = self.directory / "runner.json"
+        self.config = self.directory / "captain.json"
         self.policy = self.directory / "validation.json"
         self.config.write_text(json.dumps({
-            "base_url": self.url, "runner_id": "desk", "validation_policy": str(self.policy),
+            "base_url": self.url, "reconciler_id": "desk", "validation_policy": str(self.policy),
             "repositories": {"other": {"checkout": "x", "base_branch": "main",
                                        "host_id": "local", "project_id": "p0"}},
         }), encoding="utf-8")

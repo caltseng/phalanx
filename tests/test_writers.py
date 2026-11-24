@@ -84,7 +84,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(f"/v1/items/{item_id}/executions/{execution_id}/result", RUNNER, {
             "attempt_id": binding["writer"]["attempt_id"], "stage": "report_drafting",
             "expected_version": binding["version"], "outcome": "succeeded", "report_markdown": "# R\n",
-        }, 422)
+        }, 403)
         self.ok("/v1/writer/progress", token, {"note": "Drafting"})
 
         binding = self.submit(token, binding, report_markdown="# Report\n")
@@ -510,21 +510,13 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.observe(ready)["state"]["status"], "completed")
         self.ok("/v1/writer", ready_token, code=401)
 
-    def test_closed_pr_asks_the_owner_and_old_pr_stages_refuse_writers(self):
+    def test_closed_pr_asks_the_owner(self):
         binding, token = self.publish("checked_in")
         binding = self.submit(token, binding, pr_url=PR_URL)
         closed = self.observe(binding, state="closed")
         self.assertEqual((closed["state"]["status"], closed["state"]["wait"]["trigger"]),
                          ("waiting_for_input", "owner reply"))
 
-        item_id, execution_id = self.pr_item("checked_in")
-        for stage, primary in (("pr_creation", None), ("development", PR_URL)):
-            with write_transaction(self.path) as db:
-                state = json.loads(db.execute("SELECT state_json FROM executions WHERE id=?",
-                                              (execution_id,)).fetchone()[0])
-                db.execute("UPDATE executions SET state_json=? WHERE id=?",
-                           (json.dumps(dict(state, stage=stage, primary_pr=primary)), execution_id))
-            self.register(item_id, execution_id, code=409)
 
     def test_completed_ready_merge_advances_once_and_releases_check_in_dependency(self):
         for head, ancestry in ((HEAD, {}), (OTHER, {"merged_head_ancestor": HEAD})):

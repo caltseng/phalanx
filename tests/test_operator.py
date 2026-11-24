@@ -118,8 +118,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertIsNone(newest["output_revision"])
 
         pr = PullRequest("https://github.com/example/project/pull/123", Revision("head", "base"))
-        ready = Execution(Target.READY, Stage.PR_RECONCILIATION, Status.COMPLETED, final_output=pr)
-        merged = Execution(Target.MERGED, Stage.CHECK_IN, Status.COMPLETED,
+        ready = Execution(Target.READY, Stage.DELIVERY, Status.COMPLETED, final_output=pr)
+        merged = Execution(Target.MERGED, Stage.DELIVERY, Status.COMPLETED,
                            final_output=replace(pr, merge_commit="merge"))
         with write_transaction(self.path) as db:
             transition(db, 7, 2, ready, LATEST)
@@ -153,7 +153,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         with write_transaction(self.path) as db:
             db.execute("UPDATE work_items SET request_json=? WHERE id=?",
                        (json.dumps({"goal": "Ready-only rerun", "target": "checked_in"}), identifier(100007)))
-            transition(db, 7, 2, Execution(Target.READY, Stage.PR_RECONCILIATION,
+            transition(db, 7, 2, Execution(Target.READY, Stage.DELIVERY,
                                            Status.COMPLETED, final_output=pr), LATEST)
         row = self.page(BOARD + "?kind=closed&limit=1")["items"][0]
         self.assertEqual((row["id"], row["target"], row["outcome"]),
@@ -222,14 +222,14 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         candidate, head = "a" * 40, "b" * 40
         pr_url = "https://github.com/a/b/pull/42"
         cases = [
-            (Stage.PRE_PR_VALIDATION, {
+            (Stage.SELF_REVIEW, {
                 "outcome": "changes_required", "prevalidated_candidate": candidate,
                 "local_checks": [{"name": "unit", "outcome": "failed",
                                   "reason": "Timed out after 1800 seconds"},
                                  {"name": "lint", "outcome": "passed"}],
             }, candidate, "changes_required; local check unit failed: "
                          "Timed out after 1800 seconds; at aaaaaaaaaaaa"),
-            (Stage.PR_PROMOTION, {
+            (Stage.PUBLICATION, {
                 "outcome": "changes_required", "issue": "merge_conflict",
                 "pull": {"head_sha": head}, "pr_url": pr_url,
             }, head, "changes_required; merge_conflict; at bbbbbbbbbbbb"),
@@ -269,12 +269,12 @@ class OperatorTest(ServerFixture, unittest.TestCase):
 
     def test_forward_results_preserve_persisted_wait_and_explicit_reasons(self):
         wait_reason = "Waiting for required checks on " + "a" * 40
-        explicit_reason = "Runner recorded why promotion must wait"
+        explicit_reason = "Writer recorded why publication must wait"
         with write_transaction(self.path) as db:
             insert(db, 9000, Execution(Target.READY, Stage.SELF_REVIEW))
             for version, stage, reason in (
-                (2, Stage.PRE_PR_VALIDATION, None),
-                (3, Stage.PR_PROMOTION, explicit_reason),
+                (2, Stage.DELIVERY, None),
+                (3, Stage.PUBLICATION, explicit_reason),
             ):
                 state = Execution(Target.READY, stage, Status.WAITING_FOR_EXTERNAL,
                                   wait=Wait(wait_reason, "recheck"))
@@ -284,10 +284,10 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                            (json.dumps(details), identifier(9000), version))
         events = self.page(f"{BOARD}/{identifier(9000)}/timeline")["events"]
         self.assertEqual((events[0]["from_stage"], events[0]["stage"]),
-                         ("pre_pr_validation", "pr_promotion"))
+                         ("delivery", "publication"))
         self.assertEqual(events[0]["reason"], explicit_reason)
         self.assertEqual((events[1]["from_stage"], events[1]["stage"]),
-                         ("self_review", "pre_pr_validation"))
+                         ("self_review", "delivery"))
         self.assertEqual(events[1]["reason"], wait_reason)
 
     def test_result_reasons_are_bounded_redacted_and_only_use_cause_fields(self):
@@ -305,7 +305,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             "credentials": {"token": "PRIVATE CREDENTIAL"}, "lease_token": "PRIVATE LEASE",
         }
         with write_transaction(self.path) as db:
-            insert(db, 9000, Execution(Target.READY, Stage.PRE_PR_VALIDATION))
+            insert(db, 9000, Execution(Target.READY, Stage.SELF_REVIEW))
             for version in (2, 3):
                 transition(db, 9000, version, Execution(Target.READY, Stage.DEVELOPMENT))
                 db.execute("UPDATE transition_history SET details_json=? WHERE execution_id=? AND version=?",
@@ -407,7 +407,10 @@ class DashboardTest(ServerFixture, unittest.TestCase):
             item = intake.create(db, Intake(repository_id="repo", goal="Ship it", target="ready_for_check_in", label="wave-1"))
             self.execution = item["execution"]["id"]
             pull = {"number": 5, "state": "open", "draft": True, "merged": False, "head_sha": "a" * 40}
-            observe(db, self.execution, 2, Stage.PR_REVISION, pull,
+            observe(db, self.execution, 2, Stage.SELF_REVIEW, pull,
+                    gate_result={"state": "satisfied", "reasons": []}, duplicate_numbers=[6])
+            observe(db, self.execution, 3, Stage.DEVELOPMENT, pull)
+            observe(db, self.execution, 4, Stage.SELF_REVIEW, pull,
                     gate_result={"state": "satisfied", "reasons": []}, duplicate_numbers=[6])
             intake.create(db, Intake(repository_id="repo", goal="Write notes", target="report"))
         self.start_server(self.path)
@@ -434,7 +437,7 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         pull = {"number": 5, "state": "open", "draft": False, "merged": False, "head_sha": "b" * 40,
                 "additions": 10, "deletions": 2}
         with write_transaction(self.path) as db:
-            observe(db, self.execution, 3, Stage.DEVELOPMENT, pull)
+            observe(db, self.execution, 5, Stage.DEVELOPMENT, pull)
         row = self.row(BOARD)
         self.assertEqual((row["revision_round"], row["duplicate_count"]), (3, None))
         self.assertEqual((row["pr"]["head_sha"], row["pr"]["head_ci"], row["pr"]["draft"],
@@ -463,7 +466,7 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         draft = PullRequest("https://github.com/a/b/pull/5", Revision("a" * 40, "b" * 40), draft=True)
         completed = Execution(Target.READY, Stage.DELIVERY, Status.COMPLETED, final_output=draft)
         with write_transaction(self.path) as db:
-            transition(db, int(self.execution, 16), 3, completed, datetime.now(UTC).isoformat())
+            transition(db, int(self.execution, 16), 5, completed, datetime.now(UTC).isoformat())
         with connect(self.path, mode="ro") as db:
             self.assertEqual(db.execute("SELECT outcome FROM executions WHERE id=?",
                                         (self.execution,)).fetchone()[0], "draft_published")
@@ -558,8 +561,8 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         self.assertEqual([row["id"] for row in self.page(BOARD + "?label=wave-1")["items"]], [self.execution])
         self.assertEqual(len(self.page(BOARD + "?repository=repo&status=queued")["items"]), 2)
         self.assertEqual([row["title"] for row in self.page(BOARD + "?q=notes")["items"]], ["Write notes"])
-        self.assertEqual(self.page(BOARD + "?stage=check_in")["items"], [])
-        self.assertEqual([row["id"] for row in self.page(BOARD + "?stage=pr_revision")["items"]], [self.execution])
+        self.assertEqual(self.page(BOARD + "?stage=publication")["items"], [])
+        self.assertEqual([row["id"] for row in self.page(BOARD + "?stage=self_review")["items"]], [self.execution])
         self.assertEqual(self.page(BOARD + "?repository=missing")["items"], [])
         self.assertEqual(self.page(BOARD + "?status=running")["items"], [])
         for query in ("5", "%235", self.execution, "https%3A%2F%2Fgithub.com%2Fa%2Fb%2Fpull%2F5"):

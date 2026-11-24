@@ -17,17 +17,12 @@ from . import captains, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
 from .flags import all_flags
 from .intake_models import Identifier, Payload, Text, Versioned
-from .transitions import TERMINAL, WRITER_PR_STAGES, Event, PublicationMode, Stage, Status
+from .transitions import TERMINAL, Event, Stage, Status
 
 
 # Writer attempts have no timed expiry. The writer token is the fence.
 WRITER_RUNNER_ID = "@writer"
 NO_EXPIRY = 253402300799
-# Remaining runner PR stages retire in PH-DS5 part 2.
-OLD_PR_STAGES = frozenset({
-    Stage.PR_CREATION, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION, Stage.PR_VALIDATION,
-    Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.PR_REVISION, Stage.CHECK_IN,
-})
 
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Nonce = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{16,100}$")]
@@ -169,12 +164,6 @@ def register(db, item_id, execution_id, payload):
             raise intake.Conflict(f"The execution is closing. Withdraw writer {current['id']} with "
                                   "stopped=true to confirm the stop")
         raise intake.Conflict("The execution is closed or closing")
-    # Remaining runner-stage executions require a rerun, not a second writer.
-    # Draft-only self-review retains the existing direct PR.
-    if state.stage in OLD_PR_STAGES or (state.primary_pr and state.stage not in WRITER_PR_STAGES
-                                        and state.publication_mode is not PublicationMode.DRAFT):
-        raise intake.Conflict(f"The execution is in the runner stage {state.stage} or has the runner's "
-                              f"PR {state.primary_pr}. Rerun the item to deliver it through a writer")
     if current is not None:
         if payload.replaces != current["id"]:
             raise intake.Conflict(f"Execution already has writer {current['id']}. Name it in replaces "
