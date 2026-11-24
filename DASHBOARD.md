@@ -138,6 +138,32 @@ Every section is a list of one-line rows. A section shows its count in its headi
 6. **Queued and waiting.** Everything else that is open: queued stages, external waits and prerequisite waits, with the open-work pager.
 7. **Recently closed.** Newest first, with the closed-work pager. Each row shows the outcome and links to its PR or report.
 
+### New work item (local board)
+
+The board-level header has a `+` button named **New work item**, reusable by later queue
+and history pages. It opens a compact native modal with registered repository, Markdown
+goal, acceptance criteria (one per line), target, priority, optional label, publication mode,
+and optional dependencies (one item ID and optional API milestone per line). Target defaults
+to intake's `checked_in`, displayed as **Merged** using the board's display-label mapping.
+
+Creation uses the existing `POST /v1/items` owner bearer-token route and its validation,
+not another intake service. An owner-connected board reuses its in-memory credential.
+The anonymous local read board asks for an owner token inside the modal and verifies owner
+access before loading `GET /v1/repositories`; closing discards that write credential.
+No token is placed in browser storage, URLs or cookies, and anonymous/runner reads never
+become writes. Browser-origin intake requires an exact same Origin (scheme, host and port)
+and, when supplied, `Sec-Fetch-Site: same-origin`; opaque, cross-site, and same-site-but-not-
+same-origin requests are rejected. Non-browser bearer clients without browser headers
+remain supported. There is no CORS grant or cookie-based write path.
+
+Every submission generates an idempotency key and locks double submission. A lost response
+or server failure retains the exact request and key for retry, including across modal close/
+reopen; fields unlock only after a definitive rejection. Intake errors appear inline and
+identify invalid fields. Success inserts the acknowledged queued row without remounting,
+changing URL filters, resetting pagination or moving scroll; normal polling reconciles it.
+Native dialog focus containment, Escape/Close, named controls, visible focus and 44px touch
+targets support keyboard, screen-reader and narrow mobile use. Closing returns focus to `+`.
+
 ### Row anatomy
 
 Open rows, from left to right, in aligned columns:

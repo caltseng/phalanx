@@ -76,6 +76,15 @@ def require_owner(role: Annotated[Role, Depends(authenticate)]) -> Role:
     return role
 
 
+def require_same_origin(request: Request):
+    """Browser intake is same-origin; bearer-authenticated non-browser clients still work."""
+    origin = request.headers.get("origin")
+    site = request.headers.get("sec-fetch-site")
+    if ((origin is not None and origin != f"{request.url.scheme}://{request.url.netloc}")
+            or (site is not None and (site != "same-origin" or origin is None))):
+        raise HTTPException(403, "Work-item creation requires a same-origin request")
+
+
 def require_runner(role: Annotated[Role, Depends(authenticate)]) -> Role:
     if role != "runner":
         raise HTTPException(403, "Runner token required")

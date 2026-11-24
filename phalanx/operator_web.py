@@ -1,4 +1,4 @@
-"""Same-origin shell for the authenticated operator read client."""
+"""Same-origin operator shell, with owner-authenticated intake."""
 
 from pathlib import Path
 

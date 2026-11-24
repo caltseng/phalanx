@@ -148,6 +148,35 @@
 
     return {
       owner: signal => read("/v1/owner/status", signal),
+      repositories: signal => read("/v1/repositories", signal),
+      async create(payload, key) {
+        const response = await fetch("/v1/items", {
+          method: "POST", redirect: "error", cache: "no-store", credentials: "omit",
+          signal: AbortSignal.timeout(12000),
+          headers: { Accept: "application/json", "Content-Type": "application/json",
+            Authorization: "Bearer " + token, "Idempotency-Key": key },
+          body: payload
+        });
+        if (!response.ok) {
+          const error = new Error("The server returned HTTP " + response.status + ".");
+          // A definitive rejection lets the user correct the form. Unknown outcomes
+          // retain the exact payload and key, including when a response cannot be read.
+          if ([400, 401, 403, 404, 409, 422].includes(response.status)) {
+            const body = await response.json();
+            error.rejected = true;
+            error.detail = body.detail;
+          }
+          throw error;
+        }
+        const row = await response.json();
+        return {
+          id: row.execution.id, itemId: row.id, title: row.goal.split("\n")[0], goal: row.goal,
+          repo: row.repository_id, target: row.execution.state.target,
+          publicationMode: row.execution.state.publication_mode, version: row.execution.version,
+          status: row.execution.state.status, stage: row.execution.state.stage,
+          createdAt: row.execution.created_at, lastAdvancedAt: row.execution.updated_at
+        };
+      },
       async list({ kind, cursor, limit, signal }) {
         if (kind !== "open" && kind !== "closed") throw new Error("Invalid work list.");
         const params = query(limit, cursor);
@@ -204,7 +233,200 @@
   const reportStatus = document.querySelector("#operator-report-status");
   const reportContent = document.querySelector("#operator-report-content");
   let unmount;
+  let clearCreate;
   let reportRead;
+
+  function newItem(source, authenticated) {
+    const modal = document.querySelector("#operator-create");
+    const auth = document.querySelector("#operator-create-auth");
+    const password = document.querySelector("#operator-create-token");
+    const form = document.querySelector("#operator-create-form");
+    const fields = document.querySelector("#operator-create-fields");
+    const submit = document.querySelector("#operator-create-submit");
+    const close = document.querySelector("#operator-create-close");
+    const status = document.querySelector("#operator-create-status");
+    const errors = document.querySelector("#operator-create-errors");
+    const repository = form.elements.repository_id;
+    const target = form.elements.target;
+    const label = window.PhalanxOperatorBoard.label;
+    target.replaceChildren(...["checked_in", "ready_for_check_in", "report"].map(value => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label(value);
+      return option;
+    }));
+    let writer = authenticated ? source : null;
+    let pending = null;
+    let busy = false;
+    let generation = 0;
+    let trigger;
+    let acknowledge;
+    let disposed = false;
+
+    function clearErrors() {
+      errors.replaceChildren();
+      for (const field of fields.elements) {
+        field.removeAttribute("aria-invalid");
+        if (field.getAttribute("aria-describedby") === errors.id) field.removeAttribute("aria-describedby");
+      }
+    }
+
+    function showErrors(detail) {
+      clearErrors();
+      const messages = Array.isArray(detail) ? detail : [{ msg: String(detail) }];
+      for (const error of messages) {
+        const name = error.loc?.[0] === "body" ? error.loc[1] : null;
+        const field = name && form.elements.namedItem(name);
+        const message = document.createElement("p");
+        const caption = field && form.querySelector('label[for="' + field.id + '"]');
+        message.textContent = (caption ? caption.textContent + ": " : "") + error.msg;
+        errors.append(message);
+        if (field) {
+          field.setAttribute("aria-invalid", "true");
+          if (!field.hasAttribute("aria-describedby")) field.setAttribute("aria-describedby", errors.id);
+        }
+      }
+      if (modal.open) errors.focus({ preventScroll: true });
+    }
+
+    async function unlock() {
+      const current = ++generation;
+      auth.querySelector("button").disabled = true;
+      status.textContent = "Loading registered repositories...";
+      try {
+        const access = writer;
+        await access.owner(AbortSignal.timeout(12000));
+        const rows = await access.repositories(AbortSignal.timeout(12000));
+        if (disposed || generation !== current || !modal.open) return;
+        const selected = repository.value;
+        repository.replaceChildren(...rows.map(row => {
+          const option = document.createElement("option");
+          option.value = row.id;
+          option.textContent = row.id;
+          return option;
+        }));
+        if (rows.some(row => row.id === selected)) repository.value = selected;
+        auth.hidden = true;
+        form.hidden = false;
+        fields.disabled = Boolean(pending);
+        submit.disabled = busy || !rows.length;
+        status.textContent = pending ? "The previous outcome is unknown. Retry the unchanged request safely."
+          : rows.length ? "" : "No registered repositories. Register one through the owner API or CLI first.";
+        if (!busy) (pending ? submit : repository).focus({ preventScroll: true });
+      } catch (error) {
+        if (disposed || generation !== current || !modal.open) return;
+        writer = authenticated ? source : null;
+        auth.hidden = authenticated;
+        form.hidden = true;
+        status.textContent = "Could not unlock creation. " + error.message + " Close and try again.";
+      } finally {
+        auth.querySelector("button").disabled = false;
+      }
+    }
+
+    function open(button, onCreated) {
+      trigger = button;
+      acknowledge = onCreated;
+      clearErrors();
+      status.textContent = "";
+      auth.hidden = Boolean(writer);
+      form.hidden = true;
+      modal.showModal();
+      if (writer) unlock();
+      else password.focus({ preventScroll: true });
+    }
+
+    function onAuth(event) {
+      event.preventDefault();
+      const token = password.value.trim();
+      password.value = "";
+      if (!TOKEN.test(token)) {
+        status.textContent = "Enter a valid Phalanx owner token.";
+        password.focus();
+        return;
+      }
+      writer = client(token);
+      unlock();
+    }
+
+    async function onSubmit(event) {
+      event.preventDefault();
+      if (busy || !writer) return;
+      clearErrors();
+      if (!pending) {
+        const lines = value => value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+        const data = Object.fromEntries(new FormData(form));
+        const payload = {
+          repository_id: data.repository_id, goal: data.goal,
+          acceptance_criteria: lines(data.acceptance_criteria),
+          target: data.target, priority: data.priority, publication_mode: data.publication_mode,
+          dependencies: lines(data.dependencies).map(line => {
+            const [upstream_id, ...milestone] = line.split(/\s+/);
+            return { upstream_id, milestone: milestone.join(" ") || "checked_in" };
+          })
+        };
+        if (data.label.trim()) payload.label = data.label.trim();
+        pending = { payload: JSON.stringify(payload), key: crypto.randomUUID() };
+      }
+      busy = true;
+      fields.disabled = true;
+      submit.disabled = true;
+      status.textContent = "Queuing work item...";
+      try {
+        const item = await writer.create(pending.payload, pending.key);
+        if (disposed) return;
+        pending = null;
+        form.reset();
+        target.value = "checked_in";
+        acknowledge(item);
+        status.textContent = "";
+        modal.close();
+      } catch (error) {
+        if (disposed) return;
+        if (error.rejected) {
+          pending = null;
+          showErrors(error.detail);
+          status.textContent = "Not queued. Correct the request and try again.";
+        } else {
+          status.textContent = "The outcome is unknown. Retry to safely send the same request; do not file it again.";
+        }
+      } finally {
+        busy = false;
+        if (!disposed) {
+          fields.disabled = Boolean(pending);
+          submit.disabled = false;
+          submit.textContent = pending ? "Retry queue request" : "Queue work item";
+        }
+      }
+    }
+
+    function onClose() {
+      if (modal.open) return;
+      generation++;
+      password.value = "";
+      if (!authenticated) writer = null;
+      trigger?.focus({ preventScroll: true });
+    }
+    const closeModal = () => modal.close();
+    close.addEventListener("click", closeModal);
+    modal.addEventListener("close", onClose);
+    auth.addEventListener("submit", onAuth);
+    form.addEventListener("submit", onSubmit);
+    source.openNewItem = open;
+    return () => {
+      disposed = true;
+      generation++;
+      modal.close();
+      writer = null;
+      password.value = "";
+      pending = null;
+      form.reset();
+      close.removeEventListener("click", closeModal);
+      modal.removeEventListener("close", onClose);
+      auth.removeEventListener("submit", onAuth);
+      form.removeEventListener("submit", onSubmit);
+    };
+  }
 
   dialog.querySelector("button").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
@@ -239,8 +461,9 @@
     }
   }
 
-  function show(source) {
+  function show(source, authenticated = false) {
     source.openReport = output => openReport(source, output);
+    clearCreate = newItem(source, authenticated);
     unmount = window.PhalanxOperatorBoard.mount(board, source);
     form.hidden = true;
     board.hidden = false;
@@ -267,7 +490,7 @@
       const source = client(token);
       const access = await source.owner(AbortSignal.timeout(12000));
       if (access.role !== "owner") throw new Error("Owner access required.");
-      show(source);
+      show(source, true);
       disconnect.hidden = false;
     } catch {
       status.textContent = "Could not verify owner access. Check the token and server, then try again.";
@@ -295,6 +518,7 @@
   disconnect.addEventListener("click", () => {
     if (dialog.open) dialog.close();
     clearReport();
+    clearCreate?.();
     unmount?.();
     unmount = undefined;
     board.hidden = true;
