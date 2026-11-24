@@ -18,6 +18,14 @@ observed head, so only a self-reviewed head is delivered. A wrong base or a read
 a closed PR asks the owner. An observed merge into the target remains a delivery fact. The diagram below describes
 the legacy runner stages, which draft-only items never enter.
 
+A completed direct `ready_for_check_in` execution also accepts `pr_observed` for its primary PR.
+If it merged into the target at the verified ready head, or the reconciler proves that head is an
+ancestor of the merged PR head, the server enriches the existing final PR output with the final
+revision, merge commit and GitHub's `merged_at`. Status stays `completed`, target stays unchanged,
+and the board outcome becomes `checked_in`. This idempotent terminal enrichment refreshes
+dependent eligibility in the same transaction. An open PR, closed-unmerged PR, wrong base,
+unrelated head, draft output, or already-recorded merge never changes terminal state.
+
 ```mermaid
 flowchart TD
     Start([New execution]) --> Kind{Output type}

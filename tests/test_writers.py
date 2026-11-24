@@ -508,6 +508,63 @@ class WriterTest(ServerFixture, unittest.TestCase):
                            (json.dumps(dict(state, stage=stage, primary_pr=primary)), execution_id))
             self.register(item_id, execution_id, code=409)
 
+    def test_completed_ready_merge_advances_once_and_releases_check_in_dependency(self):
+        for head, ancestry in ((HEAD, {}), (OTHER, {"merged_head_ancestor": HEAD})):
+            with self.subTest(head=head):
+                binding, token = self.publish("ready_for_check_in")
+                self.submit(token, binding, pr_url=PR_URL)
+                ready = self.observe(binding)
+                self.assertEqual(ready["state"]["status"], "completed")
+                dependent, execution_id = self.pr_item(
+                    "report", dependencies=[{"upstream_id": binding["item_id"], "milestone": "checked_in"}])
+                waiting, dependent_token, _ = self.register(dependent, execution_id)
+                self.assertIsNone(waiting["writer"]["attempt_id"])
+                self.assertIn("verified head or a descendant", waiting["unmet_dependencies"][0]["reason"])
+                self.assertIsNone(self.ok("/v1/writer/attempt", dependent_token,
+                                          method="POST")["writer"]["attempt_id"])
+                merge = dict(state="closed", merged=True, head_sha=head, merge_commit=MERGE,
+                             merged_at="2026-11-24T06:33:57Z", merge_method="squash_or_rebase", **ancestry)
+                done = self.observe(binding, **merge)
+                self.assertEqual((done["state"]["status"], done["version"]),
+                                 ("completed", ready["version"] + 1))
+                output = done["state"]["final_output"]
+                self.assertEqual((output["merge_commit"], output["revision"]["head"]), (MERGE, head))
+                self.assertTrue(output["merged_at"].startswith("2026-11-24T06:33:57"))
+                self.assertEqual(self.observe(binding, **merge)["version"], done["version"])
+                self.ok("/v1/writer", token, code=401)
+                eligible = self.ok("/v1/writer/attempt", dependent_token, method="POST")
+                self.assertEqual(eligible["state"]["status"], "running")
+                with connect(self.path, mode="ro") as db:
+                    transitions = db.execute(
+                        "SELECT count(*) FROM transition_history WHERE execution_id=? AND event='pr_observed'",
+                        (binding["id"],)).fetchone()[0]
+                self.assertEqual(transitions, 2)  # Ready completion, then merged enrichment.
+                page = self.ok("/v1/operator/executions?kind=closed&outcome=checked_in", OWNER)
+                row = next(row for row in page["items"] if row["id"] == binding["id"])
+                self.assertEqual(row["delivery"]["merge_commit"], MERGE)
+
+    def test_completed_ready_rejects_other_pr_and_ignores_unverified_merges(self):
+        binding, token = self.publish("ready_for_check_in")
+        self.submit(token, binding, pr_url=PR_URL)
+        ready = self.observe(binding)
+        merged = dict(state="closed", merged=True, merge_commit=MERGE, merged_at="2026-11-24T06:33:57Z")
+        self.observe(binding, number=8, code=409, **merged)
+        for pull in (
+                {"state": "closed"},
+                dict(merged, head_sha=OTHER),
+                dict(merged, head_sha=OTHER, merged_head_ancestor=BASE),
+                dict(merged, base_ref="dev"),
+                dict(merged, merged_at=None),
+                dict(merged, draft=True),
+        ):
+            with self.subTest(pull=pull):
+                unchanged = self.observe(binding, **pull)
+                self.assertEqual((unchanged["state"], unchanged["version"]), (ready["state"], ready["version"]))
+        draft, token = self.publish("ready_for_check_in", publication_mode="draft")
+        self.submit(token, draft, pr_url=PR_URL)
+        self.assertEqual(self.observe(draft, draft=True)["state"]["status"], "completed")
+        self.observe(draft, code=409, **merged)
+
     def test_draft_publication_verifies_github_without_releasing_ready_dependencies(self):
         for target in ("ready_for_check_in", "checked_in"):
             with self.subTest(target=target):

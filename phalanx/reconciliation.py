@@ -1,9 +1,7 @@
 """GitHub and git observations from the background reconciler, and the flags derived from them.
 
-Observations are timestamped facts, and they never block work. They advance only a writer's
-delivery stage, and only for the PR that writer published, where GitHub decides: a merge into the
-target by any method delivers, and a ready PR reaches ready_for_check_in (decision 69). Elsewhere
-they leave the execution's state and version alone, so recording one can't race a running attempt.
+Observations advance a writer's delivery stage and enrich completed ready outputs when their
+verified head (or a descendant) merges. Elsewhere they leave state and version alone.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -45,13 +43,14 @@ class ObservedPull(Payload):
     # (None when it couldn't), and GitHub's merged_at.
     merge_method: Literal["merge", "squash_or_rebase"] | None = None
     merged_at: AwareDatetime | None = None
+    merged_head_ancestor: SHA | None = None
     additions: Annotated[int, Field(strict=True, ge=0)] | None = None
     deletions: Annotated[int, Field(strict=True, ge=0)] | None = None
 
     @model_validator(mode="after")
     def merge_details(self):
-        if not self.merged and (self.merge_method or self.merged_at):
-            raise ValueError("Merge method and time describe a merged PR")
+        if not self.merged and (self.merge_method or self.merged_at or self.merged_head_ancestor):
+            raise ValueError("Merge details describe a merged PR")
         return self
 
 
@@ -114,11 +113,19 @@ def record(db, item_id, execution_id, body: Observation):
     row = intake.execution_row(db, item_id, execution_id)
     state = json.loads(row["state_json"])
     output = state["final_output"]
-    if output is not None and (
+    completed_ready = (row["status"] == "completed" and state["stage"] == "delivery"
+                       and state["target"] == "ready_for_check_in" and state["ready_revision"]
+                       and output and not output.get("draft") and state["primary_pr"] == output.get("url")
+                       and (not output.get("merge_commit") or (
+                           body.pr and body.pr.merged and body.pr.merge_commit == output["merge_commit"]
+                           and body.pr.head_sha == output["revision"]["head"])))
+    if output is not None and (not completed_ready or body.deployment is not None) and (
             row["status"] != "completed" or body.deployment is None or body.pr is None
             or output.get("merge_commit") != body.deployment.commit
             or output.get("revision", {}).get("head") != body.pr.head_sha):
-        raise intake.Conflict("Closed executions only accept deployment observations for their delivered merge")
+        raise intake.Conflict("Closed executions only accept ready-PR or delivered deployment observations")
+    if completed_ready and body.pr is None:
+        raise intake.Conflict("A completed ready execution requires its primary PR observation")
     observed_at = body.observed_at.astimezone(UTC)
     if observed_at > datetime.now(UTC) + CLOCK_SKEW:
         raise intake.Conflict("observed_at is in the future")
@@ -134,7 +141,7 @@ def record(db, item_id, execution_id, body: Observation):
             raise intake.Conflict("The PR head branch must be the item branch")
         url = f"https://github.com/{match[1]}/pull/{body.pr.number}"
         if output is not None and output.get("url", "").lower() != url.lower():
-            raise intake.Conflict("Deployment must describe the delivered PR")
+            raise intake.Conflict("Observation must describe the delivered PR")
         primary = state.get("primary_pr")
         if primary and primary.lower() != url.lower():
             raise intake.Conflict("The PR must be the item's primary PR")
@@ -173,7 +180,7 @@ def _advance(db, row, url, body, target_base, stamp):
     pull = body.pr
     # Only the PR this execution's writer published moves it; an earlier execution's PR on the
     # shared item branch is recorded and flagged, never delivered.
-    if (state.final_output is not None or state.stage is not Stage.DELIVERY or state.primary_pr != url or state.stopping
+    if (state.stage is not Stage.DELIVERY or state.primary_pr != url or state.stopping
             or state.pending_output or (pull.merged and pull.merge_commit is None)):
         return
     pr = PullRequest(url, Revision(pull.head_sha, pull.base_sha), draft=pull.draft,
@@ -182,7 +189,8 @@ def _advance(db, row, url, body, target_base, stamp):
                      merged_at=pull.merged_at and pull.merged_at.isoformat())
     ready = (pull.state == "open" and not pull.draft and pull.mergeable is not False and not body.feedback
              and body.checks in (GateState.SATISFIED, GateState.NOT_CONFIGURED))
-    evidence = Evidence(pr=pr, pr_ready=ready, off_base=pull.base_ref != target_base)
+    evidence = Evidence(pr=pr, pr_ready=ready, off_base=pull.base_ref != target_base,
+                        merged_head_ancestor=pull.merged_head_ancestor)
     following = decide(state, Event.PR_OBSERVED, evidence=evidence)
     if following == state:
         return

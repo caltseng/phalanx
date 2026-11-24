@@ -205,6 +205,8 @@ class Evidence:
     off_base: bool = False
     # The PR URL a writer reports when publication succeeds.
     published_pr: str | None = None
+    # The reconciler proved this commit is an ancestor of the merged PR's head.
+    merged_head_ancestor: str | None = None
 
 
 def _require(condition: object, message: str) -> None:
@@ -274,6 +276,15 @@ def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
              and pr and pr.url and pr.revision.head and pr.revision.base
              and state.primary_pr == pr.url,
              "A PR observation requires the PR this execution's writer published, in delivery")
+    if state.status is Status.COMPLETED:
+        output = state.final_output
+        if (state.target is not Target.READY or not isinstance(output, PullRequest)
+                or output.draft or output.merge_commit or not state.ready_revision
+                or not pr.closed or pr.draft or not pr.merge_commit or not pr.merged_at or evidence.off_base
+                or (pr.revision.head != output.revision.head
+                    and evidence.merged_head_ancestor != output.revision.head)):
+            return state
+        return replace(state, candidate=pr.revision.head, ready_revision=pr.revision, final_output=pr)
     if pr.merge_commit and evidence.off_base:
         # A merge can't be undone, and this one didn't deliver into the item's target.
         return _wait(state, Status.WAITING_FOR_INPUT,
@@ -456,6 +467,8 @@ def decide(
     A direct (writer) result skips the runner-only stages: self-review leads to
     publication, and PR_OBSERVED follows GitHub from there to delivery.
     """
+    if state.status is Status.COMPLETED and event is Event.PR_OBSERVED:
+        return _pr_observed(state, evidence)
     _require(state.status not in TERMINAL, "A closed execution must be rerun as a new execution")
     if state.pending_output is not None:
         _require(event is Event.FINALIZE, "Only finalization may resume this execution")

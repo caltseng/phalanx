@@ -78,7 +78,8 @@ alongside the target change. The timeline records the actor
 and before/after targets. The writer reads the latest target on each delivery pass and enables
 GitHub auto-merge only for `checked_in`, disabling it if retargeted to `ready_for_check_in`.
 GitHub's required reviews, checks and rulesets still gate a merge (D2); no new setting is needed.
-Steering never changes to or from `report`, and a completed ready item still requires a rerun.
+Steering never changes to or from `report`. Completed ready items cannot be steered, but the
+reconciler records a later owner merge of their verified head or a descendant without a rerun.
 
 **Draft-only publication.** Intake can set `"publication_mode": "draft"` (default: `"ready"`)
 for either PR target. This is a delivery ceiling, including for `checked_in`: the writer opens
@@ -135,13 +136,26 @@ Closed executions never raise `observation_stale`. Heartbeats carry each mapped
 repository's current check name (or none); removing or changing it records a
 disabled signal for previously observed deployments without GitHub reads, even
 outside the polling window.
-Closed executions accept only deployment observations matching their
-delivered PR, head and merge commit; their state, output and version do not
-change. Repositories without this setting have no deployment signal or
+Checked-in executions accept deployment observations matching their
+delivered PR, head and merge commit; those observations do not change state, output or version.
+Repositories without this setting have no deployment signal or
 extra post-merge polling. GitHub owns the workflow; no runtime runs a
 deployment stage and a pending or failed deploy never reopens delivery.
 
 For a writer's execution in `delivery`, the server applies each observation of its primary PR as a state transition (`pr_observed`). The observation sets the current head. Each PR observation names the branch the PR must merge into: the item's `target_branch`, else the repository's `base_branch` from the reconciler's mapping. A PR on another base never reaches `ready_for_check_in` and raises a `wrong_base` flag, and a merge into another base asks the owner instead of delivering. A merge completes the execution and ends its writer. Every post is reapplied, so a lost apply recovers on the next pass, and an unchanged observation doesn't bump the execution's version. A snapshot older than one already recorded is ignored unless it shows a merge. A `ready_for_check_in` milestone, and the target, need required checks green, so they need the repository's trusted validation policy. Without one the execution keeps waiting, visibly, until merged. Executions on the old path only record observations.
+
+The same reconciler also pages completed direct ready outcomes, without the deployment window
+or deployment opt-in, until their primary PR is observed merged. It does not rerun checks or
+reactivate their ended writers. A merge into the target at the completed output's verified head
+enriches that output with the final revision, merge commit, method and GitHub's `merged_at`.
+For a different head the reconciler compares the verified head to that exact merged head using
+GitHub ancestry and includes `merged_head_ancestor` only when it is reachable. The server requires
+that proof to match the verified head. Closed-unmerged PRs, unrelated heads and wrong-base merges
+do not advance completed executions. One `pr_observed` transition records the enrichment and
+refreshes dependents in the same transaction; repeated observations do not bump the version.
+Status remains `completed` and the target is preserved, while the board outcome becomes
+`checked_in` and `checked_in` dependencies clear. This grants no authority to merge a ready-only
+item and adds no runner hook or polling service.
 
 ## Liveness
 
