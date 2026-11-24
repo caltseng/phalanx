@@ -59,6 +59,10 @@
   <header>
     <h1>Phalanx State Machine</h1>
     <p>Select a state to inspect its evidence, transitions, and recovery paths.</p>
+    <p>These graphs show the legacy runner stages. <a href="docs/direct-sessions.md#pr-publication-and-delivery">Direct writer sessions</a>
+      use development &rarr; self review &rarr; publication &rarr; delivery.
+      With <code>publication_mode: "draft"</code>, delivery stops at a verified open draft,
+      without promotion, merging or a ready-for-check-in milestone.</p>
   </header>
   <nav aria-label="Graph view">
     <button type="button" data-view="lifecycle" aria-pressed="true">Lifecycle overview</button>

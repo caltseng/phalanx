@@ -12,6 +12,7 @@ from phalanx import captains, dispatch, flags, intake, store
 from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
+from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import item_branch
 
@@ -279,6 +280,76 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((done["state"]["status"], done["state"]["final_output"]["url"]),
                          ("completed", "https://github.com/e/r/pull/8"))
 
+    def test_deployment_observations_refresh_flags_without_reopening_delivery(self):
+        binding, token = self.publish("checked_in", target_branch="main")
+        self.submit(token, binding, pr_url=PR_URL)
+        path = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+        pull = {"number": 7, "state": "closed", "merged": True, "draft": False,
+                "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD, "base_ref": "main",
+                "base_sha": BASE, "merge_commit": MERGE}
+        body = {"pr": pull, "target_base": "main",
+                "deployment": {"commit": MERGE, "check_name": "deploy", "state": "pending"}}
+
+        def observe(**fields):
+            return self.ok(path + "/github-observation", RUNNER,
+                           dict(body, observed_at=datetime.now(UTC).isoformat(), **fields))
+
+        # A pending deployment doesn't delay completion or keep a writer alive.
+        observe()
+        completed = self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]
+        self.assertEqual(completed["state"]["status"], "completed")
+        self.ok("/v1/writer", token, code=401)
+        for state, kind in (("pending", "deployment_pending"), ("failed", "deployment_failed"),
+                            ("deployed", "deployed"), ("pending", "deployment_pending")):
+            body["deployment"]["state"] = state
+            observe()
+            self.assertFalse(observe()["recorded"])
+            found = [flag for flag in self.ok("/v1/flags", OWNER)["flags"]
+                     if flag["execution_id"] == binding["id"]]
+            self.assertEqual([flag["kind"] for flag in found], [kind])
+            self.assertIn(MERGE, found[0]["reason"])
+            self.assertEqual(self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"], completed)
+            page = self.ok("/v1/operator/executions?kind=closed", OWNER)
+            self.assertEqual((page["items"][0]["outcome"], page["items"][0]["delivery"]["merge_commit"]),
+                             ("checked_in", MERGE))
+            self.assertEqual(page["items"][0]["deployment"]["state"], state)
+            with connect(self.path, mode="ro") as db:
+                later = flags.all_flags(db, datetime.now(UTC) + DEPLOYMENT_WINDOW)["flags"]
+            kinds = {flag["kind"] for flag in later if flag["execution_id"] == binding["id"]}
+            self.assertNotIn("observation_stale", kinds)
+            self.assertEqual(kinds, {"deployment_missing"} if state == "pending"
+                             else {"deployment_failed"} if state == "failed" else set())
+            if state == "pending":
+                missing, = [flag for flag in later if flag["kind"] == "deployment_missing"]
+                self.assertTrue(missing["notify_owner"])
+        # A delayed older snapshot cannot restore a previous failed state.
+        stale = dict(body, deployment=dict(body["deployment"], state="failed"),
+                     observed_at=(datetime.now(UTC) - timedelta(minutes=5)).isoformat())
+        self.ok(path + "/github-observation", RUNNER, stale)
+        self.assertIn("deployment_pending", {flag["kind"] for flag in self.ok("/v1/flags", OWNER)["flags"]})
+        # A closed execution only accepts its own delivered PR, head and merge commit.
+        for fields, code in (
+            ({"deployment": None}, 409),
+            ({"pr": dict(pull, head_sha=OTHER)}, 409),
+            ({"pr": dict(pull, number=8)}, 409),
+            ({"pr": dict(pull, merge_commit=OTHER),
+              "deployment": dict(body["deployment"], commit=OTHER)}, 409),
+            ({"pr": dict(pull, merged=False)}, 422),
+            ({"pr": dict(pull, base_ref="dev"), "target_base": "dev"}, 409),
+        ):
+            self.ok(path + "/github-observation", RUNNER,
+                    dict(body, observed_at=datetime.now(UTC).isoformat(), **fields), code)
+        self.ok("/v1/reconcilers/local/heartbeat", RUNNER, {"deployment_checks": {"repo": None}})
+        self.assertFalse([flag for flag in self.ok("/v1/flags", OWNER)["flags"]
+                          if flag["execution_id"] == binding["id"]])
+        self.assertEqual(self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"], completed)
+        self.ok("/v1/reconcilers/local/heartbeat", RUNNER, {"deployment_checks": {"repo": None}})
+        self.assertEqual(self.ok("/v1/operator/executions?kind=closed", OWNER)["items"][0]["deployment"]["state"],
+                         "disabled")
+        with connect(self.path, mode="ro") as db:
+            later = flags.all_flags(db, datetime.now(UTC) + DEPLOYMENT_WINDOW)["flags"]
+        self.assertFalse([flag for flag in later if flag["execution_id"] == binding["id"]])
+
     def test_a_pr_into_another_base_never_delivers(self):
         binding, token = self.publish("ready_for_check_in")
         binding = self.submit(token, binding, pr_url=PR_URL)
@@ -323,6 +394,75 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 db.execute("UPDATE executions SET state_json=? WHERE id=?",
                            (json.dumps(dict(state, stage=stage, primary_pr=primary)), execution_id))
             self.register(item_id, execution_id, code=409)
+
+    def test_draft_publication_verifies_github_without_releasing_ready_dependencies(self):
+        for target in ("ready_for_check_in", "checked_in"):
+            with self.subTest(target=target):
+                binding, token = self.publish(target, publication_mode="draft", target_branch="main")
+                dependent, execution_id = self.pr_item(
+                    "report", dependencies=[{"upstream_id": binding["item_id"], "milestone": "ready_for_check_in"}])
+                waiting, dependent_token, _ = self.register(dependent, execution_id)
+                self.assertIsNone(waiting["writer"]["attempt_id"])
+                binding = self.submit(token, binding, pr_url=PR_URL)
+                self.assertEqual(binding["state"]["publication_mode"], "draft")
+                self.assertIn("open draft", binding["state"]["wait"]["reason"])
+                for pull, flag in (({}, "draft_required"), ({"draft": True, "base_ref": "dev"}, "wrong_base")):
+                    state = self.observe(binding, **pull)["state"]
+                    self.assertEqual(state["status"], "waiting_for_external")
+                    self.assertEqual(state["candidate"], HEAD)
+                    self.assertIsNone(state["ready_revision"])
+                    self.assertIn(flag, {f["kind"] for f in self.ok("/v1/flags", OWNER)["flags"]
+                                         if f["item_id"] == binding["item_id"]})
+                # Draft-only publication does not wait for ready-only CI or mergeability.
+                body = {"observed_at": datetime.now(UTC).isoformat(), "target_base": "main",
+                        "pr": {"number": 7, "state": "open", "merged": False, "draft": True,
+                               "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD,
+                               "base_ref": "main", "base_sha": BASE}}
+                route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+                self.ok(route + "/github-observation", RUNNER, body)
+                state = self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]["state"]
+                self.assertEqual((state["status"], state["final_output"]["draft"]), ("completed", True))
+                self.assertIsNone(state["ready_revision"])
+                self.ok("/v1/writer", token, code=401)
+                self.assertIsNone(self.ok("/v1/writer/attempt", dependent_token, method="POST")["writer"]["attempt_id"])
+                board = self.ok(f"/v1/operator/executions/{binding['id']}/timeline", OWNER)["item"]
+                self.assertEqual((board["publication_mode"], board["outcome"]), ("draft", "draft_published"))
+                self.assertIsNone(board["delivery"])
+
+    def test_a_draft_push_after_self_review_is_reviewed_before_delivery(self):
+        binding, token = self.publish("ready_for_check_in", publication_mode="draft", target_branch="main")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.observe(binding)
+        # The writer sees its own execution's flags, so a draft_required flag can't stall unseen.
+        self.assertIn("draft_required", {flag["kind"] for flag in self.ok("/v1/writer", token)["flags"]})
+        state = self.observe(binding, draft=True, head_sha=OTHER)["state"]
+        self.assertEqual((state["stage"], state["status"], state["candidate"]), ("self_review", "queued", OTHER))
+        self.assertEqual(self.ok("/v1/writer", token)["flags"], [])
+        # A replacement writer can pick up the re-review of a draft that is already published.
+        binding, token, _ = self.register(binding["item_id"], binding["id"], replaces=binding["writer"]["id"],
+                                          replaced_stopped=True)
+        binding = self.submit(token, binding, reviewed_candidate=OTHER)
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        state = self.observe(binding, draft=True, head_sha=OTHER)["state"]
+        self.assertEqual((state["status"], state["candidate"], state["final_output"]["draft"]),
+                         ("completed", OTHER, True))
+
+    def test_draft_intake_cannot_enter_legacy_promotion_and_survives_rerun(self):
+        item_id, execution_id = self.pr_item("checked_in", publication_mode="draft")
+        with write_transaction(self.path) as db:
+            claim = dispatch.claim(db, Claim(runner_id="local", repository_ids=["repo"], stages=["development"]),
+                                   intake.digest(token_urlsafe(32)))
+        self.assertEqual(claim["status"], "no_eligible_work")
+        binding, token, _ = self.register(item_id, execution_id)
+        binding = self.submit(token, binding, candidate=HEAD)
+        binding = self.submit(token, binding, reviewed_candidate=HEAD)
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.observe(binding, draft=True)
+        rerun = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/rerun", OWNER,
+                        {"expected_version": self.version(item_id), "target": "checked_in"})
+        self.assertEqual(rerun["state"]["publication_mode"], "draft")
+        self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "No PR", "target": "report",
+                                    "publication_mode": "draft"}, 422)
 
     def test_captain_sessions_actions_handoff_and_reconciler_retirement(self):
         item_id, execution_id = self.item()

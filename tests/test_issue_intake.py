@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 import os
@@ -73,6 +73,33 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
         with read_transaction(self.path) as db:
             return db.execute("SELECT count(*) FROM work_items").fetchone()[0]
 
+    def file(self, *args):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["phalanx", "--api-url", self.url, "intake", *args]):
+            with redirect_stdout(output):
+                main()
+        return json.loads(output.getvalue())
+
+    def test_cli_intake_sends_dependencies_priority_context_and_criteria(self):
+        upstream = self.file("example", "First", "--target", "report")
+        merged = self.file("example", "Merge", "--target", "checked_in")
+        item = self.file("example", "Second", "--target", "checked_in", "--key", "second",
+                         "--after", merged["id"], "--after", f"{upstream['id']}:report",
+                         "--priority", "urgent", "--context", "https://example.test/a",
+                         "--context", "note", "--accept", "tests pass", "--accept", "docs")
+        self.assertEqual(item["priority"], "urgent")
+        self.assertEqual(item["context_links"], ["https://example.test/a", "note"])
+        self.assertEqual(item["acceptance_criteria"], ["tests pass", "docs"])
+        self.assertEqual(
+            sorted((d["upstream_id"], d["milestone"]) for d in item["dependencies"]),
+            sorted([(merged["id"], "checked_in"), (upstream["id"], "report")]))
+        self.assertEqual(upstream["priority"], "normal")
+        self.assertEqual(upstream["dependencies"], [])
+        with patch.object(sys, "argv", ["phalanx", "intake", "example", "x", "--target",
+                                        "report", "--after", "abc:merged"]):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main()
+
     def test_cli_import_replay_restart_and_real_dispatch(self):
         output = io.StringIO()
         with patch.object(sys, "argv", ["phalanx", "--api-url", self.url, "ingest-issue",
@@ -118,6 +145,18 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
         self.assertNotEqual(explicit["id"], original["id"])
         self.assertEqual(explicit["execution"]["state"]["stage"], "report_drafting")
         self.assertEqual(self.ingest(target="report", key="intentional-new-import"), explicit)
+
+    def test_cli_intake_and_issue_intake_preserve_draft_publication(self):
+        for command in (["intake", "example", "Review only"],
+                        ["ingest-issue", "example", "42"]):
+            output = io.StringIO()
+            with patch.object(sys, "argv", ["phalanx", "--api-url", self.url, *command,
+                                           "--target", "ready_for_check_in", "--publication-mode", "draft"]):
+                with redirect_stdout(output):
+                    main()
+            item = json.loads(output.getvalue())
+            self.assertEqual(item["publication_mode"], "draft")
+            self.assertEqual(item["execution"]["state"]["publication_mode"], "draft")
 
     def test_unregistered_or_non_github_repository_and_credentials_cannot_import(self):
         with self.assertRaisesRegex(ValueError, "not registered"):

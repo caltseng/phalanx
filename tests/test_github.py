@@ -57,7 +57,7 @@ class GitHubClientTests(unittest.TestCase):
         return result
 
     def test_exact_pull_includes_current_head_and_merge_evidence(self):
-        self.responses.append(response(pull(draft=False, merged=True)))
+        self.responses.append(response({**pull(draft=False, merged=True), "additions": 17, "deletions": 3}))
         result = self.client.get_pull_request(7)
         self.assertEqual(self.requests[0].full_url, f"{API}/repos/owner/repo/pulls/7")
         self.assertEqual((result.head_sha, result.base_sha, result.merge_commit_sha),
@@ -65,6 +65,7 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual((result.state, result.draft, result.merged), ("closed", False, True))
         self.assertEqual(result.head_repository, "Owner/SourceFork")
         self.assertIsNone(result.mergeable)
+        self.assertEqual((result.additions, result.deletions), (17, 3))
 
     def test_issue_snapshot_and_paginated_comments_preserve_sources(self):
         issue_url = "https://github.example/Owner/Repo/issues/7"

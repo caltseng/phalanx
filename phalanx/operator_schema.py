@@ -49,15 +49,25 @@ WORKER_SCHEMA = (
 # The latest blocker a runner reported for its open attempt, shown as the item's wait reason.
 BLOCKER_SCHEMA = ("ALTER TABLE attempts ADD COLUMN blocker TEXT",)
 
-PR_OBSERVED = ("json_type({row}.details_json, '$.pr_url') = 'text' "
-               "AND json_type({row}.details_json, '$.pull.number') = 'integer' "
-               "AND json_type({row}.details_json, '$.pull.head_sha') = 'text' "
-               "AND json_type({row}.details_json, '$.pull.state') = 'text'")
 # Rework loops: re-entering one of these stages starts a new revision round.
 REWORK_ENTRY = "('development', 'pr_revision', 'report_drafting')"
 
-# PH-29a dashboard reads: labels, outcomes, PR facts the runner observed, revision rounds
-# and runner presence.
+# PR facts come exclusively from the reconciler, never writer claims or lifecycle evidence.
+PR_COLUMNS = """
+    execution_id,
+    json_extract(observation_json, '$.pr.url') AS url,
+    json_extract(observation_json, '$.pr.number') AS number,
+    json_extract(observation_json, '$.pr.state') AS state,
+    json_extract(observation_json, '$.pr.draft') AS draft,
+    json_extract(observation_json, '$.pr.merged') AS merged,
+    json_extract(observation_json, '$.pr.head_sha') AS head_sha,
+    json_extract(observation_json, '$.pr.additions') AS additions,
+    json_extract(observation_json, '$.pr.deletions') AS deletions,
+    json_extract(observation_json, '$.checks') AS ci,
+    json_extract(observation_json, '$.pr.head_sha') AS ci_head_sha,
+    json_extract(observation_json, '$.duplicate_count') AS duplicate_count
+"""
+
 DASHBOARD_SCHEMA = (
     """ALTER TABLE work_items ADD COLUMN label TEXT
        GENERATED ALWAYS AS (json_extract(request_json, '$.label')) VIRTUAL""",
@@ -89,87 +99,37 @@ DASHBOARD_SCHEMA = (
            UPDATE operator_progress SET revision_round = revision_round + 1
            WHERE execution_id = NEW.id;
        END""",
-    # The latest PR the runner observed for each execution. CI and size stay known only
-    # while the observed head is unchanged.
-    """CREATE TABLE operator_pr (
-        execution_id TEXT PRIMARY KEY NOT NULL REFERENCES executions(id),
-        version INTEGER NOT NULL,
-        url TEXT NOT NULL,
-        number INTEGER NOT NULL,
-        state TEXT NOT NULL,
-        draft INTEGER,
-        merged INTEGER,
-        head_sha TEXT NOT NULL,
-        additions INTEGER,
-        deletions INTEGER,
-        ci TEXT,
-        ci_head_sha TEXT,
-        duplicate_count INTEGER NOT NULL
-    )""",
-    f"""INSERT INTO operator_pr
-       SELECT latest.execution_id, latest.version,
-              json_extract(latest.details_json, '$.pr_url'),
-              json_extract(latest.details_json, '$.pull.number'),
-              json_extract(latest.details_json, '$.pull.state'),
-              json_extract(latest.details_json, '$.pull.draft'),
-              json_extract(latest.details_json, '$.pull.merged'),
-              json_extract(latest.details_json, '$.pull.head_sha'),
-              NULL, NULL, gate.ci, gate.head,
-              coalesce((SELECT json_array_length(published.details_json, '$.duplicate_numbers')
-                        FROM transition_history AS published
-                        WHERE published.execution_id = latest.execution_id
-                          AND json_type(published.details_json, '$.duplicate_numbers') = 'array'
-                        ORDER BY published.version DESC LIMIT 1), 0)
-       FROM transition_history AS latest
-       LEFT JOIN (
-           SELECT execution_id, json_extract(details_json, '$.pull.head_sha') AS head,
-                  json_extract(details_json, '$.gate_result.state') AS ci, max(version)
-           FROM transition_history
-           WHERE json_type(details_json, '$.gate_result') = 'object'
-           GROUP BY execution_id, head
-       ) AS gate ON gate.execution_id = latest.execution_id
-              AND gate.head = json_extract(latest.details_json, '$.pull.head_sha')
-       WHERE {PR_OBSERVED.format(row="latest")} AND latest.version = (
-           SELECT max(other.version) FROM transition_history AS other
-           WHERE other.execution_id = latest.execution_id AND {PR_OBSERVED.format(row="other")})""",
-    f"""CREATE TRIGGER operator_pr_observed AFTER INSERT ON transition_history
-       WHEN {PR_OBSERVED.format(row="NEW")}
-       BEGIN
-           INSERT INTO operator_pr VALUES (
-               NEW.execution_id, NEW.version,
-               json_extract(NEW.details_json, '$.pr_url'),
-               json_extract(NEW.details_json, '$.pull.number'),
-               json_extract(NEW.details_json, '$.pull.state'),
-               json_extract(NEW.details_json, '$.pull.draft'),
-               json_extract(NEW.details_json, '$.pull.merged'),
-               json_extract(NEW.details_json, '$.pull.head_sha'),
-               json_extract(NEW.details_json, '$.pull.additions'),
-               json_extract(NEW.details_json, '$.pull.deletions'),
-               json_extract(NEW.details_json, '$.gate_result.state'),
-               CASE WHEN json_type(NEW.details_json, '$.gate_result') = 'object'
-                    THEN json_extract(NEW.details_json, '$.pull.head_sha') END,
-               coalesce(json_array_length(NEW.details_json, '$.duplicate_numbers'), 0)
-           ) ON CONFLICT (execution_id) DO UPDATE SET
-               version = excluded.version, url = excluded.url, number = excluded.number,
-               state = excluded.state, draft = excluded.draft, merged = excluded.merged,
-               head_sha = excluded.head_sha,
-               additions = CASE WHEN excluded.additions IS NOT NULL OR excluded.head_sha IS NOT head_sha
-                                THEN excluded.additions ELSE additions END,
-               deletions = CASE WHEN excluded.deletions IS NOT NULL OR excluded.head_sha IS NOT head_sha
-                                THEN excluded.deletions ELSE deletions END,
-               ci = CASE WHEN excluded.ci_head_sha IS NOT NULL OR excluded.head_sha IS NOT ci_head_sha
-                         THEN excluded.ci ELSE ci END,
-               ci_head_sha = CASE WHEN excluded.ci_head_sha IS NOT NULL
-                                       OR excluded.head_sha IS NOT ci_head_sha
-                                  THEN excluded.ci_head_sha ELSE ci_head_sha END,
-               duplicate_count = CASE
-                   WHEN json_type(NEW.details_json, '$.duplicate_numbers') = 'array'
-                   THEN excluded.duplicate_count ELSE duplicate_count END;
-       END""",
-    # Last time each runner polled for work or renewed a lease, and the slots it offered.
-    """CREATE TABLE runners (
-        id TEXT PRIMARY KEY NOT NULL,
-        slots INTEGER,
-        last_seen_at TEXT NOT NULL
-    )""",
+    """CREATE INDEX operator_observed ON github_observations
+       (execution_id, last_observed_at DESC, observed_at DESC)""",
+    f"CREATE INDEX operator_retry ON executions(retry_at) WHERE {OPEN}",
+    "CREATE INDEX operator_lease ON attempts(lease_expires_at) WHERE ended_at IS NULL",
+    f"""CREATE TABLE operator_pr AS SELECT {PR_COLUMNS}
+        FROM github_observations AS observation
+        WHERE (observation.pr_url, observation.head_sha, observation.digest) = (
+            SELECT latest.pr_url, latest.head_sha, latest.digest FROM github_observations AS latest
+            WHERE latest.execution_id = observation.execution_id
+            ORDER BY latest.last_observed_at DESC, latest.observed_at DESC LIMIT 1)
+        """,
+    "CREATE UNIQUE INDEX operator_pr_execution ON operator_pr(execution_id)",
+    *(
+        f"""CREATE TRIGGER operator_pr_{name} AFTER {event} ON github_observations
+            BEGIN
+                INSERT OR REPLACE INTO operator_pr SELECT {PR_COLUMNS}
+                FROM github_observations WHERE execution_id = NEW.execution_id
+                ORDER BY last_observed_at DESC, observed_at DESC LIMIT 1;
+            END"""
+        for name, event in (("insert", "INSERT"), ("update", "UPDATE OF last_observed_at"))
+    ),
+    "CREATE TABLE operator_change (token TEXT NOT NULL)",
+    "INSERT INTO operator_change VALUES (hex(randomblob(16)))",
+    *(
+        f"""CREATE TRIGGER operator_change_{table}_{event.lower()} AFTER {event} ON {table}
+            BEGIN UPDATE operator_change SET token = hex(randomblob(16)); END"""
+        for table in (
+            "work_items", "executions", "attempts", "dispatch_settings", "writers",
+            "external_rechecks", "attempt_workers", "github_observations", "transition_history",
+            "local_check_results", "captain_actions",
+        )
+        for event in ("INSERT", "UPDATE", "DELETE")
+    ),
 )

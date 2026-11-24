@@ -14,7 +14,7 @@ from . import dependencies
 from .finalization_schema import enqueue
 from .pr_models import GITHUB_REMOTE
 from .transitions import (
-    Bypass, Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
+    Bypass, Event, Evidence, Execution, Outcome, PublicationMode, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
 
 
@@ -207,15 +207,18 @@ def new_execution(db, item_id, target, *, previous_id=None):
     execution_id = uuid4().hex
     clock = datetime.now(UTC)
     now = clock.isoformat(timespec="microseconds")
-    state_json = encode(asdict(start(target)))
     item = item_row(db, item_id)
     request = json.loads(item["request_json"])
+    mode = PublicationMode(request.get("publication_mode", PublicationMode.READY))
+    state_json = encode(asdict(start(target, mode)))
+    # step5-remove: draft-only delivery must never enter the legacy promotion path.
+    affinity = "@writer" if mode is PublicationMode.DRAFT else request.get("runner_affinity") or ""
     db.execute(
         """INSERT INTO executions (id, item_id, previous_id, version, state_json,
                created_at, updated_at, queue_repository, queue_affinity, queue_priority, ready_since)
            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)""",
         (execution_id, item_id, previous_id, state_json, now, now, item["repository_id"],
-         request.get("runner_affinity") or "", PRIORITY[request.get("priority", "normal")],
+         affinity, PRIORITY[request.get("priority", "normal")],
          int(clock.timestamp() * 1000)),
     )
     record(db, execution_id, 1, "rerun" if previous_id else "intake", {}, state_json, now)

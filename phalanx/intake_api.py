@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
 from .auth import authenticate, require_coordinator, require_owner, require_runner, require_worker
 from .store import read_transaction, write_transaction
-from .transitions import Stage
+from .transitions import PublicationMode, Stage
 from .intake_models import (
     AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
@@ -57,6 +57,8 @@ def create(request: Request, body: Intake, key: Key = None):
         omitted.add("label")
     if not body.dependencies:
         omitted.add("dependencies")
+    if body.publication_mode is PublicationMode.READY:
+        omitted.add("publication_mode")
     payload = body.model_dump(mode="json", exclude=omitted)
     return run(request, intake.create, body, write=True,
                scope="intake", key=key, payload=payload)
@@ -253,8 +255,8 @@ def local_checks(request: Request, item_id: Identifier, execution_id: Identifier
 
 
 @router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
-def reconciler_heartbeat(request: Request, runner_id: Identifier):
-    return run(request, reconciliation.heartbeat, runner_id, write=True)
+def reconciler_heartbeat(request: Request, runner_id: Identifier, body: reconciliation.Heartbeat | None = None):
+    return run(request, reconciliation.heartbeat, runner_id, body, write=True)
 
 
 @router.delete("/reconcilers/{runner_id}", dependencies=[Depends(require_coordinator)])

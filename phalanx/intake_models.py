@@ -1,8 +1,8 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from .transitions import Outcome, Stage, Target
+from .transitions import Outcome, PublicationMode, Stage, Target
 from .validation import CHECK_WAIT_LIMIT_RANGE, PreOutcome
 
 
@@ -43,6 +43,13 @@ class Intake(Payload):
     runner_affinity: Identifier | None = None
     label: Label | None = None
     dependencies: list[Prerequisite] = Field(default_factory=list, max_length=100)
+    publication_mode: PublicationMode = PublicationMode.READY
+
+    @model_validator(mode="after")
+    def publication_target(self):
+        if self.target is Target.REPORT and self.publication_mode is PublicationMode.DRAFT:
+            raise ValueError("Draft publication requires a PR target")
+        return self
 
 
 class Versioned(Payload):

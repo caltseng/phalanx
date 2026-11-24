@@ -1,5 +1,6 @@
 """PR lifecycle payloads shared by the runner and the server."""
 
+from datetime import timedelta
 import re
 from typing import Annotated, Literal
 
@@ -14,6 +15,7 @@ Name = Annotated[str, StringConstraints(min_length=1, max_length=255)]
 Repository = Annotated[str, StringConstraints(max_length=256, pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
 PositiveInt = Annotated[int, Field(strict=True, ge=1, le=2**63 - 1)]
 Flag = Annotated[bool, Field(strict=True)]
+DEPLOYMENT_WINDOW = timedelta(hours=24)
 
 
 class ExpectedRefs(Payload):

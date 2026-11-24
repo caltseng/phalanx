@@ -8,6 +8,16 @@ Phalanx tries to self-resolve within the work itemâ€™s scope and the repositoryâ
 
 ## Lifecycle stages
 
+Direct writer sessions use the separate `development` -> `self_review` -> `publication` ->
+`delivery` path in [direct sessions](docs/direct-sessions.md#pr-publication-and-delivery).
+With intake `publication_mode: "draft"`, publication records the writer's PR URL and delivery
+waits for the reconciler to verify that primary PR open, unmerged, draft, at the reviewed candidate
+and target base. It completes with a draft output and no `ready_revision`, never satisfying a
+ready/check-in prerequisite. A head other than the reviewed candidate queues `self_review` for the
+observed head, so only a self-reviewed head is delivered. A wrong base or a ready PR keeps waiting;
+a closed PR asks the owner. An observed merge into the target remains a delivery fact. The diagram below describes
+the legacy runner stages, which draft-only items never enter.
+
 ```mermaid
 flowchart TD
     Start([New execution]) --> Kind{Output type}

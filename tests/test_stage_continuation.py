@@ -386,9 +386,10 @@ class StageContinuationTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(self.claim(stages=AGENT)[0]["status"], "at_capacity")
                 self.assertEqual(self.reserved(), capacity + RUNNER_ONLY_SLOTS)
                 self.assertEqual(self.state(promotions[-1]["id"])["status"], "queued")
-                # A runner-only stage that can't be admitted shows why on the board.
-                self.assertEqual(self.board(promotions[-1]["id"])["wait_reason"],
-                                 "Waiting for runner-only lane capacity")
+                # Legacy runner admission must not imply a direct-path capacity wait.
+                self.assertIsNone(self.board(promotions[-1]["id"])["wait_reason"])
+                self.assertEqual(self.board(promotions[-1]["id"])["next_action"],
+                                 "Next to run: a Captain dispatches a writer")
                 self.finish(*admitted_leases[0])
                 self.assertIsNone(self.board(promotions[-1]["id"])["wait_reason"])
 

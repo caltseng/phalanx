@@ -162,11 +162,13 @@ def resolve_dependencies(
                 continue
             if state.status == Status.COMPLETED:
                 reason = "Prerequisite completed without check-in. Rerun it with check-in or replace it."
-        elif state.status == Status.COMPLETED and isinstance(output, PullRequest):
+        elif state.status == Status.COMPLETED and isinstance(output, PullRequest) and not output.draft:
             resolved.append(ResolvedDependency(
                 upstream_id, milestone, execution_id, output.url, output.revision.head, output.revision,
             ))
             continue
+        elif state.status == Status.COMPLETED and isinstance(output, PullRequest) and output.draft:
+            reason = "Prerequisite completed as a draft, not ready for check-in. Rerun or replace it."
         elif (state.stage in (Stage.CHECK_IN, Stage.DELIVERY)
               and state.ready_revision and state.primary_pr
               and state.ready_revision.head == state.candidate):
