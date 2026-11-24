@@ -165,7 +165,11 @@ review and storage always reference the exact immutable draft revision.
 
 An operator-owned charter defines goal, repo scope, authority, escalation and
 stop conditions. Captain wakes every five minutes and hands off after four hours, 48 wakes,
-first compaction or degradation by default. Overlap is bounded to thirty minutes. The
+five successful compactions or actual degradation/failure by default. The positive-integer
+charter `[shift].max_compactions` is the authoritative compaction handoff threshold.
+Below it an ordinary compaction is a checkpoint, not a mandatory handoff. Unknown
+telemetry never implies a count or a first-compaction fallback; elapsed-time/wake bounds
+and actual degradation/failure signals remain independent. Overlap is bounded to thirty minutes. The
 predecessor finishes/abandons uncertain intents and performs creator-owned cleanup before
 ending, without waiting forever for a successor. Only the owner grants repository trust.
 

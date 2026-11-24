@@ -200,10 +200,16 @@ The single concurrent-writer budget is persisted `dispatch_settings.max_writers`
 initially five, editable by the owner in Scribe or through the dispatch settings API.
 Registration enforces it atomically across Captains and repositories; intents and
 waiting writers count. `shift launch` supplies no separate limit, and charters reject
-`[shift] max_writers`; `deploy init` writes only `max_hours` and `max_wakes` shift
+`[shift] max_writers`; `deploy init` writes `max_hours`, `max_wakes` and
+`max_compactions` shift
 bounds. This is **not** five building writers plus ten total. Shipped code does not
 prove installation state: coordinate removal of an existing charter concurrency
 entry with service deployment; do not treat approval or an open PR as deployment.
+The charter's `max_compactions` is the only compaction-handoff threshold (default five).
+The server retains monotone cumulative successful telemetry; `shift heartbeat` compares
+that total with the freshly loaded charter. Packaged Captain/keeper instructions defer
+to that result, not a hardcoded first-compaction rule. See the
+[retained-conversation rollout boundary](deployment.md#compaction-threshold-activation).
 Likewise tokenless local-board actions require both shipped code and verified deployment:
 explicit `PHALANX_LOCAL_BOARD=1`, a loopback-only listener, direct loopback peer and local
 Host, with exact same-origin writes and no forwarding headers. Narrow `/operator/api/`

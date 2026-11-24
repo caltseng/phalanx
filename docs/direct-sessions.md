@@ -202,10 +202,16 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
 - **Shift end.** A shift ends on the first of these:
   - a fixed age (4 h);
   - a wake count (48);
-  - the Captain's first observed context compaction;
+  - the Captain's cumulative successful-compaction count reaching the charter's
+    `[shift].max_compactions` (default 5);
   - a degradation signal: three failed actions in a row, a deviation flag it raised against itself (`captain_idle_with_work`, `orphan_session` it created), or a missed heartbeat it notices on waking.
 
-  The bounds are charter settings (D7).
+  The bounds are positive-integer charter settings (D7, amended for compaction handoff).
+  Ordinary compaction below the threshold is a checkpoint, not a mandatory handoff.
+  Only trustworthy cumulative successful native telemetry counts. Repeated reports are
+  idempotent and omissions preserve known totals. Unavailable telemetry remains unknown,
+  never a fabricated count or a first-compaction fallback; age/wake and actual
+  degradation/failure safeguards still apply independently.
 - **Handoff.**
   1. The outgoing Captain sets `ending` and posts a handoff note: open decisions, its unconfirmed intents and anything it was midway through. The note is a hint. The successor verifies every point against the server, GitHub and session status and never trusts it as state.
   2. It launches the successor with the charter, the parent Captain ID and a nonce, using the same at-most-once launch rule as writers.
@@ -339,5 +345,5 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
 | D6 | Enforce dispatch pause and persisted workspace `max_writers` (initially 5) on new registrations. Owner edits persist through dashboard reloads and Captain heartbeats. |
-| D7 | Shift bounds: four hours, 48 wakes, first compaction or degradation, configurable in charter. |
+| D7 | Shift bounds: four hours, 48 wakes, five successful compactions or actual degradation/failure. Age, wakes and compaction threshold are configurable in charter. The original first-compaction default is superseded by the compaction-handoff work item. |
 | D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |

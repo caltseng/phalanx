@@ -169,10 +169,14 @@ notes = "Optional context for every Captain."
 [shift]
 max_hours = 4
 max_wakes = 48
+max_compactions = 5
 ```
 
-`[shift]` is optional. Its positive-integer settings default to `max_hours = 4` and
-`max_wakes = 48` (D7). Configure concurrency with Scribe's **Writer concurrency**
+`[shift]` is optional. Its positive-integer settings default to `max_hours = 4`,
+`max_wakes = 48` and `max_compactions = 5` (D7, as amended for compaction handoff).
+The compaction threshold uses only cumulative successful native telemetry; ordinary
+compaction below it is a checkpoint. Missing telemetry stays unknown, with no hidden
+first-compaction fallback. Configure concurrency with Scribe's **Writer concurrency**
 control or owner-authenticated `PUT /v1/dispatch/settings` (`{"max_writers": 5}`),
 not in the charter or `allowed_actions` prose. The persisted limit starts at 5.
 Charter `[shift] max_writers` is rejected with guidance to remove it and use
@@ -287,7 +291,12 @@ A successor does not inherit creator-only runtime authority.
 4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." Before any early exit, it checks cleanup of Captain sessions that this keeper session created. It starts no new Captain when a live one exists, the most recent ended less than 10 minutes ago without a successor yet, or it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run that can't schedule itself creates the Captain with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`. That same keeper creator must retain a cleanup wake or child-ended notification until its Captain hands off cleanly; a fresh scheduled keeper session has no creator authority over it.
 5. The app may let only a session's creator archive it. Captains clean up their own writers and helpers; keeper runs clean up their own Captain children. All use the preservation check and durable result above, not repeated attempts by successors. Missing authority is recorded and escalated once, with `orphan_session` left visible.
 
-A Captain's shift ends when the charter's `[shift]` bounds are reached, at its first compaction or when it degrades. It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
+A Captain's shift ends when the charter's `[shift]` age, wake or successful-compaction
+bound is reached, or independently on actual degradation/failure (three failed actions
+in a row, a self-raised deviation flag, or a missed heartbeat noticed on waking).
+`shift heartbeat` returns the effective `max_compactions` and compares it with the
+server's cumulative known total; repeated/omitted reports do not reset or add to it.
+It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
 
 ### Retained chats and owner-message forwarding
 
