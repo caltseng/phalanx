@@ -134,7 +134,7 @@ There is no relay polling and no foreground polling loop.
 
    New work must be filed as an item before a session is launched for it. Any visible session without a registered writer, reviewer or Captain registration is flagged `orphan_session`.
 
-   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. The README's [Captain section](../README.md#run-a-captain-on-the-direct-path) shows the setup.
+   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. [Run a Captain on the direct path](direct-path.md#run-a-captain-on-the-direct-path) shows the setup.
 4. **Deviation detection.** See [Deviation flags](#deviation-flags). The reconciler and server raise these flags. They never block.
 5. **Escalation.** Escalate to the owner only for trust, scope changes, destructive actions (overwriting a foreign head, closing PRs, deleting branches or data), missing credentials or authority, and exhausted retry caps. The Captain decides everything else and logs it (`answered_by: captain`, [decisions.md](decisions.md)).
 
@@ -209,7 +209,7 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 
 ## What gets removed
 
-- **Relay:** `captain_relay.py`, `captain-relay.sqlite3`, `phalanx relay`, standing relay serve, `relay_stalled` (decision 65), and the README relay sections. The PH-11b decision is superseded.
+- **Relay:** `captain_relay.py`, `captain-relay.sqlite3`, `phalanx relay`, standing relay serve, `relay_stalled` (decision 65), and the relay guide ([captain-relay.md](captain-relay.md)). The PH-11b decision is superseded.
 - **Slot gating and admission:**
   - the attended slot journal and `phx attended prepare|receipt|renew|submit`;
   - `attended-recover`, `captain_loop.py`'s slot scheduling and the bridge adapter;
@@ -269,7 +269,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
    - merged-to-delivered for all three merge methods;
    - a shift handoff with overlap, and a keeper restart after every Captain is gone.
 
-   Then remove the relay, slots, adoption, runner-only stages and every runner-local SQLite store, and update AGENTS.md (D1, D3), SPEC.md, STATE_MACHINE.md, the HTML diagram and README.
+   Then remove the relay, slots, adoption, runner-only stages and every runner-local SQLite store, and update AGENTS.md (D1, D3), SPEC.md, STATE_MACHINE.md, the HTML diagram, README and the operator guides under docs/.
 
 ## Decisions
 
@@ -347,7 +347,7 @@ Main at `40be235`, 2026-11-23.
 - **Relay stall:** after 180 s, with a request waiting, a relay stall is reported and the owner notified ([captain_loop.py:36-37](../phalanx/captain_loop.py), [captain_loop.py:662-699](../phalanx/captain_loop.py)).
 - **Overdue workers:** `worker_overdue` is raised at 3 h ([captain_loop.py:468](../phalanx/captain_loop.py), decision 60).
 - **Lease renewal:** renewal is the worker heartbeat ([dispatch.py:212-225](../phalanx/dispatch.py)), and `last_advanced_at` is tracked for the board ([operator_schema.py:55-63](../phalanx/operator_schema.py)).
-- **Relay chat:** a session automation wakes the relay chat every 5 min, and its persistence across a reboot is unverified (README "Standing relay serve" and "Runtime mapping"; the runtime runbook). The relay store uses `BEGIN IMMEDIATE` with a 30 s timeout ([captain_relay.py:34-40](../phalanx/captain_relay.py)), and contention is tracked as 108f6009.
+- **Relay chat:** a session automation wakes the relay chat every 5 min, and its persistence across a reboot is unverified ([Standing relay serve](captain-relay.md#standing-relay-serve) and [Runtime mapping](captain-relay.md#runtime-mapping); the runtime runbook). The relay store uses `BEGIN IMMEDIATE` with a 30 s timeout ([captain_relay.py:34-40](../phalanx/captain_relay.py)), and contention is tracked as 108f6009.
 - **Captain answers:** Captain answers are attributed (`answered_by: captain`), and decisions go to [decisions.md](decisions.md).
 
 **Missing**

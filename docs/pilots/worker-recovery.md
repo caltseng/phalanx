@@ -1,6 +1,6 @@
 # PH-01 worker recovery field report
 
-This report records field evidence for each runtime that serves the runtime-neutral bridge contract (see the README's runtime mapping). The Codex desktop app was piloted first, for discovery and live observation. The PH-11b native muster then ran on the GitHub Copilot app as Captain; see [GitHub Copilot app muster](#github-copilot-app-muster-on-november-21-2026).
+This report records field evidence for each runtime that serves the runtime-neutral bridge contract (see the [runtime mapping](../captain-relay.md#runtime-mapping)). The Codex desktop app was piloted first, for discovery and live observation. The PH-11b native muster then ran on the GitHub Copilot app as Captain; see [GitHub Copilot app muster](#github-copilot-app-muster-on-november-21-2026).
 
 A local runner process handles durable attempt state, workspace preparation, lease renewal, evidence verification, and publication. The Captain chat serves launch and observation through the Captain chat relay.
 
@@ -16,7 +16,7 @@ A local runner process handles durable attempt state, workspace preparation, lea
 
 ## GitHub Copilot app muster on November 21, 2026
 
-**Runtime.** The Captain was a GitHub Copilot app session on Windows. It served the [Captain chat relay](../../README.md#captain-chat-relay) and the app's runtime mapping row by hand. The server and the `captain` loop ran from `main` at `ae224b4` (#62) as detached local processes, with capacity 2. Both pilot checkouts were registered with `add_repository` (pilot-py `c690dc60-199b-4d4e-be4f-764d2a007d3d`, pilot-web `252f7d83-3066-4a2c-aa64-7cc7754c8ce7`, host `local`). Workers were `create_session` sessions with a branch workspace, the attempt UUID as name, and an autopilot kickoff. They appear in the app sidebar under their pilot projects.
+**Runtime.** The Captain was a GitHub Copilot app session on Windows. It served the [Captain chat relay](../captain-relay.md#captain-chat-relay) and the app's runtime mapping row by hand. The server and the `captain` loop ran from `main` at `ae224b4` (#62) as detached local processes, with capacity 2. Both pilot checkouts were registered with `add_repository` (pilot-py `c690dc60-199b-4d4e-be4f-764d2a007d3d`, pilot-web `252f7d83-3066-4a2c-aa64-7cc7754c8ce7`, host `local`). Workers were `create_session` sessions with a branch workspace, the attempt UUID as name, and an autopilot kickoff. They appear in the app sidebar under their pilot projects.
 
 **Items.** A PR item for [phalanx-pilot-py#3](https://github.com/caltseng/phalanx-pilot-py/issues/3) (slugify) and a report item for [phalanx-pilot-web#1](https://github.com/caltseng/phalanx-pilot-web/issues/1) (titleCase). The report goal told the worker to ask one question before drafting.
 
@@ -34,7 +34,7 @@ All times are UTC.
 
 After the run, each attempt marker had exactly one session in `list_sessions_and_chats`: `a0d98b4b`, `7ca37c63`, `062a34cb` and `f6db1b3a`. Each slot held one reservation throughout.
 
-**How the restarts were done.** One app session cannot restart itself and keep serving. Each restart was a fresh child Captain session that started with no relay history. It got only the README procedure, the state directory and the relay helpers, and served `relay next` until a stop condition. Ending a Captain's turn mid-request is the same failure as a crashed chat: the request stays taken and is never handed out again.
+**How the restarts were done.** One app session cannot restart itself and keep serving. Each restart was a fresh child Captain session that started with no relay history. It got only the relay procedure (then in the README, now [captain-relay.md](../captain-relay.md)), the state directory and the relay helpers, and served `relay next` until a stop condition. Ending a Captain's turn mid-request is the same failure as a crashed chat: the request stays taken and is never handed out again.
 
 **Where it stopped.** The report item completed. The PR item stopped at `self_review` (queued) after the draft was published, because no dispatcher stage on `main` serves `self_review` yet (PH-14a part 2).
 
