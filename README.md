@@ -112,6 +112,7 @@ Stopped-writer replacement preserves local work and reconciles external effects.
 | [`phalanx/prompts/`](phalanx/prompts/), [`phalanx/static/`](phalanx/static/) | Native-session prompts and Scribe browser assets. |
 | [`phalanx/deployment.py`](phalanx/deployment.py), [`muster.py`](phalanx/muster.py), [`scripts/`](scripts/) | Installation/service entrypoints, existing-muster discovery and prepared-checks helpers. |
 | [`tests/`](tests/), [CI workflow](.github/workflows/ci.yml) | Standard-library unittest suite, HTTP/Git fixtures and cross-platform CI. |
+| [`.agents/skills/`](.agents/skills/) | Reusable agent skills: [PR review](.agents/skills/pr-review/SKILL.md) and [complexity-killer](.agents/skills/complexity-killer/SKILL.md) for evidence-based complexity and blocking audits. |
 | [`docs/`](docs/), [`SPEC.md`](SPEC.md), [`STATE_MACHINE.md`](STATE_MACHINE.md) | Operating guides, implementation map and authoritative design/lifecycle references. |
 
 ## Quickstart: new install
