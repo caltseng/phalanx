@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx import captains, dispatch, flags, intake, shift, store
+from phalanx import captains, dispatch, finalization, flags, intake, shift, store
 from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
@@ -111,6 +112,46 @@ class WriterTest(ServerFixture, unittest.TestCase):
             writer = db.execute("SELECT * FROM writers WHERE id=?", (binding["writer"]["id"],)).fetchone()
         self.assertIsNotNone(writer["ended_at"])
         self.assertEqual((writer["end_reason"], writer["attempt_id"]), ("closed as completed", None))
+
+    def test_concurrent_charter_limited_registrations_do_not_overfill(self):
+        items = [self.item(), self.item()]
+        bodies = [{"expected_version": self.version(item_id), "captain_id": self.captain["id"],
+                   "runtime": "any-runtime", "nonce": token_urlsafe(16),
+                   "token_digest": intake.digest(token_urlsafe(32)),
+                   "writer_limit": {"max_writers": 1, "repositories": ["repo"]}}
+                  for item_id, _ in items]
+
+        def register(index):
+            item_id, execution_id = items[index]
+            return self.request(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER, bodies[index])
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(register, range(2)))
+        self.assertEqual(sorted(code for code, _ in responses), [200, 409])
+        winner = next(response for code, response in responses if code == 200)
+        refused = next(response for code, response in responses if code == 409)
+        self.assertIn("max_writers=1", refused["detail"])
+        self.assertIn(winner["writer"]["id"], refused["detail"])
+
+    def test_failed_and_cancelled_writers_release_charter_capacity(self):
+        limit = {"max_writers": 1, "repositories": ["repo"]}
+        for ending in ("failed", "cancelled"):
+            with self.subTest(ending=ending):
+                item_id, execution_id = self.item()
+                binding, _, _ = self.register(item_id, execution_id, writer_limit=limit)
+                action = "close-failure" if ending == "failed" else "cancel"
+                self.ok(f"/v1/items/{item_id}/executions/{execution_id}/{action}", OWNER,
+                        {"expected_version": binding["version"], "reason": "Cannot continue"})
+                self.ok(f"/v1/items/{item_id}/executions/{execution_id}/writer/withdraw", RUNNER,
+                        {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                         "reason": "stopped", "stopped": True})
+                closed = finalization.attempt(self.path, execution_id)
+                self.assertEqual(closed["state"]["status"], ending)
+                following, following_execution = self.item()
+                launched, _, _ = self.register(following, following_execution, writer_limit=limit)
+                self.ok(f"/v1/items/{following}/executions/{following_execution}/writer/withdraw", RUNNER,
+                        {"captain_id": self.captain["id"], "writer_id": launched["writer"]["id"],
+                         "reason": "never launched"})
 
     def test_queued_binding_stays_out_of_the_old_loop_and_survives_steering(self):
         item_id, execution_id = self.item()
@@ -725,7 +766,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             return response
 
         self.assertEqual(api("/v1/flags")["flags"], [])
-        status = shift.status(api, {"repositories": ["repo"]}, "c")
+        status = shift.status(api, {"repositories": ["repo"], "shift": shift.SHIFT_DEFAULTS}, "c")
         self.assertEqual(status["flags"], [])
         self.assertEqual(status["captain"]["cleanup_pending"], 0)
         self.assertEqual(status["captain"]["ended_writers"], [])

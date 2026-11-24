@@ -50,12 +50,18 @@ class CharterTest(unittest.TestCase):
     def test_charter_is_validated_and_revisioned(self):
         charter = self.charter(CHARTER + "[shift]\nmax_wakes = 2\n")
         self.assertEqual(charter["revision"], hashlib.sha256(Path(self.config["charter"]).read_bytes()).hexdigest())
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2})
+        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2, "max_writers": 4})
         for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the queue is empty"]', "[]"),
                      CHARTER.replace('["repo"]', '["repo", "other"]'), CHARTER + "[shift]\nmax_hours = 0\n",
                      CHARTER + "[shift]\nmax_hours = true\n", "goal = [\n"):
             with self.subTest(text=text), self.assertRaises(shift.ShiftError):
                 self.charter(text)
+
+    def test_max_writers_is_a_positive_integer(self):
+        self.assertEqual(self.charter(CHARTER + "[shift]\nmax_writers = 7\n")["shift"]["max_writers"], 7)
+        for value in ("0", "-1", "true", "1.5", '"4"'):
+            with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "positive integers.*max_writers"):
+                self.charter(CHARTER + f"[shift]\nmax_writers = {value}\n")
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
         for path in (self.checkout / "c.toml", self.root / "worktrees" / "c.toml"):
@@ -186,6 +192,65 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         with self.assertRaisesRegex(shift.ShiftError, "outside the charter"):
             shift.launch(self.api, self.config, self.charter, captain, self.item("other")["id"])
+
+    def test_writer_cap_counts_intents_and_confirmed_writers_across_captains(self):
+        self.charter["shift"]["max_writers"] = 1
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        other = shift.start(self.api, self.charter, "chat-2")["captain"]["id"]
+        item, queued = self.item(), self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        writer = launched["writer"]
+        route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
+        flags = self.api("/v1/flags")["flags"]
+        for session in (None, "s-1"):
+            with self.subTest(session=session):
+                if session:
+                    self.api(route, body={"captain_id": captain, "writer_id": writer["id"],
+                                          "session_id": session}, method="PATCH")
+                with self.assertRaisesRegex(ValueError, f"Wait: charter max_writers=1.*{writer['id']}"):
+                    shift.launch(self.api, self.config, self.charter, other, queued["id"])
+                status = shift.status(self.api, self.charter, other)
+                self.assertEqual((status["active_writers"], status["max_writers"]), (1, 1))
+                replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+                self.assertEqual(replay["writer"]["id"], writer["id"])
+        self.assertEqual(self.api("/v1/flags")["flags"], flags)
+        self.api(route + "/withdraw", body={"captain_id": captain, "writer_id": writer["id"],
+                                            "reason": "stopped", "stopped": True})
+        self.assertEqual(shift.status(self.api, self.charter)["active_writers"], 0)
+        shift.launch(self.api, self.config, self.charter, other, queued["id"])
+
+    def test_replacement_at_writer_cap_releases_only_the_replaced_writer(self):
+        self.charter["shift"]["max_writers"] = 1
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        replacement = shift.launch(self.api, self.config, self.charter, captain, item["id"],
+                                   replaces=launched["writer"]["id"])
+        self.assertEqual(replacement["writer"]["replaced_id"], launched["writer"]["id"])
+        self.assertEqual(shift.status(self.api, self.charter)["active_writers"], 1)
+        replay = shift.launch(self.api, self.config, self.charter, captain, item["id"],
+                              replaces=launched["writer"]["id"])
+        self.assertEqual(replay["writer"]["id"], replacement["writer"]["id"])
+        with self.assertRaisesRegex(ValueError, "max_writers=1"):
+            shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
+
+    def test_completed_writer_releases_a_place(self):
+        self.charter["shift"]["max_writers"] = 1
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        launched = shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
+        base_url, token = credential(Path(launched["worktree"]))
+        binding = request(base_url, token, "/v1/writer")
+        for evidence in ({"report_markdown": "# Report\n"},
+                         {"report_revision": hashlib.sha256(b"# Report\n").hexdigest()},
+                         {"report_revision": hashlib.sha256(b"# Report\n").hexdigest()}):
+            binding = request(base_url, token,
+                              f"/v1/items/{binding['item_id']}/executions/{binding['id']}/result",
+                              body={"attempt_id": binding["writer"]["attempt_id"],
+                                    "stage": binding["state"]["stage"], "expected_version": binding["version"],
+                                    "outcome": "succeeded", **evidence})
+        self.assertEqual(binding["state"]["status"], "completed")
+        self.assertEqual(shift.status(self.api, self.charter)["active_writers"], 0)
+        shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
 
     def test_launch_kickoff_names_the_repository_checks_environment_or_its_absence(self):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
