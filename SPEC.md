@@ -1,207 +1,254 @@
 # Phalanx design spec
 
-Phalanx lets its users dispatch work across registered repositories and have local agents carry it through to a Markdown report or pull request. Caleb is the first user, and the design must also serve other people and teams (see [Users and workspaces](#users-and-workspaces)). The backend is the durable source of truth. Agents run locally on machines with access to the relevant checkouts and credentials. The initial design should favor a small API, recoverable execution, and a flexible work-item format.
+Phalanx lets users dispatch work across registered repositories and carry it through to a
+Markdown report or pull request. Caleb is the first user; the design must also serve other
+people and teams. Agents run on machines with the relevant checkouts and credentials.
+Favor a small API, recoverable execution and flexible work items.
 
-**Decided replacement:** [docs/direct-sessions.md](docs/direct-sessions.md) replaces the Captain relay, attended slots, admission gating and runner-local SQLite stores with direct sessions, a GitHub reconciler and shift-based Captains (decisions 68–71). Until it is implemented, this spec describes the running system.
+**Running architecture:** [direct sessions](docs/direct-sessions.md), native Captain chats,
+registered writers and an independent GitHub reconciler (decisions 68-71). Phalanx adds
+visibility and coordination, not a permission gate. GitHub owns PR facts and merges;
+Phalanx owns items, attempts, questions, evidence, flags and observations. PH-DS5 part 1
+has removed the previous session transport/scheduler and admission machinery. Remaining
+runner-only PR stages and local SQLite stores retire in part 2.
 
-Direct components discover an existing muster through `--home`, then `PHALANX_HOME`, then
-the single per-user `~/.phalanx/muster.json` locator. Discovery is read-only and never repairs,
-initializes or migrates state. Authenticated `muster status` reads API identity, live Captains,
-open writers, reconciler freshness and dispatch pause. See the [layout and precedence](README.md#direct-muster-discovery-and-status).
+Direct clients discover the existing muster via `--home`, `PHALANX_HOME`, then the single
+per-user `~/.phalanx/muster.json` locator. Discovery is read-only: never initialize or migrate
+state to repair discovery. Authenticated `muster status` reads identity, Captains, writers,
+reconciler freshness and pause. See [layout and precedence](README.md#direct-muster-discovery-and-status).
 
 ## Work items and repositories
 
-- Direct writer sessions support intake `publication_mode: "draft"` (default `"ready"`) as a
-  publication ceiling for PR targets. The writer never promotes or merges that PR; delivery ends
-  only after the reconciler verifies the open draft at the self-reviewed head and target base.
-  Draft delivery does not satisfy ready/check-in dependencies. See
-  [direct-session publication](docs/direct-sessions.md#pr-publication-and-delivery).
-- Operator summaries, outcome filters, overview and label rollups distinguish draft completion
-  as `draft_published`, not `ready_for_check_in`; the overview counts it as a delivered outcome.
-- A work item has an ID, repository, goal, output type (`report` or `pull_request`), status, and timestamps. Optional fields include context links, acceptance criteria, a target branch, a label that groups related items on the operator board, and dependencies on other work items. An API caller may provide an idempotency key so resubmitting the same request returns the original item.
-- A registered repository has a stable ID and expected remote. Each runner maps that ID to a local checkout and verifies the remote before starting. Repository instructions apply to each run. An item waits if no eligible runner can access its repo.
-- A repository may opt into post-merge deployment visibility with `post_merge_check` in its reconciler mapping. The reconciler observes the named GitHub check on each delivered merge commit and the server derives pending, failed or deployed board flags. This does not add a stage, delay check-in or change dependencies; GitHub owns deployment. See [direct-session reconciliation](docs/direct-sessions.md#github-reconciliation).
-- GitHub issue intake is an explicit local `ingest-issue` command for a registered `github.com` repository and issue number. The local client reads the issue and all comments with its own GitHub credential, then submits an immutable snapshot and source link through owner-authenticated API intake. The operator chooses the completion target, which defaults to `checked_in`; issue content cannot grant permissions, change runner configuration, or register repositories. A stable per-repository issue idempotency key prevents duplicate retry publication; edited snapshots conflict instead of replacing existing work. Polling, webhooks and ongoing synchronization are not part of this path.
-- A **field report** is a Markdown deliverable with findings, sources or evidence where relevant, and open questions. PR items have a completion target of `ready_for_check_in` or `checked_in`; intake defaults to `checked_in` when no target is given, and an explicit `report` or `ready_for_check_in` is kept as requested. On the direct path the writer enables GitHub auto-merge only for `checked_in`, and GitHub's required reviews, checks and rulesets gate the merge; no new setting is needed. The owner or Captain can steer an open PR item's target between `ready_for_check_in` and `checked_in`, including in direct `delivery`; the timeline records who changed it. Steering can't switch between a report and a PR. A completed direct ready execution remains completed: when its primary PR later merges into the target at the verified head or a descendant, the reconciler observation enriches its final output exactly once with the final revision, merge commit and `merged_at`. Its board outcome becomes `checked_in` and check-in dependents become eligible, without a rerun, writer, or merge authorization. Closed-unmerged PRs and unrelated heads do not advance it. A target change does not itself change GitHub auto-merge; the writer reconciles it with the current target.
-- The requested output type defines the intended path. Every closed execution records exactly one final output, either a verified PR reference or a stored Markdown report. If work closes without the requested deliverable, store a disposition report explaining the failure or cancellation, what was attempted, and what remains. Include any partial PR as a reference in that report. Work still in progress can have intermediate evidence and no final output yet.
+- An item has ID, registered repository, goal, output type (`report` or `pull_request`),
+  timestamps, and one current execution. Optional fields include context, acceptance
+  criteria, target branch, grouping label, priority, affinity and dependencies.
+- A repository has a stable ID and expected remote. Local mappings verify the checkout and
+  base before work. Repository instructions apply. Missing mappings or prepared checks
+  environments are visible blockers, not permission to improvise another environment.
+- PR target defaults to `checked_in`; explicit `ready_for_check_in` and `report` are
+  preserved. Writers enable GitHub auto-merge only for checked-in work. Owner/Captain
+  steering can change an open PR target, including delivery, but cannot switch PR/report.
+  The writer reconciles GitHub auto-merge with the latest target on each delivery pass.
+- A completed ready execution stays completed when its primary PR later merges into the
+  target at the verified head or a proven descendant. Reconciliation enriches its final
+  output once with final revision, merge commit and `merged_at`, and releases check-in
+  dependents without a rerun, writer or merge authorization. Closed-unmerged PRs, unrelated
+  heads and wrong-base merges do not advance it.
+- `publication_mode: "draft"` (default `"ready"`) is a ceiling for either PR target. Writers
+  never promote/merge it. Delivery verifies the primary PR open, draft, unmerged, at the
+  reviewed head/item branch/target base. It records `draft_published`, satisfies no
+  ready/check-in dependency and ends the writer. A changed head queues self-review.
+- Every closed execution records exactly one verified PR or stored Markdown report.
+  Failure/cancellation without the requested output records a disposition report with
+  evidence, partial artifacts and recovery context. Open executions may have intermediate
+  evidence without a final output.
+- GitHub issue intake is explicit `ingest-issue` for a registered github.com repo and issue
+  number. The local client reads the issue/comments with its credential, then posts an
+  immutable owner-authenticated snapshot. Stable per-repo issue idempotency prevents
+  duplicate retry intake; edited snapshots conflict. Issue content cannot grant authority
+  or edit config. Polling, webhooks and ongoing synchronization are not part of this path.
+- Optional `post_merge_check` observes deployment on the delivered merge commit for up to
+  24 hours, stopping on success. Pending/failed/deployed/missing are flags, not stages or
+  delivery gates. Rechecks replace the latest signal; changed/removed config retires old
+  signals without extra provider reads.
 
 ## Dispatch and execution
 
-Use Phalanx terminology in operator-facing copy where it describes a concrete event.
-
 | Term | Meaning |
 | --- | --- |
-| **Muster** | A batch of work launched from the Captain chat. |
-| **Marshaled** | A work item has enough context to enter the queue. Dispatch gates still determine when it can be claimed. |
-| **Phalanx advancing** | Work is moving to the next lifecycle stage after the server accepts the evidence. Name the stage and transition condition in the activity entry. |
-| **Field report** | A Markdown deliverable, including the disposition report when work closes without the requested result. |
-| **Spearheaded by Phalanx** | Attribution footer in the description of every PR Phalanx opens. |
+| Muster | A batch of work launched from the Captain chat. |
+| Marshaled | Context is sufficient to enter the queue; eligibility still applies. |
+| Phalanx advancing | Accepted evidence moves work to the named next lifecycle stage. |
+| Field report | Markdown deliverable, including a disposition when the requested output is unavailable. |
+| Spearheaded by Phalanx | Footer on every PR Phalanx creates. |
 
-Append `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)` as its own paragraph at the end of each PR description Phalanx creates. Keep the footer when updating that description and add it only once across retries.
+End each created PR description with
+`Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`, exactly once.
 
-1. An authenticated client files an item through the API and receives its ID. The API supports listing and inspecting work, claiming eligible items, renewing claims, posting progress and results, and responding to a question.
-2. A runner requests an atomic claim for an eligible repo only when it has a free slot and dispatch is enabled. Agents can run concurrently, including on the same repo when their tasks are independent. A runner uses a separate worktree and topic branch for each PR item.
-3. An agent reads the repo instructions, executes one assigned stage, and returns its outcome and evidence or a focused question. The server applies the transition rules before the item is eligible for another stage. A waiting item releases its worker slot and retains the question, prior work, and resume context.
-4. A reply makes the item eligible again. A runner can resume from the recorded handoff and branch rather than require the original agent process to stay alive.
-
-Each work item exposes both its lifecycle stage and its execution status. For example, `pr_validation / waiting_for_external` shows that a published PR is waiting for CI or a preview.
+1. Authenticated owner intake files the item. Missing prerequisites keep it queued with
+   a visible reason. Otherwise an unbound item visibly **awaits a direct Captain**; unpinned
+   intake must not disappear behind an unavailable scheduler.
+2. The Captain re-reads its charter and API/GitHub/native session state. It chooses named
+   eligible work, records a writer intent/nonce and scoped token digest before launching
+   one native session. Registration atomically enforces one open writer per execution and
+   the charter's `max_writers` across its repositories. Dispatch pause stops new admissions.
+3. The writer uses an isolated item worktree, reads repository instructions and performs
+   its stage. `phx work` submits progress, result/evidence or a focused question using the
+   credential in the item's Git directory. Never expose it in chat or commits.
+4. Accepted results end one attempt and open the next runnable stage for the same writer.
+   The writer remains registered across input, external, retry and dependency waits.
+   After a reply or recheck, `work next` resumes when eligible. Keep working until a real
+   blocker or verified completion, not merely a stage boundary.
+5. The reconciler independently observes GitHub and posts timestamped facts/flags. It
+   does not launch/stop sessions, mutate GitHub, or require a worker attempt.
 
 ## Development lifecycle state machine
 
-The Markdown specs define lifecycle and execution transitions. The transition tables and rules in [STATE_MACHINE.md](STATE_MACHINE.md) are authoritative. Mermaid and the [HTML visualization](state-machine.html) illustrate those rules. Update the Markdown first when changing a transition, then bring the diagrams and tests into sync.
+[STATE_MACHINE.md](STATE_MACHINE.md) is authoritative; keep
+[the HTML diagram](state-machine.html) in sync.
 
-Workers try to self-resolve within scope and repository rules, escalating when human judgment or authorization is required or further attempts cannot make progress.
-
-The server owns transitions. Each stage has required evidence, allowed next stages, and a recovery path. A worker reports an outcome and evidence for its current stage. The server validates the transition and atomically records the new state and timeline event. Stages that need agent work become eligible for another claim. Stages waiting for GitHub checks, reviews, or approval release their worker slot.
-
-| Stage | Advance when | Recovery or loop |
+| Stage | Advance when | Recovery |
 | --- | --- | --- |
-| `development` | Record a candidate commit. Open a draft PR for the first candidate or advance to `self_review` when a PR already exists. | Retry transient execution failures or pause for a focused decision. |
-| `pr_creation` | Open and verify a draft PR, then advance to `self_review`. | Reuse a matching PR when found, and adopt an existing PR on the item branch: a foreign head returns to `development` to integrate its commits, and a closed PR asks the owner. After bounded reconciliation, retry uncertain creation so publication is not dropped. |
-| `self_review` | The implementing agent checks the diff against the request and repo rules, with findings recorded. Advance to `pre_pr_validation`. | Return to `development` for findings that require changes. |
-| `pre_pr_validation` | Run applicable local tests and live checks before promotion by default. Advance to `pr_promotion` after a pass or a recorded bypass allowed by repo policy. | Route actionable failures to `development` with the tail of each failed check's output. A check that only timed out, with no failure in its output, retries validation with bounded backoff before returning to `development`. Cap concurrent local checks per runner host; waiting validations show the reason. Development may return the candidate unchanged when a rerun should pass. For unavailable checks, try to restore validation or record a permitted bypass or blocker. |
-| `pr_promotion` | Update and verify the candidate on the existing PR. While it is a draft, mark it ready for review after draft-only checks pass. Advance to `pr_validation`. | Wait for draft-only external checks, which bind to the PR's head and recorded base; an advanced target branch alone doesn't stall promotion. A merge conflict goes to `pr_revision`, which resolves it on the draft and returns it here. Before the first promotion, failed checks or an unexpected head return to `development`, which fixes or integrates the foreign commits, then revalidates. Phalanx never converts a ready PR back to draft; a ready PR records draft-only checks as skipped. Ask the owner for a closed or retargeted PR, or before re-promoting a PR a human converted to draft. |
-| `pr_validation` | Observe CI for the current PR head and run required preview checks once available. Advance to `pr_reconciliation` with the results. | Wait for pending external checks without holding a worker slot. |
-| `adversarial_review` | An independent review pass examines the diff since the last reviewed head (the whole PR diff the first time) for correctness, regressions, and missing validation. Record findings against the exact PR head and return to `pr_reconciliation`. | Blocking findings go to `pr_revision`. Retry an interrupted review on the current head. |
-| `pr_reconciliation` | Observe the current head's required checks and previews, waiting for pending ones without holding a slot. Confirm the branch is mergeable, actionable review comments are addressed, and the review covers the current head. Then complete a ready-only item, or one whose runner has auto-merge off, with the PR ready; otherwise advance to `check_in`. | An unreviewed diff goes to `adversarial_review`. A merge conflict, failed checks, new actionable GitHub feedback, or an unexpected head go to `pr_revision` as findings. Ask the owner after 10 revision rounds or a third round with identical findings. |
-| `pr_revision` | Fix the findings on the open PR. Self-review only the new diff, rerun the failed checks and the local checks covering the changed files, push, verify the head, and advance to `pr_validation`, or back to `pr_promotion` while the PR is still a draft. | A push to a ready PR that loses to a foreign one returns through `pr_reconciliation`. Escalate to `development` when the fix turns into new scope. Never change the PR's draft or ready state. |
-| `check_in` | When the runner's auto-merge setting is on (the default), reconcile any earlier merge first, then recheck the expected head and mergeability and merge with a head precondition. GitHub's required reviews, checks and rulesets gate the merge; Phalanx adds no gate. Complete only after GitHub confirms the merge and the item records the resulting commit. | Reconcile ambiguous merge responses before retrying. A conflict or unexpected head goes to `pr_revision` as findings. When GitHub refuses the merge because of repository rules or a disallowed merge method, wait for them to be satisfied, then ask the owner. |
+| `development` | Candidate committed with repository checks performed. | Retry transient failures or ask a focused question; preserve local work. |
+| `self_review` | Exact candidate reviewed against scope and repository rules. | Findings return to development; bound repeated no-progress cycles. |
+| `publication` | Writer pushes/opens or reuses one PR at the explicit base, honoring target and draft ceiling; submits primary URL. | Reconcile uncertain effects before repeating writes. Never reuse a PR merged by an earlier execution. |
+| `delivery` | Trusted reconciler verifies requested draft, ready or merged output. | Writer fixes failing checks, feedback/conflicts on the same PR; closed without merge asks for input. |
+| `report_drafting` | Content-addressed Markdown draft stored. | Preserve evidence and handoff. |
+| `report_review` | Exact stored draft and supporting evidence verified. | Return findings and reviewed revision to drafting. |
+| `report_storage` | Reviewed artifact and terminal reference committed atomically. | Server retries storage independently, without redrafting. |
 
-The server durably records report finalization before writing the final artifact. Finalization retries independently of worker capacity or dispatch pause. The owner can retry a stalled finalization after addressing the storage blocker.
+A ready primary head on the target base with required checks green, no feedback and no
+conflict satisfies ready-only work. Checked-in work records that milestone and waits for
+GitHub merging. A verified merge by anyone, via merge/squash/rebase, into the target completes
+either target, including draft-mode work. Record exact final head, merge commit, time and
+verified method. An owner merge after ready-only completion releases check-in dependents.
+A merge into another base asks the owner. Never replace a closed primary PR silently.
 
-The draft author self-reviews the field report before submitting it. A fresh review assignment receives the exact stored draft revision and verifies the report against the request, its supporting evidence, and its links. Findings and the reviewed draft go back to drafting for fixes. The runner submits the approved revision for server finalization without launching a storage worker. Reports share the same pause, retry, and handoff behavior.
+**D1:** writers perform Git/GitHub writes under repository rules and credentials.
+**D3:** trusted local checks are reconciler flags, not a Phalanx gate. Writers still run
+repository checks; GitHub checks, reviews and rulesets gate merging. Provider failures produce
+no false observations and back off independently by repo.
 
-Draft revisions are content-addressed and written once, so a review stays bound to the exact Markdown it checked. A completed review or an unaccepted storage submission survives lease expiry or a restart through the recovery claim on the same attempt, without a second review or a redraft. The stored report is served by the API, so it stays readable with the runner offline.
-
-For PR work, the runner binds self-review and local check results to the claimed candidate at the clean item worktree HEAD. Gitignored build output does not make the worktree dirty. Local checks and bypass authorizations come from trusted repository policy supplied by the runner. The result timeline records review notes, each check disposition, and the reason and authorization for a bypass.
-
-The [runner-local validation policy](docs/runner-validation-policy.md) is loaded from an explicit operator-owned file outside worker-writable checkouts, selected by registered repository ID. Commands, bypass reasons, and authority are never loaded from item or worker-controlled content. Unavailable policy is distinct from explicitly empty checks. The loader preserves phase-specific source and revision requirements; preview provider adapters and draft-only recovery remain separate integration requirements and unsupported configuration cannot waive their gates.
+Runner-only implementations (`pr_creation`, `pre_pr_validation`, `pr_promotion`,
+`pr_validation`, `adversarial_review`, `pr_reconciliation`, `pr_revision`, `check_in`), their
+evidence routes and local SQLite stores remain for PH-DS5 part 2. They have no CLI scheduler
+or queue claim endpoint. Direct writers never enter them. Their temporary contracts are
+summarized in [the state machine](STATE_MACHINE.md#remaining-runner-stage-contracts-ph-ds5-part-2).
 
 ### Execution status and recovery
 
-- Use `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`, `failed`, and `cancelled` as execution statuses. Store the stage, status, expected revision, and why any wait is active. A waiting item has a resume trigger, such as a user reply, check result, approval, or scheduled recheck. Reconcile external waits periodically so a missed event cannot strand the item.
-- Accept transitions only for the expected state version and, for worker results, the current lease. Persist attempts and transition evidence. A stale result cannot advance the item. Make retryable API operations idempotent and reconcile remote effects before repeating PR creation, updates, or a merge.
-- The local notification route is a pollable owner inbox of open questions. An authenticated, versioned reply records the answer with the original question and handoff and queues the same stage. A runner can list due external rechecks in bounded batches and queue that same stage once per wait version. Recheck timing includes jitter and honors a bounded provider retry delay. Provider observation supplies gate evidence separately.
-- Cap automatic retries and detect repeated review or conflict cycles that make no progress. After `self_review`, `pre_pr_validation` or a published PR stage, the server allows ten rework rounds and two on identical findings between owner replies; the next one asks the owner instead. Escalate with the blocker, attempted fixes, and a concrete next decision. From a stalled stage the user can retry, supply input, redirect, or cancel. `completed`, `failed`, and `cancelled` close an execution. Rerunning terminal work creates a linked execution and preserves the original history.
-- Verify the transition table with tests for the happy path, failed validation, new PR comments, merge conflicts, changed heads, interruptions, and an already-merged PR. Every active state needs a path forward, a resume trigger, or an explicit disposition.
+- Status is `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`,
+  `failed` or `cancelled`, separate from stage. Every open state has an action, resume
+  trigger or recovery path. Persist wait reasons and recheck due external waits with jitter.
+- Results require the current writer binding, attempt, stage and expected version. A
+  writer token has no timed expiry. Ended/replaced writers and stale attempts cannot submit.
+  Retryable mutations are idempotent; reconcile uncertain remote effects first.
+- Questions save prompt/options/default/handoff. A versioned reply records its author and
+  queues the same stage. Captains answer routine questions from scope/repo evidence and
+  record `answered_by: captain`; owner is the default.
+- Lost launch response: discover the nonce through complete native session inventory
+  before repeating. Confirm native ID/link in the registration. Stale/unknown session
+  status is a flag, never proof it stopped.
+- Replacement names the current writer and attests the exact session stopped after
+  preserving local changes, checkpoints and external effects. Revocation and replacement
+  are atomic. Never discard work or start a second writer to repair a lost response.
+- Retry transient failures with bounded backoff; bound repeated identical findings and
+  ask for input with evidence when recovery cannot progress. Keep unrelated work moving.
+- Cancellation stops new work and reconciles in-flight effects before finalization.
+  Rerun creates a linked execution with explicit target, preserving all prior history.
+  Report finalization is durable, retryable and independent of dispatch pause.
 
 ## Runner and agent interface
 
-The runner is the agent’s gateway to Phalanx. It claims and renews work through the API, prepares the workspace, launches the agent, and submits the validated result with its current lease. The agent receives instructions and returns a result through the local runtime interface. Queue credentials and lease tokens stay with the runner.
+Captains use their runtime's native tools to create visible sessions. The core assumes no
+runtime's tool names or behavior. It records session IDs/links and nonce-based discovery
+evidence. The writer kickoff contains goal, context, acceptance criteria, exact stage/result
+contract, verified workspace/base/topic, dependency output pins, prior handoff and any reply.
+It distinguishes the installed Phalanx control command from the repo's prepared checks
+environment. Missing/unusable checks environments are explicit gaps, not permission to
+borrow another checkout or install packages.
 
-### Work packet
+Writers submit JSON outcomes: `succeeded` with stage evidence, `changes_required` with
+revision-bound findings, `needs_input` with question/handoff, or `failed` with reason and
+partial artifacts. Only the server applies transitions and closes the execution. Report
+review and storage always reference the exact immutable draft revision.
 
-The runner passes the agent a packet with these fields and instructions.
+### Captain shifts and continuity
 
-| Field | Contents |
-| --- | --- |
-| Work item | ID, goal, context links, acceptance criteria when supplied, and expected output type (`report` or `pull_request`). |
-| Stage assignment | Current stage, attempt ID, expected state version and revision when applicable, and the outcome and evidence requirements for this stage. |
-| Workspace | Verified repository and local working directory. For PR work, include the base and topic branches and use the item’s isolated worktree. |
-| Handoff | Attempt history relevant to resuming, known branch or PR, remaining work, and any answer supplied by the user. |
-| Execution instructions | Read applicable repository instructions, stay within the assigned scope, run relevant checks, and ask for input when a missing decision materially affects the outcome. |
+An operator-owned charter defines goal, repo scope, authority, writer budget, escalation and
+stop conditions. Captain wakes every five minutes and hands off after four hours, 48 wakes,
+first compaction or degradation by default. Overlap is bounded to thirty minutes. The
+predecessor finishes/abandons uncertain intents and performs creator-owned cleanup before
+ending, without waiting forever for a successor. Only the owner grants repository trust.
 
-### Result contract
-
-The agent returns one JSON result for its assigned stage. It reports an outcome and evidence. The server uses the current stage, outcome, and applicable gates to determine the next stage or execution status. The runner attaches the attempt ID, expected state version, and lease to the submission. Advancing a stage ends that attempt and releases its slot. The next stage gets a new claim, which may reuse the workspace or chat when appropriate.
-
-| Outcome | Required result |
-| --- | --- |
-| `succeeded` | Evidence the stage passed, such as a candidate revision, validation results, a PR URL and verified head, or final report Markdown, as appropriate. |
-| `changes_required` | Findings tied to the reviewed or tested revision, with enough detail to reproduce or act on them. |
-| `needs_input` | A focused question, relevant options or tradeoffs, and a handoff describing what is done and how to resume. Include workspace or output references when available. |
-| `failed` | Why the attempt could not produce a stage outcome, what was tried, and whether a retry is likely to help. Include references to any partial result. |
-
-The authenticated runner submits GitHub observations through the versioned, leased PR observation route. The runner obtains exact provider reads, resolves repository policy, and correlates gate evidence to the observed PR and revision. The server matches the registered repository and current assignment, evaluates the normalized gate evidence, and records the accepted observation with the transition. See the [runner contract](docs/runner-pr-observations.md).
-
-For example, `self_review` plus `succeeded` with findings and revision evidence advances to `pre_pr_validation`. `self_review` plus `changes_required` returns to `development`. Required external checks can still keep an item waiting even after a successful worker result. Only the server marks the whole item completed when its completion target is satisfied.
-
-On `needs_input`, the runner records the question and handoff, releases the slot, and triggers the notification flow. A user reply requeues the item and becomes part of the next work packet. The Captain triages each question first: it answers when the answer follows from the repository, the issue, its conventions or a proposed default, and escalates to the owner only when human judgment materially changes the outcome or authority is missing. The reply records who answered as `answered_by`, `owner` by default or `captain`, in history and the next packet's handoff. If a process stops before returning a valid result, the runner records the attempt failure. Before retrying, it checks for an existing branch, PR, or stored report so work completed just before the interruption can be recovered.
-
-### Execution adapters
-
-V1 prioritizes a **muster**, a batch launched from a Captain chat in any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code. Each claimed item runs in a visible worker session in the target repo’s project. Record its session link with the attempt. Verify session launch, observation, and result handoff for each runtime adapter in a pilot. Continuous dispatch into visible worker sessions remains an open integration question.
-
-**Decision (PH-11b):** The Captain chat holds its runtime's session tools, so production requests reach the runtime through a **Captain chat relay**. The runner loop queues each `resolve_project`, `launch`, `observe` and `resume` request in its private state directory and waits. The Captain chat takes each request once, runs it with its runtime's tools, and records the reply with `phalanx relay respond`. A request the Captain never took is provably undelivered and may be relaunched. A taken request is never handed out again; an unanswered launch stays reserved until native discovery reconciles it by marker. A trusted subprocess bridge uses the same JSON contract and passes the same contract test. The contract names no runtime; each runtime adapter maps it to that runtime's own tools and session identity. A runtime's session tools can be called only from inside an agent turn, so the loop can neither serve nor wake the relay. Muster setup therefore includes a **standing relay serve**: a dedicated relay chat serves continuously, and the runtime's own scheduler wakes it whenever its turn ends. Each runtime adapter documents that mechanism and its recovery bound. Overlapping servers are safe because each request is taken exactly once. When no server has polled or answered for a bounded time (180 seconds) while a request waits, the loop reports a **relay stall**. It publishes the stall as a runner-level wait reason on every item whose worker needs the relay, and notifies the owner through an optional runner-configured command. The first poll or answer clears the stall, notifies the owner, and draining resumes without a loop restart.
-
-Persist the worker session ID before relying on its result. When Captain monitoring stops or a lease lapses, reconcile a known worker session before assigning a replacement. Reattach if it is active, collect and verify its result if it finished, or resume from a checkpoint if it stopped. Recheck an unknown state before escalating. Use a new server-authorized recovery claim for any recovered result and keep the prior attempt in history.
-
-Keep the work packet and result contract independent of the runtime. An execution adapter starts an item in its workspace, reports progress and a session reference when available, and normalizes the final result or question. The runner handles claims, retries, and handoffs across all adapters. Keep native session IDs on the attempt and preserve enough workspace and handoff context to resume without them. A headless run can expose logs or a native session reference according to its runtime’s capabilities.
-
-Keep one adapter per runtime. A Captain adapter is the procedure a Captain chat in that runtime follows to serve the relay. [Captain relay and bridge](docs/captain-relay.md) documents the generic procedure and each runtime's mapping; the GitHub Copilot app or CLI and Claude Code serve the same contract. Keep runtime selection in runner configuration and runtime-specific invocation details inside the adapters. Every runtime uses the same backend, queue, work packet, and result contract.
-
-**P2:** Add subprocess bridge adapters for runtimes that can launch and observe visible sessions without a Captain chat.
+A runtime keeper wakes every thirty minutes to start a Captain if none is live, respecting
+recent handoff and charter stop conditions. Existing writers and the reconciler continue
+without a Captain. Stale Captain/reconciler, no progress, unconfirmed launches, stopped
+writers and orphan sessions are visible flags with recovery actions. Archival requires
+preserved local work and runtime creator authority; server records do not perform archival.
 
 ## Settings and dispatch gates
 
-- **Max concurrency.** Set a per-runner maximum for active worker attempts across all repositories and runtimes. A muster may request fewer slots. A waiting-for-input item releases its slot. Reducing the limit leaves current attempts running and stops new claims until the runner is below the new limit.
-- **Dispatch pause.** Allow intake while new claims are paused. Existing attempts can finish and report results. Resume enables claims again.
-- **Eligibility.** Claim only work for registered repos the runner can reach and execute with an available runtime. A runner can declare the stages it supports so the server filters them before ranking. An unmet prerequisite keeps an item queued with a visible reason. Independent jobs in the same repo remain eligible.
-- **Additional gates.** Keep optional queue-wide concurrency limits and explicit approval before publishing a PR as design choices. Enforce any queue-wide limit in the same atomic server-side claim operation. Start without per-repo limits unless overlap becomes a real problem.
+- Charter `max_writers` bounds new registered writers across its repositories. Intents and
+  waiting writers count. Replacements add no extra place; reductions do not end writers.
+- Pause blocks new registrations/attempts while existing progress/results continue.
+- Captains consider repo mappings, charter scope, affinity, dependencies and retry time.
+  Rank eligible work by urgent/normal/low priority aged toward urgent, then oldest ready
+  time and stable item ID. A new stage gets a new clock; blocked/retrying work does not
+  accrue runnable age prematurely.
+- Never infer server admission from board counts. The server checks current durable
+  prerequisites and fencing atomically at registration/attempt time.
 
 ## Worktrees and queue selection
 
-- Design v1 for many concurrent workers on one machine. Keep runner identity, repo mappings, runtime availability, and the concurrency limit in the contract. Multiple devices draining the shared queue and resuming each other’s work are P2. The server assigns one active stage claim per item in either case.
-- Use an isolated worktree and an item-specific topic branch for each active PR item. Reuse the worktree on the same device after verifying the branch, checkpoint, and local edits. Keep unpublished changes pinned to the device that holds them. Avoid replacement work while an original worker may still be active.
-- When the checkpoint is durable, another eligible device can fetch the recorded branch and commit, recreate its local worktree, and resume from the stored handoff. Opening the draft PR is a natural publication checkpoint. Reports can move after their draft and evidence are stored. Remove a closed item's worktree only after verifying no unrecorded changes remain.
-- Atomically claim the highest-ranked eligible stage. Filter by dispatch gates, device capability and affinity, prerequisites, and retry time before ranking. Start with urgent, normal, and low priority. Within a tier, order by oldest `ready_since`, then a stable item ID.
-- Age runnable stages toward the highest priority so newly filed urgent work cannot continuously overtake older eligible work. Preserve `ready_since` through claim contention. Start a new clock when a new stage becomes runnable. Apply bounded retry backoff and expose the reason and duration when work cannot run. The aging interval is a setting to tune in the pilot.
-- **Keep working until you really can't anymore** (Caleb, 2026-11-23). Admission is per item, not per stage. Keep working on the same item through its runnable delivery stages until it is done or genuinely can't continue: an explicit blocker or external wait, a safe stop or cancel, or a failure that needs recovery. Retain its capacity reservation across stage handoffs while each stage keeps its own attempt, lease and fencing, and release capacity correctly on wait, stop, completion or recovered expiry. This never waives checks, trust, permissions, fencing or cancellation.
-- **Stage continuation.** A runner that can run the item's next stages offers a fresh lease secret and the stages it can run with each stage result (`Phalanx-Next-Lease` and `Phalanx-Next-Stages` headers). If the accepted result leaves the execution queued at an offered stage that is runnable now (not paused, not pinned elsewhere, no retry delay, prerequisites met, runner under capacity), the server ends the old attempt and claims the next stage for the same runner in the same transaction. The response carries the new attempt as `continuation`, so no other claim can take the slot in between and the runner's reserved count never drops. The new attempt has its own ID and lease; the old secret can no longer renew or submit. The offer is part of the replayable request, so a retried submission returns the same continuation. Otherwise the slot is released and the result's history records `capacity_release` with the reason: closed, finalizing output, stop requested, input wait, external wait, retry backoff, dependency wait, no offer, stage not offered, pinned elsewhere, dispatch paused or runner at capacity. Stopped-attempt recovery records `lease expired`, so a crashed runner's continuation expires and recovers like any other attempt. Work that waits or is released re-enters admission through `queue_head` aging. The attended runner journals the offered secret before submitting, installs the continuation in the same slot, and launches it without a new claim. The Captain loop offers every stage it can claim, skipping worker stages while any project mapping is blocked.
-- **Runner-only lane.** Capacity bounds agent worker sessions. Stages that start no agent worker (`pr_creation`, `pre_pr_validation`, `pr_promotion`, `pr_validation`, `pr_reconciliation`, `check_in` and `report_storage`) also get a lane of `RUNNER_ONLY_SLOTS` (2) per runner, so a short GitHub read or mark-ready never waits hours behind long workers. A claim or continuation into an agent stage needs open agent-stage attempts below capacity. Any claim needs all open attempts below capacity + 2, and once agents fill capacity the server offers only runner-only stages. The Captain loop's slots 1..capacity claim worker stages first and take runner-only work only when none is eligible, so a runner-only stream can't starve agents. Slots capacity+1..capacity+2 claim and continue only runner-only stages. `queue_head` aging orders both. `pre_pr_validation` is still bounded by `local_check_capacity`. These legacy admission limits do not imply a direct-path board wait.
+Use isolated worktrees and deterministic item branches, allowing independent jobs in the
+same repo. Reuse an existing worktree only after verifying branch/checkpoint/local edits.
+Keep unpublished changes on their host; reconcile session and outputs before replacement.
+Once a checkpoint is durable, another authorized host can fetch it and resume with the
+handoff. Multi-device execution and handoff remain P2.
 
 ## Parallelism and recovery
 
-- **Duplicate submissions.** Support idempotency keys on create and warn about similar open work when useful. Similarity alone should not prevent dispatch because separate tasks can touch the same feature.
-- **Duplicate execution.** Use one active lease per item. Record launch intent before starting a chat and renew leases independently of observing chat progress. An expired lease makes the item eligible for recovery, and the board shows the expiry as its wait reason until a runner recovers it. When recovery waits on the owner, the runner reports that reason with the exact `attended-recover --recheck` command, and the board shows it after the expiry. Keep active or uncertain workers counted against local capacity and reserve their worktrees until the runner reconciles them. Reconcile any worker chat, checkpoint, PR, or report before dispatching a replacement or repeating an external side effect.
-- **Attended reservations.** One runner ID and one private journal per machine hold numbered local slots. Count every occupied slot from durable claim intent through acknowledged completion, including uncertain claims, launches, and results. New reservations respect local capacity and server admission. Each slot keeps its own claim replay inputs and exact native receipt. Local journal transactions cover only reservation state, so slow Git or API operations in one slot leave other claims and renewals available.
-- **Continuous attended scheduling.** The CLI Captain loop enumerates reservations and server recovery before new eligible-stage claims, serializes work per slot, and schedules renewals separately from native observation and runner-only routes. One asynchronous project discovery pass per poll verifies each distinct host/project/checkout mapping once for all slot admission and launch checks. The fixture-backed bridge journals one relay attempt and persists its native or queued receipt immediately. A recorded relay intent is never repeated merely because a receipt is absent, a timeout elapsed, or the loop restarted. Before relay intent exists, a prepared packet with no receipt, submission or recovery ownership resumes its original claim and launch after rechecking the clean, accounted worktree and live claim; stopping instead confirms no-writer stop. Bounded native batches rotate; per-attempt cursors and admission rotation remain in memory and reset on restart. Loop status is written and emitted only on change and has one durable store, separate from reservations. Real native acceptance remains a required integration gate. An expired attempt with a known active writer, a verified result or a saved submission is adopted: the server re-leases the same open attempt under a fresh secret, the old secret stops working, and the Captain resumes renewal, observation and submission. Renewal works only on a live lease and adoption only on an expired one, so the two never race. When the exact writer stopped without a result but left local changes, the runner never releases or discards them: it resumes that same writer through the bridge with a continue prompt, at most three times, and adopts the attempt once the writer is observed active. After the limit it waits on the owner with the attempt, writer, worktree and dirty state, notifies the owner once, and still adopts if the writer is later observed active.
-- **Attended routing and cancellation.** Project discovery filters only worker-stage claims; runner-only stages remain eligible for Git-verified repositories, and general slots fall back to them when no worker stage is eligible. Correlated queued/native receipts preserve both IDs across repeated reads. Stopping workers use one leased stop-confirmation path: prove no launch/evidence for an unlaunched worker, or observe the exact launched writer stopped and verify its local outputs through recovery. A clean unlaunched workspace remains accounted when its base advances to a descendant; prepared packets retain their exact checkpoint. Journal the stop request, recheck its proof on replay, and release only after verified acknowledgment; do not submit worker results while stopping. Unmatched expired attempts consume capacity without globally blocking admission, and packet recovery waits for an observation before uncertainty backoff. Malformed native rows block their own markers, while invalid batch freshness, completeness or cursors invalidate the batch. Ambiguous launches, changed checkpoints and runner-only effects remain reserved. The adapter bounds file-backed replies and direct-helper waits without waiting for inherited-pipe EOF or terminating native worker descendants.
-- **Runner-only no-intent stop.** Stopping `report_storage` without a saved submission and `pr_creation` without a publication intent or sealed observation use the same no-writer stop-confirmation path. Check both draft journals under the existing item publication lock and account for the claimed candidate in a clean local worktree. Preserve any ambiguous publication or saved submission; release only after the exact stop acknowledgment and archive once.
-- **GitHub writes.** Workers prepare commits and evidence. The runner owns pushes, PR creation and promotion, and merge via the current item claim. Persist operation intent, verify authority and expected revision, and use Git or GitHub revision preconditions where supported. Reconcile an unresolved write before a conflicting operation. Prefer a possible duplicate PR to missing publication after bounded lookup. Verify and record one primary PR for review and check-in, and surface any duplicates. Uncertain merges require reconciliation before retrying. The direct GitHub merge-commit path relies on GitHub's expected-head precondition plus the repo's required checks and rulesets. Reconcile the recorded intent against the exact merged primary PR. A merge commit's head parent must be the authorized head, even if the base advanced; a single-parent squash or rebase commit must be on the base branch with the PR's final head equal to the authorized head. A merge the repository made itself at an earlier PR gate is verified the same way against the validated candidate and completes the item instead of asking the owner. An open PR leaves an ambiguous attempt unresolved until its disposition is established.
-- **Overlapping changes.** Separate worktrees protect local changes from concurrent agents. Review intervening changes before opening a PR. Use an explicit dependency or targeted coordination when two items need the same change in a particular order. Avoid a global one-worker-per-repo restriction.
-- **Retries.** Reconcile partial effects, then retry transient failures with bounded backoff. Within the work item’s scope and repo policy, try a different recovery path when it can address the blocker. Defer only the affected stage or shared resource and keep unrelated eligible work moving. Ask for input when authorization or a material choice is required, or when available recovery paths are exhausted. Include the recommended next action and the evidence behind it.
+Idempotency prevents duplicate posts, not all similar work. Similarity alone should not
+block independent items. Preserve one primary PR and surface duplicates after bounded
+publication reconciliation; prefer possible duplicates to silently losing the deliverable.
+Reconcile uncertain merges before retrying. Never overwrite foreign pushes. Coordinate
+known overlaps through explicit dependencies rather than a global one-writer-per-repo rule.
 
 ## Interdependent work
 
-- V1 supports multiple prerequisites per work item, across repos when needed. Items whose prerequisites are satisfied can run in parallel. Validate self-dependencies and cycles in the same transaction that writes the links. Keep dependencies in the shared store.
-- A dependency names the upstream item and the output milestone it needs. A report dependency needs the stored report. A PR dependency defaults to a verified check-in when downstream work needs the merged code. An item can explicitly depend on a PR being ready for check-in if it only needs the reviewed PR. Bind the claim to the exact upstream execution and output revision. A ready-only dependency consumes that pinned reviewed revision. A failed or cancelled upstream item does not satisfy a dependency even if it produces a disposition report.
-- Keep an item queued with a visible reason until all its prerequisites are satisfied. Before claim, give the next worker the upstream output references and expected target revision where applicable. Make newly unblocked items eligible on prerequisite completion and reconcile eligibility if an event is missed. A failed upstream prerequisite can be retried or replaced, or the dependent item can be redirected or cancelled.
-- Allow the owner to update queued work and its dependencies after upstream changes or new steering. Version those changes and check the version on claim. A change to an active item goes through the existing pause, handoff, or cancellation path so a worker cannot silently continue against revised instructions.
-- **Later: campaigns.** A campaign groups related work items around a larger goal. Campaign planning can decompose the goal into items and dependency links, then reconsider remaining work after check-ins or steering. Keep automated decomposition and replanning outside v1. The same work-item and dependency model will support them later.
+Dependencies can cross repos and name upstream `report`, `ready_for_check_in` or `checked_in`
+milestones (check-in is the default). Validate self-links/cycles atomically. Bind each attempt
+to exact upstream execution/output revisions. Ready-only output cannot satisfy check-in;
+failed/cancelled disposition reports cannot satisfy successful report dependencies.
+
+Keep unmet reasons visible. Refresh dependents in bounded batches on upstream change and
+check durable evidence again at attempt assignment. Owner steering of queued context and
+dependencies is versioned; active work cannot silently receive revised instructions.
+Campaign planning/decomposition and automated replanning remain later work.
 
 ## Server and deployment
 
-Start with a standalone HTTP API server running on localhost. Run the CLI and workers as clients of that server from day one. The server owns the queue, claims, history, and reports. The runner owns local checkouts, agent processes, and Git credentials. Configure clients with a base URL and credentials so they can switch from the local server to a hosted instance without code changes.
+One standalone HTTP API owns the relational queue, attempts, history and reports; clients
+never write its store directly. Local config, checkouts, credentials and worktrees remain
+on their host. Local deployment is FastAPI/plain Uvicorn and standard sqlite3, DELETE journal,
+synchronous EXTRA, short serialized writes and fair reads. CPython 3.14 is the deployment
+baseline; 3.12+ is supported. Server credentials distinguish owner/runner roles; scoped
+writer credentials fence item work.
 
-Use one relational store and keep database operations behind the server, with explicit transactional claim and lease behavior. Schema changes are made directly, without migrations or compatibility layers (AGENTS.md). The first single-server deployment uses FastAPI with plain Uvicorn and Python's standard sqlite3 module in SQLite DELETE journal mode with synchronous=EXTRA and short, serialized write transactions. CPython 3.14 is the deployment baseline and CPython 3.12 or later is supported. The server authenticates owner and runner operations with distinct bearer tokens supplied at startup. A hosted instance could use SQLite on durable storage or move to a managed relational database if hosting or concurrency needs warrant it. Keep storage-specific code localized and verify claim, retry, and resume behavior against any new database before migrating.
-
-Use the same API server in both environments. For a hosted deployment, configure HTTPS, authentication, persistent storage, and backups. Local runners initiate outbound API requests, so hosting the server does not require exposing the runner or its repositories to the internet. Phone intake will use the same authenticated work-item creation endpoint.
+Use existing `MIGRATIONS` for one-time schema changes; decision 67 permits the appended
+drop-only change for the retired tables, not new migration machinery or live-data resets.
+Keep storage-specific code localized. Hosted deployment adds HTTPS, persistent storage,
+authentication and backups. Clients initiate outbound requests, so their repos need not be
+exposed. Phone intake will use the same authenticated create endpoint.
 
 ## Users and workspaces
 
-Phalanx will be used by people other than Caleb, alone or in teams, on a shared hosted server. Build for that shape now and ship it in small steps. The v1 local release runs one implicit workspace with the existing owner and runner tokens.
+Build for people alone or in teams on a shared server. V1 runs one implicit workspace with
+static owner/runner credentials; ship multi-user features in separate slices.
 
-- **Workspace.** The tenancy boundary. A workspace owns its repositories, work items, executions, runners, dispatch settings, questions and reports. Every server record belongs to exactly one workspace. The server scopes every query and write by the caller's workspace. Cross-workspace access is a bug, and tests prove isolation. The v1 data belongs to one default workspace, and a migration adds the scope without changing behavior.
-- **Users and roles.** A user is a person with a stable identity from a sign-in provider: the provider and its subject ID, with a verified email for display and invitations. Start with Google ([PH-27](IMPLEMENTATION_PLAN.md)). A user can belong to several workspaces, with a role in each:
-  - `owner` manages members, repositories, runners and dispatch;
-  - `member` files work, replies and acts on items;
-  - `viewer` can only read.
-
-  Add finer permissions, such as per repository, only when a team needs them.
-- **Attribution.** Every work item records who requested it, and every question, reply, steering change and owner action records who acted. A question goes first to the item's requester and is visible to the workspace's owners. "Needs you" means needs this user.
-- **Credentials.**
-  - **People** sign in to the dashboard. For the CLI and API they use personal API tokens, which are hashed on the server, scoped to one workspace and revocable.
-  - **Runners** register with their workspace and get their own token, bound to their runner ID.
-  - **Bootstrap.** The static owner and runner tokens remain the setup path for a single-user local install.
-- **Runners and Git stay with their owner.** A runner claims only work for its own workspace's repositories. Checkouts and Git credentials stay on the machine of the user who runs it, and the server never holds them. That boundary is what makes a shared server safe for many users.
-- **Fair sharing.** Capacity comes from each workspace's own runners, so one workspace's backlog cannot take another's slots. A hosted server adds per-workspace rate limits and storage quotas when it serves more than one workspace.
-- **Captain.** Each workspace runs its own Captain loop with that workspace's credentials. Captain decisions are attributed to the Captain and reviewable by the workspace owners.
-- **Not planned yet:** billing, enterprise single sign-on, and cross-workspace sharing.
+- **Workspace:** tenancy boundary owning repos, items, executions, runners, settings,
+  questions and reports. Future queries/writes must scope to caller workspace and prove
+  isolation in tests; introducing tenancy preserves existing data in a default workspace.
+- **Users/roles:** provider identity and subject with verified email for display/invitations;
+  start with Google (PH-27). Owners manage membership/repos/runners/dispatch, members file
+  work/reply/act, viewers read. Add finer permissions only for a concrete need.
+- **Attribution:** record requester, reply author, steering actor and Captain decisions.
+  Questions go to requester and workspace owners; "Needs you" means the current user.
+- **Credentials:** people use sign-in or hashed, revocable workspace-scoped personal API
+  tokens; runners register with their own ID-bound token. Keep static tokens for bootstrap.
+- **Local ownership:** checkouts/Git credentials stay with their owner, never the server.
+  Captains use their own workspace's credentials and authority.
+- **Fair sharing:** writer budgets belong to each workspace; add server-side workspace
+  rate/storage limits when hosting multiple workspaces.
+- Billing, enterprise SSO and cross-workspace sharing are not yet planned.
 
 ## Operator view
 
-Provide a read-only work board for the current state of Phalanx. Put work in progress first, with an explicit distinction between running, queued, waiting for input, and waiting for external checks. Show recently closed work below it, newest first, including failures and cancellations with their reports. Keep the full backlog and older history available through paginated views.
+Read-only paginated board: open work first (running/queued/input/external distinct), recently
+closed newest first, full history available. Show stage/status, repo, age, progress, wait
+reason/action, writer/session, PR and flags. Highlight actionable input. Every unbound queued
+item shows its Captain wait; do not infer capacity or rank-position blockers.
 
 - Scribe's header `+` (**New work item**) adds owner-authorized intake to the otherwise
   read-only local board through the existing `POST /v1/items` contract. The form reads registered
@@ -212,23 +259,31 @@ Provide a read-only work board for the current state of Phalanx. Put work in pro
   clients without browser headers are unchanged. Retain one key and exact payload across an
   uncertain submission until an idempotent retry settles it. Inline validation and queued-row
   insertion preserve the current board view. See [the form contract](DASHBOARD.md#new-work-item-local-board).
-- In progress shows the item and repo, current stage, status, when it last advanced, and the specific wait reason or blocker. Put items needing the user’s judgment where they are easy to find. Include links to the visible worker chat and draft PR when available.
-- A selected item shows its recorded transition history, current attempt, next action or resume trigger, and prerequisites when relevant. Result events keep an existing persisted reason (including a wait reason); otherwise they derive one (at most 400 characters) from persisted outcome, issue, failed local check names/reasons, failure reason and applied candidate/head SHA. Redact recognizable credentials before truncating; do not copy task bodies or arbitrary evidence. Events correlate the recorded attempt and worker reference, stage from/to, PR URL and full applied SHA, without substituting newer execution evidence. Reuse transition history; no new cause/event store or capacity/rank wait inference. Keep stage and execution status separate. Show the recorded lifecycle rather than percent complete, since an item may loop back after a review or revision change.
-- Recently closed shows the outcome, close time, and one link to the verified PR or stored field report. If a merge was authorized and completed, distinguish checked in from ready for check-in.
-- Read state from the API. Use bounded, paginated queries for open items and recent closures, and load the detailed timeline only when selected. Refresh periodically and show when the view is stale or disconnected. Terminal outputs and recorded history remain available while the runner is offline.
-- Every open item shows either a wait reason or a next action, including queued items (paused dispatch, scheduled retry, or next to run through Captain dispatch). Direct-path capacity is advisory, so the board adds no capacity fields or runners endpoint. The local API also serves section counts, dispatch state, oldest queued age and data freshness, label groups with a rollup, bounded execution filters, and conditional reads with a durable weak ETag. Ticking ages alone do not invalidate the tag; clients retain timestamps to calculate elapsed age. PR facts and duplicate counts come only from reconciler GitHub observations and are unknown until observed. This server slice adds no hosting, sign-in, authentication or UI changes; see [DASHBOARD.md](DASHBOARD.md#api-additions).
-- The hosted dashboard's goals, UI principles and phases are proposed in [DASHBOARD.md](DASHBOARD.md).
+
+Timeline events correlate their recorded attempt/worker, stage from/to, PR URL and full SHA,
+never newer evidence. Prefer persisted reasons; otherwise derive bounded (400-character)
+credential-redacted causes from outcome/issue/check failures/revision. Do not copy arbitrary
+task/report/review content. Read PR facts/duplicate counts only from reconciler observations;
+unknown remains null. Distinguish draft, ready and checked-in outcomes.
+
+Use bounded queries, labels/groups, filters, conditional weak ETags and on-demand timeline
+pages. Show freshness/disconnection. Ticking ages alone do not invalidate ETags; transitions
+and temporal boundaries do. Records/reports remain available offline from the writer.
+See [DASHBOARD.md](DASHBOARD.md#api-additions) for hosted UI proposals.
 
 ## First milestone
 
-Build a small API, one durable store, and a runner with a concurrency limit and a dispatch pause. Demonstrate two visible worker sessions on one machine handling different repos in parallel, with one field report and one PR that goes through the full lifecycle, including a feedback or conflict loop and an authorized check-in. Demonstrate recovery after an interruption, a question that can be answered and resumed, and the operator view under backlog. Validate the local operating envelope before adding multi-device handoff. Later, an authenticated ChatGPT action or intermediary can use the same create API to file work from a phone. Its availability and authentication flow are decisions to validate separately.
+Demonstrate concurrent visible sessions across repos, report and PR delivery, feedback/conflict
+recovery, authorized merging, interruption/question recovery and backlog visibility. Validate
+the local operating envelope before multi-device handoff. Current native-session evidence
+is in [the direct pilot](docs/pilots/direct-sessions.md).
 
 ## Design questions
 
-| Decision | Options | Starting proposal |
-| --- | --- | --- |
-| How should the first hosted instance run? | One hosted service with a persistent disk, or a hosted service with a managed relational database. | Run the standalone server locally first. Choose the host and database once we know the durability, concurrency, and maintenance tradeoffs. |
-| How should input requests reach a user? | CLI inbox, email, or a chat/push integration. | Store the question and reply in the API first. Use one notification channel per user, with a link to the item. Decide where replies should be submitted. |
-| Who can file work? | One owner, selected collaborators, or separate submitter and runner roles. | **Decided:** many users in workspaces with owner, member and viewer roles (see [Users and workspaces](#users-and-workspaces)). v1 ships one implicit workspace with owner and runner tokens. Repo and Git credentials stay local to each runner. |
-| Where should Markdown reports live? | Local files, backend artifact storage, or a designated Git repo. | Store small reports with the work item so they remain available when the runner goes offline. Revisit storage if reports start carrying large artifacts. |
-| How strict should coordination be? | Claim only by work-item ID, warn about likely overlap, or serialize work by repo or declared resource. | Start with per-item claims, isolated worktrees, and explicit dependencies for known overlaps. Add narrower coordination when a real collision shows where it helps. |
+| Decision | Starting proposal |
+| --- | --- |
+| Hosted service/storage | Local first; choose hosting from durability/concurrency/maintenance evidence. |
+| User notifications | API inbox first, then one channel per user linking the item. |
+| Intake authority | Many users/workspaces with owner/member/viewer roles; implicit workspace first. |
+| Report storage | Small immutable reports in the backend; revisit for large artifacts. |
+| Coordination strictness | Per-item fencing, isolated worktrees and explicit dependencies; narrower coordination only for real collisions. |

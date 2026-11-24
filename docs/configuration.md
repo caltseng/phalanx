@@ -1,6 +1,8 @@
 # Configuration
 
-Phalanx has no install locator or per-user config file. The server reads its settings from the environment, and every runner command takes explicit `--config` and `--state` paths. Record your values in your private muster runbook (see [Install Phalanx](install.md#choose-and-record-your-muster-directory)).
+The server reads environment settings. Direct clients support explicit config paths or the
+[muster locator](../README.md#direct-muster-discovery-and-status). Record paths and credentials
+privately; never initialize a second store to repair discovery.
 
 ## Environment variables
 
@@ -24,7 +26,6 @@ The runner reads a JSON file passed as `--config`:
 {
   "base_url": "http://127.0.0.1:8000",
   "runner_id": "desktop",
-  "capacity": 2,
   "validation_policy": "C:/phalanx-runner/validation.json",
   "repositories": {
     "registered-repo-id": {
@@ -39,18 +40,21 @@ The runner reads a JSON file passed as `--config`:
 
 | Key | Meaning |
 | --- | --- |
-| `base_url` | API base URL. The runner journal refuses a different value later. |
-| `runner_id` | Stable runner ID across restarts. It scopes server capacity and recovery. The journal refuses a different value later. |
-| `capacity` | Local agent worker slots, default 1. The runner adds two runner-only slots, `capacity`+1 and `capacity`+2. The server also applies its per-runner capacity. |
-| `repositories` | Registered repository ID to `checkout`, `base_branch`, and the runtime's `host_id` and `project_id` (see the [runtime mapping](captain-relay.md#runtime-mapping)). An optional `post_merge_check` names the repository's [post-merge deployment check](direct-path.md#post-merge-deployment-status). |
-| `stages` | Optional list restricting which stages the loop claims. |
-| `validation_policy` | Absolute path, outside every checkout, of the [validation policy](runner-validation-policy.md). Without it, validation stages are not claimed. |
+| `base_url` | API base URL. |
+| `runner_id` | Stable reconciler identity across restarts; scopes its heartbeat and flags. |
+| `repositories` | Registered repository ID to `checkout` and `base_branch`. An optional `post_merge_check` names the repository's [post-merge deployment check](direct-path.md#post-merge-deployment-status). |
+| `validation_policy` | Absolute path, outside every checkout, of the [validation policy](runner-validation-policy.md). The reconciler runs local checks and observes required GitHub checks from this policy. Local failures are flags, not a gate. |
 | `check_recheck_seconds` | How often pending draft and ready checks are rechecked. 5 to 86400, default 30. |
 | `check_wait_limit_seconds` | How long checks may stay pending on one head and base before the owner is asked. 60 to 2592000, default 7200. |
 | `local_check_capacity` | Validations that run local checks at once on the runner host. 1 to 64, default 1. |
 | `auto_merge` | `true` (default) merges at check-in; `false` delivers the ready PR and leaves the merge to the owner. |
-| `notify_command` | Executable and arguments, such as `["python", "notify.py"]`, that receives each `relay_stalled`, `relay_serving` and slot `owner_wait` event as one JSON object on stdin. Each event has `event`, `reason`, `items`, `runner_id` and `at`; `owner_wait` adds `slot`, `attempt_id` and `next_action`, and is sent once per new reason. The [reconciler](direct-path.md#run-the-github-reconciler) also sends each owner-notify flag once. It runs without the Phalanx token variables and has 30 seconds. A failure shows as `notify_blocked` in loop status. |
+| `notify_command` | Executable and arguments, such as `["python", "notify.py"]`, receiving each reconciler owner-notify flag once as JSON on stdin. It runs without Phalanx token variables and has 30 seconds. Failures are printed as actionable errors. |
 
-Keep the runner state directory private, outside every mapped checkout, and readable only by the runner account. It holds active lease secrets, the reservation journal and the relay queue.
+Keep the reconciler scratch directory outside mapped checkouts and private to its account.
+The [shift config and charter](direct-path.md#run-a-captain-on-the-direct-path) define native
+session launching and `max_writers`; there is no per-runner admission limit. Existing remaining
+runner-stage settings (`check_recheck_seconds`, `check_wait_limit_seconds`,
+`local_check_capacity`, `auto_merge`) retire with those stages in PH-DS5 part 2.
 
-Captain loop flags `--poll-seconds`, `--heartbeat-seconds`, `--batch-size` and `--wait-seconds` tune its scheduler; see [Runner operations](runner-operations.md#scheduling).
+Writer credentials live only in the item's Git directory. Captains wake through their runtime
+scheduler, not a CLI process.

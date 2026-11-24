@@ -3,314 +3,115 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>Phalanx State Machine</title>
+  <meta name="color-scheme" content="light dark">
+  <title>Phalanx state machine</title>
   <style>
-    :root { font: 16px/1.55 system-ui, sans-serif; color: #edece5; background: #101418; --muted: #aeb9c4; --border: #343e48; --accent: #f2cc83; --panel: #171d23; }
-    * { box-sizing: border-box; }
-    body { margin: 0; }
-    main { max-width: 1320px; margin: auto; padding: 42px clamp(16px, 4vw, 54px); }
-    h1, h2, h3, p { margin: 0; }
-    h1 { font-size: clamp(2.5rem, 6vw, 4.3rem); line-height: 1.06; letter-spacing: -.055em; }
-    h2 { font-size: 1.15rem; }
-    h3 { margin: 16px 0 4px; font-size: .84rem; color: var(--accent); }
-    header p { margin-top: 12px; color: var(--muted); }
-    nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 26px 0 12px; }
-    button { font: inherit; color: inherit; cursor: pointer; }
-    nav button, .transition { border: 1px solid var(--border); background: var(--panel); border-radius: 8px; padding: 8px 14px; }
-    nav button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #231a0e; font-weight: 650; }
-    :focus-visible { outline: 3px solid #fff; outline-offset: 3px; }
-    .map { overflow: auto; border: 1px solid var(--border); border-radius: 14px; background-color: #13191e; background-image: radial-gradient(#28333e 1px, transparent 1px); background-size: 20px 20px; }
-    .canvas { position: relative; width: 952px; margin: auto; }
-    svg { display: block; width: 100%; position: absolute; inset: 0; pointer-events: none; }
-    .edge { fill: none; stroke: #688094; stroke-width: 1.6; opacity: .55; }
-    .edge.return { stroke-dasharray: 5 5; }
-    .edge.selected { stroke: var(--accent); stroke-width: 2.4; opacity: 1; }
-    .stage { position: absolute; width: 148px; min-height: 52px; padding: 6px 9px; border: 1px solid #526271; border-radius: 8px; background: #202a33; font-size: .81rem; line-height: 1.2; font-weight: 650; }
-    .stage[data-kind="report"] { background: #183330; border-color: #548881; }
-    .stage[data-kind="terminal"] { background: #342c1d; border-color: #9d8250; }
-    .stage[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .legend { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 10px 1px; color: var(--muted); font-size: .83rem; }
-    [hidden] { display: none !important; }
-    .section-map { border: 1px solid var(--border); border-radius: 14px; background: #13191e; padding: clamp(14px, 3vw, 26px); }
-    .section-map ol { list-style: none; margin: 14px 0 0; padding: 0; }
-    .edge-row { display: grid; grid-template-columns: minmax(116px, 1fr) minmax(160px, 2fr) minmax(116px, 1fr); align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
-    .edge-node { width: 100%; border: 1px solid #526271; border-radius: 8px; background: #202a33; padding: 8px; font-size: .86rem; font-weight: 650; }
-    .edge-node[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
-    .edge-condition { text-align: center; color: var(--accent); font-size: .86rem; display: grid; gap: 4px; }
-    .edge-arrow { height: 1px; width: 100%; background: #688094; position: relative; }
-    .edge-arrow::after { content: ''; position: absolute; right: 0; top: -3px; border-left: 6px solid #688094; border-top: 4px solid transparent; border-bottom: 4px solid transparent; }
-    .details { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; margin-top: 8px; }
-    article { min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 20px; }
-    article p { color: var(--muted); margin-top: 6px; }
-    #transitions { list-style: none; padding: 0; margin: 6px 0 0; }
-    #transitions li + li { margin-top: 6px; }
-    .transition { display: block; width: 100%; text-align: left; font-size: .9rem; }
-    .transition:hover { border-color: var(--accent); }
-    .transition span { display: block; color: var(--muted); font-size: .82rem; }
-    footer { margin-top: 20px; }
-    footer a { color: var(--accent); }
-    @media (max-width: 700px) { .details { grid-template-columns: 1fr; } }
-    @media (max-width: 480px) { .edge-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 1fr); gap: 6px; } .edge-node { padding: 6px 4px; } }
+    :root { font: 16px/1.6 system-ui, sans-serif; color-scheme: light dark; }
+    body { max-width: 1000px; margin: auto; padding: 28px; }
+    a { color: light-dark(#0969da, #79c0ff); }
+    .map { overflow-x: auto; }
+    svg { display: block; min-width: 850px; width: 100%; }
+    rect { fill: light-dark(#f6f8fa, #212830); stroke: #738599; rx: 9px; }
+    text { fill: currentColor; text-anchor: middle; font: 15px system-ui, sans-serif; }
+    path { fill: none; stroke: #738599; stroke-width: 2; marker-end: url(#arrow); }
+    .recovery { stroke-dasharray: 6 4; }
+    .label { font-size: 12px; }
+    details { border: 1px solid #738599; border-radius: 9px; margin: 12px 0; padding: 12px; }
+    summary { cursor: pointer; font-weight: 650; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid #738599; }
   </style>
 </head>
 <body>
-<main>
-  <header>
-    <h1>Phalanx State Machine</h1>
-    <p>Select a state to inspect its evidence, transitions, and recovery paths.</p>
-    <p>These graphs show the legacy runner stages. <a href="docs/direct-sessions.md#pr-publication-and-delivery">Direct writer sessions</a>
-      use development &rarr; self review &rarr; publication &rarr; delivery.
-      With <code>publication_mode: "draft"</code>, delivery stops at a verified open draft,
-      without promotion, merging or a ready-for-check-in milestone.</p>
-  </header>
-  <nav aria-label="Graph view">
-    <button type="button" data-view="lifecycle" aria-pressed="true">Lifecycle overview</button>
-    <button type="button" data-view="development" aria-pressed="false">Intake and development</button>
-    <button type="button" data-view="validation" aria-pressed="false">PR validation and review</button>
-    <button type="button" data-view="checkin" aria-pressed="false">Reconciliation and check-in</button>
-    <button type="button" data-view="report" aria-pressed="false">Field report</button>
-    <button type="button" data-view="status" aria-pressed="false">Execution status</button>
-  </nav>
-  <div class="map" role="region" aria-label="Scrollable state graph" tabindex="0">
-    <div class="canvas" id="graph"></div>
+  <h1>Phalanx state machine</h1>
+  <p>One registered writer stays with an item across separately fenced stage attempts.
+    The server owns transitions; GitHub owns PR facts and merging.
+    <a href="STATE_MACHINE.md">Authoritative transition rules</a>.</p>
+  <h2>Direct lifecycle</h2>
+  <div class="map" tabindex="0" role="region" aria-label="Scrollable lifecycle diagram">
+    <svg viewBox="0 0 960 420" role="img" aria-labelledby="graph-title graph-description">
+      <title id="graph-title">Direct writer PR and report paths</title>
+      <desc id="graph-description">PR work goes from development through self review,
+        publication and delivery to completion. Review findings return to development.
+        Delivery fixes stay on the same PR; a draft head change returns to self review.
+        Reports go through drafting, exact-revision review and storage to completion.
+        A later verified owner merge enriches a completed ready PR without reopening work.</desc>
+      <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+        <polygon points="0,0 8,4 0,8" fill="#738599"></polygon>
+      </marker></defs>
+      <rect x="10" y="95" width="160" height="55"></rect><text x="90" y="128">Development</text>
+      <rect x="205" y="95" width="160" height="55"></rect><text x="285" y="128">Self review</text>
+      <rect x="400" y="95" width="160" height="55"></rect><text x="480" y="128">Publication</text>
+      <rect x="595" y="95" width="160" height="55"></rect><text x="675" y="128">Delivery</text>
+      <rect x="790" y="95" width="160" height="55"></rect><text x="870" y="128">Completed</text>
+      <path d="M170 122H205"></path><path d="M365 122H400"></path>
+      <path d="M560 122H595"></path><path d="M755 122H790"></path>
+      <path class="recovery" d="M850 95V55H925V95"></path>
+      <text class="label" x="870" y="43">Later verified owner merge</text>
+      <path class="recovery" d="M285 95V55H90V95"></path>
+      <text class="label" x="188" y="43">Findings: revise candidate</text>
+      <path class="recovery" d="M675 95V15H285V95"></path>
+      <text class="label" x="530" y="33">Draft head changed: self-review</text>
+      <path class="recovery" d="M650 150V205H720V150"></path>
+      <text class="label" x="675" y="226">Fix checks, feedback, conflict on same PR</text>
+      <rect x="10" y="300" width="160" height="55"></rect><text x="90" y="333">Report drafting</text>
+      <rect x="205" y="300" width="160" height="55"></rect><text x="285" y="333">Report review</text>
+      <rect x="400" y="300" width="160" height="55"></rect><text x="480" y="333">Report storage</text>
+      <path d="M170 327H205"></path><path d="M365 327H400"></path>
+      <path d="M560 327H870V150"></path>
+      <path class="recovery" d="M285 355V395H90V355"></path>
+      <text class="label" x="188" y="385">Findings on exact draft</text>
+    </svg>
   </div>
-  <div class="legend"><span id="forward-legend">Solid line · Phalanx advancing</span><span>Dashed line · Recovery or follow-up</span><span>Gold line · Selected state’s outgoing transitions</span></div>
-  <section class="section-map" id="section-map" aria-labelledby="section-title" hidden>
-    <h2 id="section-title"></h2>
-    <ol id="section-edges" aria-label="Labeled transitions"></ol>
-  </section>
-  <div class="details">
-    <article aria-live="polite">
-      <h2 id="selection" tabindex="-1"></h2>
-      <h3 id="evidence-label">Required evidence</h3>
-      <p id="evidence"></p>
-      <h3>Next step or recovery</h3>
-      <p id="recovery"></p>
-      <ul id="transitions" aria-label="Outgoing transitions"></ul>
-    </article>
-    <article>
-      <h2>Final output</h2>
-      <p>Every closed execution records one verified PR or stored Markdown report. If the requested deliverable is unavailable when work stops, the report explains why and links any partial work.</p>
-      <h3>Validation</h3>
-      <p>Phalanx opens a draft after development. Pre-validation and draft-only checks gate promotion to ready for review. A permitted pre-validation bypass records the reason and skipped checks. Required CI and previews must match the relevant revision.</p>
-      <h3>Human judgment</h3>
-      <p>Workers resolve routine issues within scope. A material decision, required approval, or stalled recovery can pause an item without occupying a worker slot.</p>
-    </article>
-  </div>
-  <footer><a href="STATE_MACHINE.md">State machine source</a></footer>
-</main>
-<script id="graph-data" type="application/json">{"lifecycle":{"labels":{"Start":"New execution","Kind":"Output type","Dev":"Development","Draft":"Report drafting","Self":"Self review","Pre":"Pre-PR validation","Publish":"Open draft PR","Post":"PR validation","Review":"Adversarial review","Reconcile":"PR reconciliation","Done":"Completed","Merge":"Check-in","ReportReview":"Report review","Store":"Store field report","Promote":"PR promotion","Revise":"PR revision"},"edges":[{"from":"Start","to":"Kind","label":""},{"from":"Kind","to":"Dev","label":"Pull request"},{"from":"Kind","to":"Draft","label":"Field report"},{"from":"Dev","to":"Publish","label":"First candidate and no existing PR"},{"from":"Dev","to":"Self","label":"Candidate for an existing PR"},{"from":"Publish","to":"Self","label":"Draft head verified"},{"from":"Publish","to":"Dev","label":"Existing PR with a foreign head"},{"from":"Self","to":"Dev","label":"Changes required"},{"from":"Self","to":"Pre","label":"Pass"},{"from":"Pre","to":"Dev","label":"Validation fails"},{"from":"Pre","to":"Promote","label":"Checks pass or permitted bypass recorded"},{"from":"Promote","to":"Dev","label":"Draft-only check fails or unexpected head"},{"from":"Promote","to":"Revise","label":"Merge conflict"},{"from":"Promote","to":"Post","label":"PR ready on the verified head"},{"from":"Post","to":"Reconcile","label":"Current CI and preview results recorded"},{"from":"Reconcile","to":"Review","label":"Diff since the last review is unreviewed"},{"from":"Review","to":"Reconcile","label":"No blocking findings"},{"from":"Review","to":"Revise","label":"Blocking findings"},{"from":"Reconcile","to":"Revise","label":"Conflict, failed check, feedback or unexpected head"},{"from":"Revise","to":"Post","label":"Fix pushed and head verified"},{"from":"Revise","to":"Promote","label":"Fix pushed to a draft PR"},{"from":"Revise","to":"Dev","label":"New scope"},{"from":"Reconcile","to":"Done","label":"Ready-only target or auto-merge off"},{"from":"Reconcile","to":"Merge","label":"Auto-merge on"},{"from":"Merge","to":"Revise","label":"Conflict or unexpected head"},{"from":"Merge","to":"Done","label":"Merge verified"},{"from":"Promote","to":"Done","label":"Repository merged the candidate"},{"from":"Post","to":"Done","label":"Repository merged the candidate"},{"from":"Draft","to":"ReportReview","label":""},{"from":"ReportReview","to":"Draft","label":"Changes required"},{"from":"ReportReview","to":"Store","label":"Evidence verified"},{"from":"Store","to":"Done","label":"Artifact recorded"}],"details":{"Dev":["Scoped changes have a recoverable candidate commit.","pr_creation for a new draft. If the item already has a PR, proceed to self_review on the new candidate."],"Self":["Candidate diff has been checked against the work item and repo rules.","pre_pr_validation if it passes. development if fixes are needed, with the findings carried into the next development packet."],"Pre":["Before requesting review, run applicable local tests and available live checks. Record the revision and results, or the skipped checks and reason for a permitted bypass.","pr_promotion after passing or recording a permitted bypass. Actionable failures return to development with the failed checks as findings."],"Publish":["Publish the candidate as a draft against the current target branch, record the PR, and verify its head.","self_review. An existing PR on the item branch is adopted: on the candidate head it continues to self_review, a foreign head returns to development to integrate its commits, and a closed PR asks the owner. Reuse a matching PR after interruption. If a bounded search cannot confirm publication, retry creation rather than drop the deliverable. If duplicates appear, select a primary and surface the others for review."],"Post":["Observe CI and perform required preview validation for the current PR head. Wait for pending checks or previews with a scheduled recheck.","pr_reconciliation with the results, including failures."],"Review":["An independent reviewer records findings and severity against the diff since the last reviewed head, or the whole PR diff on the first review.","pr_reconciliation when nothing blocks. Blocking findings go to pr_revision. An interrupted review can retry on the current revision."],"Reconcile":["Confirm CI, previews, review, and mergeability for the current PR head and base against the completion target. Reconciliation observes CI and previews on the current head itself and waits for pending checks without holding a slot.","An unreviewed diff since the last reviewed head goes to adversarial_review. A merge conflict, failed checks, new actionable GitHub feedback (requested changes or unresolved current review threads, each handed off once), or an unexpected head go to pr_revision as findings. GitHub's required approvals gate the merge at check_in. When all evidence is current, complete a ready-only item, or one whose runner has auto-merge off, with the PR marked ready; otherwise advance to check_in. After 10 revision rounds, or a third round with identical findings, since the owner's last reply, ask the owner instead."],"Merge":["Reconcile first: if GitHub reports the PR merged at the verified head, record it, even if the base advanced. A merge commit must have the head as its second parent; a squash or rebase commit has one parent and must be on the base branch. Otherwise recheck the claim, PR identity, expected head and mergeability, then request a direct merge commit pinned to the head. GitHub's required reviews, checks and rulesets gate the merge; Phalanx adds no gate.","Complete with PR link, merge commit and merge method. A conflict or unexpected head goes to pr_revision as findings. An unknown merge outcome or pending mergeability retries with backoff and reconciles before any new write. A merge GitHub refuses (HTTP 405), because of repository rules or a disallowed merge method, waits for them to be satisfied, then asks the owner. An unattributable merge asks the owner."],"Draft":["Produce a recoverable Markdown draft.","report_review"],"ReportReview":["Check the draft against the request and verify supporting evidence and links.","report_storage when it passes. Return to report_drafting for fixes."],"Store":["Store the reviewed Markdown idempotently and record its reference.","Complete with the stored report. Retry storage failures without redrafting."],"Start":["A new execution records the goal, repo, and requested output.","Choose the lifecycle according to the output type."],"Kind":["The work item asks for a pull request or a Markdown field report.","Start development for a PR or drafting for a report."],"Done":["The completion target is verified and exactly one final output is recorded.","A rerun creates a linked execution with its own result."],"Promote":["Update the existing PR to the validated candidate if needed and verify its head. While the PR is a draft, complete its draft-only checks, then mark it ready for review.","pr_validation. Wait for draft-only external checks without holding a slot. Failed draft-only checks, a merge conflict, or an unexpected head return to development with findings. A PR that is already ready skips draft-only checks and records them as skipped; Phalanx never converts a ready PR back to draft. If a human converted a promoted PR to draft, ask the owner before marking it ready again. A head Phalanx did not verify is only fast-forwarded, never overwritten; if that fails, development integrates its commits."],"Revise":["Fix the findings on the open PR: integrate the target branch or foreign commits, resolve conflicts, fix failures, and address feedback and review findings. Self-review only the new diff, rerun the failed checks and the local checks covering the changed files, then push and verify the head.","pr_validation. If a push outside Phalanx wins the race, the revision is recorded and pr_reconciliation sends the foreign head back to pr_revision. Never convert the PR to draft. A fix that turns into new scope escalates to development."]}},"status":{"labels":{"queued":"Queued","running":"Running","waiting_for_input":"Waiting for input","cancelled":"Cancelled","waiting_for_external":"Waiting for external","completed":"Completed","failed":"Failed"},"edges":[{"from":"[*]","to":"queued","label":""},{"from":"queued","to":"running","label":"Eligible claim"},{"from":"queued","to":"waiting_for_input","label":"User decision needed"},{"from":"running","to":"queued","label":"Stage advances or bounded retry"},{"from":"running","to":"waiting_for_input","label":"Human judgment required"},{"from":"running","to":"waiting_for_external","label":"External result pending"},{"from":"running","to":"completed","label":"Completion evidence verified"},{"from":"waiting_for_input","to":"queued","label":"Reply or retry"},{"from":"waiting_for_external","to":"queued","label":"Event or recheck makes work runnable"},{"from":"waiting_for_external","to":"waiting_for_input","label":"Human action required"},{"from":"waiting_for_external","to":"completed","label":"Reviewed report stored or completion verified"},{"from":"completed","to":"[*]","label":""},{"from":"failed","to":"[*]","label":""},{"from":"cancelled","to":"[*]","label":""},{"from":"queued","to":"waiting_for_external","label":"Cancellation or failure finalization"},{"from":"waiting_for_input","to":"waiting_for_external","label":"Cancellation or failure finalization"},{"from":"waiting_for_external","to":"cancelled","label":"Cancellation report stored"},{"from":"waiting_for_external","to":"failed","label":"Failure report stored"}]}}</script>
-<script>
-  const data = JSON.parse(document.getElementById('graph-data').textContent);
-  const layouts = {
-    lifecycle: {
-      Start: [24, 20], Kind: [212, 20], Dev: [24, 112], Publish: [212, 112],
-      Self: [400, 112], Pre: [588, 112], Promote: [588, 20], Post: [776, 112], Review: [776, 234],
-      Reconcile: [588, 234], Revise: [400, 234], Merge: [212, 234], Done: [24, 234],
-      Draft: [212, 354], ReportReview: [400, 354], Store: [588, 354]
-    },
-    status: {
-      queued: [24, 134], running: [270, 134], waiting_for_input: [516, 38],
-      waiting_for_external: [516, 230], completed: [762, 38], failed: [762, 134], cancelled: [762, 230]
-    }
-  };
-  const statusDetails = {
-    queued: ['The stage is eligible once dispatch, capacity, repo, runtime, and prerequisite gates pass.', 'Claim a free slot. If a prerequisite fails, resolve its disposition before dispatch.'],
-    running: ['A worker holds a current lease for one stage and reports evidence for the expected revision.', 'Advance, retry with backoff, or wait. An expired attempt cannot advance the item.'],
-    waiting_for_input: ['A question, proposed options, prior work, and a handoff are recorded.', 'A reply or retry queues another attempt for the same stage.'],
-    waiting_for_external: ['Record the external gate, expected revision, and next recheck.', 'An event or scheduled recheck resumes work. Escalate conflicts or persistent stalls.'],
-    completed: ['The requested completion target is verified and the final output is stored.', 'A rerun starts a linked execution and preserves the original result.'],
-    failed: ['The execution is closed with its final PR or a failure report.', 'Use the report and available checkpoints to decide whether to rerun.'],
-    cancelled: ['Stop is confirmed, in-flight operations are reconciled, and a final output is stored.', 'If an attempted merge already succeeded, record the verified outcome.']
-  };
-  const chart = document.getElementById('graph');
-  const sectionMap = document.getElementById('section-map');
-  const sectionTitle = document.getElementById('section-title');
-  const sectionEdges = document.getElementById('section-edges');
-  const sectionViews = {
-    development: { title: 'Intake and development', sources: ['Start', 'Kind', 'Dev', 'Self', 'Pre', 'Publish'], first: 'Dev' },
-    validation: { title: 'PR validation and review', sources: ['Promote', 'Post', 'Review'], first: 'Promote' },
-    checkin: { title: 'Reconciliation and check-in', sources: ['Reconcile', 'Revise', 'Merge'], first: 'Reconcile' },
-    report: { title: 'Field report', sources: ['Draft', 'ReportReview', 'Store'], first: 'Draft' }
-  };
-  const unlabeledConditions = {
-    Start: 'Work marshaled with a goal, repo, and requested output',
-    Dev: 'Recoverable candidate revision recorded',
-    Draft: 'Recoverable Markdown draft saved'
-  };
-  const evidence = document.getElementById('evidence');
-  const recovery = document.getElementById('recovery');
-  const heading = document.getElementById('selection');
-  const transitions = document.getElementById('transitions');
-  const viewButtons = [...document.querySelectorAll('[data-view]')];
-  const svgNS = 'http://www.w3.org/2000/svg';
-  let view = 'lifecycle';
-  let selected = 'Dev';
-
-  function svgElement(name, attrs) {
-    const element = document.createElementNS(svgNS, name);
-    for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, value);
-    return element;
-  }
-
-  function edgePath(from, to, offset) {
-    if (view === 'lifecycle' && from === 'Kind' && to === 'Draft') {
-      return 'M212,46 H192 V380 H212';
-    }
-    const [x, y] = layouts[view][from];
-    const [tx, ty] = layouts[view][to];
-    if (y === ty) {
-      const right = tx > x;
-      const start = x + (right ? 148 : 0);
-      const end = tx + (right ? 0 : 148);
-      const mid = y + 26 + offset;
-      if (Math.abs(tx - x) > 260 || !right && y === 112) {
-        const bend = mid - 47 - Math.abs(offset);
-        const step = right ? 19 : -19;
-        return `M${start},${mid} C${start + step},${mid} ${start + step},${bend} ${start + 2 * step},${bend} L${end - 2 * step},${bend} C${end - step},${bend} ${end - step},${mid} ${end},${mid}`;
-      }
-      return `M${start},${mid} L${end},${mid}`;
-    }
-    const down = ty > y;
-    const sx = x + 74 + offset;
-    const ex = tx + 74 + offset;
-    const sy = y + (down ? 52 : 0);
-    const ey = ty + (down ? 0 : 52);
-    const mid = (sy + ey) / 2;
-    return `M${sx},${sy} C${sx},${mid} ${ex},${mid} ${ex},${ey}`;
-  }
-
-  function renderGraph(graph) {
-    const height = view === 'lifecycle' ? 429 : 305;
-    chart.style.height = `${height}px`;
-    chart.replaceChildren();
-    const svg = svgElement('svg', { viewBox: `0 0 952 ${height}`, 'aria-hidden': 'true' });
-    const defs = svgElement('defs', {});
-    for (const [id, fill] of [['arrow', '#688094'], ['active-arrow', '#f2cc83']]) {
-      const marker = svgElement('marker', { id, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto' });
-      marker.append(svgElement('path', { d: 'M0 0 L8 4 L0 8 Z', fill }));
-      defs.append(marker);
-    }
-    svg.append(defs);
-    const edges = graph.edges.filter(({ from, to }) => layouts[view][from] && layouts[view][to]);
-    const counts = new Map();
-    for (const { from, to } of edges) {
-      const key = [from, to].sort().join('/');
-      counts.set(key, (counts.get(key) || 0) + 1);
-    }
-    const seen = new Map();
-    const highlights = [];
-    for (const { from, to, label } of edges) {
-      const key = [from, to].sort().join('/');
-      const index = seen.get(key) || 0;
-      seen.set(key, index + 1);
-      const offset = (index - (counts.get(key) - 1) / 2) * 14;
-      const active = from === selected;
-      const retry = /fail|changes required|blocking|blocker|conflict|foreign|missing|retry|changed|needed|stale|already current/i.test(label);
-      const path = svgElement('path', { d: edgePath(from, to, offset), class: `edge${retry ? ' return' : ''}${active ? ' selected' : ''}`, 'marker-end': `url(#${active ? 'active-arrow' : 'arrow'})` });
-      if (active) highlights.push(path); else svg.append(path);
-    }
-    svg.append(...highlights);
-    chart.append(svg);
-    for (const [id, [x, y]] of Object.entries(layouts[view])) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'stage';
-      button.dataset.id = id;
-      button.dataset.kind = /Done|completed|failed|cancelled/.test(id) ? 'terminal' : /Draft|ReportReview|Store/.test(id) ? 'report' : 'stage';
-      button.style.left = `${x}px`;
-      button.style.top = `${y}px`;
-      button.textContent = graph.labels[id];
-      button.setAttribute('aria-pressed', String(selected === id));
-      button.addEventListener('click', () => select(id, true));
-      chart.append(button);
-    }
-    return edges;
-  }
-
-  function renderSection(section, graph) {
-    sectionTitle.textContent = section.title;
-    sectionEdges.replaceChildren();
-    for (const [index, { from, to, label }] of graph.edges.entries()) {
-      if (!section.sources.includes(from)) continue;
-      const item = document.createElement('li');
-      item.className = 'edge-row';
-      const condition = document.createElement('span');
-      condition.className = 'edge-condition';
-      condition.textContent = label || unlabeledConditions[from];
-      const arrow = document.createElement('span');
-      arrow.className = 'edge-arrow';
-      arrow.setAttribute('aria-hidden', 'true');
-      condition.append(arrow);
-      const nodes = [from, to].map((id, side) => {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'edge-node';
-        button.dataset.id = id;
-        button.dataset.edgeNode = `${index}-${side}`;
-        button.textContent = graph.labels[id];
-        button.setAttribute('aria-pressed', String(selected === id));
-        button.addEventListener('click', () => select(id, button.dataset.edgeNode));
-        return button;
-      });
-      item.append(nodes[0], condition, nodes[1]);
-      sectionEdges.append(item);
-    }
-  }
-
-  function render() {
-    const section = sectionViews[view];
-    const graph = data[section ? 'lifecycle' : view];
-    chart.parentElement.hidden = Boolean(section);
-    document.querySelector('.legend').hidden = Boolean(section);
-    document.getElementById('forward-legend').textContent = view === 'status' ? 'Solid line · Status transition' : 'Solid line · Phalanx advancing';
-    sectionMap.hidden = !section;
-    const edges = section ? graph.edges : renderGraph(graph);
-    if (section) renderSection(section, graph);
-    heading.textContent = graph.labels[selected];
-    const details = view === 'status' ? statusDetails[selected] : graph.details[selected];
-    evidence.textContent = details[0];
-    recovery.textContent = details[1];
-    transitions.replaceChildren();
-    for (const { from, to, label } of edges.filter(({ from }) => from === selected)) {
-      const item = document.createElement('li');
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'transition';
-      button.textContent = `→ ${graph.labels[to]}`;
-      const condition = label || unlabeledConditions[from];
-      if (condition) {
-        const description = document.createElement('span');
-        description.textContent = condition;
-        button.append(description);
-      }
-      button.addEventListener('click', () => select(to, true));
-      item.append(button);
-      transitions.append(item);
-    }
-  }
-
-  function select(id, focus = false) {
-    selected = id;
-    render();
-    if (focus) {
-      const target = typeof focus === 'string' ? sectionMap.querySelector(`[data-edge-node="${focus}"]`) :
-        (sectionViews[view] ? sectionMap : chart).querySelector(`[data-id="${id}"]`);
-      if (target) target.focus();
-      else heading.focus();
-    }
-  }
-
-  for (const button of viewButtons) {
-    button.addEventListener('click', () => {
-      view = button.dataset.view;
-      for (const tab of viewButtons) tab.setAttribute('aria-pressed', String(tab === button));
-      chart.parentElement.scrollLeft = 0;
-      select(sectionViews[view]?.first || (view === 'lifecycle' ? 'Dev' : 'queued'));
-    });
-  }
-  render();
-</script>
+  <details open>
+    <summary>Publication and delivery</summary>
+    <p>Publish one primary PR with an explicit target base. Ready-only work is never merged
+      by its writer. Checked-in work may enable GitHub auto-merge, under repository rules.
+      Trusted local checks are flags, not a Phalanx gate.</p>
+    <p>Draft publication is a ceiling: never promote or merge. Verify the open draft at the
+      self-reviewed head, item branch and target base; a changed head returns to review.
+      Draft completion satisfies no ready/check-in dependency.</p>
+    <p>A verified merge by anyone, via merge, squash or rebase, into the target completes
+      either PR target. Failed checks, feedback and conflicts remain actionable writer flags.
+      Closed without merge asks for input; never silently replace the PR.</p>
+    <p>A completed ready PR can later record a verified merge at its ready head or a proven
+      descendant into the target. Enrich its existing output with final revision, merge commit
+      and merged time, then refresh dependents. It stays completed, with no new writer or
+      merge authority. Unrelated heads, draft outputs and wrong-base merges do not qualify.</p>
+  </details>
+  <h2>Execution status</h2>
+  <table>
+    <thead><tr><th>Status</th><th>Resume or disposition</th></tr></thead>
+    <tbody>
+      <tr><td>Queued</td><td>Named writer attempt after pause, dependency and retry guards pass.
+        Unbound work visibly awaits a direct Captain.</td></tr>
+      <tr><td>Running</td><td>Submit current attempt evidence; next runnable stage opens a new
+        attempt for the same writer. Otherwise wait, retry, ask, or finalize.</td></tr>
+      <tr><td>Waiting for input</td><td>Saved question and handoff; versioned reply queues the same stage.</td></tr>
+      <tr><td>Waiting for external</td><td>Observation/recheck resumes work or verifies delivery;
+        report finalization retries independently.</td></tr>
+      <tr><td>Completed / failed / cancelled</td><td>Exactly one verified PR or stored Markdown
+        report. A rerun creates a linked execution for new work; a completed ready PR can
+        record its later verified merge without reopening.</td></tr>
+    </tbody>
+  </table>
+  <details>
+    <summary>Interruption and cancellation</summary>
+    <p>Writer credentials have no timed expiry. Discover an uncertain launch by nonce.
+      Replacement must name the current writer and attest its exact native session stopped
+      after preserving local work and accounting for effects. Revoke the old token atomically.</p>
+    <p>Cancellation stops new work and reconciles in-flight effects before finalization.
+      A verified merge wins over an attempted cancellation. Storage failure leaves a visible,
+      retryable finalization, not a terminal execution without output.</p>
+  </details>
+  <details>
+    <summary>Remaining runner stages: removal in PH-DS5 part 2</summary>
+    <p>The retained PR creation, validation, promotion, review, revision and check-in stage
+      implementations have no CLI scheduler or queue claim endpoint. Direct writers do not
+      enter them. Their temporary observation/lease contracts and local SQLite stores remain
+      until part 2; see the <a href="STATE_MACHINE.md#remaining-runner-stage-contracts-ph-ds5-part-2">transition source</a>.</p>
+  </details>
+  <footer><a href="SPEC.md">Design</a> &middot;
+    <a href="docs/direct-sessions.md">Direct session contracts</a></footer>
 </body>
 </html>

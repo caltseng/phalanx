@@ -25,7 +25,7 @@ def _pull(pull) -> GitHubPull:
 
 
 class RunnerAPI(Protocol):
-    """The attended runner's authenticated API transport."""
+    """The runner's authenticated API transport."""
 
     def call(self, path: str, body: dict, *, lease: str, key: str | None = None) -> dict: ...
 

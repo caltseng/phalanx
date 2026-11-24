@@ -64,16 +64,7 @@ SUMMARY = """
            (SELECT attempt.lease_expires_at FROM attempts AS attempt
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS lease_expires_at,
            (SELECT attempt.id FROM attempts AS attempt
-            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS stage_owner,
-           (SELECT json_extract(history.details_json, '$.continued_from') IS NOT NULL
-            FROM transition_history AS history
-            WHERE history.execution_id = execution.id AND history.event = 'claim'
-            ORDER BY history.version DESC LIMIT 1) AS slot_retained,
-           (SELECT json_extract(history.details_json, '$.capacity_release')
-            FROM transition_history AS history
-            WHERE history.execution_id = execution.id AND history.attempt_id IS NOT NULL
-              AND history.event != 'claim'
-            ORDER BY history.version DESC LIMIT 1) AS capacity_release
+            WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS stage_owner
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
@@ -214,6 +205,9 @@ def queued_wait(row, now_ms, context):
     hold = context.get("holds", {}).get(row["id"])
     if hold:
         return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}
+    if row["writer_id"] is None:
+        return {"reason": "Awaiting a direct Captain",
+                "trigger": "A Captain registers and launches this item's writer"}
     return {}
 
 
@@ -273,15 +267,9 @@ def summary(row, now, context):
         wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
     expires = row["lease_expires_at"]
     if expires is not None and expires <= now.timestamp() and not wait:
-        # Runners publish blockers only while renewing, so an expired lease needs its own reason.
-        # Recovery reports an owner wait as the expired attempt's blocker.
         at = datetime.fromtimestamp(expires, UTC).isoformat()
-        if row["runner_blocker"]:
-            wait = {"reason": f"Lease expired at {at}; {row['runner_blocker']}",
-                    "trigger": "Resolve the blocker; the runner recovers the expired attempt on its next pass"}
-        else:
-            wait = {"reason": f"Lease expired at {at}; awaiting runner recovery",
-                    "trigger": "The runner recovers the expired attempt on its next pass"}
+        wait = {"reason": f"Lease expired at {at}; stop the worker before rerunning",
+                "trigger": "Confirm the worker stopped, then rerun through a direct Captain"}
     if row["runner_blocker"] and not wait:
         wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
     status = row["status"]
@@ -320,11 +308,7 @@ def summary(row, now, context):
         "recheck_at_ms": row["recheck_at_ms"],
         "worker_reference": row["worker_reference"],
         "worker_url": row["worker_url"],
-        # Who runs the current stage, whether it kept its slot from the previous
-        # stage, and otherwise why the item last gave its runner slot back.
         "stage_owner": row["stage_owner"],
-        "slot_retained": bool(row["stage_owner"] and row["slot_retained"]),
-        "capacity_release": None if row["stage_owner"] else row["capacity_release"],
         "wait_since": wait_since,
         "wait_age_seconds": (
             max(0, int((now - datetime.fromisoformat(wait_since)).total_seconds()))
@@ -671,15 +655,6 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                     ON prior.execution_id = event.execution_id AND prior.version = event.version - 1
                 WHERE event.execution_id = ?
                 UNION ALL
-                SELECT adoption.version, 'recover_claim', adoption.created_at, adoption.attempt_id,
-                       json_extract(adopted.state_json, '$.stage'),
-                       json_extract(adopted.state_json, '$.status'),
-                       NULL, 'Adopted the attempt: ' || adoption.reconciliation, NULL, NULL
-                FROM attempt_adoptions AS adoption
-                JOIN transition_history AS adopted
-                    ON adopted.execution_id = adoption.execution_id AND adopted.version = adoption.version
-                WHERE adoption.execution_id = ?
-                UNION ALL
                 SELECT observation.version, 'github_observation', observation.observed_at, NULL,
                        json_extract(observed.state_json, '$.stage'),
                        json_extract(observed.state_json, '$.status'),
@@ -719,7 +694,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             LEFT JOIN attempt_workers AS worker ON worker.attempt_id = events.attempt_id
             {boundary}
             ORDER BY events.version DESC, events.created_at DESC LIMIT ?""",
-            (execution_id, execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
         now = datetime.now(UTC)
         context = dispatch_context(db, now)

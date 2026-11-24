@@ -1,12 +1,11 @@
 """Authenticated HTTP routes for the durable work-item lifecycle."""
 
-import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
+from . import finalization, intake, pr_models, pr_observations, reconciliation, waits
 from .auth import (
     authenticate, require_coordinator, require_owner, require_runner, require_same_origin, require_worker,
 )
@@ -135,9 +134,9 @@ def fence(request, lease):
     writer = getattr(request.state, "writer", None)
     if writer is not None:
         return writer["token_digest"]
-    if lease is None:  # step5-remove: runner leases
+    if lease is None:
         raise HTTPException(422, "Runners must send the Phalanx-Lease header")
-    return intake.digest(lease)  # step5-remove: runner leases
+    return intake.digest(lease)
 
 
 def attempt_event(request, operation, item_id, execution_id, body, lease, key):
@@ -163,34 +162,17 @@ def attempt_event(request, operation, item_id, execution_id, body, lease, key):
         payload.pop("wait_limit_seconds")
     receipt = {"body": payload, "lease_digest": lease_digest}
     writer = getattr(request.state, "writer", None)
-    continuation = None if writer else next_stage_offer(request)  # step5-remove: runner slots
-    if continuation is not None:
-        receipt["continuation"] = {"lease_digest": intake.digest(continuation["lease"]),
-                                   "stages": continuation["stages"]}
 
     def perform(db, *args):
         view = operation(db, *args)
         if writer is not None:
             return writers.advance(db, writer["id"], body.attempt_id, view)
-        return dispatch.hand_off(db, item_id, body.attempt_id, view, continuation)  # step5-remove
+        return view
 
     return run(
         request, perform, item_id, execution_id, body, lease_digest, write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key, payload=receipt,
     )
-
-
-def next_stage_offer(request):
-    """The runner's optional offer to keep its slot for the next stage under a fresh lease."""
-    lease = request.headers.get("Phalanx-Next-Lease")
-    stages = request.headers.get("Phalanx-Next-Stages")
-    if lease is None and stages is None:
-        return None
-    names = sorted({name.strip() for name in (stages or "").split(",") if name.strip()})
-    if (lease is None or not re.fullmatch(r"[A-Za-z0-9_-]{32,200}", lease)
-            or not names or any(name not in set(Stage) for name in names)):
-        raise HTTPException(422, "A continuation needs a valid next lease and runnable stages")
-    return {"lease": lease, "stages": names}
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/result",

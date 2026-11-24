@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 
-from .attended import RunnerAPI
+from .api_client import RunnerAPI
 from .candidate_local import LOCAL_CHECK_CAPACITY, LOCAL_CHECK_CAPACITY_RANGE
 from .runner_errors import RunnerError
 from .validation import (

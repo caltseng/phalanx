@@ -149,14 +149,13 @@
     return Boolean(from) && (STAGES.indexOf(to) < STAGES.indexOf(from) || to === "pr_revision");
   }
 
-  // Old runner path (worker reference, chat, slots). Delete with direct sessions step 5.
+  // Remaining runner-stage attempts, pending PH-DS5 part 2.
   function legacyRunnerFacts(item) {
     const legacy = item.legacy || {};
     const chat = safeUrl(legacy.chatUrl);
     return [
       legacy.workerRef && ["Worker", legacy.workerRef],
-      chat && ["Worker chat", h("a", { href: chat, text: "open" })],
-      legacy.slotNote && ["Slot", legacy.slotNote]
+      chat && ["Worker chat", h("a", { href: chat, text: "open" })]
     ].filter(Boolean);
   }
 
@@ -170,7 +169,7 @@
    * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
    * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?} and
-   * legacy?: {workerRef?, chatUrl?, slotNote?} for the old runner path.
+   * legacy?: {workerRef?, chatUrl?} for remaining runner-stage attempts.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
    * recovery, firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionRef,
    * state, live, stale, heartbeatAt, wakeCount, charterRevision?, focus, handoffNote?}]}.

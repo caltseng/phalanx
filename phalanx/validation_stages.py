@@ -1,4 +1,4 @@
-"""Runner-owned validation stages for attended reservations.
+"""Runner-owned validation stages.
 
 Each handler journals its request before sending it, so an interrupted
 submission replays the same body and idempotency key.
@@ -8,8 +8,8 @@ from dataclasses import asdict, replace
 import os
 from pathlib import Path
 
-from .attended import RunnerError
-from .attended_drafts import github_repository
+from .runner_errors import RunnerError
+from .github import github_repository
 from .candidate_local import LOCAL_CHECK_CAPACITY, CandidateLocal
 from .check_in import MergeTarget, check_in, merge_evidence, observe_merge
 from .git_publication import GitPublication, PublicationError

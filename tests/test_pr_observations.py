@@ -9,7 +9,7 @@ from phalanx.intake_models import Intake
 from phalanx.store import migrate, write_transaction
 from phalanx.workspaces import _item_branch
 
-from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
 
 
 HEAD = "a" * 40
@@ -38,11 +38,7 @@ class PullObservationFixture(ServerFixture):
 
     def claim(self, stage):
         self.lease = {"Phalanx-Lease": token_urlsafe(32)}
-        status, assignment = self.request("/v1/dispatch/claim", RUNNER, {
-            "runner_id": "local", "repository_ids": ["repo"],
-        }, self.lease)
-        self.assertEqual(status, 200)
-        self.assertEqual(assignment["status"], "claimed")
+        assignment = claim_stage(self.path, self.item.rsplit("/", 1)[1], self.lease["Phalanx-Lease"])
         self.assertEqual(assignment["execution"]["state"]["stage"], stage)
         return {
             "stage": stage, "attempt_id": assignment["attempt_id"],

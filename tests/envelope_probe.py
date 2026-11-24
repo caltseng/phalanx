@@ -1,14 +1,14 @@
 """PH-19a local operating envelope probe.
 
 Seeds a production-schema store, starts the real HTTP server in a separate process and
-drives mixed authenticated traffic against it: claims, renewals and report-stage results
-from synthetic workers on several runners, owner intake with urgent arrivals, paginated
+drives mixed authenticated traffic against it: writer registration, progress and report-stage results
+from synthetic workers under several Captains, owner intake with urgent arrivals, paginated
 board and inbox reads, and rejected credentials. While that load runs it injects the
 PH-19 fault cases: a provider throttle, a storage outage, an interrupted worker while a
 dependent waits on a blocked prerequisite, and a hard server kill during a dependent
 wakeup batch followed by a drain of due external waits.
 
-The synthetic workers only hold a lease for a short sleep. They measure the server's
+The synthetic workers only work for a short sleep. They measure the server's
 latency, fairness and recovery, not live worker capacity.
 
     python tests/envelope_probe.py --json-out envelope.json
@@ -20,6 +20,7 @@ import argparse
 from bisect import bisect_left
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, contextmanager
 from datetime import datetime
 import http.client
 import json
@@ -45,7 +46,7 @@ from phalanx import dispatch, intake, waits  # noqa: E402
 from phalanx.dispatch_api import DispatchSettings  # noqa: E402
 from phalanx.intake_models import Intake  # noqa: E402
 from phalanx.store import connect, migrate, write_transaction  # noqa: E402
-from phalanx.transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES, Event, Outcome, Wait  # noqa: E402
+from phalanx.transitions import Event, Outcome, Wait  # noqa: E402
 
 
 OWNER = "o" * 32
@@ -80,6 +81,15 @@ server.run()
 
 class Stopped(Exception):
     pass
+
+
+@contextmanager
+def read_store(path):
+    """Synthetic selection tolerates the injected outage, including schema loading on open."""
+    with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True,
+                                timeout=REQUEST_TIMEOUT, autocommit=True)) as db:
+        db.row_factory = sqlite3.Row
+        yield db
 
 
 def percentile(values, fraction):
@@ -204,8 +214,12 @@ class Probe:
         self.server = None
         self.pid = None
         self.base = None
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.clients = []
+        self.captains = {}
+        self.writer_tokens = {}
+        self.writer_bindings = {}
+        self.in_use = set()
 
     # Setup -----------------------------------------------------------------------------------
 
@@ -221,23 +235,15 @@ class Probe:
             for repository in GENERAL + LANES:
                 intake.register(db, repository, f"https://github.com/example/{repository}.git")
             dispatch.set_dispatch(db, DispatchSettings(paused=False, aging_seconds=config.aging_seconds))
-            for runner in self.runners():
-                dispatch.set_capacity(db, runner, config.capacity)
-            for lane in LANES:
-                dispatch.set_capacity(db, f"lane-{lane}", 8)
 
         now_ms = int(time.time() * 1000)
         ready, blocked, closed = [], [], []
         for start in range(0, config.executions, 5000):
             with write_transaction(self.path) as db:
                 for index in range(start, min(config.executions, start + 5000)):
-                    affinity = None
-                    if self.rng.random() < 0.1:
-                        affinity = self.rng.choice(self.runners())
                     item = intake.create(db, Intake(
                         repository_id=GENERAL[index % len(GENERAL)], goal=f"Backlog item {index}",
                         target="report", priority=self.rng.choice(PRIORITY_NAMES),
-                        runner_affinity=affinity,
                     ))
                     share = index % 100
                     bucket = ready if share == 0 else blocked if share < 30 else closed
@@ -313,8 +319,8 @@ class Probe:
         execution = item["execution"]
         return intake.check_current(db, item["id"], execution["id"], execution["version"])
 
-    def runners(self):
-        return [f"runner-{index}" for index in range(self.config.runners)]
+    def captain_names(self):
+        return [f"captain-{index}" for index in range(self.config.captains)]
 
     # Server ----------------------------------------------------------------------------------
 
@@ -377,22 +383,96 @@ class Probe:
         return self.config.poll_seconds * rng.uniform(0.8, 1.2)
 
     def claim(self, client, runner, repositories, label="claim"):
-        lease = token_urlsafe(32)
-        status, claim = client.call(label, "POST", "/v1/dispatch/claim", RUNNER,
-                                    {"runner_id": runner, "repository_ids": repositories},
-                                    {"Phalanx-Lease": lease})
-        if status != 200:
-            self.violation(f"{label} for {runner} returned {status}: {claim}")
+        # A synthetic Captain selects named work read-only. Registration, fencing and
+        # charter limits are exercised through the production HTTP API, not a test route.
+        with self.lock:
+            captain = self.captains.get(runner)
+            if captain is None:
+                status, captain = client.call(
+                    "captain", "POST", "/v1/captains", RUNNER,
+                    {"session_ref": runner, "charter_revision": "probe"},
+                    {"Idempotency-Key": f"captain-{runner}"},
+                )
+                if status != 201:
+                    self.violation(f"Captain registration returned {status}: {captain}")
+                    return None, None
+                self.captains[runner] = captain
+            now_ms = int(time.time() * 1000)
+            placeholders = ",".join("?" for _ in repositories)
+            with read_store(self.path) as db:
+                rows = db.execute(
+                    f"""SELECT e.item_id, e.id, e.version, w.id AS writer_id, w.captain_id
+                        FROM executions e LEFT JOIN writers w
+                            ON w.execution_id=e.id AND w.ended_at IS NULL
+                        WHERE e.queue_repository IN ({placeholders}) AND e.status='queued'
+                          AND e.ready_since <= ? AND e.dependency_wait_json IS NULL
+                          AND (w.id IS NULL OR w.captain_id=?)
+                        ORDER BY w.id IS NULL,
+                          min(2, e.queue_priority + (? - e.ready_since) / ?) DESC,
+                          e.ready_since, e.item_id LIMIT 100""",
+                    (*repositories, now_ms, captain["id"], now_ms,
+                     self.config.aging_seconds * 1000),
+                ).fetchall()
+                # Direct stage results normally open the next attempt immediately.
+                active = db.execute(
+                    f"""SELECT e.item_id, e.id, e.version, w.id AS writer_id, w.captain_id
+                        FROM writers w JOIN executions e ON e.id=w.execution_id
+                        WHERE w.captain_id=? AND w.ended_at IS NULL AND e.status='running'
+                          AND e.queue_repository IN ({placeholders}) ORDER BY w.created_at""",
+                    (captain["id"], *repositories),
+                ).fetchall()
+            selected = next((row for row in [*active, *rows] if row["item_id"] not in self.in_use), None)
+            if selected is None:
+                self.metrics.count(f"{label}:no_eligible_work")
+                return None, None
+            item_id, execution_id = selected["item_id"], selected["id"]
+            self.in_use.add(item_id)
+        token = self.writer_tokens.get(item_id)
+        if selected["writer_id"] is None:
+            token = token_urlsafe(32)
+            cap = self.config.captains * self.config.max_writers if repositories == GENERAL else 8
+            status, binding = client.call(
+                label, "POST", f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER,
+                {"expected_version": selected["version"], "captain_id": captain["id"],
+                 "runtime": "synthetic", "nonce": token_urlsafe(16), "token_digest": intake.digest(token),
+                 "writer_limit": {"max_writers": cap, "repositories": repositories}},
+            )
+            if status == 409:
+                with self.lock:
+                    self.in_use.discard(item_id)
+                self.metrics.count(f"{label}:contended")
+                return None, None
+            if status != 200:
+                self.violation(f"Writer registration returned {status}: {binding}")
+                return None, None
+            self.writer_tokens[item_id] = token
+        else:
+            binding = self.writer_bindings.get(item_id)
+            if not (binding and binding["version"] == selected["version"]
+                    and binding["writer"]["id"] == selected["writer_id"]
+                    and binding["writer"]["attempt_id"] is not None):
+                status, binding = client.call(label, "POST", "/v1/writer/attempt", token)
+                if status != 200:
+                    self.violation(f"Writer next attempt returned {status}: {binding}")
+                    return None, None
+        if binding["writer"]["attempt_id"] is None:
+            with self.lock:
+                self.in_use.discard(item_id)
             return None, None
-        self.metrics.count(f"{label}:{claim['status']}")
-        return (claim, lease) if claim["status"] == "claimed" else (None, None)
+        self.metrics.count(f"{label}:claimed")
+        with read_store(self.path) as db:
+            details = json.loads(db.execute(
+                "SELECT details_json FROM transition_history WHERE execution_id=? AND version=?",
+                (execution_id, binding["version"]),
+            ).fetchone()[0])
+        return {"item_id": item_id, "execution": binding, "attempt_id": binding["writer"]["attempt_id"],
+                "dependencies": details.get("dependencies", [])}, token
 
-    def renew(self, client, runner, claim, lease):
-        status, body = client.call("renew", "POST",
-                                   f"/v1/dispatch/runners/{runner}/attempts/{claim['attempt_id']}/renew",
-                                   RUNNER, {}, {"Phalanx-Lease": lease})
+    def progress(self, client, claim, token):
+        status, body = client.call("progress", "POST", "/v1/writer/progress", token,
+                                   {"note": "Synthetic worker progressing"})
         if status != 200:
-            self.violation(f"Renewal of {claim['attempt_id']} returned {status}: {body}")
+            self.violation(f"Progress for {claim['attempt_id']} returned {status}: {body}")
 
     def finish_stage(self, client, claim, lease, **fields):
         execution = claim["execution"]
@@ -405,9 +485,35 @@ class Probe:
             body["report_revision"] = execution["state"]["report_draft"]
         body.update(fields)
         status, result = client.call(
-            "result", "POST", f"/v1/items/{claim['item_id']}/executions/{execution['id']}/result", RUNNER,
-            body, {"Phalanx-Lease": lease, "Idempotency-Key": f"{claim['attempt_id']}-result"},
+            "result", "POST", f"/v1/items/{claim['item_id']}/executions/{execution['id']}/result", lease,
+            body, {"Idempotency-Key": f"{claim['attempt_id']}-result"},
         )
+        if status == 401 and stage == "report_storage" and body["outcome"] == "succeeded":
+            # A restart can lose the final reply after committing and ending the writer.
+            observed, events = client.call(
+                "result_confirmation", "GET",
+                f"/v1/items/{claim['item_id']}/executions/{execution['id']}/timeline", OWNER,
+            )
+            accepted = observed == 200 and any(
+                event["event"] == "result" and event["attempt_id"] == claim["attempt_id"]
+                and event["version"] == execution["version"] + 1
+                and all(event["details"].get(key) == body[key]
+                        for key in ("stage", "outcome", "report_revision"))
+                for event in events
+            )
+            if accepted:
+                completed = self.item(client, claim["item_id"])["execution"]
+                if (completed["id"] == execution["id"]
+                        and completed["state"]["status"] == "completed"
+                        and completed["state"]["report_draft"] == body["report_revision"]):
+                    status, result = 200, completed
+                    self.metrics.count("completed_results_confirmed_after_401")
+        with self.lock:
+            if status == 200 and result["state"]["status"] == "running":
+                self.writer_bindings[claim["item_id"]] = result
+            else:
+                self.writer_bindings.pop(claim["item_id"], None)
+            self.in_use.discard(claim["item_id"])
         if status != 200:
             self.violation(f"Result for {claim['item_id']} at {stage} returned {status}: {result}")
             return None
@@ -456,7 +562,7 @@ class Probe:
                 self.metrics.claims.append(time.monotonic())
             hold = rng.uniform(low, high)
             time.sleep(hold / 2)
-            self.renew(client, runner, claim, lease)
+            self.progress(client, claim, lease)
             time.sleep(hold / 2)
             if self.finish_stage(client, claim, lease) is not None:
                 self.metrics.count("worker_stages")
@@ -523,7 +629,7 @@ class Probe:
             ("GET", "/v1/owner/inbox", None, None, 401),
             ("GET", "/v1/owner/inbox", "x" * 32, None, 401),
             ("POST", "/v1/items", RUNNER, {"repository_id": "repo-0", "goal": "Denied", "target": "report"}, 403),
-            ("POST", "/v1/dispatch/claim", OWNER, {"runner_id": "runner-0", "repository_ids": ["repo-0"]}, 403),
+            ("POST", "/v1/writer/attempt", OWNER, None, 403),
         )
         while not self.stop.is_set():
             for method, path, token, body, expected in checks:
@@ -615,31 +721,31 @@ class Probe:
         if claim is None or claim["execution"]["state"]["stage"] != "report_review":
             self.violation("Interrupted item did not reach report_review")
             return
-        # The worker process dies here and stops renewing. Jump its lease past expiry rather
-        # than waiting the production lease.
+        # The Captain attests that the exact native session stopped, then replaces it.
+        # No lease expiry or local recovery journal participates.
         interrupted = time.monotonic()
         claims_before = len(self.metrics.claims)
-        with sqlite3.connect(self.path, timeout=30, isolation_level=None) as db:
-            db.execute("BEGIN IMMEDIATE")
-            db.execute("UPDATE attempts SET lease_expires_at=? WHERE id=?",
-                       (int(time.time()) - 1, claim["attempt_id"]))
-            db.execute("COMMIT")
-        db.close()
-        status, candidates = client.call("recovery", "GET", f"/v1/dispatch/runners/{runner}/recovery", RUNNER)
-        expired = [entry for entry in candidates or () if entry["attempt_id"] == claim["attempt_id"]]
-        if status != 200 or not expired or expired[0]["reason"] != "lease_expired":
-            self.violation(f"Expired attempt is not a visible recovery candidate: {status} {candidates}")
-            return
+        self.pause(1)
+        old_token = lease
+        replacement_token = token_urlsafe(32)
+        previous = claim["execution"]
         status, recovered = client.call(
-            "recover", "POST",
-            f"/v1/dispatch/runners/{runner}/attempts/{claim['attempt_id']}/recover-stopped", RUNNER,
-            {"expected_version": expired[0]["version"], "item_id": item_id,
-             "reconciliation": "Worker process exited before producing a review"},
-            {"Idempotency-Key": f"{claim['attempt_id']}-recover"},
+            "replace_writer", "POST",
+            f"/v1/items/{item_id}/executions/{previous['id']}/writer", RUNNER,
+            {"expected_version": previous["version"], "captain_id": self.captains[runner]["id"],
+             "runtime": "synthetic", "nonce": token_urlsafe(16),
+             "token_digest": intake.digest(replacement_token),
+             "replaces": previous["writer"]["id"], "replaced_stopped": True},
         )
-        if status != 200 or recovered["state"]["status"] != "queued" or recovered["retry_at_ms"] is None:
-            self.violation(f"Stopped-worker recovery did not requeue with a retry time: {status} {recovered}")
+        if status != 200 or recovered["state"]["status"] != "running":
+            self.violation(f"Stopped-writer replacement failed: {status} {recovered}")
             return
+        self.writer_tokens[item_id] = replacement_token
+        with self.lock:
+            self.in_use.discard(item_id)
+        status, _ = client.call("fenced_writer", "GET", "/v1/writer", old_token)
+        if status != 401:
+            self.violation(f"Replaced writer was not fenced: {status}")
         while True:
             resumed, lease = self.claim(client, runner, lane, label="lane_claim")
             if resumed is not None:
@@ -710,7 +816,6 @@ class Probe:
         client = Client(self)
         upstream = self.ids["fanout_upstream"]
         runner, lane = "lane-fanout-source", ["fanout-source"]
-        self.drive(client, runner, lane, upstream, until="queued")
         while True:
             claim, lease = self.claim(client, runner, lane, label="lane_claim")
             if claim is not None and claim["execution"]["state"]["stage"] == "report_storage":
@@ -725,7 +830,7 @@ class Probe:
             self.violation(f"Fan-out prerequisite did not complete before the restart: {result}")
         killed = time.monotonic()
         self.kill_server()
-        with connect(self.path, mode="ro") as db:
+        with read_store(self.path) as db:
             blocked_at_kill = db.execute(
                 """SELECT count(*) FROM executions WHERE queue_repository='fanout'
                    AND dependency_wait_json IS NOT NULL"""
@@ -738,7 +843,7 @@ class Probe:
         drain.start()
         unblocked = None
         while unblocked is None and time.monotonic() < healthy + 300:
-            with connect(self.path, mode="ro") as db:
+            with read_store(self.path) as db:
                 left = db.execute(
                     """SELECT count(*) FROM executions WHERE queue_repository='fanout'
                        AND dependency_wait_json IS NOT NULL"""
@@ -762,7 +867,7 @@ class Probe:
             self.violation("Fan-out dependents were still blocked 300 s after the restart")
 
     def drain(self):
-        """Admit every due external recheck after the restart while renewals continue."""
+        """Admit every due external recheck after restart while writer traffic continues."""
         started = time.monotonic()
         local = threading.local()
 
@@ -809,8 +914,8 @@ class Probe:
         self.t0 = time.monotonic()
         self.wall_start = datetime.now().astimezone()
         load = [threading.Thread(target=self.guard, args=(self.worker, runner, index), daemon=True)
-                for index, runner in enumerate(runner for runner in self.runners()
-                                               for _ in range(self.config.capacity + 1))]
+                for index, runner in enumerate(runner for runner in self.captain_names()
+                                               for _ in range(self.config.max_writers + 1))]
         load += [threading.Thread(target=self.guard, args=(target,), daemon=True)
                  for target in (self.owner_intake, self.urgent_lane, self.auth)]
         load += [threading.Thread(target=self.guard, args=(self.board, index), daemon=True)
@@ -896,7 +1001,7 @@ class Probe:
             with self.metrics.lock:
                 outage["release_to_first_claim_seconds"] = next(
                     (round(stamp - end, 2) for stamp in self.metrics.claims if stamp > end), None)
-            outage_latency = [elapsed for label in ("claim", "renew", "result")
+            outage_latency = [elapsed for label in ("claim", "progress", "result")
                               for stamp, elapsed, status in self.metrics.samples[label]
                               if start <= stamp <= end + self.config.fault_grace]
             outage["write_latency_ms"] = spread(outage_latency, 1000)
@@ -904,6 +1009,8 @@ class Probe:
             "seconds": round(seconds, 1), "offered_requests_per_second": round(offered / seconds, 1),
             "completed_requests_per_second": round(completed / seconds, 1),
             "worker_stage_results": self.metrics.counts["worker_stages"],
+            "completed_results_confirmed_after_401":
+                self.metrics.counts["completed_results_confirmed_after_401"],
             "claim_outcomes": {name.split(":", 1)[1]: count for name, count in self.metrics.counts.items()
                                if name.startswith("claim:")},
             "routes": routes,
@@ -926,7 +1033,7 @@ class Probe:
         promoted = Counter()
         lane = []
         placeholders = ",".join("?" * len(GENERAL))
-        with connect(self.path, mode="ro") as db:
+        with read_store(self.path) as db:
             rows = db.execute(
                 f"""SELECT e.queue_repository, e.queue_priority, h.created_at,
                            json_extract(h.details_json, '$.ready_since_ms') AS ready_since
@@ -962,40 +1069,32 @@ class Probe:
                 band: {**spread(bands[band], 0.001), "claimed_after_aging": promoted[band]}
                 for band in PRIORITY_NAMES
             },
-            "free_slot_eligible_to_claim_seconds": spread(lane, 0.001),
+            "free_writer_eligible_to_claim_seconds": spread(lane, 0.001),
             "eligible_at_end": eligible,
             "oldest_eligible_age_at_end_seconds": oldest and round((now_ms - oldest) / 1000, 1),
         }
 
     def invariants(self):
         checks = {}
-        with connect(self.path, mode="ro") as db:
+        with read_store(self.path) as db:
             checks["quick_check"] = db.execute("PRAGMA quick_check").fetchone()[0]
-            limits = dict(db.execute("SELECT runner_id, capacity FROM runner_limits").fetchall())
             events = defaultdict(list)
-            for runner, stage, started, ended in db.execute(
-                    "SELECT runner_id, stage, started_at, ended_at FROM attempts"):
-                agent = stage not in RUNNER_ONLY_STAGES
-                events[runner].append((started, 1, agent))
-                events[runner].append((ended or "9999", -1, agent))
-            peaks, agent_peaks = {}, {}
-            for runner, entries in events.items():
-                load = peak = agents = agent_peak = 0
-                for _, change, agent in sorted(entries, key=lambda entry: (entry[0], entry[1])):
+            for repository, started, ended in db.execute(
+                    """SELECT e.queue_repository, w.created_at, w.ended_at
+                       FROM writers w JOIN executions e ON e.id=w.execution_id"""):
+                group = "general" if repository in GENERAL else repository
+                events[group].extend(((started, 1), (ended or "9999", -1)))
+            peaks = {}
+            for group, entries in events.items():
+                load = peak = 0
+                for _, change in sorted(entries, key=lambda entry: (entry[0], entry[1])):
                     load += change
-                    agents += change if agent else 0
                     peak = max(peak, load)
-                    agent_peak = max(agent_peak, agents)
-                peaks[runner], agent_peaks[runner] = peak, agent_peak
-            checks["peak_attempts_by_runner"] = {runner: peaks[runner] for runner in sorted(peaks)
-                                                 if runner.startswith("runner-")}
-            checks["peak_agent_attempts_by_runner"] = {runner: agent_peaks[runner] for runner in sorted(agent_peaks)
-                                                       if runner.startswith("runner-")}
-            # Agent stages are bounded by capacity; the runner-only lane adds RUNNER_ONLY_SLOTS on top.
-            checks["overbooked_runners"] = sorted(
-                runner for runner in peaks
-                if peaks[runner] > limits.get(runner, dispatch.DEFAULT_CAPACITY) + RUNNER_ONLY_SLOTS
-                or agent_peaks[runner] > limits.get(runner, dispatch.DEFAULT_CAPACITY))
+                peaks[group] = peak
+            checks["peak_registered_writers"] = peaks
+            checks["overbooked_writer_groups"] = sorted(
+                group for group in peaks if peaks[group] >
+                (self.config.captains * self.config.max_writers if group == "general" else 8))
             checks["executions_with_two_open_attempts"] = db.execute(
                 """SELECT count(*) FROM (SELECT execution_id FROM attempts WHERE ended_at IS NULL
                    GROUP BY execution_id HAVING count(*) > 1)"""
@@ -1027,7 +1126,7 @@ class Probe:
                 """SELECT count(*) FROM executions WHERE queue_repository = 'fanout'
                    AND dependency_wait_json IS NOT NULL"""
             ).fetchone()[0]
-        for name, expected in (("quick_check", "ok"), ("overbooked_runners", []),
+        for name, expected in (("quick_check", "ok"), ("overbooked_writer_groups", []),
                                ("executions_with_two_open_attempts", 0), ("waits_without_reason", 0),
                                ("dependency_waits_without_reason", 0), ("queued_without_next_action", 0),
                                ("running_without_attempt", 0), ("due_rechecks_left", 0),
@@ -1044,17 +1143,17 @@ def parse(argv=None):
     add("--due-waits", type=int, default=10_000, help="external waits already due at restart")
     add("--fanout", type=int, default=2_000, help="dependents of one report prerequisite")
     add("--throttled", type=int, default=8, help="items failed with a provider throttle")
-    add("--runners", type=int, default=4)
-    add("--capacity", type=int, default=6, help="slots per runner; each runner gets one extra worker")
+    add("--captains", type=int, default=4)
+    add("--max-writers", type=int, default=6, help="writer budget per synthetic Captain")
     add("--duration", type=float, default=150.0, help="minimum load seconds")
     add("--scenario-timeout", type=float, default=600.0)
     add("--seed", type=int, default=19)
     add("--aging-seconds", type=int, default=60)
     add("--backlog-age-seconds", type=int, default=300, help="spread of seeded ready times")
     add("--poll-seconds", type=float, default=2.0, help="empty-poll delay, jittered by 20%%")
-    add("--work-seconds", type=float, nargs=2, default=(0.5, 1.5), help="lease hold per stage")
+    add("--work-seconds", type=float, nargs=2, default=(0.5, 1.5), help="work time per stage")
     add("--intake-rate", type=float, default=2.0, help="owner arrivals per second")
-    add("--lane-interval", type=float, default=3.0, help="seconds between free-slot urgent arrivals")
+    add("--lane-interval", type=float, default=3.0, help="seconds between free-writer urgent arrivals")
     add("--board-readers", type=int, default=2)
     add("--board-interval", type=float, default=1.0)
     add("--auth-interval", type=float, default=2.0)

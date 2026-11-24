@@ -164,14 +164,6 @@ def timeline(db, item_id, execution_id):
     )]
     states = {event["version"]: event["state"] for event in events}
     events += [{
-        "version": row["version"], "event": "recover_claim", "attempt_id": row["attempt_id"],
-        "created_at": row["created_at"],
-        "details": {"runner_id": row["runner_id"], "reconciliation": row["reconciliation"]},
-        "state": states[row["version"]],
-    } for row in db.execute(
-        "SELECT * FROM attempt_adoptions WHERE execution_id=?", (execution_id,),
-    )]
-    events += [{
         "version": row["version"], "event": "github_observation", "attempt_id": None,
         "created_at": row["observed_at"],
         "details": {**json.loads(row["observation_json"]), "last_observed_at": row["last_observed_at"]},
@@ -211,8 +203,7 @@ def new_execution(db, item_id, target, *, previous_id=None):
     request = json.loads(item["request_json"])
     mode = PublicationMode(request.get("publication_mode", PublicationMode.READY))
     state_json = encode(asdict(start(target, mode)))
-    # step5-remove: draft-only delivery must never enter the legacy promotion path.
-    affinity = "@writer" if mode is PublicationMode.DRAFT else request.get("runner_affinity") or ""
+    affinity = request.get("runner_affinity") or ""
     db.execute(
         """INSERT INTO executions (id, item_id, previous_id, version, state_json,
                created_at, updated_at, queue_repository, queue_affinity, queue_priority, ready_since)
@@ -282,8 +273,8 @@ def steer(db, item_id, execution_id, payload):
     db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
     db.execute(
         """UPDATE executions SET version=?, state_json=?, updated_at=?, queue_priority=?,
-               queue_affinity=CASE WHEN queue_affinity='@writer' THEN queue_affinity ELSE ? END
-           WHERE id=?""",  # step5-remove: keeps writer-bound executions out of the old loop
+               queue_affinity=?
+           WHERE id=?""",
         (row["version"] + 1, state_json, now, PRIORITY[request.get("priority", "normal")],
          request.get("runner_affinity") or "", execution_id),
     )
@@ -542,7 +533,7 @@ def result(db, item_id, execution_id, payload, lease_digest):
         ).fetchone():
             raise Conflict(f"{published} was already merged for an earlier execution. Publish this "
                            "execution's work in a new PR")
-    # step5-remove: a writer's attempt takes the direct path; step 5 makes it the only path.
+    # Remaining runner-stage callers keep their contracts until PH-DS5 part 2.
     direct = db.execute("SELECT 1 FROM writers WHERE attempt_id=? AND ended_at IS NULL",
                         (payload.attempt_id,)).fetchone() is not None
     retry_at = None

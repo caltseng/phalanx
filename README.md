@@ -1,14 +1,14 @@
 # Phalanx
 
-Phalanx is an agentic orchestrator for work across repositories. Work items live in an API-backed queue. A local runner lets multiple agents claim work in parallel and deliver either a Markdown report or a pull request.
+Phalanx is an agentic orchestrator for work across repositories. Work items live in an API-backed queue. Captain chats launch registered writer sessions in parallel to deliver a Markdown report or a pull request.
 
 1. File a work item for a registered repository with a goal, enough context to execute it, and the expected output.
 2. Start a **muster**, a batch of eligible work launched from the Captain chat. Agents work in parallel, use isolated checkouts for changes, and verify their results.
-3. Follow each item through its lifecycle. After development, Phalanx opens a draft PR. Self-review, pre-validation and draft-only checks gate promotion to ready for review. CI, previews, independent review, feedback and conflict resolution gate check-in. The runner checks in the PR when authorized. Report work ends with a verified **field report** in Markdown.
+3. Follow each item through its lifecycle. The writer develops, self-reviews, pushes and opens its PR. The reconciler observes GitHub and flags problems for the writer to fix. GitHub's required checks and reviews gate merging. Draft-only work stops at a verified draft; ready-only work stops at a ready PR. Report work ends with a verified **field report** in Markdown.
 
 **Phalanx advancing** means a work item has met the conditions to move to its next stage. Every closed work item has a final output: if it ends without the requested deliverable, Phalanx stores a field report explaining what happened and what remains.
 
-The first milestone runs the HTTP API server and durable store locally, with concurrent work in visible worker sessions launched from a Captain chat. Phalanx is runtime-neutral: any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code, can serve as Captain through the [bridge contract](docs/captain-relay.md#bridge-contract). The same server is intended to move to cloud hosting while agents keep running locally.
+The HTTP API server and durable store run locally, with visible worker sessions launched by Captain chats through their runtime's native tools. Phalanx is runtime-neutral: Codex, GitHub Copilot CLI or app, Claude Code, or any runtime with visible sessions can follow the [direct-session contract](docs/direct-sessions.md). The same server is intended to move to cloud hosting while agents keep running locally.
 
 ## Quickstart: new install
 
@@ -110,10 +110,9 @@ To retrieve one item's correlated timeline through the supported API, see the [p
 
 - [Install Phalanx](docs/install.md): first-time setup, credentials, runner setup and repository trust.
 - [Resume an existing install](docs/resume.md): restart order, single-instance checks and status.
-- [Runner operations](docs/runner-operations.md): the Captain loop, PR validation and check-in, and manual `attended` commands.
-- [Captain relay and bridge](docs/captain-relay.md): the bridge contract, Captain chat relay, standing relay serve and runtime mapping.
+- [Runner operations](docs/runner-operations.md): direct writers, publication, validation flags and delivery.
 - [Direct path](docs/direct-path.md): the GitHub reconciler and a Captain on the direct path.
-- [Recovery and troubleshooting](docs/recovery.md): stuck relays, reservation reconciliation, and SQLite backup and restore.
+- [Recovery and troubleshooting](docs/recovery.md): writer discovery and replacement, and SQLite backup and restore.
 - [Work items](docs/work-items.md): filing, draft-only PR delivery, GitHub issue import, answering questions and the operator board.
 - [Configuration](docs/configuration.md): environment variables and the runner config.
 - [API reference](docs/api.md) and [developing Phalanx](docs/development.md): routes, leases, transactions and tests.

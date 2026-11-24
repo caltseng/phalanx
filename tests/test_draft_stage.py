@@ -92,9 +92,9 @@ class DraftStageTests(ServerFixture, unittest.TestCase):
 
     def claim(self, stage):
         lease = token_urlsafe(32)
-        result = self.call("/dispatch/claim", {
-            "runner_id": "local", "repository_ids": ["repo"],
-        }, lease=lease)
+        from test_bootstrap import claim_stage
+
+        result = claim_stage(self.db, self.item, lease)
         self.assertEqual(result["execution"]["state"]["stage"], stage)
         return DraftAssignment(self.item, self.execution, result["runner_id"],
                                result["attempt_id"], result["execution"]["version"], lease)

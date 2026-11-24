@@ -1,22 +1,15 @@
 # Phalanx work item state machine
 
-The transition tables and rules in this Markdown document define Phalanx’s behavior. The diagrams and [HTML visualization](state-machine.html) are visual references. If a diagram differs from the transition rules, correct the diagram against the rules.
+The transition tables and rules here are authoritative. The diagrams and
+[HTML visualization](state-machine.html) illustrate them. An execution has a **stage**
+(what happens next) and **status** (whether it can happen now). The server owns both.
+One registered writer remains with its item; each attempted stage is separately fenced.
 
-Each execution has a **stage**, which describes what must happen next, and a **status**, which describes whether it can happen now. For example, `pr_validation / waiting_for_external` can mean the current PR head is awaiting CI. The server owns both values. A worker attempts one stage and reports its outcome and evidence. The server determines the transition and releases or reassigns the slot.
-
-Phalanx tries to self-resolve within the work item’s scope and the repository’s rules. Fix failing tests, reconcile routine conflicts, and address actionable review feedback independently when the expected result is clear. Ask for human judgment when competing choices would materially change the requested behavior, an approval is required, or continued attempts cannot make progress. Record material assumptions and how they were verified.
+Workers self-resolve within scope and repository rules. Fix routine failures, conflicts and
+feedback; ask for judgment or missing authority only when necessary. Record assumptions,
+evidence, prior work and a concrete resume action.
 
 ## Lifecycle stages
-
-Direct writer sessions use the separate `development` -> `self_review` -> `publication` ->
-`delivery` path in [direct sessions](docs/direct-sessions.md#pr-publication-and-delivery).
-With intake `publication_mode: "draft"`, publication records the writer's PR URL and delivery
-waits for the reconciler to verify that primary PR open, unmerged, draft, at the reviewed candidate
-and target base. It completes with a draft output and no `ready_revision`, never satisfying a
-ready/check-in prerequisite. A head other than the reviewed candidate queues `self_review` for the
-observed head, so only a self-reviewed head is delivered. A wrong base or a ready PR keeps waiting;
-a closed PR asks the owner. An observed merge into the target remains a delivery fact. The diagram below describes
-the legacy runner stages, which draft-only items never enter.
 
 A completed direct `ready_for_check_in` execution also accepts `pr_observed` for its primary PR.
 If it merged into the target at the verified ready head, or the reconciler proves that head is an
@@ -31,90 +24,106 @@ flowchart TD
     Start([New execution]) --> Kind{Output type}
     Kind -->|Pull request| Dev[Development]
     Kind -->|Field report| Draft[Report drafting]
-    Dev -->|First candidate and no existing PR| Publish[Open draft PR]
-    Dev -->|Candidate for an existing PR| Self[Self review]
-    Publish -->|Draft head verified| Self
-    Publish -->|Existing PR with a foreign head| Dev
+    Dev -->|Candidate commit| Self[Self review]
     Self -->|Changes required| Dev
-    Self -->|Pass| Pre[Pre-PR validation]
-    Pre -->|Validation fails| Dev
-    Pre -->|Checks pass or permitted bypass recorded| Promote[PR promotion]
-    Promote -->|Draft-only check fails or unexpected head| Dev
-    Promote -->|Merge conflict| Revise
-    Promote -->|PR ready on the verified head| Post[PR validation]
-    Post -->|Current CI and preview results recorded| Reconcile[PR reconciliation]
-    Reconcile -->|Diff since the last review is unreviewed| Review[Adversarial review]
-    Review -->|No blocking findings| Reconcile
-    Review -->|Blocking findings| Revise[PR revision]
-    Reconcile -->|Conflict, failed check, feedback or unexpected head| Revise
-    Revise -->|Fix pushed and head verified| Post
-    Revise -->|Fix pushed to a draft PR| Promote
-    Revise -->|New scope| Dev
-    Reconcile -->|Ready-only target or auto-merge off| Done([Completed])
-    Reconcile -->|Auto-merge on| Merge[Check-in]
-    Merge -->|Conflict or unexpected head| Revise
-    Merge -->|Merge verified| Done
-    Promote -->|Repository merged the candidate| Done
-    Post -->|Repository merged the candidate| Done
-    Draft --> ReportReview[Report review]
+    Self -->|Exact candidate reviewed| Publish[Publication]
+    Publish -->|Primary PR URL recorded| Deliver[Delivery]
+    Deliver -->|Checks, feedback or conflict| Fix[Writer fixes same PR]
+    Fix -->|Push to primary PR| Deliver
+    Deliver -->|Draft head changed| Self
+    Deliver -->|Verified requested target| Done([Completed])
+    Draft -->|Stored draft revision| ReportReview[Report review]
     ReportReview -->|Changes required| Draft
-    ReportReview -->|Evidence verified| Store[Store field report]
+    ReportReview -->|Exact revision reviewed| Store[Report storage]
     Store -->|Artifact recorded| Done
+    Done -.->|Later verified owner merge enriches output| Done
 ```
 
-The arrows below apply only when their guards pass. A blocked guard keeps the stage and changes the execution status. Record evidence against the candidate revision. After PR publication, use the PR identity, head, and base revision where relevant. A changed head invalidates prior head-bound evidence. Recheck base-sensitive evidence when the base moves. Draft and ready check evidence binds to the PR's head and the base GitHub records for it, which GitHub doesn't advance when the target branch moves. An ordinary target advance therefore doesn't stall promotion or validation; a resulting conflict takes the merge-conflict path, and a repo that requires an up-to-date branch enforces it through GitHub's rules at `check_in`.
-
-Before the PR is first marked ready, every fix goes back to `development`, which builds the candidate. After that, the PR stays ready and fixes go through the revision loop: `pr_reconciliation`, `pr_revision`, `pr_validation`, and `adversarial_review` when the new diff needs it. Each pass validates and reviews only what changed. `ready_for_check_in` remains a dependency milestone, reached when reconciliation finds every gate current.
-
-| Stage | Event or evidence | Next stage or disposition |
+| Stage | Required event or evidence | Next stage or disposition |
 | --- | --- | --- |
-| `development` | Scoped changes have a recoverable candidate commit. | `pr_creation` for a new draft. If the item already has a PR, proceed to `self_review` on the new candidate. A retry whose findings need no change, such as a local check that passes when rerun, may return the recorded candidate unchanged to rerun `self_review` and `pre_pr_validation`. |
-| `pr_creation` | Publish the candidate as a draft against the current target branch, record the PR, and verify its head. | `self_review`. An existing PR on the item branch is adopted: on the candidate head it continues to `self_review`, a foreign head returns to `development` to integrate its commits, and a closed PR asks the owner. Reuse a matching PR after interruption. If a bounded search cannot confirm publication, retry creation rather than drop the deliverable. If duplicates appear, select a primary and surface the others for review. |
-| `self_review` | Candidate diff has been checked against the work item and repo rules. | `pre_pr_validation` if it passes. `development` if fixes are needed, with the findings carried into the next development packet. |
-| `pre_pr_validation` | Before requesting review, run applicable local tests and available live checks. Record the revision and results, or the skipped checks and reason for a permitted bypass. | `pr_promotion` after passing or recording a permitted bypass. Actionable failures return to `development` with the failed checks and the tail of their output as findings. A pure timeout with no identified failure retries `pre_pr_validation` twice with backoff (`retry_at`) before returning. When every local check slot on the runner host is busy, the stage waits as external gate `local_check_capacity` and is rechecked. After 10 rounds of `self_review` or `pre_pr_validation` findings, or a third round with identical findings, since the owner's last reply, ask the owner instead. |
-| `pr_promotion` | Update the existing PR to the validated candidate if needed and verify its head. While the PR is a draft, complete its draft-only checks, then mark it ready for review. | `pr_validation`. Wait for draft-only external checks without holding a slot. Failed draft-only checks or an unexpected head return to `development` with findings. A merge conflict goes to `pr_revision` as findings, like after promotion. A PR that is already ready skips draft-only checks and records them as skipped; Phalanx never converts a ready PR back to draft. If a human converted a promoted PR to draft, ask the owner before marking it ready again. A head Phalanx did not verify is only fast-forwarded, never overwritten; if that fails, development integrates its commits. |
-| `pr_validation` | Observe CI and perform required preview validation for the current PR head. Wait for pending checks or previews with a scheduled recheck. | `pr_reconciliation` with the results, including failures. |
-| `adversarial_review` | An independent reviewer records findings and severity against the diff since the last reviewed head, or the whole PR diff on the first review. | `pr_reconciliation` when nothing blocks. Blocking findings go to `pr_revision`. An interrupted review can retry on the current revision. |
-| `pr_reconciliation` | Confirm CI, previews, review, and mergeability for the current PR head and base against the completion target. Reconciliation observes CI and previews on the current head itself and waits for pending checks without holding a slot. | An unreviewed diff since the last reviewed head goes to `adversarial_review`. A merge conflict, failed checks, new actionable GitHub feedback (requested changes or unresolved current review threads, each handed off once), or an unexpected head go to `pr_revision` as findings. GitHub's required approvals gate the merge at `check_in`. When all evidence is current, complete a ready-only item, or one whose runner has auto-merge off, with the PR marked ready; otherwise advance to `check_in`. After 10 revision rounds, or a third round with identical findings, since the owner's last reply, ask the owner instead. |
-| `pr_revision` | Fix the findings on the open PR: integrate the target branch or foreign commits, resolve conflicts, fix failures, and address feedback and review findings. Self-review only the new diff, rerun the failed checks and the local checks covering the changed files, then push and verify the head. | `pr_validation`, or `pr_promotion` while the PR is still a draft. If a push outside Phalanx wins the race on a ready PR, the revision is recorded and `pr_reconciliation` sends the foreign head back to `pr_revision`. Never change the PR's draft or ready state. A fix that turns into new scope escalates to `development`. |
-| `check_in` | Reconcile first: if GitHub reports the PR merged at the verified head, record it, even if the base advanced. A merge commit must have the head as its second parent; a squash or rebase commit has one parent and must be on the base branch. Otherwise recheck the claim, PR identity, expected head and mergeability, then request a direct merge commit pinned to the head. GitHub's required reviews, checks and rulesets gate the merge; Phalanx adds no gate. | Complete with PR link, merge commit and merge method. A conflict or unexpected head goes to `pr_revision` as findings. An unknown merge outcome or pending mergeability retries with backoff and reconciles before any new write. A merge GitHub refuses (HTTP 405), because of repository rules or a disallowed merge method, waits for them to be satisfied, then asks the owner. An unattributable merge asks the owner. |
-| `report_drafting` | Produce a recoverable Markdown draft. | `report_review` |
-| `report_review` | Check the draft against the request and verify supporting evidence and links. | `report_storage` when it passes. Return to `report_drafting` for fixes. |
-| `report_storage` | Store the reviewed Markdown idempotently and record its reference. | Complete with the stored report. Retry storage failures without redrafting. |
-| `publication` | A registered writer pushes the item branch, opens one ready PR against the target branch and, for `checked_in`, enables GitHub auto-merge. It reports the PR URL, which must be in the item's repository and not one an earlier execution merged, and becomes the primary PR. | `delivery`, waiting for reconciler observations. Fixes are pushed to the open PR, so this stage takes no `changes_required`. |
-| `delivery` | The reconciler's GitHub observations of the primary PR the writer published. GitHub's view wins: an observation sets the current head. | A merge by any method, by anyone, into the target branch completes either PR target with the merge commit, final head, merge time and verified method, through the same merge verification as an external merge at a PR gate. An open, non-draft head with required checks green, no unresolved feedback and no conflict completes `ready_for_check_in`, and for `checked_in` marks the `ready_for_check_in` milestone while auto-merge delivers. A PR on another base is never ready, and a merge into another base asks the owner. A PR closed without merge asks the owner; an owner reply queues `delivery` for the writer. Failing checks and feedback stay flags for the writer to act on. |
+| `development` | Scoped changes committed as a recoverable full candidate SHA. Repository checks and instructions apply. | `self_review`. Reconcile existing branches/PRs before repeating writes. |
+| `self_review` | Review the exact candidate against the request, correctness and repository rules; record notes and reviewed candidate. | `publication` on success; `development` with findings for changes. Bounded repeated findings ask for input. |
+| `publication` | Writer pushes the deterministic item branch and opens or reuses one PR with the explicit target base. Honor publication mode and current target. Report its URL; it must belong to the registered repo and not be a PR merged by an earlier execution. | `delivery`, waiting for trusted reconciler observations. No `changes_required` here: fix the same PR during delivery. |
+| `delivery` | Trusted timestamped GitHub observation of the recorded primary PR and exact head. GitHub wins over cached facts. | Verified requested target completes. Failed/pending checks, feedback, conflict, changed head or wrong base remain visible waits/flags for the writer. Closed without merge asks for input; a reply queues delivery. |
+| `report_drafting` | Submit recoverable Markdown; server stores a content-addressed draft. | `report_review`. |
+| `report_review` | Check exact draft against the request, evidence and links; submit its revision. | `report_storage` on success; `report_drafting` with findings otherwise. |
+| `report_storage` | Submit the reviewed revision; store it idempotently. | Complete atomically with the report. Retry storage without redrafting. |
 
-On the [direct-sessions](docs/direct-sessions.md) path, a writer's execution goes `development` → `self_review` → `publication` → `delivery`. It never enters `pr_creation`, `pre_pr_validation`, `pr_promotion`, `pr_validation`, `adversarial_review`, `pr_reconciliation`, `pr_revision` or `check_in`. Local checks are flags, not a gate (D3), and repository rules gate the merge. A writer can't register for an execution the old loop has already taken into one of those stages or given a draft PR.
+### Publication and delivery targets
 
-If GitHub reports the PR already merged, verify the merge matches this work item and the expected candidate before recording completion. At `pr_promotion`, `pr_validation` or `pr_reconciliation`, a merge by the repository itself (for example its own merge workflow) completes the item as merged, like `check_in`, when GitHub's PR record shows the recorded PR, repository, head and base branches, and a final head equal to the validated candidate, with method-appropriate provenance as in `check_in`. The item closes at `check_in` with the actual merge commit, method and time, even if its target was ready-only. A mismatch, such as another final head, asks the owner and names it. An unexpected merge or a PR closed without merge requires a decision if the action's intent cannot be established. Never open a replacement PR just because an existing one is closed.
+For ready publication the writer marks a reused draft ready and enables GitHub auto-merge
+**only** for `checked_in`. A `ready_for_check_in` item is never merged by its writer. Steering
+between PR targets is allowed while open, including delivery; the writer re-reads the target
+and disables auto-merge when retargeted to ready-only. New work on a completed item requires
+a rerun; recording a later verified owner merge only enriches its existing final output.
 
-Record the trusted runner's independent review against the PR revision assigned by passing gates. Before queuing check-in, persist the runner's authorization and operation ID against the primary PR and exact ready revision. Accept merge completion only when the current claim supplies the verified provider merge commit and its ordered parents: at `check_in` against the recorded intent, and at the earlier PR stages against the validated candidate. See the [runner PR observation contract](docs/runner-pr-observations.md) for required evidence.
+An open primary PR on the correct base, ready for review, at a head whose required checks
+are green, with no unresolved feedback or conflict reaches `ready_for_check_in`. That
+completes ready-only work, or records the milestone while checked-in work awaits merging.
+Required ready checks come from trusted policy. Missing policy/checks wait visibly; they
+cannot invalidate an actual verified merge.
 
-## Repository validation policy
+With `publication_mode: "draft"`, the writer opens a draft or converts the reused PR to draft
+and disables auto-merge. It never promotes or merges. Delivery completes only when the
+reconciler verifies the primary PR open, unmerged, draft, on the deterministic item branch,
+at the self-reviewed candidate and target base. It records `draft_published`, with no
+`ready_revision`, and satisfies no ready/check-in prerequisite. A changed head queues
+`self_review` for the observed candidate; a wrong base or ready PR keeps waiting.
 
-- Each repo can define applicable pre-validation commands, when they may be skipped, draft-only checks, expected CI, and required previews. Start from repository instructions and GitHub’s required checks. If no CI is expected or required, advance. If expected CI is absent, recheck and surface a blocker if it stays missing.
-- Run candidate-local pre-validation before uploading an update. Run checks that need a published candidate after the candidate reaches the PR. Check draft-only gates before the first promotion and post-promotion CI afterward. Draft-only gates apply only while the PR is a draft. Phalanx never converts a ready PR back to draft, so later revisions record those checks as skipped.
-- Pre-validation runs before promotion by default. A work item can request a bypass for urgency, or the runner can skip checks that repo policy marks inapplicable to the change. Record the candidate revision, affected checks, reason, and basis for authorization. Record a bypass as skipped, and retain any earlier failures. Draft-only gates, CI, required previews, and check-in rules still apply.
-- A changed PR head invalidates candidate-bound checks and CI and preview evidence for the old head, and requires review of the diff since the last reviewed head. A changed base invalidates mergeability and checks tied to the old merge candidate, and requires review of the new diff if it changes. Head-only evidence may carry forward when its inputs are unchanged and repo policy allows it. Recheck the provider’s latest approval and merge gates before check-in.
-- If someone pushes outside Phalanx, reconcile the new head and revalidate it. Continue when the changes fit the work item. Ask for judgment if scope or intent is unclear. Preserve the external change rather than overwriting it.
+A verified merge into the target by **anyone**, via merge, squash or rebase, completes either
+PR target. Record final head, merge commit, method and time. A merge commit must contain
+the final head as its second parent; a single-parent squash/rebase commit must be reachable
+on the base with the PR's verified final head. No Phalanx merge intent is required on the
+direct path. A merge into another base asks the owner. Never open a replacement just because
+the primary PR closed. An owner merge after ready-only completion releases checked-in
+dependents when observed. Older observations cannot overwrite newer facts except a merge.
+
+Trusted local checks are reconciler flags, not a Phalanx gate (D3). Writers follow repository
+checks; GitHub reviews, checks and rulesets gate merging. Optional post-merge deployment
+observations are flags, not stages or delivery gates.
+
+### Remaining runner-stage contracts (PH-DS5 part 2)
+
+The following stage implementations, lease renewals, observation routes and runner-local
+SQLite stores remain temporarily for part 2. They have **no CLI scheduler or queue claim
+endpoint**. Direct writers never enter them and cannot register over an execution already
+at a runner-only PR stage or carrying its draft PR.
+
+| Stage | Retained behavior |
+| --- | --- |
+| `pr_creation` | Publish/reconcile a draft, verify head, then self-review. An existing foreign head returns to development; a closed PR asks for input. |
+| `pre_pr_validation` | Trusted candidate-local checks or authorized bypass precede promotion. Failures return findings; pure timeout retries with backoff. Host check concurrency remains a local-check guard, not item admission. |
+| `pr_promotion` | Update/verify the candidate and draft-only gates, then mark ready. A conflict goes to revision; failed gates/foreign head return to development. Never convert ready to draft here. |
+| `pr_validation` | Observe current CI/required previews, waiting with a recheck, then reconcile. |
+| `adversarial_review` | Review the assigned current diff independently; pass to reconciliation or send blocking findings to revision. |
+| `pr_reconciliation` | Verify exact head-bound checks, review and mergeability. Route unreviewed diffs to review and failures/conflicts/feedback to revision; complete ready-only work or proceed to check-in. |
+| `pr_revision` | Fix findings on the existing PR, review the new diff, run relevant checks and push. Return to validation, or promotion for a draft. |
+| `check_in` | Reconcile prior merge, then use an authorized expected-head merge and verify provider provenance. GitHub rules still gate it. |
+
+These callers authenticate with their current live lease. No expired-attempt recovery
+endpoint remains. Preserve any such attempt's work, verify its worker stopped, then use
+owner cancel/rerun rather than inventing a replacement lease. Details of the retained
+evidence remain in [runner PR observations](docs/runner-pr-observations.md) and
+[validation policy](docs/runner-validation-policy.md).
 
 ## Execution status
 
 ```mermaid
 stateDiagram-v2
     [*] --> queued
-    queued --> running: Eligible claim
-    queued --> waiting_for_external: Cancellation or failure finalization
-    queued --> waiting_for_input: User decision needed
-    running --> queued: Stage advances or bounded retry
-    running --> waiting_for_input: Human judgment required
-    running --> waiting_for_external: External result pending
-    running --> completed: Completion evidence verified
-    waiting_for_input --> queued: Reply or retry
-    waiting_for_input --> waiting_for_external: Cancellation or failure finalization
-    waiting_for_external --> queued: Event or recheck makes work runnable
-    waiting_for_external --> waiting_for_input: Human action required
-    waiting_for_external --> completed: Reviewed report stored or completion verified
+    queued --> running: Named writer attempt
+    running --> running: Next runnable stage, new attempt
+    queued --> waiting_for_input: Decision needed
+    running --> queued: Retry delay or paused continuation
+    running --> waiting_for_input: Question
+    running --> waiting_for_external: External result or finalization
+    running --> completed: Output verified
+    waiting_for_input --> queued: Reply
+    waiting_for_external --> queued: Event or recheck
+    waiting_for_external --> waiting_for_input: Owner action
+    waiting_for_external --> completed: Output verified
+    queued --> waiting_for_external: Cancellation finalization
+    waiting_for_input --> waiting_for_external: Cancellation finalization
     waiting_for_external --> failed: Failure report stored
     waiting_for_external --> cancelled: Cancellation report stored
     completed --> [*]
@@ -124,29 +133,44 @@ stateDiagram-v2
 
 | Event | Server behavior |
 | --- | --- |
-| Eligible claim | Check dispatch pause, capacity, repo and runtime eligibility, and all upstream milestones in the claim operation. Capacity counts open agent-stage attempts against the runner's capacity and all open attempts against capacity + `RUNNER_ONLY_SLOTS` (2). When agents fill capacity, only runner-only stages (no agent worker session) are eligible. Assign one current lease and a new attempt only when all prerequisites are satisfied. Bind the claim to their exact executions and output revisions. A blocked item retains the unmet prerequisite and reason. A failed or cancelled prerequisite prompts recovery, redirection, or cancellation of the dependent work. |
-| Prerequisite satisfied | Recheck all prerequisites and make the dependent item eligible when its last required output is verified. Keep unrelated items runnable. Reconcile missed notifications by checking durable milestone records before claims and on recheck. |
-| Valid stage result | Check attempt ID, current lease, state version, stage, and evidence. Atomically record the outcome and timeline event. Queue the next runnable stage or persist the appropriate wait or final result. If the runner offered a fresh lease for that stage and it is runnable now, claim it for the same runner in the same transaction (a `claim` event with `continued_from`) so the item keeps its slot; otherwise record the `capacity_release` reason on the result. Apply the final-output guard before any terminal transition. The operator timeline preserves existing result/wait reasons. When absent, it explains result transitions, including backward ones, using the persisted outcome, issue, failed local checks and failure reason, with the applied SHA retained in a bounded, credential-redacted reason. This read projection changes no transitions or capacity policy. |
-| Retryable failure or expired lease | Reconcile the known worker session, checkpoint, and outputs. If the writer is still running or has a verified result, adopt the same open attempt under a recovery claim. The claim replaces the expired lease secret and is accepted only after expiry, so it cannot race a renewal. If the writer stopped without a result but left local changes, resume that same writer (bounded) and adopt once it is active again; never release or discard the changes. Retry a stopped attempt with bounded backoff. Unknown session state warrants a recheck before replacement. A late result cannot advance the item on an expired lease. Before repeating a GitHub operation, reconcile what happened. |
-| Human judgment required | Save one focused question, the options, any proposed default, and the handoff. Release the slot and notify the user. A reply queues the stage again with that context. |
-| External gate pending | Save the gate and expected revision, release the slot, and recheck periodically as well as on events. A result schedules the work needed to continue. Escalate persistent stalls or conflicting evidence. |
-| Repeated lack of progress | Stop repeating the same ineffective attempt. Try a scoped recovery with a different path when evidence supports it. Otherwise ask for a decision with prior attempts and a recommended next action. Release the slot and keep unrelated eligible work running. Reservations for live or uncertain processes still apply. The user can reply, retry, redirect, or close the execution. |
-| Runner relay stalled | The state and lease stay unchanged. When the runner's runtime relay has taken no waiting request for the bounded stall time, the runner attaches the stall reason to each affected attempt's lease renewal. The server shows it as each item's wait reason, and the runner notifies the owner. When the relay takes requests again, the next renewal clears the reason. Work continues without a restart or a new attempt. |
-| Cancel requested | Stop new work. For active work, record the cancellation request and reconcile any in-flight publication before marking it cancelled. If the merge already succeeded, record that verified outcome. |
-| Finalize a report | Record the terminal intent and release the attempt before storage. The server retries independently of dispatch. Store or reuse the exact report and close the execution in one transaction. |
-| Rerun a closed execution | Create a linked execution with an explicit target. Preserve history and reconcile any existing branch, PR, or report before repeating effects. |
+| Writer registration | Check expected version, named execution eligibility, dispatch pause, prerequisites and charter writer limit. Atomically enforce one open writer. An unbound queued item visibly awaits a direct Captain. |
+| Named writer attempt | Verify the current scoped token and runnable state. Assign a new attempt and pin exact upstream executions/output revisions. A wait exposes its reason and resume trigger. |
+| Valid result | Check attempt, writer binding, version, stage and evidence. Record outcome and history atomically; end that attempt. Open the next runnable attempt for the same writer or retain the writer through the wait. Old attempts/tokens cannot advance state. |
+| Paused dispatch | Refuse new registrations and attempts. Existing attempts can post progress/results. Resume makes runnable work available again. |
+| Prerequisite satisfied | Re-evaluate durable milestones in bounded batches and at claim time. Unrelated items remain runnable. Failed/cancelled upstream work never qualifies through its disposition report. |
+| Human judgment | Save question/options/default/handoff and notify. Captain replies record `answered_by: captain`; owner is the default. Reply queues the same stage, retaining its writer and context. |
+| External wait | Store reason, gate, expected revision and due recheck. Events or bounded jittered polling resume it. Delivery observations can complete directly without another attempt. |
+| Interrupted writer | No timed expiry. Verify native state, exact session and preserved local work. Discover uncertain launch by nonce before launching. Replacement must name the current writer and attest it stopped; revoke old credential atomically. |
+| Repeated lack of progress | Bound retries/repeated findings and ask for a decision with prior attempts and next action. Silence and stale-progress flags alone do not authorize replacing a writer. |
+| Cancel requested | Stop new work and reconcile in-flight effects; confirm the exact worker stopped. If a merge succeeded, record it rather than claiming cancellation. Store a disposition report when needed. |
+| Finalize report | Persist terminal intent, then store/reuse exact artifact and close atomically. Retry independently of pause. |
+| Rerun | New linked execution with explicit target; preserve old history and reconcile existing outputs before repeating effects. |
 
-Before yielding a slot, record the workspace, candidate revision or local checkpoint, relevant validation evidence, and remaining work. Keep the item on the same runner while a required checkpoint exists only there. If that runner cannot recover, ask whether to rebuild from the last durable checkpoint or close the execution.
+Capture worktree, candidate/checkpoint, evidence and remaining work before yielding. A required
+checkpoint that exists only locally pins recovery to that host until safely preserved.
 
 ## Final output guard
 
-- A `completed`, `failed`, or `cancelled` execution always has exactly one final output. A running, queued, or waiting execution may have progress notes, a draft report, or a PR link without a final output. The requested output type remains in the work item even if its final output differs.
-- On successful PR work, the final output is the verified PR link and head, with the merge commit when the completion target is `checked_in`. On successful report work, the final output is the stored reviewed Markdown report.
-- On failure or cancellation without the requested deliverable, the final output is a Markdown report with the disposition, last stage, what was attempted, the blocker or reason for stopping, partial artifacts, and any useful next action. A partial PR can be linked from the report. The server can produce the report from the execution history even when the worker has exited or work was cancelled before the first claim.
-- Store the final output reference and terminal status together. If output storage fails, keep the execution open with a retryable finalization step. Reuse an existing matching artifact and leave a conflicting artifact intact for investigation. The server retries after 2, 4, 8, and 16 seconds. After five recorded failures, the execution wait and timeline show the blocker. The owner can restore database access or resolve the report integrity issue, then POST the current expected version to the execution’s `retry-finalization` endpoint. A full database outage leaves the intent due and appears in server logs while the API cannot record retry history.
+- Every `completed`, `failed` or `cancelled` execution has exactly one final output.
+- Successful PR work records verified PR/head and the merge commit for checked-in delivery.
+  Draft-only completion is distinct from ready delivery. Successful report work records the
+  reviewed Markdown.
+- Failure/cancellation without the requested output stores a disposition report: last stage,
+  attempts, reason, partial artifacts and useful recovery action. It can link a partial PR.
+- Store output and terminal status together. A storage outage leaves retryable finalization,
+  never a closed row without output. Retry after 2, 4, 8 and 16 seconds; after five failures
+  show the blocker. Owner `retry-finalization` uses the current expected version. A complete
+  database outage leaves the intent due and logs the storage error.
 
 ## Transition tests
 
-Cover a report and a PR through completion, ready-only without merge, auto-merge off, pre-PR checks passing or explicitly bypassed, a required CI failure after bypass, PR-only preview checks, a revision loop that fixes a conflict, a failed check and new comments without returning to draft or to development, changed heads or bases, and a retry that discovers an existing PR or successful merge. Exercise duplicate submissions and events, a stale worker result, a lost external notification, a failed prerequisite, interruption during cancellation, and a review loop with no progress. Verify that failure and cancellation produce a report, including cancellation before the first claim, and that a storage outage leaves finalization retryable. For every active state, verify a next action, a persisted resume trigger, or an explicit way to close the execution.
+Cover PR/report completion, both PR targets, draft ceiling/head re-review, all merge methods,
+owner merges, target steering, failed checks/feedback/conflicts, exact reviewed revisions,
+duplicate/idempotent posts, stale credentials, lost launches, racing Captains, stopped writer
+replacement with preserved work, pause, questions/replies, cancellation, report-storage
+outages and reruns. Keep remaining runner-stage coverage until part 2 deletes those stages.
 
-For dependency coverage, test parallel prerequisites across repos, a downstream item waiting for the last prerequisite, ready-only evidence held until a required merge, a failed upstream item that produces a report, cycle rejection, and eligibility changes after steering.
+Dependency coverage includes parallel cross-repository prerequisites, exact output pins,
+ready-only versus merged milestones, failed upstream reports, cycles, missed notifications,
+and eligibility changes after steering. Every open state needs an action, resume trigger or
+explicit recovery path.

@@ -121,11 +121,9 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
             results = list(pool.map(lambda _: self.ingest(), range(4)))
         self.assertEqual(results, [item] * 4)
         self.assertEqual(self.item_count(), 1)
-        status, assignment = self.request("/v1/dispatch/claim", RUNNER, {
-            "runner_id": "local", "repository_ids": ["example"], "stages": ["development"],
-        }, {"Phalanx-Lease": "x" * 32, "Idempotency-Key": "claim-import"})
-        self.assertEqual(status, 200, assignment)
-        self.assertEqual(assignment["status"], "claimed")
+        from test_bootstrap import claim_stage
+
+        assignment = claim_stage(self.path, item["id"], "x" * 32)
         self.assertEqual(assignment["item_id"], item["id"])
         self.assertEqual(assignment["request"]["goal"], item["goal"])
         self.assertEqual(assignment["request"]["context_links"], [ISSUE_URL])

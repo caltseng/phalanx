@@ -4,8 +4,8 @@ import json
 import os
 from pathlib import Path
 
-from .attended import RunnerAPI
-from .attended_drafts import github_repository
+from .api_client import RunnerAPI
+from .github import github_repository
 from .runner_errors import RunnerError
 from .workspaces import WorkspaceError, WorkspaceManager, _git
 
@@ -134,14 +134,14 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
     hosts = {other.get("host_id") for other in mappings.values() if other.get("host_id")}
     host_id = host_id or mapping.get("host_id") or (hosts.pop() if len(hosts) == 1 else None)
     if project_id and host_id:
-        step("runtime_project", OK, f"project {project_id} on host {host_id}; the Captain loop "
-             "verifies it with resolve_project before launching workers")
+        step("runtime_project", OK, f"project {project_id} on host {host_id}; the Captain "
+             "verifies native workspace identity and trust before launching writers")
     else:
         step("runtime_project", MISSING, "Create or open a runtime project for the checkout and pass "
              + " and ".join(flag for flag, value in (("--project-id", project_id), ("--host-id", host_id))
                             if not value))
 
-    # 4. runner.json mapping. A partial mapping would break the loop, so write only a complete one.
+    # 4. Write only complete repository mappings.
     if checkout_ok and project_id and host_id:
         wanted = {**mapping, "checkout": str(checkout), "base_branch": base_branch,
                   "host_id": host_id, "project_id": project_id}
@@ -194,6 +194,6 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
 
     # 6. Owner trust: never granted by Phalanx.
     step("owner_trust", MANUAL, f"The owner grants the worker runtime standing trust for "
-         f"{checkout or 'the checkout'}; the Captain loop reports an untrusted mapping")
+         f"{checkout or 'the checkout'}; the Captain reports pending native trust approval")
     return {"repository": repository,
             "complete": all(entry["status"] != MISSING for entry in steps), "steps": steps}

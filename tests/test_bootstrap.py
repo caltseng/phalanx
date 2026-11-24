@@ -20,6 +20,21 @@ from timing import WAIT_SECONDS
 
 OWNER = "o" * 32
 RUNNER = "r" * 32
+
+
+def claim_stage(path, item_id, lease, runner_id="local"):
+    """Seed an attempt for runner-stage tests; production launches use writer registration."""
+    from phalanx import intake
+
+    with write_transaction(path) as db:
+        row = intake.current_execution(db, item_id)
+        state = intake.STATE.validate_json(row["state_json"])
+        assignment = intake.claim_attempt(
+            db, row, state, runner_id=runner_id, lease_digest=intake.digest(lease),
+            lease_expires_at=int(time.time()) + 300,
+        )
+        return {**assignment, "runner_id": runner_id, "item_id": item_id,
+                "request": json.loads(intake.item_row(db, item_id)["request_json"])}
 # Loaded or hosted machines can stall a single fsync-heavy request or server start.
 # Tests never assert on these timeouts.
 REQUEST_TIMEOUT = STARTUP_TIMEOUT = WAIT_SECONDS
@@ -185,6 +200,30 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 db.execute("PRAGMA user_version = 999")
             with self.assertRaises(ValueError):
                 migrate(future)
+
+    def test_retirement_migration_preserves_items_attempts_and_history(self):
+        from phalanx import intake
+        from phalanx.intake_models import Intake
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "upgrade.sqlite3"
+            with patch.object(store, "MIGRATIONS", store.MIGRATIONS[:-1]):
+                migrate(path)
+            with write_transaction(path) as db:
+                intake.register(db, "repo", "https://github.com/e/r.git")
+                item = intake.create(db, Intake(repository_id="repo", goal="Keep this", target="report"))
+                db.execute("INSERT INTO runner_limits VALUES ('old', 4)")
+            claim_stage(path, item["id"], "x" * 32)
+            with connect(path) as db:
+                saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
+                         for table in ("work_items", "executions", "attempts", "transition_history")}
+            migrate(path)
+            migrate(path)
+            with connect(path) as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                self.assertTrue({"runner_limits", "attempt_adoptions"}.isdisjoint(tables))
+                for table, rows in saved.items():
+                    self.assertEqual([tuple(row) for row in db.execute(f"SELECT * FROM {table}")], rows)
 
     def test_serialized_transactions_commit_and_roll_back(self):
         with TemporaryDirectory() as directory:

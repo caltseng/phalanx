@@ -102,6 +102,10 @@ MIGRATIONS = (
     CLOSED_WRITER_MIGRATION,
     DASHBOARD_SCHEMA,
     SESSION_ARCHIVE_SCHEMA,
+    (
+        "DROP TABLE attempt_adoptions",
+        "DROP TABLE runner_limits",
+    ),
 )
 
 

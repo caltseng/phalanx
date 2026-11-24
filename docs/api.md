@@ -1,6 +1,8 @@
 # API reference
 
-The HTTP API is the only path to queue state. Owner routes use the owner bearer token and runner routes the runner token. In the local deployment, the runner token identifies a trusted runner role; use one stable runner ID per runner across restarts, which scopes capacity and recovery within that role. All routes below are under `/v1` unless shown in full.
+The HTTP API is the only path to queue state. Owner routes use the owner bearer token,
+Captain/reconciler routes use the trusted runner token, and writer routes use a scoped writer
+bearer token. All routes below are under `/v1` unless shown in full.
 
 ## Direct muster status
 
@@ -48,12 +50,19 @@ other execution flags. See [creator-owned cleanup](direct-path.md#creator-owned-
 | `GET /items/{item_id}/executions/{execution_id}/report` | Owner or runner | Retrieve the final stored Markdown. |
 | `POST /items/{item_id}/executions/{execution_id}/cancel` | Owner | Request cancellation with `expected_version` and `reason`. |
 | `POST /items/{item_id}/executions/{execution_id}/rerun` | Owner | Create a linked execution from the current closed execution with `expected_version` and an explicit `target`. |
-| `POST /items/{item_id}/executions/{execution_id}/result` | Runner | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
+| `POST /items/{item_id}/executions/{execution_id}/result` | Writer, or remaining runner-stage caller | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
 | `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation under a live lease after accounting for the worker and its effects. |
 
 Intake requires `repository_id` and `goal`; `target` defaults to `checked_in`, preserving explicit `ready_for_check_in` and `report` requests. Optional fields include `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the item's output type.
 
-Results and stop confirmations require a matching `attempt_id`, `stage` and `expected_version`, plus the current secret in the `Phalanx-Lease` header. A successful report-drafting result sends `report_markdown`; the server persists it and derives a SHA-256 revision. Report review and storage send `report_revision`, and the server copies the reviewed draft into final storage in the same transaction that closes the execution. A `needs_input` result supplies `question.prompt` and `question.handoff`, with optional `options` and `proposed_default`. Active cancellation preserves the attempt while awaiting reconciliation. An expired lease or uncertain provider effect requires recovery before confirmation.
+Results require a matching `attempt_id`, `stage` and `expected_version`, authenticated with
+the current writer token. Remaining runner-stage callers instead supply their runner token
+and current `Phalanx-Lease`. A successful report-drafting result sends `report_markdown`;
+the server persists it and derives a SHA-256 revision. Report review and storage send
+`report_revision`; final storage and execution closure are atomic. A `needs_input` result
+supplies `question.prompt` and `question.handoff`, with optional `options` and
+`proposed_default`. Active cancellation preserves the attempt while effects are reconciled.
+Writer stop confirmation uses its scoped credential; runner-stage confirmation needs a live lease.
 
 ### Prerequisites and queued steering
 
@@ -76,24 +85,27 @@ Milestone changes refresh up to 32 dependents in the upstream transaction. Large
 
 See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the question and reply flow. Runners can post `/external-wait` under an execution with the live attempt lease, expected version and an idempotency key. Include the attempt and stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Both use the runner token. A recheck queues the same stage for verification.
 
-## Dispatch and leases
+## Direct writers and dispatch
 
 | Method and path | Request and behavior |
 | --- | --- |
-| `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). A pause stops new assignments while existing leases, results and recovery continue. |
-| `PUT /v1/dispatch/runners/{runner_id}/capacity` | Owner sets `capacity` (1–256, default 4 per runner) for agent worker stages. Runner-only stages use a separate lane of 2 per runner. Reductions take effect for the next claim and leave all reservations in place. |
-| `POST /v1/dispatch/claim` | Runner sends `runner_id`, `repository_ids` (1–100 local checkout mappings), optional `slots` to lower the capacity for this muster, and optional `stages` to claim only supported stages. Send a fresh cryptographically random secret, for example Python's `secrets.token_urlsafe(32)`, in `Phalanx-Lease`. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Runner sends the original `Phalanx-Lease` before expiry. The response gives `lease_expires_at` in Unix seconds. Renew independently of worker observation, by default every 60 seconds. The optional body carries `worker` (`reference` and HTTPS `url`) and `blocker`, the runner's current blocker text; a renewal without `blocker` clears it. |
-| `GET /v1/dispatch/runners/{runner_id}/recovery` | Runner lists expired reservations for its ID with the item, execution, attempt, stage, current execution version and reconciliation action. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-stopped` | Runner supplies `item_id`, `expected_version`, and a `reconciliation` note describing how it verified the worker stopped and accounted for downstream effects. Accepts `Idempotency-Key`. A live, replaced or changed attempt is rejected. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recover-claim` | Adopts an expired open attempt under the new `Phalanx-Lease` secret, with the same body as `recover-stopped`. The attempt, version and stage stay the same, and the old secret stops working. Accepts `Idempotency-Key`. A live lease (renew it instead), an ended attempt or a changed execution is rejected. The adoption appears in both timelines as a `recover_claim` event at the same version. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/recovery-wait` | Runner sets `blocker` (or `null` to clear) on an expired open attempt while its recovery waits on the owner. The board shows it after the lease expiry. A live lease (report blockers on renewal) or an ended attempt is rejected. |
+| `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). Pause stops new writer registrations and attempts; existing results and progress remain accepted. |
+| `POST /v1/items/{item}/executions/{execution}/writer` | Captain registers a named writer intent, expected version, nonce and token digest. Optional `writer_limit` enforces its charter across the named repositories atomically. Replacement requires the current writer ID and stopped attestation. |
+| `PATCH /v1/items/{item}/executions/{execution}/writer` | Captain confirms the native session ID/link for its registered intent. |
+| `POST /v1/writer/attempt` | Scoped writer claims/resumes its own execution's next runnable stage. |
+| `POST /v1/writer/progress` | Scoped writer records progress without a timed lease. |
+| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Remaining runner-stage callers renew the original live `Phalanx-Lease`; optional `worker` reference/link and `blocker` update board evidence. Returns `lease_expires_at`. This route retires in part 2. |
 
-A claim returns HTTP 200 with one of `claimed`, `paused`, `at_capacity` or `no_eligible_work`. A successful assignment includes the work request, execution and version, attempt ID, and lease expiry (`PHALANX_LEASE_SECONDS` after the claim, 300 by default). Pass its attempt ID, execution version and stage to the result route with the same lease header. Keep the bearer token and lease secret with the runner. After a lost claim response, replay the same body and lease secret to retrieve the original assignment. Deduplicate by attempt ID and verify that the lease and execution are still current before starting work on a replayed assignment. Empty polls leave no receipts. The server stores only the lease-secret digest.
+`phx shift` registers and manages Captains; `phx work` uses the scoped credential in the item's
+Git directory. The server enforces one open writer per execution. A result advances the same
+writer to the next runnable stage with a new attempt; the writer retains ownership through
+waits. It has no timed expiry. See the [complete fencing and evidence contract](direct-sessions.md#writer-registration-and-fencing).
 
-An intake item can set `runner_affinity` to require a specific runner ID. For matching repositories and affinity, urgency rises one band per aging interval. Within the effective band, the server chooses the oldest eligible timestamp and breaks ties by item ID. Execution views report `ready_since_ms` and `retry_at_ms` as Unix milliseconds, and `retry_count` as the retries scheduled in the current stage. A reconciled retry starts accruing age when its delay elapses. A newly queued stage gets its own clock. The claim index excludes blocked stages; a stage begins to age once its last prerequisite clears and any retry delay elapses.
-
-An expired lease prevents stale results and renewals, but its attempt still holds the slot and item reservation. Leave uncertain or live workers reserved. After confirming that a worker stopped and that repeating the stage is safe, submit stopped recovery. It records the reconciliation and uses delays of 5, 10, 20 and 40 seconds for the first four retries. A fifth stopped attempt waits for owner intervention. If cancellation is already pending, stopped recovery closes it with a stored cancellation report. Recovery claims extend this to launch intent, live session reattachment and collection of finished results; see [Runner operations](runner-operations.md#recovery-inside-the-loop).
+Unbound queued items show **Awaiting a direct Captain**, even without `runner_affinity`.
+Captains select named eligible items, taking dependencies, priority aging and retry time into
+account. Views expose `ready_since_ms`, `retry_at_ms` and `retry_count`. A stopped writer
+is replaced only after its native session and local work are accounted for. No timed expiry
+alone authorizes replacement.
 
 ## Operator board data
 
@@ -105,7 +117,7 @@ Both owner and runner tokens can call these routes. With `PHALANX_LOCAL_BOARD=1`
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
 | `GET /v1/operator/overview` | Section counts, 24-hour outcomes, dispatch paused/on, oldest eligible queued age and `generated_at` for data age. |
 | `GET /v1/operator/groups/{label}` | Current executions with the label, a paginated item list and an outcome/size/time rollup. |
-| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`. |
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the returned `next_cursor` as `cursor` on the same route and list kind until it is null. Pages read live state: an open execution entering or leaving the input-wait group can cross the cursor between requests, so refresh from the first page to see the current order. New timeline events and closures normally precede the current cursor. The timestamp and version fields describe the persisted state.
 
@@ -113,7 +125,13 @@ Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` 
 
 Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
 
-`last_advanced_at` records entry into the current stage, and `last_progress_at` the latest execution transition. Wait details include the stored reason, resume trigger and age of the current wait. A scheduled retry appears as `retry_at_ms` and a due external gate recheck as `recheck_at_ms`, both in Unix milliseconds. `primary_pr_url` is the recorded primary PR. `worker_reference` is the latest attempt's opaque worker ID, which the runner republishes on each renewal, and `worker_url` is the bridge's optional HTTPS chat link. When the runner is blocked on an item it would otherwise show as plainly running, such as an unreachable runtime or an ambiguous worker, it sends the reason as `blocker` with each renewal, and the item's `wait_reason` shows it until a renewal omits it. `version` is the execution version a reply must name. The timeline lists blocking `prerequisites` and, while the item waits for input, the current `question`. The draft state has no current read mapping. Report output URLs use the authenticated report route.
+`last_advanced_at` records entry into the current stage, and `last_progress_at` the latest
+execution transition. Wait details include the reason, resume trigger and age. Scheduled
+retries and external rechecks appear as `retry_at_ms` and `recheck_at_ms`. `primary_pr_url`
+identifies the primary PR. Writer fields expose its native session and progress, while
+`worker_reference` and `worker_url` retain remaining runner-stage attempt evidence.
+`version` is the version a reply must name. Timelines list blocking `prerequisites` and the
+current `question`. Report output URLs use the authenticated report route.
 
 ### Read one item's correlated timeline
 

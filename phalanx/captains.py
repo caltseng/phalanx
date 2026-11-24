@@ -137,13 +137,14 @@ def active_holds(db, now):
     return {
         row["execution_id"]: row["reason"]
         for row in db.execute(
-            """SELECT action.* FROM executions AS execution
-               JOIN captain_actions AS action ON action.rowid = (
-                   SELECT latest.rowid FROM captain_actions AS latest
-                   WHERE latest.execution_id = execution.id AND latest.version = execution.version
-                   ORDER BY latest.created_at DESC, latest.rowid DESC LIMIT 1)
-               WHERE execution.status = 'queued' AND action.action = 'held'
-                 AND action.created_at > ?""",
+            """SELECT action.* FROM captain_actions AS action
+               JOIN executions AS execution ON execution.id = action.execution_id
+               WHERE action.action = 'held' AND action.created_at > ?
+                 AND execution.status = 'queued' AND action.version = execution.version
+                 AND NOT EXISTS (
+                     SELECT 1 FROM captain_actions AS latest
+                     WHERE latest.execution_id = action.execution_id AND latest.version = action.version
+                       AND (latest.created_at, latest.rowid) > (action.created_at, action.rowid))""",
             ((now - IDLE_WITH_WORK).isoformat(timespec="microseconds"),))
         if row["captain_id"] in live
     }
