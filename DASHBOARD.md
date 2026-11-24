@@ -97,6 +97,15 @@ Explicit missing/deleted reports disable the link with that reason. An omitted s
 in a partial inventory is not evidence of deletion. Unsafe or conflicting identities
 remain unlinked.
 
+Long queue waits remain visible after 30 minutes. **Queue backlogged** uses a neutral
+information marker and **Waiting for writer capacity**, including occupied/maximum
+assigned-writer counts from canonical dispatch settings. An active Captain hold does
+not hide full-capacity backlog. **Dispatch overdue** keeps warning styling only for
+unassigned runnable work with free capacity, dispatch enabled and no active hold
+(the API retains `captain_idle_with_work` for compatibility). Dependency waits are
+not missed launches. Flags retain first-seen ages and execution/item links; paused
+dispatch is informational, not evidence that a Captain stopped.
+
 ## Who uses it
 
 - **v1 hosted:** a single workspace, with Caleb as its owner. He signs in with Google ([PH-27](IMPLEMENTATION_PLAN.md)) against an email allowlist. The owner token still works as a fallback, and for the CLI and API.
