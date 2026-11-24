@@ -158,7 +158,9 @@
     await tick();
     const detail = () => root.querySelector("#detail-run");
     assert(detail() && detail().previousElementSibling.contains(item("run")), "Detail opens in place under its row");
-    assert(detail().textContent.includes("pr revision") && detail().textContent.includes("Prerequisites"), "Stage history and dependencies");
+    const history = detail().querySelector(".timeline").textContent;
+    assert(history.includes("self review") && history.includes("development") &&
+      detail().textContent.includes("Prerequisites"), "Stage history and dependencies");
     assert(detail().textContent.includes("att2") && detail().textContent.includes("opaque-worker-7"), "Attempt and legacy worker");
     assert(detail().querySelector(".captain-ref .mark-run") && ended().open, "Captain reference live and Ended state retained in details");
     assert(detail().textContent.includes("Merged") && detail().querySelector(".chip .mark-flag"), "Mapped target and flag in details");
