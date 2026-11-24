@@ -119,7 +119,9 @@ The reconciler runs periodically for each open PR item and for due external wait
 | Ready head with required checks and reviews satisfied | `ready_for_check_in`. Merging is GitHub's job (D2). |
 | Branch commits reachable from the base with no PR (git ancestry) | A flag only. |
 
-GitHub rate limits back off and never block other items.
+GitHub rate limits back off and never block other items. An execution's unexpected
+observation failure is recorded with its item ID in the pass's errors; remaining
+executions are still processed.
 
 Post-merge deployment is an optional observation, not a lifecycle stage or
 completion gate. A repository mapping's `post_merge_check` names its
@@ -145,7 +147,10 @@ deployment stage and a pending or failed deploy never reopens delivery.
 For a writer's execution in `delivery`, the server applies each observation of its primary PR as a state transition (`pr_observed`). The observation sets the current head. Each PR observation names the branch the PR must merge into: the item's `target_branch`, else the repository's `base_branch` from the reconciler's mapping. A PR on another base never reaches `ready_for_check_in` and raises a `wrong_base` flag, and a merge into another base asks the owner instead of delivering. A merge completes the execution and ends its writer. Every post is reapplied, so a lost apply recovers on the next pass, and an unchanged observation doesn't bump the execution's version. A snapshot older than one already recorded is ignored unless it shows a merge. A `ready_for_check_in` milestone, and the target, need required checks green, so they need the repository's trusted validation policy. Without one the execution keeps waiting, visibly, until merged. Executions on the old path only record observations.
 
 The same reconciler also pages completed direct ready outcomes, without the deployment window
-or deployment opt-in, until their primary PR is observed merged. It does not rerun checks or
+or deployment opt-in, until their primary PR is observed merged. Operator summaries expose the
+verified final output's `{head, base}` as `output_revision` (null without a PR output); `output`
+remains the compact `{kind, url}` reference. The reconciler reads the verified head from
+`output_revision`, not the compact reference. It does not rerun checks or
 reactivate their ended writers. A merge into the target at the completed output's verified head
 enriches that output with the final revision, merge commit, method and GitHub's `merged_at`.
 For a different head the reconciler compares the verified head to that exact merged head using

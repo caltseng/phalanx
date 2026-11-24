@@ -115,6 +115,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual((newest["id"], newest["closed_at"], newest["outcome"], newest["output"]["kind"]),
                          (identifier(3), LATER, "cancelled", "report"))
         self.assertEqual(self.get(newest["output"]["url"], OWNER), (200, "Cancellation report"))
+        self.assertIsNone(newest["output_revision"])
 
         pr = PullRequest("https://github.com/example/project/pull/123", Revision("head", "base"))
         ready = Execution(Target.READY, Stage.PR_RECONCILIATION, Status.COMPLETED, final_output=pr)
@@ -126,6 +127,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         results = self.page(BOARD + "?kind=closed&limit=2")["items"]
         self.assertEqual([row["outcome"] for row in results], ["checked_in", "ready_for_check_in"])
         self.assertEqual(results[0]["output"], {"kind": "pr", "url": pr.url})
+        self.assertEqual([row["output_revision"] for row in results],
+                         [{"head": "head", "base": "base"}] * 2)
         self.assertEqual(results[0]["delivery"], {"merged": True, "merge_commit": "merge", "merge_method": None,
                                                   "merged_at": None})
         self.assertIsNone(results[1]["delivery"])

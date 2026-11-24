@@ -1,4 +1,4 @@
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead, RemoteDisconnected
 import json
@@ -21,9 +21,9 @@ from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stal
 from phalanx.validation import GateResult, GateState
 from phalanx.workspaces import any_file_lock
 from phalanx.store import migrate, read_transaction, write_transaction
-from phalanx.transitions import item_branch
+from phalanx.transitions import Execution, PullRequest as OutputPR, Revision, Stage, Status, Target, item_branch
 
-from test_bootstrap import OWNER, RUNNER
+from test_bootstrap import OWNER, RUNNER, ServerFixture
 from test_pr_observations import BASE, HEAD, OTHER, PullObservationFixture
 
 
@@ -257,6 +257,53 @@ class FakeGitHub:
 def execution(item_id, repo="repo", primary=None):
     return {"id": uuid4().hex, "item_id": item_id, "repository_id": repo, "primary_pr_url": primary,
             "closed_at": datetime.now(UTC).isoformat()}
+
+
+class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(TemporaryDirectory()))
+        self.path = self.root / "queue.sqlite3"
+        migrate(self.path)
+        self.start_server(self.path)
+
+    def test_real_operator_summary_advances_a_merged_ready_execution_to_checked_in(self):
+        api = API(self.url, RUNNER)
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
+        config = {"runner_id": "local", "repositories": {"repo": {"base_branch": "main"}}}
+        for merged_head in (HEAD, OTHER):
+            with self.subTest(merged_head=merged_head):
+                status, item = self.request("/v1/items", OWNER, {
+                    "repository_id": "repo", "goal": "Ship it", "target": "ready_for_check_in"})
+                self.assertEqual(status, 201, item)
+                primary = "https://github.com/example/repo/pull/7"
+                revision = Revision(HEAD, BASE)
+                ready = Execution(Target.READY, Stage.DELIVERY, Status.COMPLETED,
+                                  candidate=HEAD, primary_pr=primary, ready_revision=revision,
+                                  final_output=OutputPR(primary, revision))
+                with write_transaction(self.path) as db:
+                    db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                               (json.dumps(asdict(ready)), item["execution"]["id"]))
+                rows = api.call("/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["output"], {"kind": "pr", "url": primary})
+                merged = replace(pull_request(merged_head, item_branch(item["id"]), state="closed"),
+                                 merged=True, merge_commit_sha=BASE,
+                                 merged_at="2026-11-24T06:33:57Z")
+                github = FakeGitHub([merged], parents=(BASE, merged_head))
+                reconciler = Reconciler(config, self.root / "state", api, github_token="token",
+                                        github_client=lambda *args, **kwargs: github)
+                with patch.object(github, "is_on_branch", return_value=True) as compare:
+                    self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
+                if merged_head != HEAD:
+                    compare.assert_called_once_with(HEAD, merged_head)
+                else:
+                    compare.assert_not_called()
+                done = api.call("/operator/executions?kind=closed&outcome=checked_in")["items"]
+                row = next(row for row in done if row["id"] == item["execution"]["id"])
+                self.assertEqual(row["delivery"]["merge_commit"], BASE)
+                output = api.call(f"/items/{item['id']}")["execution"]["state"]["final_output"]
+                self.assertEqual(output["revision"]["head"], merged_head)
 
 
 class ReconcilerPassTest(unittest.TestCase):
@@ -493,7 +540,7 @@ class ReconcilerPassTest(unittest.TestCase):
         self.config["repositories"] = {"repo": {"base_branch": "main"}}
         primary = "https://github.com/example/repo/pull/7"
         ready = dict(execution("ready", primary=primary), stage="delivery", outcome="ready_for_check_in",
-                     output={"revision": {"head": HEAD}},
+                     output={"kind": "pr", "url": primary}, output_revision={"head": HEAD, "base": BASE},
                      closed_at=(datetime.now(UTC) - timedelta(days=30)).isoformat())
         api = FakeAPI([], {"repo": "https://github.com/example/repo"}, closed=[ready])
         merged = replace(pull_request(OTHER, item_branch("ready"), state="closed"), merged=True,
@@ -521,6 +568,29 @@ class ReconcilerPassTest(unittest.TestCase):
         github.pulls = [pull_request(HEAD, item_branch("ready"))]
         with patch.object(reconciler, "policy", side_effect=AssertionError("No local checks after completion")):
             self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
+
+    def test_unexpected_execution_errors_are_reported_without_aborting_the_pass(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        self.github["repo"] = FakeGitHub([pull_request(HEAD, item_branch("good"))])
+        for error in (KeyError("revision"), TypeError("invalid revision"), RuntimeError("unexpected")):
+            with self.subTest(error=error):
+                api = FakeAPI([execution("bad"), execution("good")],
+                              {"repo": "https://github.com/example/repo"})
+                reconciler = self.reconciler(api)
+                observe = reconciler.observe
+
+                def observe_one(row, *args):
+                    if row["item_id"] == "bad":
+                        raise error
+                    return observe(row, *args)
+
+                with patch.object(reconciler, "observe", side_effect=observe_one):
+                    result = reconciler.run_pass()
+                self.assertEqual((result["observed"], result["checked"]), (1, 0))
+                self.assertEqual(len(result["errors"]), 1)
+                self.assertIn(f"bad: {type(error).__name__}:", result["errors"][0])
+                self.assertIn(str(error), result["errors"][0])
+                self.assertEqual([item for item, _ in api.posts], ["good"])
 
     def test_completed_ready_discovery_keeps_its_filter_across_pages(self):
         primary = "https://github.com/example/repo/pull/7"
