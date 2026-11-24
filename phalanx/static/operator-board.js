@@ -119,6 +119,11 @@
     if (kind === "run") {
       path("M8 .5 11.5 8 8 10.5 4.5 8Z", { fill: "currentColor" });
       path("M8 10V15", { stroke: "currentColor", "stroke-width": "1.5" });
+    } else if (kind === "captain") {
+      path("M1 6C1 2.5 4 .5 8 .5S15 2.5 15 6H12.5C12 4 10.5 3 8 3S4 4 3.5 6Z",
+        { fill: "currentColor" });
+      path("M3 8A5 5 0 0 1 13 8V9H10V11L12 12 11 15 7 13V9H5V14H2L3 10Z",
+        { fill: "currentColor" });
     } else if (kind === "flag" || kind === "notify") {
       path("M3 15V1", { stroke: "currentColor", "stroke-width": "1.5" });
       path("M4 2Q7 0 10 2T15 2L12 6 15 9Q12 11 9 9T4 9Z",
@@ -666,9 +671,9 @@
         h("span", { text: label(flag.kind) })));
     }
 
-    function glyph(kind, text) {
+    function glyph(kind, text, markKind) {
       return h("span", { class: "glyph t-" + kind, title: text },
-        ["run", "wait", "idle"].includes(kind) ? mark(kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
+        markKind || ["run", "wait", "idle"].includes(kind) ? mark(markKind || kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
         h("span", { class: "sr-only", text }));
     }
 
@@ -682,7 +687,7 @@
       const captain = state.captains.rows.find(row => row.id === id);
       const word = captain?.live ? "live" : captain?.stale ? "stale" : captain?.state === "ended" ? "ended" : "status unavailable";
       return h("span", { class: "captain-ref" + (word === "ended" ? " captain-ended" : "") },
-        glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word),
+        glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word, "captain"),
         " Captain " + short(id) + " · " + word);
     }
 
@@ -938,7 +943,7 @@
       const word = captain.live ? "live" : captain.stale ? "stale" : label(captain.state);
       const focus = (captain.focus || []).map(id => titles.get(id) || short(id));
       return h("li", { class: "row t-" + health + (captain.state === "ended" ? " captain-ended" : "") }, h("div", { class: "line" },
-        glyph(health, word),
+        glyph(health, word, "captain"),
         h("span", { class: "name" }, h("strong", { text: "Captain " + short(captain.id) }),
           h("span", { class: "faint", text: " " + word })),
         h("span", { class: "stat" }, h("span", { class: captain.live ? "beat" : "", "aria-hidden": "true", text: "♥" }),
