@@ -100,6 +100,15 @@ def _item_branch(item_id: str) -> str:
     return item_branch(item_id)
 
 
+def _lock(handle) -> None:
+    """Take a nonblocking exclusive lock on an open file; raise OSError when held."""
+    if os.name == "nt":
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 @contextmanager
 def _file_lock(path: Path):
     """Serialize an operation across local processes and threads."""
@@ -111,11 +120,7 @@ def _file_lock(path: Path):
         deadline = time.monotonic() + 30
         while True:
             try:
-                if os.name == "nt":
-                    handle.seek(0)
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock(handle)
                 break
             except OSError as exc:
                 if time.monotonic() >= deadline:
@@ -123,6 +128,25 @@ def _file_lock(path: Path):
                 time.sleep(0.05)
         yield
         # Closing the file releases the lock, including on exceptions and process exit.
+
+
+@contextmanager
+def any_file_lock(paths):
+    """Hold the first free lock among `paths` and yield its path, or yield None if all are held."""
+    for path in paths:
+        try:
+            handle = path.open("a+b")
+        except OSError as exc:
+            raise WorkspaceError(f"Cannot open lock at {path}: {exc}") from exc
+        try:
+            _lock(handle)
+        except OSError:
+            handle.close()
+            continue
+        with handle:
+            yield path
+        return
+    yield None
 
 
 class WorkspaceManager:
@@ -242,6 +266,52 @@ class WorkspaceManager:
                  base_sha, workspace.head)
         except WorkspaceError as exc:
             raise WorkspaceError("Candidate does not contain the pinned development base") from exc
+
+    def contains_base(self, workspace: Workspace, base_sha: str) -> bool:
+        try:
+            self.verify_base_ancestry(workspace, base_sha)
+        except WorkspaceError:
+            return False
+        return True
+
+    def merged_base(self, workspace: Workspace, candidate: str, base_sha: str) -> bool:
+        """Recognize a merge of the base into the candidate that an earlier submit already made."""
+        parents = _git(workspace.path, "rev-list", "--parents", "-n", "1", workspace.head).split()
+        return parents[1:] == [candidate, base_sha]
+
+    def integrate_base(self, workspace: Workspace, base_sha: str, message: str) -> str | None:
+        """Merge the pinned base into a clean candidate without rewriting history.
+
+        Return None after a clean merge commit, or the Git detail after restoring the candidate.
+        """
+        path = workspace.path
+        if workspace.dirty:
+            raise WorkspaceError("Cannot integrate the development base into a dirty checkout")
+        options = ["-c", "commit.gpgsign=false"]
+        try:
+            _git(path, "var", "GIT_COMMITTER_IDENT")
+        except WorkspaceError:
+            options += ["-c", "user.name=Phalanx runner", "-c", "user.email=phalanx-runner@localhost"]
+        with tempfile.TemporaryDirectory(prefix="phalanx-hooks-") as empty_hooks:
+            options += ["-c", f"core.hooksPath={Path(empty_hooks).as_posix()}"]
+            try:
+                _git(path, *options, "merge", "--no-ff", "--no-edit", "-m", message, base_sha)
+                return None
+            except WorkspaceError as exc:
+                detail = str(exc)
+        conflicts = _git(path, "diff", "--name-only", "--diff-filter=U").split()
+        try:
+            _git(path, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+        except WorkspaceError:
+            pass
+        else:
+            _git(path, "merge", "--abort")
+        head = _git(path, "rev-parse", "--verify", "HEAD^{commit}").strip()
+        if head != workspace.head or _status(path):
+            raise WorkspaceError(f"Could not restore the candidate after a failed base merge: {path}")
+        if conflicts:
+            detail = "Conflicting files: " + ", ".join(conflicts)
+        return detail
 
     def prepare(self, item_id: str, *, base: str) -> Workspace:
         """Create from a local base ref, or return the existing checkout as found."""

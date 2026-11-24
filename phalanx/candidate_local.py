@@ -1,52 +1,29 @@
 """Runner operations for candidate-local stages under a reserved item claim."""
 
-import os
-import signal
-import subprocess
-import tempfile
-from dataclasses import dataclass
-from pathlib import Path
 from uuid import UUID
 
 from .attended import RunnerAPI, RunnerError
 from .handoff import WorkerResult, WorkPacket
+from .local_checks import CheckCommandError, LocalCheck, run_check
 from .transitions import Outcome, Stage
-from .validation import GateState, PreCheck, PreEvidence, PreOutcome, evaluate_pre_validation
+from .validation import GateState, PreEvidence, PreOutcome, evaluate_pre_validation
 from .workspaces import Workspace, WorkspaceError, WorkspaceManager
 
-OUTPUT_TAIL_BYTES = 4096
-
-
-@dataclass(frozen=True)
-class LocalCheck:
-    """One check from trusted runner configuration for the registered repository."""
-
-    policy: PreCheck
-    argv: tuple[str, ...] = ()
-    timeout_seconds: int = 60
-    disposition: PreOutcome | None = None
-    reason: str = ""
-    authorization: str = ""
-
-    def __post_init__(self):
-        if not self.policy.name.strip():
-            raise ValueError("A local check needs a name")
-        if self.disposition is not None:
-            if self.argv or self.disposition not in (PreOutcome.SKIPPED, PreOutcome.INAPPLICABLE):
-                raise ValueError("A bypass must be skipped or inapplicable and cannot specify a command")
-            return
-        if not self.argv or not Path(self.argv[0]).is_absolute() or self.timeout_seconds <= 0:
-            raise ValueError("A check command needs an absolute executable and a positive timeout")
-        if os.name == "nt" and Path(self.argv[0]).suffix.lower() != ".exe":
-            raise ValueError("A Windows check command needs an executable (.exe)")
-
+# Default host limit on concurrent local check runs; configurable as local_check_capacity.
+LOCAL_CHECK_CAPACITY = 1
+LOCAL_CHECK_CAPACITY_RANGE = (1, 64)
+# A timeout with no identified failure may be host contention, so validation retries it first.
+TIMEOUT_RETRIES = 2
+TIMEOUT_RETRY_SECONDS = 60
 
 class CandidateLocal:
     """Collect result bodies for a single claim. The dispatcher owns reservation and lease renewal.
 
     Journal the returned body before submission so an uncertain response can be replayed.
     Self-review collection requires a reconciled, stopped worker with validated handoff evidence.
-    A check timeout stops the check's process tree and records a failed check.
+    A check timeout stops the check's process tree and records a failed check. When every
+    failed check only timed out with no failure in its output, validation retries with
+    backoff up to TIMEOUT_RETRIES times before returning the candidate to development.
     """
 
     def __init__(self, api: RunnerAPI, workspace: WorkspaceManager, claim: dict,
@@ -140,6 +117,7 @@ class CandidateLocal:
                                    or len({check.policy.name.strip() for check in checks}) != len(checks)):
             raise RunnerError("Local check policy requires at most 50 uniquely named checks")
         observations = []
+        inconclusive = set()
         body["local_checks"] = records = []
         try:
             self._authorize()
@@ -150,9 +128,11 @@ class CandidateLocal:
                     self._authorize()
                     workspace = self._inspect()
                     try:
-                        outcome, reason = _run_check(check, workspace.path)
+                        outcome, reason, timed_out = run_check(check, workspace.path)
+                        if timed_out:
+                            inconclusive.add(check.policy.name)
                         self._inspect()
-                    except WorkspaceError as exc:
+                    except (WorkspaceError, CheckCommandError) as exc:
                         problem = f"{check.policy.name}: {exc}"
                         outcome, reason = PreOutcome.FAILED, problem
                 else:
@@ -174,6 +154,15 @@ class CandidateLocal:
         if gate.state in (GateState.SATISFIED, GateState.NOT_CONFIGURED):
             return dict(body, outcome=Outcome.SUCCEEDED, prevalidated_candidate=self.candidate)
         if gate.state == GateState.FAILED:
+            failed = [record["name"] for record in records if record["outcome"] == PreOutcome.FAILED]
+            retries = self.execution.get("retry_count", 0)
+            if failed and inconclusive.issuperset(failed) and retries < TIMEOUT_RETRIES:
+                delay = TIMEOUT_RETRY_SECONDS * 2 ** retries
+                return dict(body, outcome=Outcome.FAILED, candidate=self.candidate,
+                            retry_after_seconds=delay, failure_reason=(
+                                f"Local check {', '.join(failed)} timed out with no failure identified; "
+                                f"retrying validation in {delay} seconds "
+                                f"(retry {retries + 1} of {TIMEOUT_RETRIES})."))
             return dict(body, outcome=Outcome.CHANGES_REQUIRED, candidate=self.candidate)
         return self._wait(body, "\n".join(gate.reasons),
                           handoff="Verify repository check policy and any proposed bypass.")
@@ -193,42 +182,3 @@ class CandidateLocal:
             self._inspect()
         return self.api.call(f"/items/{self.item_id}/executions/{self.execution['id']}/result",
                              body, lease=self.lease, key=f"candidate-local-{self.attempt}")
-
-
-def _run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
-    env = {key: value for key, value in os.environ.items()
-           if not key.upper().startswith(("GIT_", "PHALANX_"))}
-    # A file, unlike a pipe, cannot fill up and block the check or its children.
-    with tempfile.TemporaryFile() as output:
-        try:
-            process = subprocess.Popen(check.argv, cwd=path, env=env, stdin=subprocess.DEVNULL,
-                                       stdout=output, stderr=subprocess.STDOUT,
-                                       start_new_session=os.name != "nt")
-        except OSError as exc:
-            raise WorkspaceError(f"Repair the configured check command (OS error {exc.errno})") from None
-        try:
-            returncode = process.wait(timeout=check.timeout_seconds)
-            reason = f"Exited with status {returncode}" if returncode else ""
-        except subprocess.TimeoutExpired:
-            _kill_tree(process)
-            returncode, reason = None, f"Timed out after {check.timeout_seconds} seconds"
-        if returncode == 0:
-            return PreOutcome.PASSED, ""
-        output.seek(max(0, output.seek(0, os.SEEK_END) - OUTPUT_TAIL_BYTES))
-        tail = output.read().decode("utf-8", errors="replace").strip()
-    return PreOutcome.FAILED, f"{reason}\n\nOutput tail:\n{tail}" if tail else reason
-
-
-def _kill_tree(process: subprocess.Popen) -> None:
-    """Stop a timed-out check and the processes it started."""
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, check=False)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:  # The group may already be gone; macOS reports EPERM for zombies.
-            pass
-    process.kill()
-    process.wait()

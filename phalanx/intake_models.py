@@ -11,6 +11,8 @@ WaitLimit = Annotated[int, Field(strict=True, ge=CHECK_WAIT_LIMIT_RANGE[0], le=C
 Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,100}$")]
 RevisionID = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 Markdown = Annotated[str, StringConstraints(min_length=1, max_length=256000, pattern=r"\S")]
+PullUrl = Annotated[str, StringConstraints(
+    pattern=r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]{0,9}$")]
 
 
 class Payload(BaseModel):
@@ -117,3 +119,5 @@ class Result(AttemptEvent):
     prevalidated_candidate: Text | None = None
     review_notes: Text | None = None
     local_checks: list[LocalCheckResult] | None = Field(default=None, max_length=50)
+    # The PR a writer opened at publication. The reconciler's observation records the primary PR.
+    pr_url: PullUrl | None = None

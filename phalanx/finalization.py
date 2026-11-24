@@ -8,7 +8,7 @@ from time import time
 
 from . import intake
 from .store import connect, write_transaction
-from .transitions import Event, Evidence, Status, StoredReport, Wait
+from .transitions import TERMINAL, Event, Evidence, Status, StoredReport, Wait
 
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,8 @@ def _finish(db, row, state, job):
     output = StoredReport(f"/v1/items/{row['item_id']}/executions/{row['id']}/report", revision)
     updated = intake.apply(db, row, state, Event.FINALIZE, details={"report": output.reference},
                            evidence=Evidence(stored_report=output))
+    if updated["state"]["status"] in TERMINAL:
+        intake.end_writers(db, row["id"], updated["state"]["status"])
     db.execute("DELETE FROM report_finalizations WHERE execution_id=?", (row["id"],))
     return updated
 

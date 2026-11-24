@@ -81,22 +81,66 @@
         const url = httpsUrl(row.output.url);
         if (url) output = { kind: "pr", url };
       }
+      const merge = row.delivery?.merged ? row.delivery : null;
+      const delivery = merge && typeof merge.merge_commit === "string" ? {
+        mergeCommit: merge.merge_commit,
+        method: typeof merge.merge_method === "string" ? merge.merge_method : null,
+        mergedAt: typeof merge.merged_at === "string" ? merge.merged_at : null
+      } : undefined;
       return {
-        id, itemId, output,
+        id, itemId, output, delivery,
         version: row.version,
         title: row.title,
+        goal: row.goal,
+        target: row.target,
         repo: row.repository_id,
         stage: row.stage,
         status: row.status,
+        createdAt: row.created_at,
         lastAdvancedAt: row.last_advanced_at,
+        lastProgressAt: row.last_progress_at,
+        waitSince: row.wait_since,
         waitReason: row.wait_reason,
+        resumeTrigger: row.resume_trigger,
         retryAt: epochMs(row.retry_at_ms),
         recheckAt: epochMs(row.recheck_at_ms),
-        workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
-        chatUrl: httpsUrl(row.worker_url),
+        // Old runner path; delete with direct sessions step 5.
+        legacy: {
+          workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
+          chatUrl: httpsUrl(row.worker_url),
+          slotNote: typeof row.stage_owner === "string"
+            ? (row.slot_retained ? "Retained slot" : "Admitted") + "; " + row.stage + " attempt " + row.stage_owner.slice(0, 8)
+            : typeof row.capacity_release === "string" ? "Slot released: " + row.capacity_release : null
+        },
         primaryPrUrl: httpsUrl(row.primary_pr_url),
         closedAt: row.closed_at,
-        outcome: row.outcome
+        outcome: row.outcome,
+        writer: row.writer ? {
+          state: row.writer.state,
+          runtime: row.writer.runtime,
+          captainId: row.writer.captain_id,
+          sessionId: row.writer.session_id,
+          sessionUrl: httpsUrl(row.writer.session_url),
+          lastProgressAt: row.writer.last_progress_at,
+          progressNote: row.writer.progress_note
+        } : null
+      };
+    }
+
+    function captain(row) {
+      return {
+        id: row.id, sessionRef: row.session_ref, state: row.state, live: row.live === true,
+        stale: row.stale === true, heartbeatAt: row.heartbeat_at, wakeCount: row.wake_count,
+        charterRevision: typeof row.charter_revision === "string" ? row.charter_revision : null,
+        focus: Array.isArray(row.focus) ? row.focus : [], handoffNote: row.handoff_note
+      };
+    }
+
+    function flag(row) {
+      return {
+        kind: row.kind, itemId: row.item_id, executionId: row.execution_id, captainId: row.captain_id,
+        reason: row.reason, recovery: row.recovery, firstSeen: row.first_seen,
+        notifyOwner: row.notify_owner === true
       };
     }
 
@@ -115,7 +159,6 @@
         return {
           item: item(page.item),
           attempt: page.attempt,
-          resumeTrigger: page.item.resume_trigger,
           question: page.question ? {
             prompt: page.question.prompt,
             options: Array.isArray(page.question.options) ? page.question.options : [],
@@ -128,7 +171,7 @@
             reason: dependency.reason
           })),
           events: pageRows(page.events, limit).map(event => ({
-            at: event.created_at, fromStage: event.from_stage,
+            at: event.created_at, event: event.event, fromStage: event.from_stage,
             stage: event.stage, status: event.status, reason: event.reason
           })),
           nextCursor: nextCursor(page.next_cursor)
@@ -137,6 +180,14 @@
       report({ itemId, id }, signal) {
         const path = "/v1/items/" + identifier(itemId) + "/executions/" + identifier(id) + "/report";
         return read(path, signal, "text/plain");
+      },
+      async captains({ signal }) {
+        const page = await read("/v1/captains?limit=25", signal);
+        return { captains: pageRows(page.captains, 25).map(captain), nextCursor: null };
+      },
+      async flags({ signal }) {
+        const page = await read("/v1/flags", signal);
+        return { flags: Array.isArray(page.flags) ? page.flags.map(flag) : [], nextCursor: null };
       }
     };
   }

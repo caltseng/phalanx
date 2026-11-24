@@ -9,16 +9,20 @@ import sqlite3
 from pydantic import TypeAdapter, ValidationError
 
 from .draft_stage import RunnerAPI
+from .check_in import MergeTarget, merge_evidence, observe_merge
 from .github import GitHubClient, GitHubError
-from .github_checks import PreviewReader, collect_github_checks
+from .github_checks import collect_github_checks
 from .intake_models import Identifier
 from .pr_models import (
-    ExpectedRefs, GateObservation, GitHubPull, PublishedValidationClaimCheck, Rework, Validation,
+    ExpectedRefs, ExternalMerge, GateObservation, GitHubPull, PublishedValidationClaimCheck, Rework, Validation,
 )
-from .transitions import Outcome, Stage
-from .validation import GateState, Phase, RequiredCheck
+from .transitions import Outcome, Revision, Stage
+from .validation import GateState, Phase
+from .validation_policy import PublishedValidationPolicy
 
 _IDENTIFIER = TypeAdapter(Identifier)
+# GitHub usually shows a merge commit within seconds of the merge.
+_MERGE_RETRY_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -29,17 +33,8 @@ class PublishedValidationAssignment:
     attempt_id: str
     state_version: int
     lease: str = field(repr=False)
-
-
-@dataclass(frozen=True)
-class PublishedValidationPolicy:
-    """Complete ready-phase policy from trusted runner configuration."""
-
-    required: tuple[RequiredCheck, ...] | None
-    read_preview: PreviewReader | None = None
-    # Pending ready checks; None leaves the server defaults.
-    recheck_seconds: int | None = None
-    wait_limit_seconds: int | None = None
+    # Optional next-stage offer headers for the attempt-ending submission.
+    offer: dict = field(default_factory=dict, repr=False)
 
 
 class PublishedValidationRunner:
@@ -68,7 +63,7 @@ class PublishedValidationRunner:
             event = claim.model_dump(mode="json", exclude={"runner_id"})
             saved = self._receipt(assignment, self._observe(authority, event, policy))
         route, body = saved
-        return self.api.call(f"{path}/{route}", body, lease=assignment.lease, key=key)
+        return self.api.call(f"{path}/{route}", body, lease=assignment.lease, key=key, **assignment.offer)
 
     def _observe(self, authority, event, policy):
         promotion = authority["promotion"]
@@ -95,6 +90,8 @@ class PublishedValidationRunner:
                 return _retry(event, str(error), error.retry_after_seconds)
             return _block(event, f"Restore access to the primary PR. {error}", handoff)
 
+        if pull.merged:
+            return self._merged(event, expected, url, pull, handoff)
         if (
             pull.url.casefold() != url.casefold() or pull.state != "open"
             or pull.merged is not False or pull.draft
@@ -149,6 +146,18 @@ class PublishedValidationRunner:
         except ValidationError:
             return _block(event, "Resolve invalid or oversized ready-phase policy or evidence.", handoff)
         return "pr-observation", body.model_dump(mode="json")
+
+    def _merged(self, event, expected, url, pull, handoff):
+        """Deliver a PR the repository merged at the validated candidate instead of asking the owner."""
+        outcome = observe_merge(self.github, MergeTarget(
+            expected.number, url, expected.head_ref, expected.base_ref, Revision(expected.head_sha, pull.base_sha),
+        ))
+        if outcome.status == "merged":
+            return "pr-merged", merge_evidence(ExternalMerge, event, outcome, outcome.pull.base_sha)
+        if outcome.status == "pending":
+            return _retry(event, outcome.reason, outcome.retry_after_seconds or _MERGE_RETRY_SECONDS)
+        return _block(event, f"{url} was merged outside Phalanx, but not as the validated candidate: "
+                      f"{outcome.reason}. Decide how this item should continue, then reply.", handoff)
 
     def _receipt(self, assignment, submission=None):
         identity = (assignment.item_id, assignment.execution_id, assignment.runner_id,

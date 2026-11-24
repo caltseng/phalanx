@@ -3,20 +3,24 @@ import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from phalanx.candidate_local import CandidateLocal, LocalCheck
+from phalanx.candidate_local import CandidateLocal
+from phalanx.local_checks import LocalCheck
 from phalanx.github import PullRequest
 from phalanx.github_checks import collect_github_checks
-from phalanx.intake_models import Result
-from phalanx.published_validation_stage import PublishedValidationPolicy
+from phalanx.intake_models import ExternalWait, Result
+from phalanx.validation_policy import PublishedValidationPolicy
 from phalanx.transitions import Revision
 from phalanx.validation import (
     CheckKind, GateResult, GateState, Phase, PreOutcome, PublishedCandidate, RequiredCheck,
     evaluate_published_checks,
 )
 from phalanx.validation_policy import ValidationPolicyError, load_validation_policy
+from phalanx.validation_stages import _pre_validation, run
+from phalanx.workspaces import any_file_lock
 
 
 class ValidationPolicyTests(unittest.TestCase):
@@ -218,7 +222,7 @@ class ValidationPolicyTests(unittest.TestCase):
             "item_id": "item", "attempt_id": "attempt", "execution": execution,
             "request": {"repository_id": "repo"},
         }, runner_id="desk", lease="secret")
-        with patch("phalanx.candidate_local._run_check") as run:
+        with patch("phalanx.candidate_local.run_check") as run:
             body = operation.pre_validate(policy.local_checks)
         run.assert_not_called()
         validated = Result.model_validate(body)
@@ -233,3 +237,42 @@ class ValidationPolicyTests(unittest.TestCase):
                          GateState.WAITING)
         self.assertEqual(operation.pre_validate(None)["outcome"], "needs_input")
         self.assertEqual(operation.pre_validate(())["outcome"], "succeeded")
+
+    def test_busy_local_check_capacity_waits_before_running_checks(self):
+        self.repo.update(local_checks=[self.command()])
+        policy = self.load()
+        root = self.path.parent
+        record = {}
+        runner = SimpleNamespace(root=root, config={"local_check_capacity": 1},
+                                 _ensure_reservation=Mock(), _send_submission=Mock(return_value="execution"),
+                                 _transaction=lambda save: save(record, None))
+        snapshot = {"lease": "secret", "claim": {"attempt_id": "attempt", "execution": {
+            "version": 3, "state": {"stage": "pre_pr_validation", "candidate": "a" * 40},
+        }}}
+        slot = [root / "local-check-0.lock"]
+
+        def validate(checks):
+            with any_file_lock(slot) as held:
+                self.assertIsNone(held)
+            return {"outcome": "succeeded"}
+
+        local = Mock()
+        local.pre_validate.side_effect = validate
+        with patch("phalanx.validation_stages._candidate", return_value=local), \
+                patch("phalanx.validation_stages._policy", return_value=policy):
+            with any_file_lock(slot) as held:
+                self.assertEqual(held, slot[0])
+                sent = run(runner, snapshot)
+            local.pre_validate.assert_not_called()
+            local._inspect.assert_not_called()
+            self.assertEqual(sent["status"], "pre_pr_validation_submitted")
+            waiting = runner._send_submission.call_args.args[1]
+            self.assertIs(waiting, record["submission"])
+            self.assertEqual(runner._send_submission.call_args.args[2], "pre_pr_validation:attempt:3")
+            self.assertEqual(waiting["route"], "external-wait")
+            self.assertIn("local check capacity", waiting["reason"])
+            self.assertEqual(ExternalWait.model_validate(waiting["body"]).gate, "local_check_capacity")
+            self.assertEqual(_pre_validation(runner, snapshot), {"body": {"outcome": "succeeded"}})
+        local.pre_validate.assert_called_once_with(policy.local_checks)
+        with any_file_lock(slot) as held:
+            self.assertEqual(held, slot[0])
