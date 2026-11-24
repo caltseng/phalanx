@@ -82,6 +82,50 @@ class WorkspaceTests(unittest.TestCase):
             )
         self.assertFalse(self.root.exists())
 
+    def test_rejects_workspace_root_inside_checkout_or_git_metadata(self):
+        linked = self.directory / "linked"
+        self.git(self.checkout, "worktree", "add", "--detach", str(linked))
+        for checkout, root, message in (
+            (self.checkout, self.checkout / "workspaces", "mapped checkout"),
+            (linked, self.checkout / ".git" / "workspaces", "Git metadata"),
+        ):
+            manager = WorkspaceManager(checkout, "git@github.com:owner/repo", root)
+            with self.assertRaisesRegex(WorkspaceError, message):
+                manager.verify_checkout()
+
+    def test_snapshot_rejects_each_identity_mismatch(self):
+        workspace = self.prepare()
+        common = self.checkout / ".git"
+        snapshot = self.manager._snapshot
+        self.assertEqual(self.manager.inspect("item"), workspace)
+        for path, branch, repo in ((self.checkout, workspace.branch, common),
+                                   (workspace.path, "phalanx/other", common),
+                                   (workspace.path, workspace.branch, self.directory)):
+            with self.assertRaisesRegex(WorkspaceError, "identity changed"):
+                snapshot(path, branch, repo)
+
+        # A copied .git pointer reaches the real metadata but not its backlink.
+        copy = self.directory / "copy"
+        copy.mkdir()
+        (copy / ".git").write_bytes((workspace.path / ".git").read_bytes())
+        with self.assertRaisesRegex(WorkspaceError, "different checkout"):
+            snapshot(copy, workspace.branch, common)
+
+        # Metadata outside the repo's worktrees directory is refused.
+        admin = self.directory / "admin"
+        admin.mkdir()
+        (admin / "commondir").write_text(f"{common.as_posix()}\n")
+        (admin / "HEAD").write_text(f"ref: refs/heads/{workspace.branch}\n")
+        (admin / "gitdir").write_text(f"{(copy / '.git').as_posix()}\n")
+        (copy / ".git").write_text(f"gitdir: {admin.as_posix()}\n")
+        with self.assertRaisesRegex(WorkspaceError, "outside the repo's worktrees"):
+            snapshot(copy, workspace.branch, common)
+
+        # A branch without a commit cannot produce a candidate head.
+        self.git(self.checkout, "update-ref", "-d", f"refs/heads/{workspace.branch}")
+        with self.assertRaisesRegex(WorkspaceError, "rev-parse failed"):
+            snapshot(workspace.path, workspace.branch, common)
+
     def test_rejects_unowned_registration_and_occupied_path(self):
         workspace = self.prepare()
         refs = self.git(self.checkout, "for-each-ref", "--format=%(refname)",
