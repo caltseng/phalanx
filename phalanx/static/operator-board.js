@@ -126,15 +126,22 @@
       path("M6 2.5C5.8 4.2 3.8 5.5 4.3 7L6 8.6 7.7 7C8.2 5.5 6.2 4.2 6 2.5ZM5.3 8H6.7V15H5.3Z",
         { class: "spear spear-center", fill: "currentColor" });
     } else if (kind === "captain") {
-      path("M1 6C1 2.5 4 .5 8 .5S15 2.5 15 6H12.5C12 4 10.5 3 8 3S4 4 3.5 6Z",
+      svg.setAttribute("viewBox", "0 0 64 64");
+      path("M7 29C4 15 15 3 31 3C43 3 52 9 57 17L50 22C43 14 35 12 28 15C21 18 19 23 19 29Z",
         { fill: "currentColor" });
-      path("M3 8A5 5 0 0 1 13 8V9H10V11L12 12 11 15 7 13V9H5V14H2L3 10Z",
+      path("M17 33C17 23 24 17 33 17C44 17 50 24 50 34V36H37V43L46 47L41 61L24 52L29 37H16Z",
+        { fill: "currentColor" });
+      path("M14 37H23L18 52H9Z",
         { fill: "currentColor" });
     } else if (kind === "flag" || kind === "notify") {
       path("M3 15V1", { stroke: "currentColor", "stroke-width": "1.5" });
       path("M4 2Q7 0 10 2T15 2L12 6 15 9Q12 11 9 9T4 9Z",
-        { class: "pennant", fill: kind === "notify" ? "var(--flag)" : "none",
-          stroke: "var(--flag)", "stroke-width": "1.5" });
+        { class: "pennant", fill: kind === "notify" ? "currentColor" : "none",
+          stroke: "currentColor", "stroke-width": "1.5" });
+    } else if (kind === "handoff") {
+      path("M9 2A6 6 0 1 0 13.5 10M8 5L12 8L8 11M4 8H12",
+        { fill: "none", stroke: "currentColor", "stroke-width": "1.7",
+          "stroke-linecap": "round", "stroke-linejoin": "round" });
     } else {
       path("M8 1 14 3V7Q14 12 8 15 2 12 2 7V3Z",
         { fill: "none", stroke: "currentColor", "stroke-width": "1.5" });
@@ -146,6 +153,7 @@
   function tone(item) {
     if (item.outcome) {
       const outcome = outcomeKey(item);
+      if (["draft_published", "ready_for_check_in"].includes(outcome)) return "handoff";
       return outcome === "failed" ? "fail" : outcome === "cancelled" ? "muted" : "ok";
     }
     if (item.status === "waiting_for_input") return "attn";
@@ -680,7 +688,7 @@
 
     function glyph(kind, text, markKind) {
       return h("span", { class: "glyph t-" + kind, title: text },
-        markKind || ["run", "wait", "idle"].includes(kind) ? mark(markKind || kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
+        markKind || ["run", "wait", "idle", "handoff"].includes(kind) ? mark(markKind || kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
         h("span", { class: "sr-only", text }));
     }
 
@@ -923,7 +931,7 @@
         const notify = members.some(flag => flag.notifyOwner);
         const informational = kind === "queue_backlogged" && !notify;
         const oldest = Math.min(...members.map(flag => epoch(flag.firstSeen) ?? now));
-        const group = h("details", { class: "fgroup t-" + (notify ? "attn" : informational ? "info" : "wait"), "data-kind": kind });
+        const group = h("details", { class: "fgroup t-" + (notify ? "attn" : informational ? "info" : kind === "deployed" ? "ok" : "wait"), "data-kind": kind });
         if (state.flagGroups.has(kind)) group.open = true;
         group.addEventListener("toggle", () => {
           if (group.open) state.flagGroups.add(kind);
@@ -1051,7 +1059,7 @@
         needs.length + looseNotify.length ? "attn" : "", needContent));
       if (enabled.flags) {
         sections.push(section("flags", "Flags", otherFlags.length,
-          otherFlags.some(flag => flag.kind !== "queue_backlogged") ? "wait" : "",
+          otherFlags.some(flag => !["queue_backlogged", "deployed"].includes(flag.kind)) ? "wait" : "",
           otherFlags.length ? h("div", { class: "rows flags" }, flagGroups(otherFlags, titles, now))
             : h("p", { class: "empty", text: state.flags.failed ? "Flags unavailable." : "No flags. Nothing has drifted." })));
       }
@@ -1107,7 +1115,7 @@
         h("li", { class: needs.length + looseNotify.length ? "t-attn" : "" }, h("strong", { text: String(needs.length + looseNotify.length) }), " needs you"),
         h("li", {}, h("strong", { text: active.length + (active.length ? more : "") }), " active"),
         h("li", {}, h("strong", { text: queued.length + (queued.length ? more : "") }), " queued"),
-        enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || flag.kind !== "queue_backlogged") ? "t-wait" : "" },
+        enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || !["queue_backlogged", "deployed"].includes(flag.kind)) ? "t-wait" : "" },
           h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
         enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
       renderHealth();
