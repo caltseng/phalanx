@@ -279,12 +279,16 @@ item shows its Captain wait; do not infer capacity or rank-position blockers.
   Stored reports render a safe local Markdown subset using generated DOM only: strip raw
   HTML, render code literally, allow only credential-free HTTP(S) links and omit external
   images. The plain-text report API and strict CSP are unchanged.
-- Scribe's header `+` (**New work item**) adds owner-authorized intake to the otherwise
-  read-only local board through the existing `POST /v1/items` contract. The form reads registered
-  repositories with an owner token, defaults to `checked_in` (displayed as **Merged**), and
+- Scribe's header `+` (**New work item**) adds intake through narrow `/operator/api/`
+  adapters to the existing `POST /v1/items` contract. The form reads registered
+  repositories, defaults to `checked_in` (displayed as **Merged**), and
   supports goal, acceptance criteria, target, priority, label, publication mode and dependencies.
-  Tokens stay in memory; the anonymous loopback read path never authorizes intake. Browser
-  creation requires a matching Origin and rejects non-same-origin Fetch Metadata. Bearer API
+  With explicit server-side `PHALANX_LOCAL_BOARD=1`, a verified direct loopback peer and
+  local Host authorize these dashboard actions without a token prompt. Forwarding headers
+  are rejected; never enable this mode behind a proxy or tunnel. Tokenless writes require
+  an exact matching Origin and reject null origins and non-same-origin Fetch Metadata.
+  Nonlocal boards still require owner authentication; the server never injects its token
+  into browser resources. All `/v1` writes keep their existing bearer authorization. Bearer API
   clients without browser headers are unchanged. Retain one key and exact payload across an
   uncertain submission until an idempotent retry settles it. Inline validation and queued-row
   insertion preserve the current board view. See [the form contract](DASHBOARD.md#new-work-item-local-board).

@@ -228,12 +228,14 @@ goal, acceptance criteria (one per line), target, priority, optional label, publ
 and optional dependencies (one item ID and optional API milestone per line). Target defaults
 to intake's `checked_in`, displayed as **Merged** using the board's display-label mapping.
 
-Creation uses the existing `POST /v1/items` owner bearer-token route and its validation,
-not another intake service. An owner-connected board reuses its in-memory credential.
-The anonymous local read board asks for an owner token inside the modal and verifies owner
-access before loading `GET /v1/repositories`; closing discards that write credential.
-No token is placed in browser storage, URLs or cookies, and anonymous/runner reads never
-become writes. Browser-origin intake requires an exact same Origin (scheme, host and port)
+Creation uses `/operator/api/items`, a narrow adapter to existing intake validation and
+idempotency, not another intake service. With explicit `PHALANX_LOCAL_BOARD=1`, a verified
+direct loopback peer and local Host can load `/operator/api/repositories` and create work
+without entering a credential. The form opens directly, with no unlock step. Forwarding
+headers cannot grant local authority. Nonlocal boards require an owner connection and
+reuse its in-memory credential; `/v1` writes still require their existing bearer roles.
+No server credential is injected into the browser or placed in storage, URLs or cookies.
+Tokenless intake requires an exact same Origin (scheme, host and port)
 and, when supplied, `Sec-Fetch-Site: same-origin`; opaque, cross-site, and same-site-but-not-
 same-origin requests are rejected. Non-browser bearer clients without browser headers
 remain supported. There is no CORS grant or cookie-based write path.
@@ -328,8 +330,9 @@ and owner-authenticated intake are described explicitly here and in [work items]
 
 ## API additions
 
-These operator routes are read-only; the merged local `+` form uses the existing owner
-intake route, and later D2 actions will also reuse existing routes. The D1 server reads
+The `/v1/operator` routes are read-only; the local `+` form uses a narrowly authorized
+`/operator/api` adapter to existing intake, and later D2 actions will also reuse existing logic.
+The D1 server reads
 (PH-29a) target the local board at `/operator/` only, with existing authentication unchanged:
 no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data)
 lists the routes. Persisted dispatch `max_writers` is enforced atomically at writer registration.

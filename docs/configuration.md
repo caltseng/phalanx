@@ -18,7 +18,7 @@ This setup never renames or upgrades live directories.
 | `PHALANX_SHIFT_CONFIG` | `shift` | Explicit shift JSON path when `--config` is absent. Explicit config preserves existing layouts and does not load the discovered `private.env`; an explicit `--home` selects the muster layout instead. |
 | `PHALANX_OWNER_TOKEN` | Server, owner CLI commands | Owner bearer token. |
 | `PHALANX_RUNNER_TOKEN` | Server, Captain/reconciler commands | Trusted service bearer token; never given to writers. |
-| `PHALANX_LOCAL_BOARD` | Server | Set to `1` to let loopback requests read the operator board without a token. Leave it unset on any hosted server, including behind a same-machine reverse proxy or tunnel. See [Work items](work-items.md#operator-work-board). |
+| `PHALANX_LOCAL_BOARD` | Server | Set to `1` only on a directly accessed, loopback-bound server to allow tokenless board reads and same-origin `/operator/api/` actions. Local Host and actual loopback peer are required; forwarding headers are rejected. All `/v1` writes retain bearer authorization. Leave unset on hosted servers, reverse proxies and tunnels. See [Work items](work-items.md#operator-work-board). |
 | `PHALANX_API_URL` | Owner CLI commands | API base URL; defaults to `http://127.0.0.1:8000`. `--api-url` before the command overrides it. |
 | `PHALANX_GITHUB_TOKEN` | Reconciler, `onboard`, `ingest-issue` | Local GitHub reads, onboarding CI discovery and issue import. Direct writers publish using their configured Git/GitHub credentials. |
 

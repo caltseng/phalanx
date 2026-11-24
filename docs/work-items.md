@@ -63,7 +63,8 @@ Open `http://127.0.0.1:8000/operator/` on the running server. With
 `PHALANX_LOCAL_BOARD=1`, board reads skip authentication for requests from a loopback
 client with a `localhost`, `127.0.0.1` or `[::1]` `Host` header. This covers
 `/v1/operator/*`, stored reports, `GET /v1/captains`, `GET /v1/captains/{id}` and
-`GET /v1/flags`. It does not open intake, session archival records, muster status or
+`GET /v1/flags`. Narrow `/operator/api/` dashboard actions also allow trusted local access;
+this does not open `/v1` writes, session archival records, muster status or
 other authenticated operations; a supplied bearer token is still validated. Leave the
 flag unset on a hosted server, including behind a same-machine reverse proxy or tunnel.
 Without the flag, the board asks for a bearer token and holds it in memory until you
@@ -81,12 +82,21 @@ question with its exact `reply` command. Reports omit raw HTML and external imag
 code stays literal and links allow only credential-free HTTP(S).
 
 The header **+ / New work item** is the local board's write action: it files through the
-existing owner-authenticated intake API, defaults to **Merged** (`checked_in`), and accepts
+`/operator/api/items` adapter to the existing intake implementation, defaults to **Merged**
+(`checked_in`), and accepts
 goal, acceptance criteria, target, priority, label, publication mode and dependencies.
-An anonymous local reader must supply an owner token in the modal; a read credential never
-grants write authority. The modal discards its temporary credential on close, stores no
-token in browser storage, and retains the exact request/idempotency key after an uncertain
-response for safe retry. Browser writes must be same-origin. See the
+On an explicitly enabled local-only board it opens directly into the usable form, without
+an owner token or unlock step. Nonlocal boards still require the owner connection.
+The modal stores no token in browser storage and retains the exact request/idempotency key
+after an uncertain response for safe retry. Local writes require an exact same Origin
+(scheme, host and port), a verified loopback peer and local Host, and reject null origins,
+cross-site/same-site requests and forwarding headers. Keep the service bound to
+`127.0.0.1` (or `::1`), with no proxy or tunnel: another local process is trusted, but a
+network or shared-machine deployment is not this trust model. Before enabling or deploying,
+the service owner must verify the actual listening address and explicit
+`PHALANX_LOCAL_BOARD=1`, drain/restart the existing service rather than start another, and
+confirm local creation succeeds while unauthenticated `/v1` writes still return 401.
+The server never sends its owner credential to the browser. See the
 [form contract](../DASHBOARD.md#new-work-item-local-board).
 
 Other board actions still use the CLI/API. Item/execution deep links, queue/history pages,
