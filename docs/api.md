@@ -82,7 +82,7 @@ Both owner and runner tokens can call these routes. With `PHALANX_LOCAL_BOARD=1`
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
 | `GET /v1/operator/overview` | Section counts, 24-hour outcomes, dispatch paused/on, oldest eligible queued age and `generated_at` for data age. |
 | `GET /v1/operator/groups/{label}` | Current executions with the label, a paginated item list and an outcome/size/time rollup. |
-| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. Result `reason` derives a credential-redacted cause from persisted details, bounded to 400 characters; see the [correlated timeline example](../README.md#read-one-items-correlated-timeline). A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the returned `next_cursor` as `cursor` on the same route and list kind until it is null. Pages read live state: an open execution entering or leaving the input-wait group can cross the cursor between requests, so refresh from the first page to see the current order. New timeline events and closures normally precede the current cursor. The timestamp and version fields describe the persisted state.
 
@@ -91,6 +91,58 @@ Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` 
 Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
 
 `last_advanced_at` records entry into the current stage, and `last_progress_at` the latest execution transition. Wait details include the stored reason, resume trigger and age of the current wait. A scheduled retry appears as `retry_at_ms` and a due external gate recheck as `recheck_at_ms`, both in Unix milliseconds. `primary_pr_url` is the recorded primary PR. `worker_reference` is the latest attempt's opaque worker ID, which the runner republishes on each renewal, and `worker_url` is the bridge's optional HTTPS chat link. When the runner is blocked on an item it would otherwise show as plainly running, such as an unreachable runtime or an ambiguous worker, it sends the reason as `blocker` with each renewal, and the item's `wait_reason` shows it until a renewal omits it. `version` is the execution version a reply must name. The timeline lists blocking `prerequisites` and, while the item waits for input, the current `question`. The draft state has no current read mapping. Report output URLs use the authenticated report route.
+
+### Read one item's correlated timeline
+
+Use the authenticated API, not direct database queries. Inspect the item to find its
+current `execution.id` (`GET /v1/items/ITEM_ID`); use
+`GET /v1/items/ITEM_ID/executions` to find earlier executions after a rerun.
+Then page that execution's existing operator timeline:
+
+```powershell
+$base = "http://127.0.0.1:8000"
+$headers = @{ Authorization = "Bearer $env:PHALANX_OWNER_TOKEN" }
+$item = Invoke-RestMethod "$base/v1/items/ITEM_ID" -Headers $headers
+$route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100"
+do {
+    $page = Invoke-RestMethod $route -Headers $headers
+    $page.events | Select-Object version, attempt_id, worker_reference, from_stage, stage, reason, pr_url, candidate
+    $route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100&cursor=$($page.next_cursor)"
+} while ($page.next_cursor)
+```
+
+The response's `item.item_id` and `item.id` correlate the work item and execution.
+Events are newest first; `attempt_id` and that attempt's `worker_reference` identify
+the worker when recorded (otherwise null). `from_stage` and `stage` show a stage change.
+`pr_url` is the PR recorded on that event, and `candidate` is its full applied
+candidate/head SHA, not the execution's possibly newer revision.
+
+For example, the paginated backward-transition fixture in
+`tests/test_operator.py::test_backward_result_reasons_correlate_the_recorded_attempt_and_revision`
+includes this event (other response fields omitted):
+
+```json
+{
+  "version": 4,
+  "attempt_id": "result-attempt-1",
+  "worker_reference": "worker-1",
+  "from_stage": "pr_promotion",
+  "stage": "development",
+  "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",
+  "pr_url": "https://github.com/a/b/pull/42",
+  "candidate": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
+```
+
+An existing `details.reason` or state `wait.reason` takes precedence, including
+on forward results that enter an external wait. Otherwise result reasons derive
+only from persisted outcome, issue, failed local check names and reasons, failure
+reason, and applied SHA. Derived reasons are at most 400 characters, with bounded
+check/failure excerpts and a reserved short-SHA suffix. Recognizable GitHub tokens,
+bearer credentials and named secret assignments are redacted before truncation.
+Task bodies, reports, review notes and other arbitrary evidence are not copied
+into these reasons. Existing pause/retry waits are unchanged; no slot, capacity or
+rank-position wait reasons are inferred on the direct path.
 
 ## Runner PR observations
 

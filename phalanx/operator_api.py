@@ -167,8 +167,8 @@ def timeline_event(row):
     details = json.loads(event.pop("details") or "{}")
     event["candidate"] = applied_sha(details)
     event["pr_url"] = details.get("pr_url")
-    if event["event"] == "result":
-        event["reason"] = result_reason(details) or event["reason"]
+    if event["event"] == "result" and event["reason"] is None:
+        event["reason"] = result_reason(details)
     return event
 
 

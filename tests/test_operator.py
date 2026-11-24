@@ -220,6 +220,29 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             self.assertEqual(event["pr_url"], pr_url if index == 1 else None)
             self.assertNotIn("details", event)
 
+    def test_forward_results_preserve_persisted_wait_and_explicit_reasons(self):
+        wait_reason = "Waiting for required checks on " + "a" * 40
+        explicit_reason = "Runner recorded why promotion must wait"
+        with write_transaction(self.path) as db:
+            insert(db, 9000, Execution(Target.READY, Stage.SELF_REVIEW))
+            for version, stage, reason in (
+                (2, Stage.PRE_PR_VALIDATION, None),
+                (3, Stage.PR_PROMOTION, explicit_reason),
+            ):
+                state = Execution(Target.READY, stage, Status.WAITING_FOR_EXTERNAL,
+                                  wait=Wait(wait_reason, "recheck"))
+                transition(db, 9000, version, state)
+                details = {"outcome": "succeeded", "candidate": "a" * 40, "reason": reason}
+                db.execute("UPDATE transition_history SET details_json=? WHERE execution_id=? AND version=?",
+                           (json.dumps(details), identifier(9000), version))
+        events = self.page(f"{BOARD}/{identifier(9000)}/timeline")["events"]
+        self.assertEqual((events[0]["from_stage"], events[0]["stage"]),
+                         ("pre_pr_validation", "pr_promotion"))
+        self.assertEqual(events[0]["reason"], explicit_reason)
+        self.assertEqual((events[1]["from_stage"], events[1]["stage"]),
+                         ("self_review", "pre_pr_validation"))
+        self.assertEqual(events[1]["reason"], wait_reason)
+
     def test_result_reasons_are_bounded_redacted_and_only_use_cause_fields(self):
         candidate = "c" * 40
         secrets = ["ghp_" + "x" * 36, "github_pat_" + "y" * 60, "bearer-value",
