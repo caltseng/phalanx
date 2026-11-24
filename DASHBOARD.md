@@ -98,6 +98,24 @@ Captain rows show the native session's reported successful compaction count, or
 `compactions unavailable` when telemetry is unknown (including historical Captains).
 The charter revision remains in the API for enforcement, not in the main row.
 
+Captain helmets and names link to their recorded host-app session. Native links are
+restricted to canonical `ghapp://sessions/<UUID>` and `codex://threads/<UUID>` targets;
+an existing HTTPS session URL is also usable. Activation is an ordinary browser link,
+retaining external-app confirmation, never a server-side app launch or new conversation.
+Opaque legacy Captain references without a known host remain unchanged and show
+`session unavailable`. New `shift start` registrations encode a known app runtime in
+the session reference; existing records are not rewritten or assigned a guessed host.
+
+Work rows and details retain the latest writer's session association across active,
+queued/resumed and closed executions, including history and execution permalinks.
+An ended writer is not evidence that its app session was deleted. A newly registered
+replacement without an identity does not borrow its predecessor's session.
+Recorded links say existence is unverified unless native inspection explicitly reported
+the session present; present means last reported, not a live availability guarantee.
+Explicit missing/deleted reports disable the link with that reason. An omitted session
+in a partial inventory is not evidence of deletion. Unsafe or conflicting identities
+remain unlinked.
+
 Long queue waits remain visible after 30 minutes. **Queue backlogged** uses a neutral
 information marker and **Waiting for writer capacity**, including occupied/maximum
 assigned-writer counts from canonical dispatch settings. An active Captain hold does

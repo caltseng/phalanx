@@ -221,6 +221,33 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 201, item)
         return item
 
+    def test_captain_reference_records_host_without_rewriting_legacy_identities(self):
+        native = "12345678-1234-1234-1234-123456789abc"
+        for runtime, prefix in (("copilot-app", "ghapp://sessions/"), ("codex", "codex://threads/"),
+                                ("unknown", "")):
+            with self.subTest(runtime=runtime):
+                captain = shift.start(self.api, self.charter, native, runtime=runtime)["captain"]
+                self.assertEqual(captain["session_ref"], prefix + native)
+                self.assertEqual(captain["session_availability"], "unverified")
+                heartbeat = shift.heartbeat(self.api, self.charter, captain["id"],
+                    sessions=[{"id": native, "name": "Captain [phx]", "availability": "present"}])
+                self.assertEqual(heartbeat["captain"]["session_availability"], "present")
+                flags = self.api("/v1/flags")["flags"]
+                self.assertFalse(any(flag["kind"] == "orphan_session" for flag in flags))
+                archived = self.api("/v1/session-archives?session_id=" + native)
+                self.assertTrue(archived["active"])
+        preserved = shift.start(self.api, self.charter, "legacy-opaque")["captain"]
+        self.assertEqual(preserved["session_ref"], "legacy-opaque")
+
+    def test_new_host_reference_does_not_reuse_an_ended_legacy_captain(self):
+        native = "abcdefab-1234-1234-1234-123456789abc"
+        ended = shift.start(self.api, self.charter, native)["captain"]
+        shift.heartbeat(self.api, self.charter, ended["id"], state="ended")
+        fresh = shift.start(self.api, self.charter, native, runtime="copilot-app")["captain"]
+        self.assertNotEqual(fresh["id"], ended["id"])
+        self.assertEqual(fresh["state"], "active")
+        self.assertEqual(shift.heartbeat(self.api, self.charter, fresh["id"], wake=True)["captain"]["wake_count"], 1)
+
     def test_captain_launches_a_replayable_writer_and_counts_wakes(self):
         started = shift.start(self.api, self.charter, "chat-1")
         captain = started["captain"]["id"]
@@ -555,13 +582,17 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                          [("s-1", "phx 1234abcd nonce"), ("s-2", "phx captain")])
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
                               "--session", "s-task", "Fix recovery [phx]",
-                              "--session-writer", "s-task", "abcdef0123456789"))
+                              "--session-writer", "s-task", "abcdef0123456789",
+                              "--session-availability", "s-task", "missing"))
         session = beat["captain"]["sessions"][0]
         self.assertEqual(session["writer_nonce"], "abcdef0123456789")
+        self.assertEqual(session["availability"], "missing")
         repeated = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain))
         self.assertEqual(repeated["captain"]["sessions"], [session])
         for arguments in (("--session-writer", "missing", "nonce"),
-                          ("--no-sessions", "--session-writer", "s-task", "nonce")):
+                          ("--no-sessions", "--session-writer", "s-task", "nonce"),
+                          ("--session-availability", "missing", "deleted"),
+                          ("--session", "s-task", "Task", "--session-availability", "s-task", "unknown")):
             result = subprocess.run(
                 [sys.executable, "-m", "phalanx", "shift", "--config", str(config),
                  "heartbeat", "--captain", captain, *arguments],

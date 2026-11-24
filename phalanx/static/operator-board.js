@@ -87,6 +87,47 @@
     return null;
   }
 
+  function sessionTarget(record = {}) {
+    if (["missing", "deleted"].includes(record.sessionAvailability)) {
+      return { url: null, reason: "session " + record.sessionAvailability };
+    }
+    const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+    const prefixes = new Map([["copilot-app", "ghapp://sessions/"], ["codex", "codex://threads/"]]);
+    const reference = record.sessionUrl || record.sessionRef;
+    const prefix = prefixes.get(record.runtime);
+    let url = null;
+    if (reference) {
+      const native = new RegExp("^(ghapp://sessions/|codex://threads/)(" + uuid + ")$").exec(reference);
+      if (native && (!prefix || prefix === native[1]) &&
+          (!record.sessionId || record.sessionId.toLowerCase() === native[2].toLowerCase())) {
+        url = reference;
+      } else if (typeof reference === "string" && /^https:\/\/[^\s\\]+$/.test(reference)) {
+        try {
+          const parsed = new URL(reference);
+          if (!parsed.username && !parsed.password) url = parsed.href;
+        } catch {
+          // A malformed recorded URL is unavailable, not a reason to guess another app.
+        }
+      } else if (!record.sessionUrl && prefix && new RegExp("^" + uuid + "$").test(reference) &&
+          (!record.sessionId || record.sessionId.toLowerCase() === reference.toLowerCase())) {
+        url = prefix + reference;
+      }
+    } else if (prefix && new RegExp("^" + uuid + "$").test(record.sessionId || "")) {
+      url = prefix + record.sessionId;
+    }
+    return { url, reason: !url ? "session unavailable: host or identity unknown, or invalid link"
+      : record.sessionAvailability === "present" ? "session last reported present"
+        : "recorded session; existence unverified" };
+  }
+
+  function sessionNode(record, props, ...children) {
+    const target = sessionTarget(record);
+    const attrs = { ...props, title: [props.title, target.reason].filter(Boolean).join(" · "),
+      "aria-label": (props["aria-label"] || "Open session") + " · " + target.reason };
+    return target.url ? h("a", { ...attrs, href: target.url }, ...children)
+      : h("span", { ...attrs, "aria-disabled": "true" }, ...children);
+  }
+
   function prNumber(url) {
     const match = /\/pull\/(\d+)/.exec(url || "");
     return match ? "#" + match[1] : "PR";
@@ -651,12 +692,14 @@
     function writerCell(item) {
       const writer = item.writer;
       if (!writer) return h("span", { class: "writer faint", text: "no writer" });
-      const text = writer.state === "launching" ? "unconfirmed" : label(writer.state);
+      const target = sessionTarget(writer);
+      const text = (writer.state === "launching" ? "unconfirmed" : label(writer.state)) +
+        (target.url ? "" : " · " + target.reason);
       const attrs = { class: "writer w-" + (writer.state || "unknown"),
         title: "Writer " + label(writer.state) + " · " + (writer.runtime || "runtime unknown") +
           (writer.captainId ? " · Captain " + short(writer.captainId) : "") };
-      const url = safeUrl(writer.sessionUrl);
-      return url ? h("a", { ...attrs, href: url, text, "data-focus": "writer:" + item.id }) : h("span", { ...attrs, text });
+      return sessionNode(writer, { ...attrs, "aria-label": "Writer session for " + item.title,
+        "data-focus": "writer:" + item.id }, text);
     }
 
     function prCell(item) {
@@ -703,8 +746,11 @@
       const captain = state.captains.rows.find(row => row.id === id);
       const word = captain?.live ? "live" : captain?.stale ? "stale" : captain?.state === "ended" ? "ended" : "status unavailable";
       return h("span", { class: "captain-ref" + (word === "ended" ? " captain-ended" : "") },
-        glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word, "captain"),
-        " Captain " + short(id) + " · " + word);
+        sessionNode(captain, { "aria-label": "Open Captain " + short(id) },
+          glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word, "captain")),
+        sessionNode(captain, { "aria-label": "Open Captain " + short(id) },
+          " Captain " + short(id) + " · " + word),
+        !sessionTarget(captain).url && h("span", { class: "faint", text: " · session unavailable" }));
     }
 
     function itemRow(item, kind, index, now) {
@@ -722,7 +768,8 @@
         h("span", { class: "dur", title: "Intake " + stamp(item.createdAt) + " · Closed " + stamp(item.closedAt) },
           epoch(item.createdAt) && epoch(item.closedAt) ? "took " + span(epoch(item.closedAt) - epoch(item.createdAt)) : "—",
           h("span", { class: "sr-only", text: " · Intake " + stamp(item.createdAt) + " · Closed " + stamp(item.closedAt) })),
-        h("span", { class: "reason faint", text: shortfall(item) })
+        h("span", { class: "reason faint" }, item.writer && writerCell(item),
+          item.writer && shortfall(item) ? " " : "", shortfall(item))
       ] : [
         h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status),
           text: label(item.stage) + (item.publicationMode === "draft" ? " · draft only" : "") }),
@@ -790,7 +837,6 @@
       }
       const item = { ...row, ...data.item };
       const writer = item.writer;
-      const sessionUrl = safeUrl(writer?.sessionUrl);
       const pr = safeUrl(item.primaryPrUrl || (item.output?.kind === "pr" ? item.output.url : null));
       const links = h("nav", { class: "detail-links", "aria-label": "Detail links" },
         item.itemId && h("a", { href: "/operator/items/" + encodeURIComponent(item.itemId), text: "Current item" }),
@@ -815,7 +861,8 @@
         ["Writer", writer && h("span", {}, label(writer.state), " · ", writer.runtime || "runtime unknown",
           writer.captainId ? h("span", {}, " · ", captainReference(writer.captainId)) : "",
           writer.sessionId ? h("code", { text: " " + short(writer.sessionId), title: writer.sessionId }) : "",
-          sessionUrl ? h("span", {}, " · ", h("a", { href: sessionUrl, text: "session" })) : "")],
+          h("span", {}, " · ", sessionNode(writer, { "aria-label": "Open writer session" },
+            sessionTarget(writer).url ? "session" : sessionTarget(writer).reason)))],
         ["PR", pr && h("a", { href: pr, text: prNumber(pr) + " ↗" })],
         ["Delivery", delivery(item, now)],
         ["Output", item.output?.kind === "report" ? prCell(item) : null],
@@ -965,9 +1012,13 @@
       const word = captain.live ? "live" : captain.stale ? "stale" : label(captain.state);
       const focus = (captain.focus || []).map(id => titles.get(id) || short(id));
       return h("li", { class: "row t-" + health + (captain.state === "ended" ? " captain-ended" : "") }, h("div", { class: "line" },
-        glyph(health, word, "captain"),
-        h("span", { class: "name" }, h("strong", { text: "Captain " + short(captain.id) }),
-          h("span", { class: "faint", text: " " + word })),
+        sessionNode(captain, { "aria-label": "Open Captain " + short(captain.id),
+          "data-focus": "captain-helmet:" + captain.id }, glyph(health, word, "captain")),
+        h("span", { class: "name" },
+          sessionNode(captain, { "aria-label": "Open Captain " + short(captain.id),
+            "data-focus": "captain:" + captain.id }, h("strong", { text: "Captain " + short(captain.id) })),
+          h("span", { class: "faint", text: " " + word +
+            (sessionTarget(captain).url ? "" : " · " + sessionTarget(captain).reason) })),
         h("span", { class: "stat" }, h("span", { class: captain.live ? "beat" : "", "aria-hidden": "true", text: "♥" }),
           " heartbeat ", ago(captain.heartbeatAt, now)),
         h("span", { class: "stat", text: "wakes " + (captain.wakeCount ?? 0) }),
@@ -1030,7 +1081,7 @@
       for (const item of state.open.rows) {
         const flags = flagsFor(index, item);
         if (item.status === "waiting_for_input" || item.status === "failed" || flags.some(flag => flag.notifyOwner)) needs.push(item);
-        else if (item.status === "running" || item.writer) active.push(item);
+        else if (item.status === "running" || (item.writer && item.writer.state !== "ended")) active.push(item);
         else queued.push(item);
       }
       for (const item of needs) for (const flag of flagsFor(index, item)) shown.add(flag);
@@ -1175,5 +1226,5 @@
     };
   }
 
-  window.PhalanxOperatorBoard = { mount, label };
+  window.PhalanxOperatorBoard = { mount, label, sessionTarget };
 })();

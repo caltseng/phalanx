@@ -99,6 +99,11 @@ class WriterTest(ServerFixture, unittest.TestCase):
     def test_report_finalization_ends_the_writer(self):
         item_id, execution_id = self.item()
         binding, token, _ = self.register(item_id, execution_id)
+        native = "12345678-1234-1234-1234-123456789abc"
+        route = f"/v1/items/{item_id}/executions/{execution_id}/writer"
+        self.ok(route, RUNNER, {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                               "session_id": native, "session_url": "codex://threads/" + native},
+                method="PATCH")
         binding = self.submit(token, binding, report_markdown="# Report\n")
         binding = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
         self.assertEqual(binding["state"]["stage"], "report_storage")
@@ -108,6 +113,43 @@ class WriterTest(ServerFixture, unittest.TestCase):
             writer = db.execute("SELECT * FROM writers WHERE id=?", (binding["writer"]["id"],)).fetchone()
         self.assertIsNotNone(writer["ended_at"])
         self.assertEqual((writer["end_reason"], writer["attempt_id"]), ("closed as completed", None))
+        for url in (f"/v1/operator/items/{item_id}",
+                    f"/v1/operator/executions/{execution_id}/timeline"):
+            recorded = self.ok(url, OWNER)["item"]["writer"]
+            self.assertEqual((recorded["state"], recorded["session_id"], recorded["session_url"],
+                              recorded["session_availability"]),
+                             ("ended", native, "codex://threads/" + native, "unverified"))
+        history = self.ok("/v1/operator/executions?kind=closed", OWNER)["items"]
+        self.assertEqual(history[0]["writer"]["session_id"], native)
+        observer = self.ok("/v1/captains", RUNNER,
+            {"session_ref": "observer", "charter_revision": "c1"}, 201)
+        for availability in ("missing", "deleted"):
+            self.ok(f"/v1/captains/{observer['id']}", RUNNER, {
+                "charter_revision": "c1", "wake_count": 1, "state": "active",
+                "sessions": [{"id": native, "name": "Ended writer [phx]", "availability": availability,
+                              "runtime": "any-runtime"}],
+            }, method="PUT")
+            recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]["writer"]
+            self.assertEqual(recorded["session_availability"], availability)
+
+    def test_queued_writer_history_is_not_an_active_writer_or_a_replacement_session(self):
+        item_id, execution_id = self.item()
+        binding, _, _ = self.register(item_id, execution_id)
+        route = f"/v1/items/{item_id}/executions/{execution_id}/writer"
+        writer_id = binding["writer"]["id"]
+        self.ok(route, RUNNER, {"captain_id": self.captain["id"], "writer_id": writer_id,
+                               "session_id": "recorded-session"}, method="PATCH")
+        self.ok(route + "/withdraw", RUNNER, {"captain_id": self.captain["id"],
+                "writer_id": writer_id, "stopped": True, "reason": "Resume later"})
+        recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
+        self.assertEqual((recorded["status"], recorded["writer"]["state"]), ("queued", "ended"))
+        self.assertEqual(recorded["writer"]["session_id"], "recorded-session")
+        self.assertEqual(recorded["wait_reason"], "Awaiting a direct Captain")
+        self.assertIsNone(shift._summary(recorded)["writer"])
+        replacement, _, _ = self.register(item_id, execution_id)
+        recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]["writer"]
+        self.assertEqual(recorded["id"], replacement["writer"]["id"])
+        self.assertIsNone(recorded["session_id"])
 
     def test_concurrent_registrations_without_charter_limits_do_not_overfill(self):
         self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
