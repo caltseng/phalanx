@@ -4,7 +4,12 @@ This guide sets up a **new** install: it creates tokens, a database, a runner st
 
 ## Choose and record your muster directory
 
-The server reads `PHALANX_DB` and its tokens from the environment. Legacy runner commands take explicit `--config` and `--state` paths. Direct `shift` and `reconcile` commands also support the optional [per-user muster locator](../README.md#direct-muster-discovery-and-status): `--home`, then `PHALANX_HOME`, then `~/.phalanx/muster.json`. It only finds existing configuration; it never creates or migrates state. Pick one muster directory now and record these in a private local runbook outside the repository:
+The server reads `PHALANX_DB` and its tokens from the environment. Direct `shift` and
+`reconcile` support explicit `--config` paths (the reconciler also needs `--state`), or the
+optional [per-user muster locator](../README.md#direct-muster-discovery-and-status):
+`--home`, then `PHALANX_HOME`, then `~/.phalanx/muster.json`. It only finds existing
+configuration; it never creates or migrates state. Pick one muster directory now and record
+these in a private local runbook outside the repository:
 
 - the muster directory and the Phalanx checkout and virtual environment you run from;
 - the absolute `PHALANX_DB` path;
@@ -86,7 +91,7 @@ A runner executes work on one machine. Give it:
 1. **A stable reconciler ID** and private scratch directory outside mapped checkouts.
 2. **A runner config**, such as `C:/muster/runner.json`, mapping each registered repository to its local checkout and runtime project. See [Configuration](configuration.md#runner-config).
 3. **`PHALANX_RUNNER_TOKEN`** in Captain/reconciler command environments and **`PHALANX_GITHUB_TOKEN`** for GitHub observation. Native writers use their own configured Git/GitHub credentials.
-4. **A validation policy** for PR validation, if you want PRs promoted and checked in. Write it as described in [the validation policy guide](runner-validation-policy.md) at an absolute path outside every checkout.
+4. **A validation policy** defining required ready checks so the reconciler can verify ready delivery, plus optional trusted local checks that raise flags rather than gate direct work. Write it as described in [the validation policy guide](runner-validation-policy.md) at an absolute path outside every checkout. Configure each writer repository's prepared `checks_environment` separately in the shift config.
 5. **Standing repository trust** in the worker runtime, below.
 
 Fetch the desired origin branch into each mapped checkout before the first muster.

@@ -20,6 +20,22 @@ Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` i
 
 ## Queue storage
 
-Migration 2 stores execution snapshots as JSON and exposes `stage` and `status` as queryable columns. It enforces one open execution per item and one open attempt per execution. A claim selects a queued execution and calls `intake.claim_attempt` inside the same `store.write_transaction` after checking admission. Supply a stable `runner_id`, the SHA-256 hex digest of a freshly generated URL-safe lease secret, and `lease_expires_at` as Unix seconds. Return the plaintext secret only to the claiming runner. The claim returns the new attempt ID and execution snapshot, appends history, increments the state version and changes the execution to running. A committed result ends the attempt. Renewal and recovery use the persisted attempt ID, runner ID, lease digest and expiry. A cancellation request keeps the attempt open until stop confirmation or recovery.
+Execution snapshots are JSON with indexed stage/status columns, one open execution per item
+and one open attempt per execution. A Captain registers a named writer intent after checking
+eligibility, pause and its charter's writer budget. The server stores its scoped token digest;
+the plaintext credential stays in the worktree's Git directory. `writer/attempt` calls
+`intake.claim_attempt` transactionally for that writer's own queued execution, recording the
+new attempt, pinned dependency evidence, running state and incremented version. Direct writer
+bindings have no timed expiry. A committed result ends the attempt and, when immediately
+runnable, claims the next stage for the same writer in that transaction.
 
-PH-06 owns candidate indexing, time eligibility, aging, capacity, admission and lease renewal. PH-08 owns reply and external recheck routes. PH-09 owns general failure finalization and retries. Provider verification and recovery of uncertain writes belong to the GitHub and runner integrations. The result API rejects caller-supplied PR observations. The operator API provides bounded history reads for the board.
+Questions and waits retain the writer; stopped-writer replacement requires native-session
+evidence and preserved local work, not an expired lease. Remaining runner-only PR stage
+callers still use leases and observation routes until PH-DS5 part 2, but the queue claim and
+expired-attempt recovery endpoints and old CLI scheduler are gone. Use owner cancel/rerun
+for an unschedulable old-stage execution rather than manufacturing a lease.
+
+The result API accepts scoped stage evidence; trusted reconciler observations verify direct
+PR delivery. The operator API provides bounded history, overview/group/filter reads and
+conditional ETags; PR facts come only from reconciler observations. See
+[direct writers and dispatch](api.md#direct-writers-and-dispatch).

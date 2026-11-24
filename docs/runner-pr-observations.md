@@ -1,5 +1,11 @@
 # Runner PR observations
 
+**Retained runner-stage reference, not the direct writer protocol.** These leased routes and
+their local journals remain until PH-DS5 part 2; part 1 removed their scheduler and queue
+claim path. Direct writers submit publication URLs through `phx work`; the independent
+reconciler posts GitHub observations without a stage lease. See
+[direct publication and delivery](direct-sessions.md#pr-publication-and-delivery).
+
 Submit `POST /v1/items/{item_id}/executions/{execution_id}/pr-observation` with the runner bearer token and the current claim's `Phalanx-Lease`. Use an `Idempotency-Key` and repeat the same body and lease after an uncertain API response. Successful submissions return the updated execution. They record the observation in the timeline and end the attempt in the same transaction.
 
 The runner credential authorizes the caller to attest facts from its GitHub adapter and repository policy. Keep that credential and the lease in the runner. Populate this route from exact GitHub reads and the runner's own expected refs, policy, and revision evidence. The worker result route remains the path for local stage results.
