@@ -218,15 +218,86 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((binding["state"]["stage"], binding["state"]["status"]), ("publication", "running"))
         return binding, token
 
-    def observe(self, binding, code=200, **pull):
+    def observe(self, binding, code=200, *, checks="satisfied", **pull):
         pull = {"number": 7, "state": "open", "merged": False, "draft": False,
                 "head_ref": item_branch(binding["item_id"]), "head_sha": HEAD, "base_ref": "main",
                 "base_sha": BASE, **pull}
         body = {"observed_at": datetime.now(UTC).isoformat(), "pr": pull, "target_base": "main",
-                **({"checks": "satisfied"} if pull["state"] == "open" else {})}
+                **({"checks": checks} if pull["state"] == "open" else {})}
         self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/github-observation", RUNNER,
                 body, code)
         return self.ok(f"/v1/items/{binding['item_id']}", OWNER)["execution"]
+
+    def steer(self, binding, target, code=200, **fields):
+        response = self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}", OWNER,
+                           {"expected_version": binding["version"], "target": target, **fields},
+                           code, method="PATCH")
+        if code == 200:
+            response["execution"]["item_id"] = binding["item_id"]
+        return response
+
+    def test_queued_target_steering_preserves_output_type_and_versions(self):
+        item_id, execution_id = self.pr_item("ready_for_check_in")
+        binding = dict(self.ok(f"/v1/items/{item_id}", OWNER)["execution"], item_id=item_id)
+        self.steer(binding, "report", code=409)
+        changed = self.steer(binding, "checked_in", steered_by="captain")
+        self.assertEqual((changed["target"], changed["execution"]["state"]["target"]),
+                         ("checked_in", "checked_in"))
+        self.steer(binding, "ready_for_check_in", code=409)
+        changed = self.steer(changed["execution"], "ready_for_check_in")
+        self.assertEqual(changed["target"], "ready_for_check_in")
+        report_id, _ = self.item()
+        report = dict(self.ok(f"/v1/items/{report_id}", OWNER)["execution"], item_id=report_id)
+        self.steer(report, "checked_in", code=409)
+        self.steer(report, "ready_for_check_in", code=409)
+        binding, token, _ = self.register(item_id, execution_id)
+        self.steer(binding, "checked_in")
+        binding = self.ok("/v1/writer", token)
+        reviewed = self.submit(token, binding, candidate=HEAD)
+        self.assertEqual((reviewed["state"]["stage"], reviewed["state"]["target"]),
+                         ("self_review", "checked_in"))
+
+    def test_delivery_target_steering_records_actor_and_completed_ready_requires_rerun(self):
+        binding, token = self.publish("ready_for_check_in")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.steer(binding, "report", code=409)
+        self.steer(binding, "checked_in", code=409, goal="Not a target-only edit")
+        for target, actor in (("checked_in", "captain"), ("ready_for_check_in", "owner")):
+            before = binding["state"]["target"]
+            changed = self.steer(binding, target, steered_by=actor)
+            binding = changed["execution"]
+            self.assertEqual((changed["target"], binding["state"]["target"]), (target, target))
+            self.assertEqual((binding["state"]["stage"], binding["state"]["status"]),
+                             ("delivery", "waiting_for_external"))
+            timeline = self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/timeline", OWNER)
+            self.assertEqual(timeline[-1]["event"], "steer")
+            self.assertEqual(timeline[-1]["details"],
+                             {"before": {"target": before}, "after": {"target": target}, "steered_by": actor})
+        done = dict(self.observe(binding), item_id=binding["item_id"])
+        self.assertEqual(done["state"]["status"], "completed")
+        self.steer(done, "checked_in", code=409)
+        rerun = self.ok(f"/v1/items/{done['item_id']}/executions/{done['id']}/rerun", OWNER,
+                        {"expected_version": done["version"], "target": "checked_in"})
+        self.assertNotEqual(rerun["id"], done["id"])
+        self.assertEqual(rerun["state"]["target"], "checked_in")
+
+    def test_steered_check_in_waits_for_required_checks_and_records_the_merge(self):
+        binding, token = self.publish("ready_for_check_in")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        binding = self.steer(binding, "checked_in")["execution"]
+        for checks in ("failed", "waiting"):
+            waiting = self.observe(binding, checks=checks)
+            self.assertEqual((waiting["state"]["stage"], waiting["state"]["status"]),
+                             ("delivery", "waiting_for_external"))
+            self.assertIsNone(waiting["state"]["ready_revision"])
+            self.assertIsNone(waiting["state"]["final_output"])
+        ready = self.observe(binding)
+        self.assertEqual(ready["state"]["status"], "waiting_for_external")
+        self.assertEqual(ready["state"]["ready_revision"], {"head": HEAD, "base": BASE})
+        merged = self.observe(binding, state="closed", merged=True, merge_commit=MERGE)
+        self.assertEqual((merged["state"]["status"], merged["state"]["target"]), ("completed", "checked_in"))
+        self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+        self.ok("/v1/writer", token, code=401)
 
     def test_writer_publishes_and_any_merge_delivers(self):
         binding, token = self.publish("checked_in")

@@ -131,6 +131,19 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(assignment["request"]["context_links"], [ISSUE_URL])
         self.assertNotIn("local-github-token", json.dumps(assignment))
 
+    def test_cli_issue_target_defaults_to_merge_and_preserves_explicit_targets(self):
+        for target in (None, "ready_for_check_in", "report"):
+            with self.subTest(target=target):
+                arguments = ["phalanx", "--api-url", self.url, "ingest-issue", "example", "42",
+                             "--key", f"target-{target}"]
+                if target:
+                    arguments.extend(["--target", target])
+                output = io.StringIO()
+                with patch.object(sys, "argv", arguments), redirect_stdout(output):
+                    main()
+                item = json.loads(output.getvalue())
+                self.assertEqual(item["execution"]["state"]["target"], target or "checked_in")
+
     def test_changed_snapshot_and_target_conflict_without_duplicate(self):
         original = self.ingest()
         self.issue["body"] = "Edited context"

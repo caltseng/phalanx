@@ -71,6 +71,15 @@ A writer-bound PR item goes `development` → `self_review` → `publication` �
 2. **Delivery.** The execution waits as `delivery / waiting_for_external` with no attempt, and the reconciler's observations drive it (see the next section). The writer stays registered. It watches the PR on GitHub and fixes failing checks, review feedback and conflicts by pushing to the open PR, which needs no attempt. The Captain sees the same problems as `checks_failed`, `review_feedback`, conflict and `head_drift` flags. The next observation picks up the new head.
 3. **Closed without merge.** The server asks the owner. A reply queues `delivery` for the writer, which reopens the PR or explains, then posts a result to return to the wait.
 
+PR intake defaults to `checked_in`; explicit `ready_for_check_in` and `report` targets are
+unchanged. An owner or Captain can steer an open PR item's target, including in direct
+`delivery`, between `ready_for_check_in` and `checked_in`. Only queued work accepts other edits
+alongside the target change. The timeline records the actor
+and before/after targets. The writer reads the latest target on each delivery pass and enables
+GitHub auto-merge only for `checked_in`, disabling it if retargeted to `ready_for_check_in`.
+GitHub's required reviews, checks and rulesets still gate a merge (D2); no new setting is needed.
+Steering never changes to or from `report`, and a completed ready item still requires a rerun.
+
 **Draft-only publication.** Intake can set `"publication_mode": "draft"` (default: `"ready"`)
 for either PR target. This is a delivery ceiling, including for `checked_in`: the writer opens
 with `gh pr create --draft --base <target>`, never promotes or merges, and never enables auto-merge.

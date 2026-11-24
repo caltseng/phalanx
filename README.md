@@ -34,6 +34,12 @@ python -m phalanx intake example "Review the test coverage" --target report --ke
 
 Open `http://127.0.0.1:8000/operator/` to watch it. To run the work, set up a runner and start a muster as described in [Install Phalanx](docs/install.md), which also covers macOS and Linux, repository trust and the GitHub token.
 
+`intake` and `ingest-issue` default to `--target checked_in`. On the direct path the writer
+enables GitHub auto-merge only for that target; required reviews, checks and rulesets still gate
+the merge. Use `--target ready_for_check_in` to stop at a ready PR or `--target report` for a
+Markdown report. Owners and Captains can steer an open PR item between the two PR targets,
+including during direct delivery; a completed ready item still needs a rerun to merge.
+
 **One-time repository trust:** the owner must grant trust in the worker runtime before work can run.
 In the GitHub Copilot app, also approve the per-project repository trust card in the project's session;
 a checkout path in the runtime's `trustedFolders` configuration does not approve that app-level card.

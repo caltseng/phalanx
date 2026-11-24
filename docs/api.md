@@ -19,7 +19,7 @@ The HTTP API is the only path to queue state. Owner routes use the owner bearer 
 | `POST /items/{item_id}/executions/{execution_id}/result` | Runner | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
 | `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation under a live lease after accounting for the worker and its effects. |
 
-Intake accepts `repository_id`, `goal` and `target`, plus optional `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the item's output type.
+Intake requires `repository_id` and `goal`; `target` defaults to `checked_in`, preserving explicit `ready_for_check_in` and `report` requests. Optional fields include `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the item's output type.
 
 Results and stop confirmations require a matching `attempt_id`, `stage` and `expected_version`, plus the current secret in the `Phalanx-Lease` header. A successful report-drafting result sends `report_markdown`; the server persists it and derives a SHA-256 revision. Report review and storage send `report_revision`, and the server copies the reviewed draft into final storage in the same transaction that closes the execution. A `needs_input` result supplies `question.prompt` and `question.handoff`, with optional `options` and `proposed_default`. Active cancellation preserves the attempt while awaiting reconciliation. An expired lease or uncertain provider effect requires recovery before confirmation.
 
@@ -28,6 +28,13 @@ Results and stop confirmations require a matching `attempt_id`, `stage` and `exp
 An owner can include `dependencies` in `POST /v1/items`. Each entry names an `upstream_id` and a `milestone` of `report`, `ready_for_check_in` or `checked_in` (the default). Prerequisites may belong to other repositories. Item inspection includes configured links and the execution's `unmet_dependencies`, with an explanation for each wait.
 
 An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with `expected_version` and changes to `goal`, `context_links`, `acceptance_criteria`, `priority`, `runner_affinity` or `dependencies`. Omitted fields keep their values. An empty list clears a list field, and `null` clears runner affinity. The patch accepts `Idempotency-Key`. Stale versions and executions outside the queued state return HTTP 409.
+
+The same patch accepts `target` changes between `ready_for_check_in` and `checked_in`, with
+`steered_by: "owner"` (default) or `"captain"` recorded alongside the before/after values in the
+timeline. A target-only change is also allowed on active PR work, including direct `delivery`
+and its GitHub wait. Switching to or from `report` is refused. A completed ready item still requires
+`rerun`. A target change does not itself call GitHub; the writer reconciles auto-merge with the
+latest target on its next delivery pass.
 
 A successful claim includes a `dependencies` snapshot with each upstream execution ID, output reference and exact revision. For a reviewed PR it includes the reviewed head and base; for a check-in it also identifies the verified merge commit. Use these revisions in the work packet. The snapshot is recorded on the attempt's claim event and returned on claim replay even if an upstream execution is rerun.
 
