@@ -20,12 +20,10 @@ from .intake_models import Identifier, Payload, Text, Versioned
 from .transitions import TERMINAL, WRITER_PR_STAGES, Event, PublicationMode, Stage, Status
 
 
-# step5-remove: the old dispatch loop claims by queue affinity and attempts carry a timed lease.
-# A writer-bound execution uses an affinity no runner ID can match (runner IDs exclude "@"),
-# and its attempts use a lease that never expires. The writer token is the fence.
-WRITER_AFFINITY = "@writer"
+# Writer attempts have no timed expiry. The writer token is the fence.
+WRITER_RUNNER_ID = "@writer"
 NO_EXPIRY = 253402300799
-# step5-remove: the old loop's PR stages. A writer delivers a PR through publication and delivery.
+# Remaining runner PR stages retire in PH-DS5 part 2.
 OLD_PR_STAGES = frozenset({
     Stage.PR_CREATION, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION, Stage.PR_VALIDATION,
     Stage.ADVERSARIAL_REVIEW, Stage.PR_RECONCILIATION, Stage.PR_REVISION, Stage.CHECK_IN,
@@ -123,7 +121,7 @@ def claim_next(db, writer, *, continued_from=None):
     if (state.status == Status.QUEUED and state.stopping is None and state.pending_output is None
             and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)):
         claim = intake.claim_attempt(
-            db, row, state, runner_id=WRITER_AFFINITY, lease_digest=writer["token_digest"],
+            db, row, state, runner_id=WRITER_RUNNER_ID, lease_digest=writer["token_digest"],
             lease_expires_at=NO_EXPIRY, now=now, continued_from=continued_from,
         )
     db.execute("UPDATE writers SET attempt_id=? WHERE id=?",
@@ -171,9 +169,8 @@ def register(db, item_id, execution_id, payload):
             raise intake.Conflict(f"The execution is closing. Withdraw writer {current['id']} with "
                                   "stopped=true to confirm the stop")
         raise intake.Conflict("The execution is closed or closing")
-    # step5-remove: an execution the old loop already took past development stays on that path,
-    # including one back in development or self-review with its draft PR open. Draft-only items
-    # never enter that path, so a draft one back in self-review keeps its writer PR.
+    # Remaining runner-stage executions require a rerun, not a second writer.
+    # Draft-only self-review retains the existing direct PR.
     if state.stage in OLD_PR_STAGES or (state.primary_pr and state.stage not in WRITER_PR_STAGES
                                         and state.publication_mode is not PublicationMode.DRAFT):
         raise intake.Conflict(f"The execution is in the runner stage {state.stage} or has the runner's "
@@ -215,8 +212,6 @@ def register(db, item_id, execution_id, payload):
         (writer_id, execution_id, item_id, payload.captain_id, payload.runtime, payload.nonce,
          payload.token_digest, payload.replaces, intake.timestamp()),
     )
-    # step5-remove: keeps the old loop from claiming a writer-bound execution.
-    db.execute("UPDATE executions SET queue_affinity=? WHERE id=?", (WRITER_AFFINITY, execution_id))
     claim_next(db, writer_row(db, writer_id))
     return binding(db, writer_row(db, writer_id))
 

@@ -7,10 +7,7 @@ from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from .attended import RunnerError, add_attended_command, run_attended
-from .attended_recovery_service import add_recovery_command, run_recovery_command
-from .captain_loop import add_captain_command, run_captain
-from .captain_relay import add_relay_command, run_relay
+from .runner_errors import RunnerError
 from .github import GitHubError
 from .issue_intake import ingest_issue
 from .muster import add_muster_command, run_muster
@@ -121,10 +118,6 @@ def main() -> None:
     cancel = commands.add_parser("cancel", help="cancel an item's current execution")
     cancel.add_argument("item_id")
     cancel.add_argument("--reason", required=True)
-    add_attended_command(commands)
-    add_recovery_command(commands)
-    add_captain_command(commands)
-    add_relay_command(commands)
     add_work_command(commands)
     add_reconcile_command(commands)
     add_shift_command(commands)
@@ -135,14 +128,6 @@ def main() -> None:
             from .server_admin import run_server_command
 
             run_server_command(args)
-        elif args.command == "attended":
-            run_attended(args)
-        elif args.command == "attended-recover":
-            run_recovery_command(args)
-        elif args.command == "captain":
-            run_captain(args)
-        elif args.command == "relay":
-            run_relay(args)
         elif args.command == "onboard":
             from .onboarding import onboard as run_onboard
 

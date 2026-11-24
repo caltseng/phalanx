@@ -56,7 +56,7 @@ the policy file as part of a worker's task.
 }
 ```
 
-This is separate from the attended runner's checkout/capacity config. The
+This is separate from the local checkout configuration. The
 loader does not modify that config or add a CLI option. `python -m phalanx onboard`
 (see the README) adds a starter entry for a new repository: `ready_checks` from
 the CI on its base branch tip, `draft_checks: []`, and `local_checks: null` for
@@ -140,7 +140,7 @@ Set `"validation_policy"` in the runner config to the absolute policy path.
 `CandidateLocal.pre_validate`), `pr_promotion` (draft checks, then marking the
 primary PR ready) and `pr_validation` (ready checks on the current head) on the
 runner, journaling each result before submission. Pending CI waits for an
-external recheck that the Captain loop requests when due. Pending draft and
+external recheck that a runner-stage caller requests when due. Pending draft and
 ready checks are rechecked after the optional runner config
 `"check_recheck_seconds"` (a whole number from 5 to 86400, default 30). Once
 checks have been pending on the same head and base for
@@ -165,7 +165,7 @@ with the output tail.
 
 The runner runs at most `"local_check_capacity"` (optional runner config, 1 to
 64, default 1) local check sets at once on its host, using lock files under
-the attended state root. A validation that finds every slot busy runs no
+the runner-stage state root. A validation that finds every local check lock busy runs no
 check. It waits as external gate `local_check_capacity` with the reason
 "Waiting for local check capacity" and is rechecked after 30 s, so waiting
 never counts against a check's timeout. When the reviewed candidate differs

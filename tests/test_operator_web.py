@@ -136,6 +136,6 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                     with self.subTest(path=path):
                         self.assertEqual(self.get(path)[0], 401)
                 self.assertEqual(self.request("/v1/items", body={"goal": "x"})[0], 401)
-                self.assertEqual(self.request("/v1/dispatch/claim", body={}, method="POST")[0], 401)
+                self.assertEqual(self.request("/v1/writer/attempt", body={}, method="POST")[0], 401)
             finally:
                 self.stop_server(server)

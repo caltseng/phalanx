@@ -7,7 +7,7 @@ class EnvelopeProbeTest(unittest.TestCase):
     def test_small_envelope_survives_every_fault_case(self):
         summary = envelope_probe.run(envelope_probe.parse([
             "--executions", "1000", "--due-waits", "200", "--fanout", "60", "--throttled", "2",
-            "--runners", "2", "--capacity", "2", "--duration", "20", "--throttle-seconds", "4",
+            "--captains", "2", "--max-writers", "2", "--duration", "20", "--throttle-seconds", "4",
             "--outage-seconds", "3", "--aging-seconds", "10",
         ]))
         self.assertEqual(summary["violations"], [])

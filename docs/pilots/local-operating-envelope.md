@@ -38,17 +38,21 @@ Completed runs checked for duplicate claims and leftover running jobs, then ran 
 
 ## Provisional defaults and targets
 
+The original probes below are historical measurements, not instructions for running the
+retired scheduler. Direct writers have no timed expiry; the charter defines their budget.
+PH-19a's latency and recovery targets are unchanged.
+
 | Setting | Starting value |
 | --- | --- |
-| Local worker slots | 4 configurable slots. Count live or uncertain sessions against capacity. Validate 2, 4 and 8 real sessions before raising the default. |
-| Claim pacing | Poll every 2 s with ±20% jitter when dispatch is enabled and capacity is available. Nudge on a known slot release or eligibility event. Back off empty polls to 10 s. |
-| Leases | 90 s expiry, renew every 20 s with jitter. Schedule heartbeats independently from chat observation and batch work. |
+| Native writer budget | Set charter `max_writers`; count live, waiting and uncertain intents. Validate 2, 4 and 8 real sessions before raising it. |
+| Synthetic claim pacing | Poll every 2 s with ±20% jitter when dispatch and the writer budget permit. Native Captains use their runtime wake schedule. |
+| Progress | Scoped writers post progress without timed expiry. Observe native state independently; stale progress does not authorize replacement. |
 | Priority aging | Start with urgent, normal, and low. Promote by one tier per 5 minutes continuously eligible, capped at urgent. Break ties by oldest eligible time then stable ID. Preserve age across contention and track retry delays separately. Use the oldest ready head per band if that keeps ranking indexed. |
 | Retries and external waits | Start transient stage retry delay at 5 s, double with jitter to a 2 min cap, and surface after five failed attempts. For ambiguous provider writes, reconcile before retrying. Start external reconciliation at 30 s with jitter, respect provider retry timing and bound each due batch to 100. |
 
-At the paced synthetic load below, target claim and renewal HTTP p95 ≤100 ms and p99 ≤500 ms, including queueing and durable commit. Separately target p95 ≤3 s from eligibility to claim while a matching slot is free. Under urgent intake, a continuously eligible oldest item should reach urgent within 10 min from low or 5 min from normal and claim on the next available matching slot and poll once older top-rank work has drained. Measure rank-promotion and oldest wait separately from time spent blocked or at capacity.
+At the paced synthetic load below, target claim and progress HTTP p95 ≤100 ms and p99 ≤500 ms, including queueing and durable commit. Separately target p95 ≤3 s from eligibility to claim while the writer budget permits. Under urgent intake, a continuously eligible oldest item should reach urgent within 10 min from low or 5 min from normal and claim on the next available matching writer and poll once older top-rank work has drained. Measure rank-promotion and oldest wait separately from time spent blocked or at capacity.
 
-After restart, target healthy HTTP and durable queue reads within 10 s, dispatch of eligible unrelated work within 30 s when slots are available, and reconciliation of 10,000 due local events within 2 min while serving renewals. Time provider-directed delays separately. For the real-worker sweep, retain at least 8 GiB available RAM, 20% disk free on the volume holding worktrees and the database, and at least 20% CPU idle on a rolling five-minute average. Record peak disk usage per build and stop raising concurrency when any headroom target fails.
+After restart, target healthy HTTP and durable queue reads within 10 s, dispatch of eligible unrelated work within 30 s when writers are available, and reconciliation of 10,000 due local events within 2 min while serving progress. Time provider-directed delays separately. For the real-worker sweep, retain at least 8 GiB available RAM, 20% disk free on the volume holding worktrees and the database, and at least 20% CPU idle on a rolling five-minute average. Record peak disk usage per build and stop raising concurrency when any headroom target fails.
 
 ## Load and recovery gates
 
@@ -79,7 +83,21 @@ At both sizes, SQLite used a range search of the partial queue index for each re
 
 ## PH-19a integrated envelope probe
 
-[`tests/envelope_probe.py`](../../tests/envelope_probe.py) runs the PH-19 fault cases against the real HTTP server under mixed authenticated traffic. It seeds a production-schema store in-process, starts Uvicorn in a separate process and drives everything else through the API with owner and runner tokens. Random choices use a fixed seed, so reruns offer the same work. Wall-clock timings vary with the host. The probe exits nonzero and lists violations when an invariant or fault expectation fails. `tests/test_envelope_probe.py` runs a small configuration in about 25 s on every CI platform.
+[`tests/envelope_probe.py`](../../tests/envelope_probe.py) runs the PH-19 fault cases against
+the real HTTP server. It seeds a production-schema store, starts Uvicorn separately and
+uses synthetic Captains to select named work read-only. All work mutations use the real
+Captain registration, writer attempt/progress/result and owner/reconciler APIs. Random choices
+use a fixed seed; wall timings vary. Invariant/fault violations exit nonzero; timing targets
+must be compared with the JSON measurements separately. The small CI configuration covers
+the same fault cases.
+
+The direct workload retains 100,000 seed executions, 10,000 due waits, 2,000 dependents, four
+Captains with a combined budget of 24 writers, one extra polling actor per Captain, and the
+same intake/read/fault timing. `--captains` and `--max-writers` control the synthetic budget.
+Interrupted review now exercises explicit stopped-writer replacement, preserved draft and
+revoked-token rejection, not clock mutation. Report stages continue under the same writer.
+There is no local reservation database. The probe checks charter admission and one open
+attempt per execution. It measures free-writer delay separately from saturated backlog.
 
 ```powershell
 .\.venv\Scripts\python.exe -B tests\envelope_probe.py --json-out envelope.json
@@ -87,7 +105,7 @@ At both sizes, SQLite used a range search of the partial queue index for each re
 
 On macOS or Linux, use `.venv/bin/python` and `tests/envelope_probe.py`. Add `--keep <dir>` to keep the store and server logs. `--help` lists the scale, pacing and fault-timing options.
 
-### Load and faults
+### Historical PH-19a load and faults (before direct sessions)
 
 - **Seed.** 100,000 report executions across 8 repositories, with the PH-03 proportions: 1% ready with ready times spread over the previous 5 min, 29% waiting for input and 70% completed. A further 10,000 external waits are already due, plus 2,000 dependents of one report prerequisite. Seeding took 101 s and produced a 213 MiB database.
 - **Workers.** Four runners with 6 slots each. Every runner has 7 synthetic workers, so one always polls at capacity. Each worker claims, renews halfway through a 0.5–1.5 s hold, then posts the stage result. It polls every 2 s ±20% when idle. The workers drive report drafting, review and storage stages.

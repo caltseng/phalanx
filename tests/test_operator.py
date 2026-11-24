@@ -341,8 +341,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                   Steering(expected_version=execution["version"], dependencies=[]))
         ready = self.page(route)
         self.assertEqual(ready["item"]["blocked_prerequisite_count"], 0)
-        self.assertIsNone(ready["item"]["wait_reason"])
-        self.assertEqual(ready["item"]["next_action"], "Next to run: a Captain dispatches a writer")
+        self.assertEqual(ready["item"]["wait_reason"], "Awaiting a direct Captain")
+        self.assertIsNone(ready["item"]["next_action"])
         self.assertEqual(ready["prerequisites"], [])
 
 
@@ -488,13 +488,14 @@ class DashboardTest(ServerFixture, unittest.TestCase):
             row = db.execute(f"{SUMMARY} WHERE execution.id=?", (self.execution,)).fetchone()
             context = dispatch_context(db, before)
         self.assertIn("Retry scheduled", summary(row, before, context)["wait_reason"])
-        self.assertIsNone(summary(row, before + timedelta(seconds=2), context)["wait_reason"])
+        self.assertEqual(summary(row, before + timedelta(seconds=2), context)["wait_reason"],
+                         "Awaiting a direct Captain")
 
     def test_open_rows_always_say_why_without_capacity_inference(self):
         for row in self.page(BOARD)["items"]:
             self.assertTrue(row["wait_reason"] or row["next_action"], row)
-            self.assertIsNone(row["wait_reason"])
-            self.assertEqual(row["next_action"], "Next to run: a Captain dispatches a writer")
+            self.assertEqual(row["wait_reason"], "Awaiting a direct Captain")
+            self.assertIsNone(row["next_action"])
         overview = self.page("/v1/operator/overview")
         self.assertEqual(overview["sections"]["queued"], 2)
         self.assertEqual(overview["dispatch"], {"paused": False})
@@ -502,15 +503,17 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         self.assertNotIn("runners", overview)
         self.assertIsNotNone(overview["oldest_queued_age_seconds"])
 
-        claim = {"runner_id": "runner-a", "repository_ids": ["repo"], "slots": 1, "stages": ["report_drafting"]}
-        status, claimed = self.request("/v1/dispatch/claim", RUNNER, claim, {"Phalanx-Lease": "x" * 32})
-        self.assertEqual((status, claimed["status"]), (200, "claimed"), claimed)
+        from test_bootstrap import claim_stage
+
+        queued_rows = self.page(BOARD)["items"]
+        selected = next(row for row in queued_rows if row["id"] != self.execution)
+        claimed = claim_stage(self.path, selected["item_id"], "x" * 32, "runner-a")
         rows = self.page(BOARD)["items"]
         running = next(row for row in rows if row["status"] == "running")
         self.assertEqual(running["next_action"], "A worker is running the report_drafting stage")
         queued = next(row for row in rows if row["id"] == self.execution)
-        self.assertIsNone(queued["wait_reason"])
-        self.assertEqual(queued["next_action"], "Next to run: a Captain dispatches a writer")
+        self.assertEqual(queued["wait_reason"], "Awaiting a direct Captain")
+        self.assertIsNone(queued["next_action"])
         overview = self.page("/v1/operator/overview")
         self.assertEqual((overview["sections"]["running"], overview["sections"]["queued"]), (1, 1))
         self.page("/v1/operator/runners", 404)

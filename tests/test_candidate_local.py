@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from phalanx.attended import RunnerError
+from phalanx.runner_errors import RunnerError
 from phalanx.candidate_local import CandidateLocal
 from phalanx.local_checks import _FAILURE, LocalCheck, kill_tree, run_check
 from phalanx.handoff import Outcome, WorkerResult

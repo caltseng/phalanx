@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store
 from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA
-from phalanx.dispatch_api import Claim, DispatchSettings
+from phalanx.dispatch_api import DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, migrate, write_transaction
@@ -57,12 +57,6 @@ class WriterTest(ServerFixture, unittest.TestCase):
         response = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER, body, code)
         return response, token, body
 
-    def old_loop_claim(self):
-        with write_transaction(self.path) as db:
-            dispatch.set_capacity(db, "local", 10)
-            return dispatch.claim(db, Claim(runner_id="local", repository_ids=["repo"], stages=STAGES),
-                                  intake.digest(token_urlsafe(32)))
-
     def submit(self, token, binding, **fields):
         state = binding["state"]
         body = {"attempt_id": binding["writer"]["attempt_id"], "stage": state["stage"],
@@ -80,8 +74,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER,
                 dict(body, token_digest=intake.digest("other")), 409)
         self.register(item_id, execution_id, code=409)
-        self.assertEqual(self.old_loop_claim()["item_id"], head)
-        self.assertEqual(self.old_loop_claim()["status"], "no_eligible_work")
+        self.assertEqual(self.ok(f"/v1/items/{head}", OWNER)["execution"]["state"]["status"], "queued")
 
         other, _ = self.item()
         self.ok(f"/v1/items/{other}", token, code=403)
@@ -154,7 +147,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         {"captain_id": self.captain["id"], "writer_id": launched["writer"]["id"],
                          "reason": "never launched"})
 
-    def test_queued_binding_stays_out_of_the_old_loop_and_survives_steering(self):
+    def test_queued_binding_survives_steering_and_resumes_its_writer(self):
         item_id, execution_id = self.item()
         with write_transaction(self.path) as db:
             db.execute("UPDATE executions SET ready_since=? WHERE id=?", (2**42, execution_id))
@@ -164,7 +157,6 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 {"expected_version": self.version(item_id), "priority": "urgent"}, method="PATCH")
         with write_transaction(self.path) as db:
             db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (execution_id,))
-        self.assertEqual(self.old_loop_claim()["status"], "no_eligible_work")
         attempt = self.ok("/v1/writer/attempt", token, method="POST")
         self.assertEqual(attempt["state"]["status"], "running")
         self.assertIsNotNone(attempt["writer"]["attempt_id"])
@@ -199,7 +191,6 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(writer + "/withdraw", RUNNER, withdrawal, 409)
         ended = self.ok(writer + "/withdraw", RUNNER, dict(withdrawal, stopped=True))
         self.assertEqual((ended["state"]["status"], ended["writer"]["state"]), ("queued", "ended"))
-        self.assertEqual(self.old_loop_claim()["status"], "no_eligible_work")
 
     def test_withdrawing_a_stopped_writer_confirms_a_pending_owner_stop(self):
         item_id, execution_id = self.item()
@@ -617,12 +608,8 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((state["status"], state["candidate"], state["final_output"]["draft"]),
                          ("completed", OTHER, True))
 
-    def test_draft_intake_cannot_enter_legacy_promotion_and_survives_rerun(self):
+    def test_draft_intake_survives_rerun(self):
         item_id, execution_id = self.pr_item("checked_in", publication_mode="draft")
-        with write_transaction(self.path) as db:
-            claim = dispatch.claim(db, Claim(runner_id="local", repository_ids=["repo"], stages=["development"]),
-                                   intake.digest(token_urlsafe(32)))
-        self.assertEqual(claim["status"], "no_eligible_work")
         binding, token, _ = self.register(item_id, execution_id)
         binding = self.submit(token, binding, candidate=HEAD)
         binding = self.submit(token, binding, reviewed_candidate=HEAD)
@@ -897,7 +884,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                           VALUES ('c', 'chat', 'c1', 'active', ?, ?)""", (now, now))
         migrate(path)
         with connect(path) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 18)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], len(store.MIGRATIONS))
             self.assertEqual(db.execute("SELECT count(*) FROM session_archives").fetchone()[0], 0)
         self.start_server(path)
 

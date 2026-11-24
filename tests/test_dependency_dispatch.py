@@ -4,8 +4,7 @@ from tempfile import TemporaryDirectory
 from time import time
 import unittest
 
-from phalanx import dependencies, dispatch, finalization, intake
-from phalanx.dispatch_api import Claim
+from phalanx import dependencies, finalization, intake
 from phalanx.intake_models import Intake, Rerun
 from phalanx.store import connect, migrate, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target
@@ -43,33 +42,30 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
                          evidence=Evidence(report_draft=revision, reviewed_report=revision, stored_report=output))
         return revision
 
-    def claim(self, db, name):
-        request = Claim(runner_id="local", repository_ids=["consumer"], stages=[Stage.REPORT_DRAFTING])
-        return dispatch.claim(db, request, intake.digest(name))
+    def claim(self, db, item):
+        row = intake.current_execution(db, item["id"])
+        assignment = intake.claim_attempt(
+            db, row, intake.STATE.validate_json(row["state_json"]), runner_id="@writer",
+            lease_digest=intake.digest(item["id"]), lease_expires_at=int(time()) + 300,
+        )
+        return None if assignment is None else {
+            **assignment, "item_id": item["id"], "request": intake.inspect(db, item["id"]),
+        }
 
-    def test_claim_skips_blocked_backlog_then_pins_both_upstreams(self):
+    def test_named_claim_checks_both_upstreams_and_pins_their_revisions(self):
         with write_transaction(self.path) as db:
             first = self.file(db, "source")
             second = self.file(db, "source")
-            backlog_source = self.file(db, "source")
             dependent = self.file(db, upstream=[first, second], priority="urgent")
-            for _ in range(100):
-                self.file(db, upstream=[backlog_source], priority="urgent")
-            older = self.file(db, priority="low")
-            urgent = self.file(db, priority="urgent")
-            db.execute("UPDATE executions SET ready_since=? WHERE item_id=?",
-                       (int(time() * 1000) - 900_000, older["id"]))
 
             first_revision = self.complete_report(db, first)
             waiting = intake.inspect(db, dependent["id"])["execution"]["unmet_dependencies"]
             self.assertEqual([link["upstream_id"] for link in waiting], [second["id"]])
-            self.assertEqual(self.claim(db, "older")["item_id"], older["id"])
-            self.assertEqual(self.claim(db, "urgent")["item_id"], urgent["id"])
-            self.assertEqual(self.claim(db, "blocked"), {"status": "no_eligible_work"})
+            self.assertIsNone(self.claim(db, dependent))
 
             second_revision = self.complete_report(db, second)
             execution = dependent["execution"]
-            assignment = self.claim(db, "resolved")
+            assignment = self.claim(db, dependent)
             self.assertEqual(assignment["item_id"], dependent["id"])
             queued = self.file(db, upstream=[first])
             expected = {
@@ -82,7 +78,6 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
                          Rerun(expected_version=current["version"], target=Target.REPORT))
             waits = intake.inspect(db, queued["id"])["execution"]["unmet_dependencies"]
             self.assertEqual([wait["upstream_id"] for wait in waits], [first["id"]])
-            self.assertEqual(self.claim(db, "resolved"), assignment)
             history = intake.timeline(db, dependent["id"], execution["id"])
             self.assertEqual(history[-1]["details"]["dependencies"], assignment["dependencies"])
 
@@ -123,11 +118,11 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             self.assertEqual(pending["state"]["pending_output"], Status.COMPLETED)
             waits = intake.inspect(db, consumer["id"])["execution"]["unmet_dependencies"]
             self.assertEqual(waits[0]["reason"], "Waiting for prerequisite report finalization")
-            self.assertEqual(self.claim(db, "pending")["status"], "no_eligible_work")
+            self.assertIsNone(self.claim(db, consumer))
 
         self.assertEqual(finalization.attempt(self.path, row["id"])["state"]["status"], Status.COMPLETED)
         with write_transaction(self.path) as db:
-            assignment = self.claim(db, "stored")
+            assignment = self.claim(db, consumer)
             self.assertEqual(assignment["item_id"], consumer["id"])
             self.assertEqual(assignment["dependencies"][0]["revision"], revision)
 
@@ -137,11 +132,12 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
             source = self.file(db, "source")
             consumer = self.file(db, upstream=[source])
             self.complete_report(db, source, simulate_missed_refresh=True)
-            self.assertEqual(self.claim(db, "before-restart")["status"], "no_eligible_work")
+            self.assertIsNotNone(intake.current_execution(db, consumer["id"])["dependency_wait_json"])
         self.stop_server(server)
         self.start_server(self.path)
         with write_transaction(self.path) as db:
-            self.assertEqual(self.claim(db, "after-restart")["item_id"], consumer["id"])
+            self.assertIsNone(intake.current_execution(db, consumer["id"])["dependency_wait_json"])
+            self.assertEqual(self.claim(db, consumer)["item_id"], consumer["id"])
 
     def test_owner_steering_is_versioned_and_rejects_active_changes(self):
         self.start_server(self.path)
@@ -166,7 +162,7 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
         self.assertEqual(changed["execution"]["unmet_dependencies"], [])
         self.assertEqual(steer(OWNER, execution["version"])[0], 409)
         with write_transaction(self.path) as db:
-            claimed = self.claim(db, "steered")
+            claimed = self.claim(db, consumer)
             self.assertEqual(claimed["request"]["goal"], "New goal")
         self.assertEqual(steer(OWNER, claimed["execution"]["version"])[0], 409)
         with connect(self.path, mode="ro") as db:

@@ -3,7 +3,7 @@
 import os
 from hashlib import sha256
 
-from .attended_drafts import github_repository
+from .github import github_repository
 from .github import GitHubClient
 from .intake_models import Intake
 

@@ -41,9 +41,6 @@ RUNNER_ONLY_STAGES = frozenset({
     Stage.PR_CREATION, Stage.REPORT_STORAGE, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION,
     Stage.PR_VALIDATION, Stage.PR_RECONCILIATION, Stage.CHECK_IN,
 })
-# Per-runner attempts beyond its capacity that only runner-only stages may use, so a
-# short GitHub or check stage never waits behind long agent workers.
-RUNNER_ONLY_SLOTS = 2
 
 
 class Status(StrEnum):
@@ -456,7 +453,7 @@ def decide(
     evidence: Evidence = Evidence(),
     wait: Wait | None = None,
     retry_allowed: bool = False,
-    direct: bool = False,  # step5-remove: a writer's result; step 5 makes this the only path
+    direct: bool = False,  # Runner-stage transitions remain until PH-DS5 part 2.
 ) -> Execution:
     """Decide one event or raise ValueError for an inadmissible event.
 

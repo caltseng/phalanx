@@ -37,7 +37,7 @@ OPERATOR_SCHEMA = (
        END""",
 )
 
-# Opaque worker session reference and optional link that the runner's bridge supplied.
+# Opaque worker session reference and optional link.
 WORKER_SCHEMA = (
     """CREATE TABLE attempt_workers (
         attempt_id TEXT PRIMARY KEY NOT NULL REFERENCES attempts(id),

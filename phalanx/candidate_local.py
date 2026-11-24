@@ -2,7 +2,8 @@
 
 from uuid import UUID
 
-from .attended import RunnerAPI, RunnerError
+from .api_client import RunnerAPI
+from .runner_errors import RunnerError
 from .handoff import WorkerResult, WorkPacket
 from .local_checks import CheckCommandError, LocalCheck, run_check
 from .transitions import Outcome, Stage

@@ -2,7 +2,7 @@
 
 GitHub exposes enough state for PH-13 to publish and recover a draft and for PH-14 to gate and verify promotion. Use Git for revision-conditional branch publication, REST for PR reads and writes, and GraphQL for ready promotion. The key limits are the lack of a head precondition on creation and promotion, and the lack of a base precondition on the ordinary merge call.
 
-This report combines documented contracts with read-only inspection of [Phalanx PR #1](https://github.com/caltseng/phalanx/pull/1). The implementation choices below apply to the first runner adapter. The [design spec](../../SPEC.md) and [state machine](../../STATE_MACHINE.md) govern transitions.
+This historical report combines documented contracts with read-only inspection of [Phalanx PR #1](https://github.com/caltseng/phalanx/pull/1). Its runner-stage implementation remains only until PH-DS5 part 2. Current writers publish directly; the [design spec](../../SPEC.md) and [state machine](../../STATE_MACHINE.md) govern transitions.
 
 ## PH-13 publication and recovery
 
@@ -23,9 +23,8 @@ For a lost push response, inspect the remote ref. At the desired SHA, adopt the 
 
 `DraftStageRunner` connects this workflow to the server. Pass the dispatch assignment and lease, the runner's repository default if the item has no explicit target, and the development checkpoint for that execution. The checkpoint carries the worktree, candidate, and the base ref and SHA captured during development. It can carry a previously recorded topic SHA when recovery requires one. Publication checks those inputs against the server and local Git before writing. It uses the recorded base SHA through draft creation and evidence submission, even if the remote moves. The claim check is read-only and does not renew the lease. The caller owns lease heartbeats. Successful evidence is sealed locally before submission so a lost acknowledgement can replay the same authenticated request even after the attempt has ended.
 
-Attended `prepare --draft` claims initial publication work for mapped GitHub repositories. Development pins the permitted origin tracking ref before launch and stores it with the verified candidate before submission. A draft claim uses the accepted checkpoint for its exact execution and candidate. A previously issued launch without base provenance can submit its verified development result, but its draft claim waits for the exact base to be recovered or the candidate to be prepared again.
-
-The Captain loop drives each draft claim through `DraftStageRunner` on every poll until the server accepts an outcome. Pending and lost-claim outcomes stay in the slot's runner status and retry under the same journaled intent and claim, so a lost push, create or acknowledgement never starts another development worker. A moved target branch doesn't stop the first draft: the runner opens it against the current base and submits that base, and later stages validate against it. A PR on the item branch that differs from the intent is submitted to the publication-blocker route and queues reconciliation with that PR as primary. When development produces a new candidate and no draft number is known, the journal supersedes the old intent: the remote item ref must still be the old candidate or its expected tip, and that SHA becomes the lease for a non-fast-forward push. The superseding call looks up PRs first, so a late draft from the old intent is routed rather than duplicated. Any other outside movement with no PR to reconcile, such as a push to the item branch or a deleted target branch, submits a `needs_input` result whose question names the observed SHA or the missing branch. The owner's reply requeues publication. A recorded or verified draft blocks superseding until reconciliation. Native desktop evidence for these routes is still pending; the coverage is fixture, local bare-remote and HTTP tests.
+There is no CLI scheduler or queue claim endpoint for these stages. Their retained local
+publication journals and HTTP contracts are covered by fixture/bare-remote tests until part 2.
 
 ## PH-14 validation and promotion
 

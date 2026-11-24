@@ -16,6 +16,13 @@ _SHA = re.compile(r"[0-9a-fA-F]{40}")
 _NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
 
 
+def github_repository(remote):
+    from .pr_models import GITHUB_REMOTE
+
+    match = GITHUB_REMOTE.fullmatch(remote)
+    return match[1].lower() if match else None
+
+
 class GitHubError(Exception):
     """Provider rejection or failed read."""
 

@@ -370,12 +370,9 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         )
         self.assertEqual(cli.returncode, 0, cli.stderr)
         self.assertEqual(json.loads(cli.stdout), queued)
-        status, resumed = self.submit(
-            "/v1/dispatch/claim", {"runner_id": "local", "repository_ids": ["example"]},
-            token=RUNNER, lease="y" * 32,
-        )
-        self.assertEqual(status, 200, resumed)
-        self.assertEqual(resumed["status"], "claimed")
+        from test_bootstrap import claim_stage
+
+        resumed = claim_stage(self.path, item["id"], "y" * 32)
         self.assertEqual(resumed["execution"]["state"]["stage"], waiting["state"]["stage"])
         self.assertEqual(resumed["input_reply"], {
             "answer": answer["answer"], "answered_by": "owner", "wait_version": waiting["version"],
@@ -415,11 +412,9 @@ class IntakeTest(ServerFixture, unittest.TestCase):
                          ("reply", "captain", "Answered by captain"))
         last_reply = self.get(f"/v1/items/{item['id']}", OWNER)[1]["last_reply"]
         self.assertEqual((last_reply["answer"], last_reply["answered_by"]), ("unittest", "captain"))
-        status, resumed = self.submit(
-            "/v1/dispatch/claim", {"runner_id": "local", "repository_ids": ["example"]},
-            token=RUNNER, lease="y" * 32,
-        )
-        self.assertEqual(status, 200, resumed)
+        from test_bootstrap import claim_stage
+
+        resumed = claim_stage(self.path, item["id"], "y" * 32)
         self.assertEqual(resumed["execution"]["state"]["stage"], waiting["state"]["stage"])
         self.assertEqual(resumed["input_reply"], {
             "answer": "unittest", "answered_by": "captain", "wait_version": waiting["version"],
@@ -577,7 +572,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM reports").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM report_finalizations").fetchone()[0], 0)
 
-    def test_failed_attempt_releases_slot_and_stalled_storage_can_be_retried(self):
+    def test_failed_attempt_ends_and_stalled_storage_can_be_retried(self):
         item, _, _, route = self.create("checked_in")
         claim = self.claim(item, item["execution"])
         result = dict(claim, outcome="failed", wait={"reason": "Build unavailable", "trigger": "owner reply"})
