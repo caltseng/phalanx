@@ -645,9 +645,6 @@
         ["Age", ago(item.createdAt, now)],
         ["Last progress", epoch(item.lastProgressAt) && ago(item.lastProgressAt, now)],
         ["Waiting", epoch(item.waitSince) && ago(item.waitSince, now)],
-        ["Wait reason", item.waitReason && h("span", { class: "pre", text: item.waitReason })],
-        ["Resumes on", item.resumeTrigger],
-        ["Next action", data.nextAction],
         ["Retry", item.retryAt && stamp(item.retryAt)],
         ["Recheck", item.recheckAt && stamp(item.recheckAt)],
         ["Attempt", data.attempt && h("code", { text: short(data.attempt), title: data.attempt })],
@@ -655,7 +652,6 @@
           writer.captainId ? h("span", {}, " · ", captainReference(writer.captainId)) : "",
           writer.sessionId ? h("code", { text: " " + short(writer.sessionId), title: writer.sessionId }) : "",
           sessionUrl ? h("span", {}, " · ", h("a", { href: sessionUrl, text: "session" })) : "")],
-        ["Writer note", writer?.progressNote],
         ["PR", pr && h("a", { href: pr, text: prNumber(pr) + " ↗" })],
         ["Delivery", delivery(item, now)],
         ["Output", item.output?.kind === "report" ? prCell(item) : null],
@@ -663,6 +659,13 @@
           text: short(item.itemId) + " / " + short(item.id) })],
         ...historicalWorkerFacts(item)
       ]));
+      for (const [heading, text] of [
+        ["Wait reason", item.waitReason], ["Resumes on", item.resumeTrigger],
+        ["Next action", data.nextAction], ["Writer note", writer?.progressNote]
+      ]) {
+        if (text) box.append(h("div", { class: "block" },
+          h("h4", { text: heading }), h("p", { class: "pre", text })));
+      }
       if (flags.length) {
         const list = h("ul", { class: "plain" });
         for (const flag of flags) {
@@ -678,7 +681,7 @@
           question.append(h("ul", { class: "options" }, data.question.options.map(option =>
             h("li", { class: option === data.question.proposedDefault ? "default" : "", text: option }))));
         }
-        if (data.question.proposedDefault) question.append(h("p", { class: "faint", text: "Proposed default: " + data.question.proposedDefault }));
+        if (data.question.proposedDefault) question.append(h("p", { class: "faint pre", text: "Proposed default: " + data.question.proposedDefault }));
         if (item.itemId && item.version) {
           question.append(h("p", {}, h("code", { class: "cmd", text: "python -m phalanx reply " + item.itemId + " " + item.id +
             " \"ANSWER\" --version " + item.version + " --key KEY" })));
