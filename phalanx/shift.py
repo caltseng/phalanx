@@ -359,6 +359,11 @@ def archive_check(api, config, charter, session_id, reported_by, *, item_id=None
                 raise WorkspaceError(f"Worktree has an in-progress Git operation: {path}")
             branch = _git(path, "symbolic-ref", "--short", "HEAD").strip()
             _git(path, "check-ref-format", f"refs/heads/{branch}")
+            if not _git(path, "ls-remote", "--heads", "origin", f"refs/heads/{branch}").strip():
+                if not item_id:
+                    raise WorkspaceError(f"Origin branch {branch} is absent; use --item to identify its base")
+                branch = item.get("target_branch") or mapping["base_branch"]
+                _git(path, "check-ref-format", f"refs/heads/{branch}")
             ref = f"refs/remotes/origin/{branch}"
             _git(path, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:{ref}")
             unpushed = _git(path, "--no-replace-objects", "rev-list", "HEAD", "--not", ref).strip()
@@ -368,7 +373,7 @@ def archive_check(api, config, charter, session_id, reported_by, *, item_id=None
         record = archive_result(api, session_id, "blocked", str(error), reported_by)
         return {"can_archive": False, **record}
     return {"can_archive": True, "session_id": session_id,
-            "reason": "Branch is pushed and worktree is clean" if worktree else "No worktree to remove"}
+            "reason": "Commits are preserved on origin and worktree is clean" if worktree else "No worktree to remove"}
 
 
 def handoff(api, charter, captain_id, note, command):

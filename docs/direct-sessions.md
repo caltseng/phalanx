@@ -210,8 +210,9 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   in that same creator session; a fresh keeper run cannot assume its creator authority.
   A predecessor still `ending` after 30 min is stale, not automatically safe to archive.
   Immediately before any archive, `shift archive-check` verifies local work is preserved:
-  the worktree is clean and its commits are on its freshly fetched origin branch. Unpushed
-  commits, local changes or unavailable evidence skip archival and raise `orphan_session`.
+  the worktree is clean and its commits are on its freshly fetched origin branch, or on the
+  item's freshly fetched origin base if its branch is absent. Unpushed commits, local changes
+  or unavailable evidence skip archival and raise `orphan_session`.
   The runtime's session tools perform archival; the core, CLI and API stay runtime-neutral.
   `shift archive-result` records success, block or refusal with the reason. A refused archive
   leaves the session untouched and keeps its flag even after the reporter ends; it is never

@@ -177,7 +177,7 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 | `shift action --captain --item --action --reason` | Puts a Captain action on the item's timeline |
 | `shift handoff --captain ID --note NOTE` | Starts ending the shift. Prints the open intents still owned, the successor's `session_name` and `kickoff`, and any registered successors |
 | `shift retire-reconciler RUNNER_ID` | Deletes a decommissioned reconciler's heartbeat, which clears its `reconciler_stale` flag |
-| `shift archive-check --session ID --by SESSION (--item ITEM \| --worktree PATH \| --no-worktree)` | Checks whether the session's writer/handoff has ended and local work is preserved. Fetches the actual origin branch and refuses dirty worktrees or unpushed commits. Does not archive |
+| `shift archive-check --session ID --by SESSION (--item ITEM \| --worktree PATH \| --no-worktree)` | Checks whether the session's writer/handoff has ended and local work is preserved. Fetches the actual origin branch (or the item's origin base when its branch is absent) and refuses dirty worktrees or unpushed commits. Does not archive |
 | `shift archive-result --session ID --by SESSION --outcome archived\|blocked\|refused --reason REASON` | Records the runtime outcome durably. A block or refusal keeps `orphan_session`; only verified archival clears it. Refusals suppress further attempts |
 
 ### Intake routing and charter lanes
@@ -210,9 +210,11 @@ store before resuming Captains and writers.
 
 Immediately before the runtime archive call, the creator runs `shift archive-check` with the
 writer's `--item`. The check inspects the verified item worktree, fetches its origin branch and
-requires every local commit to be on that remote branch. Tracked or staged changes, untracked
-non-ignored files, hidden index changes, in-progress Git operations, a missing remote branch and an
-unavailable Git check all prevent archival. Gitignored build output does not block archival.
+requires every local commit to be on that remote branch. If origin confirms the branch is absent,
+it instead freshly fetches the item's target branch (or configured base branch) and requires every
+local commit to be on that origin base. Report-only writers need not push a branch. Tracked or
+staged changes, untracked non-ignored files, hidden index changes, in-progress Git operations and
+unavailable Git evidence all prevent archival. Gitignored build output does not block archival.
 Nothing is discarded or reset. For a helper or Captain
 with a Git worktree use `--worktree`; use `--no-worktree` only after runtime inspection confirms
 there is no Git worktree or persistent work that archival would remove. `can_archive: true` is
