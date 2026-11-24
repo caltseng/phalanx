@@ -186,8 +186,8 @@ heartbeat and wakes instead of the charter hash; charter revision enforcement is
 - Persisted dispatch `max_writers` (initially 5) bounds new registered writers across the
   workspace. Owners edit it in Scribe or the dispatch settings API. Intents and waiting
   writers count; queued items without writers do not. Replacements add no extra place;
-  reductions do not end writers. Legacy charter `max_slots` / `max_writers` are validated
-  but explicitly reported as ignored, never overriding this owner-controlled setting.
+  reductions do not end writers. Charter `[shift] max_writers` is rejected with
+  guidance to remove it and use dispatch settings instead.
 - Pause blocks new registrations/attempts while existing progress/results continue.
 - Captains consider repo mappings, charter scope, affinity, dependencies and retry time.
   Rank eligible work by urgent/normal/low priority aged toward urgent, then oldest ready

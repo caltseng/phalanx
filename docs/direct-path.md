@@ -175,8 +175,8 @@ max_wakes = 48
 `max_wakes = 48` (D7). Configure concurrency with Scribe's **Writer concurrency**
 control or owner-authenticated `PUT /v1/dispatch/settings` (`{"max_writers": 5}`),
 not in the charter or `allowed_actions` prose. The persisted limit starts at 5.
-Legacy charter `max_writers` and `max_slots` remain validated but are reported as
-ignored by `shift charter`; heartbeats and launches cannot restore stale charter caps.
+Charter `[shift] max_writers` is rejected with guidance to remove it and use
+dispatch settings instead; heartbeats and launches never configure the limit.
 The server counts registered intents and
 confirmed writers on open executions across all repositories and Captains
 (including predecessors). Idle or waiting writers still count. Completion, failure,
