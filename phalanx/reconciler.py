@@ -270,7 +270,9 @@ class Reconciler:
             return github.get_pull_request(int(primary.rstrip("/").rsplit("/", 1)[1]))
         pulls = github.list_matching_pull_requests(head_owner=owner, head=branch)
         # The open PR, else the newest closed one.
-        return max(pulls, key=lambda pull: (pull.state == "open", pull.number), default=None)
+        listed = max(pulls, key=lambda pull: (pull.state == "open", pull.number), default=None)
+        # The list endpoint omits merged and mergeable, so re-read the PR for exact values.
+        return None if listed is None else github.get_pull_request(listed.number)
 
     def checkout(self, repo, remote, fetched):
         """Verify the mapped checkout's origin is the registered remote, and fetch it once a pass."""

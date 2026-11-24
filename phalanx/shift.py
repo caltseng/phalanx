@@ -274,11 +274,12 @@ def prompt(name):
     return resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
 
 
-def handoff(api, charter, captain_id, note):
+def handoff(api, charter, captain_id, note, command):
     """Start ending this shift and say how to launch, or find, the successor Captain.
 
     The server names the successor after this Captain, so a rerun after a lost reply finds the chat
-    it already launched instead of starting a second one.
+    it already launched instead of starting a second one. The kickoff names `command`, the concrete
+    `phx shift` command, because a new chat can't know which command printed it.
     """
     ending = heartbeat(api, charter, captain_id, state="ending", handoff_note=note)
     captain = ending["captain"]
@@ -288,7 +289,8 @@ def handoff(api, charter, captain_id, note):
         "open_intents": captain["open_intents"],
         "successors": successors,
         "session_name": captain["successor_name"],
-        "kickoff": (f"You succeed Phalanx Captain {captain_id}. On your first wake, run "
+        "kickoff": (f"You succeed Phalanx Captain {captain_id}. In this chat, `phx shift` means `{command}`. "
+                    f"On your first wake, run "
                     f"`phx shift start --session-ref <your native session ID> --parent {captain_id}`.\n\n"
                     + prompt("captain")),
     }
@@ -306,8 +308,9 @@ def add_shift_command(commands):
     shift.add_argument("--config", type=Path, default=os.environ.get("PHALANX_SHIFT_CONFIG"),
                        help="shift config JSON (default: PHALANX_SHIFT_CONFIG)")
     actions = shift.add_subparsers(dest="shift_command", required=True)
-    show = actions.add_parser("prompt", parents=[shared], help="print the Captain or keeper prompt")
-    show.add_argument("name", choices=["captain", "keeper"])
+    show = actions.add_parser("prompt", parents=[shared],
+                              help="print the Captain or keeper prompt, or the worker prompt template")
+    show.add_argument("name", choices=["captain", "keeper", "worker"])
     actions.add_parser("charter", parents=[shared], help="validate the charter and show its revision")
     begin = actions.add_parser("start", parents=[shared], help="register this chat as a Captain")
     begin.add_argument("--session-ref", required=True, help="this chat's native session ID or link")
@@ -379,7 +382,8 @@ def run_shift(args):
         result = API(config)(f"/v1/items/{_q(args.item)}/captain-actions", body={
             "captain_id": args.captain, "action": args.action, "reason": args.reason})
     elif args.shift_command == "handoff":
-        result = handoff(API(config), charter, args.captain, args.note)
+        command = config.get("shift_command") or f"python -m phalanx shift --config {Path(args.config).resolve()}"
+        result = handoff(API(config), charter, args.captain, args.note, command)
     elif args.shift_command == "retire-reconciler":
         result = API(config)(f"/v1/reconcilers/{_q(args.runner_id)}", method="DELETE")
     elif args.shift_command == "launch":

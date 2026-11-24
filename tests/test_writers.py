@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx import captains, dispatch, flags, intake, store
+from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.store import connect, migrate, write_transaction
@@ -96,6 +97,19 @@ class WriterTest(ServerFixture, unittest.TestCase):
             binding = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
         self.assertEqual(binding["state"]["status"], "completed")
         self.ok("/v1/writer", token, code=401)
+
+    def test_report_finalization_ends_the_writer(self):
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        binding = self.submit(token, binding, report_markdown="# Report\n")
+        binding = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
+        self.assertEqual(binding["state"]["stage"], "report_storage")
+        finished = self.submit(token, binding, report_revision=intake.digest("# Report\n"))
+        self.assertEqual(finished["state"]["status"], "completed")
+        with connect(self.path, mode="ro") as db:
+            writer = db.execute("SELECT * FROM writers WHERE id=?", (binding["writer"]["id"],)).fetchone()
+        self.assertIsNotNone(writer["ended_at"])
+        self.assertEqual((writer["end_reason"], writer["attempt_id"]), ("closed as completed", None))
 
     def test_queued_binding_stays_out_of_the_old_loop_and_survives_steering(self):
         item_id, execution_id = self.item()
@@ -398,6 +412,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.kinds(now), {("no_live_captain", "server")})
         with write_transaction(self.path) as db:
             captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+        now = datetime.now(UTC)  # after the item and heartbeat exist, so slow hosts can't make them look newer
         self.assertEqual(self.kinds(now), set())
         later = now + captains.STALE + timedelta(seconds=1)
         self.assertEqual(self.kinds(later), {("no_live_captain", "server"), ("captain_stale", "server")})
@@ -432,14 +447,19 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertEqual(stale["kind"], "captain_stale")
         self.assertIn("without finishing its handoff", stale["reason"])
 
-    def test_upgrade_resets_sessions_stored_as_bare_ids(self):
+    def previous_store(self, migration):
+        """A store upgraded up to, but not including, the given migration."""
         path = self.path.with_name("previous.sqlite3")
         with write_transaction(path, create=True) as db:
-            shift = store.MIGRATIONS.index(store.CAPTAIN_SHIFT_SCHEMA)
-            for version, statements in enumerate(store.MIGRATIONS[:shift], start=1):
+            for version, statements in enumerate(store.MIGRATIONS[:store.MIGRATIONS.index(migration)], start=1):
                 for statement in statements:
                     db.execute(statement)
                 db.execute(f"PRAGMA user_version = {version}")
+        return path
+
+    def test_upgrade_resets_sessions_stored_as_bare_ids(self):
+        path = self.previous_store(CAPTAIN_SHIFT_SCHEMA)
+        with write_transaction(path) as db:
             now = intake.timestamp()
             db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, sessions_json, created_at,
                               heartbeat_at) VALUES ('c', 'chat', 'c1', 'active', '["s-1"]', ?, ?)""", (now, now))
@@ -449,6 +469,27 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                 charter_revision="c1", wake_count=1, state="active", sessions=[captains.Session(id="s-1", name="phx x")]))
             self.assertEqual([session["id"] for session in captain["sessions"]], ["s-1"])
             flags.all_flags(db)
+
+    def test_upgrade_ends_writers_of_closed_executions(self):
+        path = self.previous_store(CLOSED_WRITER_MIGRATION)
+        with write_transaction(path) as db:
+            intake.register(db, "repo", "https://github.com/e/r.git")
+            captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+            for name in ("closed", "open"):
+                item = intake.create(db, Intake(repository_id="repo", goal=name, target="report"))
+                db.execute("""INSERT INTO writers (id, execution_id, item_id, captain_id, runtime, nonce,
+                                  token_digest, state, created_at) VALUES (?, ?, ?, ?, 'r', ?, ?, 'busy', ?)""",
+                           (name, item["execution"]["id"], item["id"], captain["id"], name, intake.digest(name),
+                            intake.timestamp()))
+            db.execute("""UPDATE executions SET state_json = json_set(state_json, '$.status', 'cancelled',
+                              '$.final_output', json('{}'))
+                          WHERE id = (SELECT execution_id FROM writers WHERE id = 'closed')""")
+        migrate(path)
+        with connect(path, mode="ro") as db:
+            writers = {row["id"]: row for row in db.execute("SELECT * FROM writers")}
+        self.assertIsNotNone(writers["closed"]["ended_at"])
+        self.assertEqual(writers["closed"]["end_reason"], "closed as cancelled")
+        self.assertEqual((writers["open"]["ended_at"], writers["open"]["end_reason"]), (None, None))
 
     def test_stored_flags_are_idempotent_and_cleared_by_their_raiser(self):
         self.start_server(self.path)
