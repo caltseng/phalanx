@@ -4,6 +4,10 @@
 foreground service entrypoints and a CLI wrapper. It does not launch Captains/writers,
 schedule tasks, grant trust, migrate directories or restart live services. Native direct
 sessions and the existing reconciler remain the only execution path.
+The [deployment diagram](architecture.md#deployment-and-recovery-boundaries) shows the
+API service, native runtime and reconciler boundaries. Tooling merged in
+[#220](https://github.com/caltseng/phalanx/pull/220); that is not evidence that an existing
+installation has adopted it. Keep installation state in the operator's private runbook.
 
 ## Helper inventory and ownership
 
@@ -134,7 +138,7 @@ new setup writes an explicit absolute path under `.phalanx_muster` instead.
 
 1. Before review, inventory only: record the owning account/supervisor, exact API
    URL/port and database path, private environment source, stable reconciler ID/config/
-   scratch path, shift config/charter (`max_writers = 5` for this deployment), workspace,
+   scratch path, shift config/charter and its current writer budget, workspace,
    worktrees, active writer registrations/nonces and current native sessions. Keep private
    values and identities in the operator's runbook, not this repo or a PR.
 2. Prepare a **new local** `deployment.json` by filling this shape with the existing paths;
@@ -172,7 +176,7 @@ new setup writes an explicit absolute path under `.phalanx_muster` instead.
    start its sole persistent supervisor with the same scratch path. Do not run `--once`
    concurrently with the persistent reconciler.
 6. Compare API/database identity, registrations and active writer nonces to the snapshot;
-   verify charter capacity remains five and the Captain's existing schedules/sessions
+   verify configured writer capacity is unchanged and the Captain's existing schedules/sessions
    still point at the old paths. Use `muster status` only if that install has already
    configured matching API home identity; otherwise use explicit shift config and
    authenticated API status. Ensure there is one service owner and one reconciler

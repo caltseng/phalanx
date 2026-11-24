@@ -26,13 +26,14 @@
   <h1>Phalanx state machine</h1>
   <p>One registered writer stays with an item across separately fenced stage attempts.
     The server owns transitions; GitHub owns PR facts and merging.
-    <a href="STATE_MACHINE.md">Authoritative transition rules</a>.</p>
+    <a href="STATE_MACHINE.md">Authoritative transition rules</a> and
+    <a href="docs/architecture.md">component, sequence and deployment diagrams</a>.</p>
   <h2>Direct lifecycle</h2>
   <div class="map" tabindex="0" role="region" aria-label="Scrollable lifecycle diagram">
     <svg viewBox="0 0 960 420" role="img" aria-labelledby="graph-title graph-description">
       <title id="graph-title">Direct writer PR and report paths</title>
       <desc id="graph-description">PR work goes from development through self review,
-        publication and delivery to completion. Review findings return to development.
+        publication and API-verified delivery to completion. Review findings return to development.
         Delivery fixes stay on the same PR; a draft head change returns to self review.
         Reports go through drafting, exact-revision review and storage to completion.
         A later verified owner merge enriches a completed ready PR without reopening work.</desc>
@@ -42,7 +43,7 @@
       <rect x="10" y="95" width="160" height="55"></rect><text x="90" y="128">Development</text>
       <rect x="205" y="95" width="160" height="55"></rect><text x="285" y="128">Self review</text>
       <rect x="400" y="95" width="160" height="55"></rect><text x="480" y="128">Publication</text>
-      <rect x="595" y="95" width="160" height="55"></rect><text x="675" y="128">Delivery</text>
+      <rect x="595" y="95" width="160" height="55"></rect><text x="675" y="128">Delivery (API)</text>
       <rect x="790" y="95" width="160" height="55"></rect><text x="870" y="128">Completed</text>
       <path d="M170 122H205"></path><path d="M365 122H400"></path>
       <path d="M560 122H595"></path><path d="M755 122H790"></path>
@@ -63,11 +64,19 @@
       <text class="label" x="188" y="385">Findings on exact draft</text>
     </svg>
   </div>
+  <p>Solid arrows are server-owned stage advances after accepted evidence; dashed arrows
+    show rework or terminal enrichment. The writer performs publication and same-PR
+    delivery fixes. The reconciler posts GitHub facts; the API verifies output.
+    Report storage is server-owned finalization of the exact reviewed draft.</p>
   <details open>
     <summary>Publication and delivery</summary>
     <p>Publish one primary PR with an explicit target base. Ready-only work is never merged
       by its writer. Checked-in work may enable GitHub auto-merge, under repository rules.
       Trusted local checks are flags, not a Phalanx gate.</p>
+    <p>Delivery normally waits without an open attempt while the same writer remains
+      registered. Ready-mode fixes need no stage result; a reply that queues delivery
+      requires the writer to act and submit success. Input and external waits do not
+      authorize replacing a live writer.</p>
     <p>Draft publication is a ceiling: never promote or merge. Verify the open draft at the
       self-reviewed head, item branch and target base; a changed head returns to review.
       Draft completion satisfies no ready/check-in dependency.</p>

@@ -14,6 +14,10 @@ The HTTP API server and durable store run locally, with visible worker sessions 
 
 ## Architecture
 
+**Relay-free, not server-free:** the retired relay transported requests for the old
+Captain loop. The HTTP API and Scribe remain. See the [implementation map and ownership,
+sequence and deployment diagrams](docs/architecture.md) for the audited architecture.
+
 The HTTP API server owns the SQLite queue, executions, attempts, questions, reports and
 timestamped evidence. It also serves **Scribe**, the local work board at `/operator/`.
 Clients reach queue state only through the API; Git checkouts and credentials stay on
@@ -31,19 +35,23 @@ Captain when none is live, including after a stale Captain, without restarting i
 See [the direct-path operating guide](docs/direct-path.md).
 
 ```text
-Owner intake -> API + SQLite <-> Scribe (/operator/)
-                    ^
-Charter -> Captain (phx shift) -> writers (phx work) -> GitHub PR
-Keeper  -> fresh Captain             |                     |
-                    +---------------+   reconciler <------+
-                                              |
-                                              +-> API delivery evidence
+Owner CLI / Scribe intake -----> HTTP API -----> server SQLite
+                                   ^
+Charter -> Captain (shift) ---------| bindings / actions / heartbeat
+Keeper  -> fresh Captain           |
+              | native launch      |
+              v                    |
+        Writer (work) -------------| scoped stage results / questions
+              |                    |
+        Item worktree -> GitHub PR |
+                          |        |
+                          +-> Reconciler -- observations -> API
 ```
 
 Intake defaults to `checked_in`; choose `ready_for_check_in` for owner-only merging or
-`report` for Markdown. Runner affinity is retained request metadata: this muster used
-`direct-hold` to keep work off the former scheduler, but direct registration needs no such
-sentinel. Charter lanes are Captain policy, explained by refreshed `held` actions, not
+`report` for Markdown. Runner affinity is retained request metadata, not a direct-session
+routing gate; no `direct-hold` sentinel is required. Charter lanes are Captain policy,
+explained by refreshed `held` actions, not
 server queues or reserved slots. PR work flows through `development`, `self_review`,
 `publication` and `delivery`. For ready-only work, the writer opens a ready PR, required
 checks pass, and the reconciler verifies completion. The owner merges; a later reconciler
@@ -68,7 +76,7 @@ The following manual alternative creates new tokens and a new database. In Power
 
 ```powershell
 py -m venv .venv
-.venv/Scripts/Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.lock -e .
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -166,10 +174,11 @@ To retrieve one item's correlated timeline through the supported API, see the [p
 - [Resume an existing install](docs/resume.md): restart order, single-instance checks and status.
 - [Writer operations](docs/writer-operations.md): direct writers, publication, validation flags and delivery.
 - [Direct path](docs/direct-path.md): the GitHub reconciler and a Captain on the direct path.
+- [Architecture](docs/architecture.md): implemented ownership, sequence, deployment and recovery boundaries.
 - [Recovery and troubleshooting](docs/recovery.md): writer discovery and replacement, and SQLite backup and restore.
 - [Work items](docs/work-items.md): filing, draft-only PR delivery, GitHub issue import, answering questions and the operator board.
 - [Configuration](docs/configuration.md): environment variables and the reconciler config.
-- [API reference](docs/api.md) and [developing Phalanx](docs/development.md): routes, leases, transactions and tests.
+- [API reference](docs/api.md) and [developing Phalanx](docs/development.md): scoped attempts, routes, transactions and tests.
 - [Validation policy](docs/validation-policy.md), [GitHub observations](docs/direct-path.md#run-the-github-reconciler), [pilot reports](docs/pilots/) and [decision log](docs/decisions.md).
 
-Design: the [spec](SPEC.md), [state machine](STATE_MACHINE.md), [roadmap](ROADMAP.md) and [implementation plan](IMPLEMENTATION_PLAN.md). Open [state-machine.html](state-machine.html) locally in a browser to explore the lifecycle and execution status graphs.
+Design: the [spec](SPEC.md), [state machine](STATE_MACHINE.md), [roadmap](ROADMAP.md) and [implementation plan](IMPLEMENTATION_PLAN.md). Open [state-machine.html](state-machine.html) locally in a browser for the lifecycle diagram and execution status reference. Its inline SVG is maintained by hand alongside the Markdown Mermaid source; there is no generated diagram bundle.

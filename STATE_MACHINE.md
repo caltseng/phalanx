@@ -4,6 +4,9 @@ The transition tables and rules here are authoritative. The diagrams and
 [HTML visualization](state-machine.html) illustrate them. An execution has a **stage**
 (what happens next) and **status** (whether it can happen now). The server owns both.
 One registered writer remains with its item; each attempted stage is separately fenced.
+The [architecture diagrams](docs/architecture.md) show which component performs each
+operation. The server verifies delivery from reconciler observations; it does not
+perform the writer's Git/GitHub writes.
 
 Workers self-resolve within scope and repository rules. Fix routine failures, conflicts and
 feedback; ask for judgment or missing authority only when necessary. Record assumptions,
@@ -21,13 +24,15 @@ unrelated head, draft output, or already-recorded merge never changes terminal s
 
 ```mermaid
 flowchart TD
+    accTitle: Direct PR and report lifecycle
+    accDescr: One writer develops, self-reviews and publishes a primary PR. Reconciler observations verify delivery. Reports use drafting, exact-revision review and server storage. Findings loop back without a separate PR executor.
     Start([New execution]) --> Kind{Output type}
     Kind -->|Pull request| Dev[Development]
     Kind -->|Field report| Draft[Report drafting]
     Dev -->|Candidate commit| Self[Self review]
     Self -->|Changes required| Dev
     Self -->|Exact candidate reviewed| Publish[Publication]
-    Publish -->|Primary PR URL recorded| Deliver[Delivery]
+    Publish -->|Primary PR URL recorded| Deliver[Delivery: API verifies observations]
     Deliver -->|Checks, feedback or conflict| Fix[Writer fixes same PR]
     Fix -->|Push to primary PR| Deliver
     Deliver -->|Draft head changed| Self
@@ -35,8 +40,8 @@ flowchart TD
     Draft -->|Stored draft revision| ReportReview[Report review]
     ReportReview -->|Changes required| Draft
     ReportReview -->|Exact revision reviewed| Store[Report storage]
-    Store -->|Artifact recorded| Done
-    Done -.->|Later verified owner merge enriches output| Done
+    Store -->|Server stores exact reviewed artifact| Done
+    Done -.->|Ready output: later verified owner merge enriches output| Done
 ```
 
 | Stage | Required event or evidence | Next stage or disposition |
@@ -94,6 +99,8 @@ merges under the same terminal enrichment rules.
 
 ```mermaid
 stateDiagram-v2
+    accTitle: Execution status, separate from lifecycle stage
+    accDescr: Queued work starts a fenced attempt. Questions wait for replies and external waits resume on observations or rechecks. Completed, failed and cancelled executions retain exactly one output.
     [*] --> queued
     queued --> running: Named writer attempt
     running --> running: Next runnable stage, new attempt

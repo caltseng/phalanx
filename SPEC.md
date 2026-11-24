@@ -11,6 +11,8 @@ visibility and coordination, not a permission gate. GitHub owns PR facts and mer
 Phalanx owns items, attempts, questions, evidence, flags and observations. Native sessions
 are the only execution path. Clients keep configuration, credentials, artifacts, worktrees
 and OS locks, not SQLite queues or publication journals.
+The [implementation map and diagrams](docs/architecture.md) trace current code ownership
+and deployment boundaries. The relay's removal did not remove the HTTP API or Scribe.
 
 Direct clients discover the existing muster via `--home`, `PHALANX_HOME`, then the single
 per-user `~/.phalanx/muster.json` locator. Discovery is read-only: never initialize or migrate
@@ -251,7 +253,8 @@ static owner/runner credentials; ship multi-user features in separate slices.
 
 ## Operator view
 
-Read-only paginated board: open work first (running/queued/input/external distinct), recently
+Paginated local board with read views and explicit owner-authenticated intake: open work
+first (running/queued/input/external distinct), recently
 closed newest first, full history available. Show stage/status, repo, age, progress, wait
 reason/action, writer/session, PR and flags. Highlight actionable input. Every unbound queued
 item shows its Captain wait; do not infer capacity or rank-position blockers.

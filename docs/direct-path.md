@@ -28,28 +28,27 @@ and optional `notify_command`. It never reads an execution-runner config.
 - Owner-notify flags are sent once each to `notify_command`.
 - Each pass prints one JSON line; `--once` runs a single pass and exits nonzero on any error.
 
-### Existing Windows muster rollout
+### Existing muster rollout
 
 Reusable launch behavior is now [versioned deployment tooling](deployment.md); retained
 host wrappers should only delegate to it. The service owner must review and coordinate
 adoption, retaining current paths, credentials, active writers and capacity. The following
-explicit command remains compatible; it is not permission to restart the live service.
-Before deploying this
-revision, create `C:\phalanx-muster\reconciler.json` with the API URL, existing reconciler
-identity as `reconciler_id`, verified repository mappings and any validation/notification
-settings. Preserve credentials in the existing private environment; never put tokens in JSON.
-Update `C:\phalanx-muster\reconcile.ps1` to load that same private environment and invoke:
+explicit command is an example, not a live-host inventory or permission to restart services.
+Use the installation's recorded API URL, existing reconciler identity as `reconciler_id`,
+verified mappings and private environment. Keep those machine-specific values in the
+operator's private runbook, not tracked documentation.
 
 ```powershell
-& "C:\phalanx-muster\phalanx\.venv\Scripts\python.exe" -P -m phalanx reconcile `
-  --config "C:\phalanx-muster\reconciler.json" --state "C:\phalanx-muster\reconciler"
+python -m phalanx reconcile --config C:\muster\reconciler.json --state C:\muster\reconciler --once
 ```
 
-Stop only the identified previous reconciler process before replacing it. Run the new
-command with `--once`, verify no errors and a fresh heartbeat through `muster status`,
-then restart the persistent launcher. Retire the obsolete execution config only after
-checking that no host launcher references it. Do not delete the API database, artifacts,
-credentials or worktrees. No client SQLite state is imported or recreated.
+Under the service owner's rollout, stop only the identified previous reconciler before
+running `--once`; it takes the same scratch lock as the persistent process. Verify no
+errors and a fresh heartbeat through authenticated API status, then start the single
+persistent supervisor. `muster status` additionally requires matching configured home
+identity. Retire obsolete configs only after checking no launcher references them.
+Do not delete the database, artifacts, credentials or worktrees. No client SQLite state
+is imported or recreated.
 
 ### Post-merge deployment status
 
@@ -105,49 +104,47 @@ forbids borrowing another checkout's environment or installing packages, and tel
 writer to report the validation gap and request the correct environment with
 `phx work question` if it is missing or unusable.
 
-### Shared non-Python checks environment: churchtree
+### Prepared checks environments
 
-The operator-provisioned npm/Playwright environment exists at
-`C:\phalanx-muster\envs\churchtree`. The live explicit shift config is
-`C:\phalanx-muster\captain.json` (not the optional locator layout's `shift.json`).
-Its `churchtree` mapping uses checkout `C:\phalanx-muster\checkouts\churchtree`,
-base `main`, and this exact value:
+Keep each repository's prepared checks environment outside its item worktrees. The
+operator records the exact interpreter or command prefix in that repository's shift
+mapping. For Windows npm/Playwright checks, the tracked
+[`scripts/checks.ps1`](../scripts/checks.ps1) accepts `-EnvironmentRoot`; a private
+environment may retain a delegation-only shim. Example mapping:
 
 ```json
-{"checks_environment": "& \"C:\\phalanx-muster\\envs\\churchtree\\checks.ps1\""}
+{"checks_environment": "& \"C:\\muster\\envs\\example\\checks.ps1\""}
 ```
 
 Writers invoke it **from their item worktree**, for example:
 
 ```powershell
-& "C:\phalanx-muster\envs\churchtree\checks.ps1" npm run ci
+& "C:\muster\envs\example\checks.ps1" npm run ci
 ```
 
-The prefix is a PowerShell command wrapper, not a Python interpreter. It runs the
-requested command without changing directory. The November 24 environment contains
-`package.json`, `package-lock.json`, `lock.sha256`, shared `node_modules` with Playwright
-`1.65.1`, and browsers in `ms-playwright` (Chromium/headless shell build 1255, ffmpeg 1013
-and winldd 1007). It sets `PLAYWRIGHT_BROWSERS_PATH` to
-`C:\phalanx-muster\envs\churchtree\ms-playwright`.
+The prefix is a PowerShell command wrapper, not a Python interpreter. Its shim
+delegates to the operator-pinned tracked script with `-EnvironmentRoot $PSScriptRoot`
+and `@args`. The script preserves the working directory and command exit code,
+verifies dependencies and sets `PLAYWRIGHT_BROWSERS_PATH` to the prepared environment's
+`ms-playwright` directory. Paths and installed browser/package versions belong in
+the private runbook; this example does not attest a particular live environment.
 
-To provision or refresh this layout, the **operator**, not a writer:
+To provision or refresh, the **operator**, not a writer:
 
 1. Copies the intended repository revision's `package.json` and `package-lock.json`
    into the external environment directory, prepares Node/npm matching repository
    requirements, and runs `npm ci` there.
 2. Installs the required Playwright browsers there with
-   `PLAYWRIGHT_BROWSERS_PATH` set to the external `ms-playwright` directory (for this
-   repository, `npx playwright install chromium`).
+   `PLAYWRIGHT_BROWSERS_PATH` set to the external `ms-playwright` directory, using
+   that repository's required browser set.
 3. Records the lowercase SHA-256 of the provisioned lockfile after normalizing CRLF to
    LF, as UTF-8 without a BOM, in `lock.sha256`; makes any retained `checks.ps1` a shim
    delegating to the pinned tracked `scripts/checks.ps1 -EnvironmentRoot <prepared environment>`
-   and puts the exact prefix in the shift config. The inspected snapshot's hash is
-   `6a51aa579c5fa36c4b5a7ebf309e91d2c8d364d779ebb36602ceb3263158c1c5`.
+   and puts the exact prefix in the shift config.
 
 Before any check, the wrapper hashes the **worktree's** `package-lock.json` with the same
-normalization. A missing or changed lockfile exits 1 with
-`churchtree checks env stale: package-lock.json differs from the provisioned env`.
-The writer reports that validation gap with `phx work question`; it never installs,
+normalization. A missing or changed lockfile fails visibly.
+The writer reports the validation gap with `phx work question`; it never installs,
 updates the shared environment, or overwrites the expected hash to bypass the mismatch.
 The operator must reprovision for the new lockfile.
 
@@ -210,9 +207,9 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 ### Intake routing and charter lanes
 
 Intake defaults to `checked_in`; explicit ready-only and report targets are preserved.
-The current muster retains `runner_affinity: "direct-hold"` on direct work. Before
-PH-DS5 part 1 it excluded the old runner; there is now no queue claim scheduler or
-special direct-hold gate. Named writer registration does not filter by affinity.
+Historical `runner_affinity: "direct-hold"` excluded the old runner before PH-DS5
+part 1; there is now no queue claim scheduler or special direct-hold gate.
+Named writer registration does not filter by affinity.
 Unbound queued work, including intake with no affinity, visibly awaits a direct Captain.
 
 Lane order and mutual exclusion belong to the operator's charter and the Captain's
@@ -232,8 +229,9 @@ stale and trust-blocked sessions are not finished. `shift status` includes each 
 `ended_writers`, including writers on closed items absent from the open-item list, and its
 `cleanup_pending` count.
 
-Session archival adds schema migration 18. Deploy it through a drained upgrade of an existing
-store before resuming Captains and writers.
+Session archival records shipped with schema step 18. This is not a request to drain or
+restart a live installation; use the [service-owner adoption procedure](deployment.md#existing-runtime-reviewed-adoption-not-a-rename)
+for an upgrade, preserving active writers and existing state.
 
 Immediately before the runtime archive call, the creator runs `shift archive-check` with the
 writer's `--item`. The check inspects the verified item worktree, fetches its origin branch and
@@ -273,7 +271,10 @@ A successor does not inherit creator-only runtime authority.
    - `name` set to `session_name`;
    - kickoff `prompt` set to `kickoff`, which names the item worktree, with mode `autopilot`.
 
-   It confirms the session with `shift writer --session-id <session ID> --session-url ghapp://sessions/<session ID>`. `list_sessions_and_chats` finds a lost launch by its name, which holds the nonce.
+   It confirms the session with `shift writer --session-id <session ID>` and, when the
+   runtime returns a link, `--session-url <that exact link>`. Do not construct a session
+   URL from its ID. `list_sessions_and_chats` finds a lost launch by its name, which
+   holds the nonce.
 4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." Before any early exit, it checks cleanup of Captain sessions that this keeper session created. It starts no new Captain when a live one exists, the most recent ended less than 10 minutes ago without a successor yet, or it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run that can't schedule itself creates the Captain with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`. That same keeper creator must retain a cleanup wake or child-ended notification until its Captain hands off cleanly; a fresh scheduled keeper session has no creator authority over it.
 5. The app may let only a session's creator archive it. Captains clean up their own writers and helpers; keeper runs clean up their own Captain children. All use the preservation check and durable result above, not repeated attempts by successors. Missing authority is recorded and escalated once, with `orphan_session` left visible.
 

@@ -2,7 +2,7 @@
 
 The reconciler observes required GitHub checks and runs trusted local checks serially
 in scratch worktrees. Local failures raise flags, not a Phalanx gate (D3). Writers run
-repository checks using their prepared [checks environment](direct-path.md#shared-non-python-checks-environment-churchtree).
+repository checks using their prepared [checks environment](direct-path.md#prepared-checks-environments).
 GitHub checks, reviews and rulesets gate merging.
 
 Set `validation_policy` in [reconciler configuration](configuration.md#reconciler-config)

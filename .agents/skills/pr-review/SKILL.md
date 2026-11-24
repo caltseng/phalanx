@@ -27,6 +27,6 @@ Record the head SHA first and review only that commit (`git fetch origin pull/<n
 
 Rank findings by impact as **blocking** or **follow-up**. Skip style nits. Say explicitly when nothing blocks.
 
-- **Merge** once the review passes at the exact head: `gh pr merge <n> --auto --merge --match-head-commit <sha>`, so GitHub merges when required CI passes on that same head.
+- **Merge** only when the item's current target and publication mode authorize check-in and the review passes at the exact head: `gh pr merge <n> --auto --merge --match-head-commit <sha>`, so GitHub merges when required CI passes on that same head. `ready_for_check_in` leaves merging to the owner; never enable auto-merge or merge it. Draft-only publication never authorizes promotion or merging. A review recommendation does not override those limits.
 - **Fix round** otherwise: give file:line, the failure scenario, and the simplest fix direction. Prefer fixes that remove code or constraints over fixes that add them.
-- **Bound it.** After two rounds, merge the verified part and file a follow-up plan row.
+- **Bound it.** After two rounds, deliver the verified part within the item's target and publication mode, and file a follow-up plan row. Merge only when authorized above.

@@ -1,6 +1,8 @@
 # Writer operations
 
-The host runs the API, native Captain and writer sessions, and a GitHub reconciler.
+The local installation has an API service, native Captain and writer sessions, and a
+GitHub reconciler. API and execution-host responsibilities remain separate even when
+they run on one machine; see the [architecture diagrams](architecture.md).
 Use [Direct path](direct-path.md) for shift configuration, the charter, native session
 launches, scheduled wakes, handoff and creator-owned cleanup.
 
@@ -47,4 +49,5 @@ worktrees, not a local database. Existing unused files are not deleted by an upg
 All durable queue and observation records remain behind the API.
 
 Use [Resume](resume.md) after restart and [Recovery](recovery.md) for uncertain launches or
-stopped writers. Dispatch pause refuses new writer registrations, not progress by existing writers.
+stopped writers. Dispatch pause refuses new writer registrations and new stage attempts, not progress
+or results for existing attempts.

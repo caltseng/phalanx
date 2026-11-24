@@ -11,6 +11,11 @@ Mark a row Caleb only for his explicit decision. To override, edit the row, set 
 **Historical mechanisms:** PH-DS5 has removed the prior transport, scheduler, reservation,
 PR-stage executor and client SQLite journal implementations. Earlier rows remain as decision
 history, not operating instructions.
+Both removals shipped in [#209](https://github.com/caltseng/phalanx/pull/209) and
+[#214](https://github.com/caltseng/phalanx/pull/214); the standalone API/Scribe server
+was not the relay and remains. Use the [implementation map](architecture.md) for
+current code ownership. Rows recording a proposal or a pilot snapshot are not proof
+that a feature is implemented or deployed.
 Row 63's execution-continuity principle now uses one registered writer across fenced stages.
 Rows 68-71 and [direct sessions](direct-sessions.md) describe the running architecture.
 Earlier validation/promotion/check-in rows describe retired stages unless explicitly marked

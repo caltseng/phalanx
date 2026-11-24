@@ -36,9 +36,7 @@ The reconciler reads `reconciler.json` from muster discovery or an explicit `--c
   "repositories": {
     "registered-repo-id": {
       "checkout": "C:/enlistments/example",
-      "base_branch": "main",
-      "host_id": "local",
-      "project_id": "project-id-from-the-runtime"
+      "base_branch": "main"
     }
   }
 }
@@ -62,6 +60,6 @@ scheduler, not a CLI process.
 
 The shift repository mapping may additionally specify `checks_environment`, the exact prepared
 interpreter or command prefix included in writer kickoffs. It is not a runner validation-policy
-command and need not be Python. The [churchtree example](direct-path.md#shared-non-python-checks-environment-churchtree)
-documents the live external npm/Playwright wrapper, lockfile-staleness check and worktree
-`node_modules` junction. Only the operator provisions dependencies; writers never install them.
+command and need not be Python. The [prepared checks environment guide](direct-path.md#prepared-checks-environments)
+documents the tracked npm wrapper, lockfile-staleness check and worktree `node_modules`
+junction. Only the operator provisions dependencies; writers never install them.

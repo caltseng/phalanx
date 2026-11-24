@@ -8,15 +8,25 @@ The [CI workflow](../.github/workflows/ci.yml) runs the same suite with the lock
 
 ## Route permissions and transactions
 
-Use the `require_owner` and `require_runner` dependencies in `phalanx.auth` to declare route permissions.
+Use `phalanx.auth` route dependencies: `require_owner` for owner writes,
+`require_runner` for trusted reconciler writes, `require_coordinator` for owner/runner
+coordination, and `require_writer` for scoped writer operations. Board reads use the
+separate opt-in local-read dependency, never write authorization. See the
+[architecture map](architecture.md) for ownership and code entry points.
 
 Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. Neither reads nor writes wait more than one turn of the other, however deep the write queue gets in DELETE journal mode. The gate adds no timeout of its own, because one write turn may legitimately outlast the busy timeout across `BEGIN` and `COMMIT`. Don't call it inside a write transaction.
 
 Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it.
 
-Connections use foreign-key enforcement, `synchronous=EXTRA` and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Lease checks and idempotency keys make retrying the identical request safe. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them.
+Connections use foreign-key enforcement, `synchronous=EXTRA` and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Current writer/attempt fencing, expected versions and idempotency keys protect retries; direct writers do not renew expiring leases. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them.
 
-Add schema changes as a new tuple of SQL statements at the end of `MIGRATIONS` in `phalanx.store`. The migrator runs the SQL and updates the schema version in one transaction. Steps change the schema only: don't add steps that rewrite existing rows or keep old formats readable. Stores older than `OLDEST_SUPPORTED_VERSION` are refused.
+Follow [AGENTS.md](../AGENTS.md) and decision 67 before adding schema changes; do not
+add migrations or compatibility machinery without authorization. Existing startup
+uses the SQL tuples in `MIGRATIONS` in `phalanx.store`, committing each step and version
+together. The authorized retirement steps drop old tables and normalize closed
+execution snapshots once, preserving immutable history and outputs. They are not a
+general invitation to rewrite live data. Stores older than `OLDEST_SUPPORTED_VERSION`
+are refused.
 
 ## Queue storage
 

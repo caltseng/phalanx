@@ -7,9 +7,12 @@ The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API rout
 **Shipped versus planned:** PH-29a's server reads shipped in
 [#144](https://github.com/caltseng/phalanx/pull/144). The local home/inline board, server-owned
 Captain liveness, glyphs, merged display label and owner-authenticated `+` intake are also
-merged (#180, #201, #204 and #205). The full route table, filter/search UI, Markdown report
-rendering, hosted sign-in and later phases below remain design goals, not available pages.
-PH-29c detail-page work and PH-29d acceptance are not claimed here.
+merged (#180, #201, #204 and #205). Local item/execution routes, queue/history pages,
+URL-backed filters/search and safe Markdown report rendering shipped in
+[#211](https://github.com/caltseng/phalanx/pull/211), with layout refinements in #216/#219.
+The groups page, hosted sign-in and later phases below remain design goals. Shipped
+features are not a claim that PH-29d performance/accessibility or owner visual acceptance
+has passed.
 
 ## Goal
 
@@ -59,11 +62,11 @@ CAPTAINS 1/1
  ▸ Ended (12)
 ACTIVE 4
  [pike] PH-15 Add direct GitHub check-in co…   phalanx  development   4m ago  —    busy         running
- [pike] PH-12 Reconcile reservations after…   phalanx  self review   2m ago  —    busy         running
- [pike] PH-14 Promote the verified primary…   phalanx  pr promotion  1m ago  #30  unconfirmed  running
- [pike] PH-08 Persist waits, replies, rechecks phalanx  pr revision   6m ago  #24  busy         ↺ CI failed on head 7caa5c2
+ [pike] PH-12 Preserve interrupted work…      phalanx  self review   2m ago  —    busy         running
+ [pike] PH-14 Publish the reviewed primary…  phalanx  publication   1m ago  #30  busy         running
+ [pike] PH-08 Persist waits, replies, rechecks phalanx  delivery      6m ago  #24  busy         CI failed; writer fixes same PR
 QUEUED AND WAITING 6
- [shield] PH-14 Collect GitHub validation…    phalanx  pr validation 3m ago #26  no writer    Waiting for CI; recheck in 1m
+ [shield] PH-14 Collect GitHub observations…  phalanx  development   3m ago —    no writer    Awaiting a direct Captain
  [shield] PH-15 Record PR review evidence…    phalanx  development   9m ago —    no writer    Waiting for 1 prerequisite
  …
 RECENTLY CLOSED 25+
@@ -108,7 +111,7 @@ RECENTLY CLOSED 25+
 
 1. **Attention, then motion, then history.** Order every page this way: what needs you, then what is moving, then what is done.
 2. **No row without a reason.** Every open row answers "what happens next, and why". A blank wait reason is a bug. This applies the "never fail silently" rule in [AGENTS.md](AGENTS.md).
-3. **Recorded lifecycle, not percent complete.** Show the stages Phalanx actually recorded and the loops it went through, such as `pr_revision ×2`, as [SPEC.md](SPEC.md#operator-view) requires.
+3. **Recorded lifecycle, not percent complete.** Show the stages Phalanx actually recorded and the loops it went through, such as `self_review` returning to `development`, as [SPEC.md](SPEC.md#operator-view) requires. Retired stage names may appear in immutable historical events, never as new dispatch choices.
 4. **Calm by default.** Keep color for states that need action: needs you, failed, stale and disconnected. Everything else stays neutral. Never use color alone; pair it with an icon and text.
 5. **Stable under refresh.** A refresh never reorders rows under the pointer, moves focus, or resets scroll. New or changed rows are highlighted briefly.
 6. **Dense and scannable.** On a laptop, each item takes one line, and about 40 rows fit on screen. The detail view holds the rest.
@@ -265,7 +268,7 @@ Clicking a title, or pressing Enter on it, expands the detail in place under its
 Built now:
 
 - **Request:** the full goal.
-- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry and recheck times, attempt, writer and its session, PR or report, and IDs. Historical runner attempt worker references/links remain until PH-DS5 part 2; admission slots and their board note were removed in part 1.
+- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry and recheck times, attempt, writer and its session, PR or report, and IDs. Historical attempt worker references/links remain readable after PH-DS5 part 2; they are evidence, not surviving runner slots or lease recovery.
 - **Flags** on this item, with their recovery and age.
 - **Question** with its options, proposed default and the exact `reply` command.
 - **Prerequisites** with their milestone and reason.
@@ -274,8 +277,8 @@ Built now:
 
 The target detail also includes:
 - **Header:** the title, repository, label, status or outcome, the completion target (ready or Merged), the primary PR and any duplicates, and the worker chat.
-- **Lifecycle rail:** the stage sequence from [STATE_MACHINE.md](STATE_MACHINE.md) with the current stage highlighted. Loops back to `development` or `pr_revision` appear as counts.
-- **Now:** the next action or resume trigger, the wait reason, retry and recheck times, and the runner and attempt holding the lease.
+- **Lifecycle rail:** the stage sequence from [STATE_MACHINE.md](STATE_MACHINE.md) with the current stage highlighted. Returns to development or report drafting appear as counts; older timelines may retain retired stages.
+- **Now:** the next action or resume trigger, the wait reason, retry and recheck times, and the registered writer and current fenced attempt (if any), not an expiring runner lease.
 - **Evidence by revision:** the local checks, CI, review findings and approvals, each tied to the head SHA it covered.
 - **Conversation:** each question with its options, the reply, and who replied.
 - **Timeline and attempts:** paginated, with a worker link for each attempt.
@@ -298,6 +301,10 @@ Computed on the server from work history and shown on History and group pages:
 - time in queue.
 
 ## Hosting and security
+
+The hosted sign-in, workspace roles, cookie writes, hashed static assets and rate limits
+below are **target design**, not shipped local authentication. Current local-board reads
+and owner-authenticated intake are described explicitly here and in [work items](docs/work-items.md#operator-work-board).
 
 - **Origin:** the hosted API origin serves the dashboard ([PH-20](IMPLEMENTATION_PLAN.md)), so it needs no CORS and no separate API base URL.
 - **Sign-in:** Google sign-in from PH-27. The session cookie is HttpOnly, Secure and SameSite=Lax. Sessions expire, and sign-out deletes the session on the server.
@@ -327,7 +334,7 @@ these board reads add no slot/capacity fields or runners endpoint.
 - An optional `label` on work items, set at intake (`phalanx intake --label`) and by steering. Steering `label: null` clears it. Labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
 - New summary fields:
   - `label`;
-  - `revision_round`: 1, plus one each time the execution re-enters development, PR revision or report drafting;
+  - `revision_round`: 1, plus one each time the execution re-enters development or report drafting (and PR revision in retained historical events);
   - `duplicate_count`: other open PRs on the item branch in the latest reconciler observation, or `null` when not observed;
   - `pr`: the PR in the latest reconciler GitHub observation, with `url`, `number`, `state` (`open`, `closed` or `merged`), `draft`, `head_sha`, `head_ci`, `additions` and `deletions`. `head_ci` is the gate result observed on that head. Each field is `null` when not observed; `pr` is `null` before an observation or when the latest observation found no PR. Writer-supplied PR URLs and lifecycle evidence never populate these facts.
   - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. Existing lifecycle/prerequisite waits take precedence; otherwise queued rows show dispatch pause, a scheduled retry, a current deliberate Captain hold, or **Awaiting a direct Captain** for unbound work. A queued row with a writer and no wait says a Captain dispatches a writer. Runner presence and capacity never infer a direct-path wait.
