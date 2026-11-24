@@ -192,9 +192,12 @@ def register(db, item_id, execution_id, payload):
         placeholders = ",".join("?" for _ in limit.repositories)
         active = db.execute(
             f"""SELECT w.id, w.item_id, w.session_id FROM writers w
-                JOIN executions e ON e.id=w.execution_id JOIN work_items i ON i.id=w.item_id
-                WHERE w.ended_at IS NULL AND e.status NOT IN ('completed', 'failed', 'cancelled')
-                  AND i.repository_id IN ({placeholders}) ORDER BY w.created_at, w.id""",
+                WHERE w.ended_at IS NULL
+                  AND EXISTS (SELECT 1 FROM executions e WHERE e.id=w.execution_id
+                              AND e.status NOT IN ('completed', 'failed', 'cancelled'))
+                  AND EXISTS (SELECT 1 FROM work_items i WHERE i.id=w.item_id
+                              AND i.repository_id IN ({placeholders}))
+                ORDER BY w.created_at, w.id""",
             limit.repositories,
         ).fetchall()
         if len(active) >= limit.max_writers:

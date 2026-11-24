@@ -147,6 +147,33 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         {"captain_id": self.captain["id"], "writer_id": launched["writer"]["id"],
                          "reason": "never launched"})
 
+    def test_charter_limit_does_not_scan_unrelated_executions(self):
+        from phalanx import writers
+
+        item_id, execution_id = self.item()
+        binding, _, _ = self.register(item_id, execution_id)
+        with write_transaction(self.path) as db:
+            for index in range(1000):
+                item = intake.create(db, Intake(repository_id="repo", goal=f"Work {index}", target="report"))
+            payload = writers.Registration(
+                expected_version=item["execution"]["version"], captain_id=self.captain["id"],
+                runtime="any-runtime", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32)),
+                writer_limit={"max_writers": 1, "repositories": ["repo", "other"]})
+            steps = 0
+
+            def budget():
+                nonlocal steps
+                steps += 100
+                return steps > 1000
+
+            db.set_progress_handler(budget, 100)
+            try:
+                with self.assertRaisesRegex(intake.Conflict, "max_writers=1") as refused:
+                    writers.register(db, item["id"], item["execution"]["id"], payload)
+                self.assertIn(binding["writer"]["id"], str(refused.exception))
+            finally:
+                db.set_progress_handler(None, 0)
+
     def test_queued_binding_survives_steering_and_resumes_its_writer(self):
         item_id, execution_id = self.item()
         with write_transaction(self.path) as db:
