@@ -214,6 +214,12 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
   - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
   - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
+    The reserved action `held` requires a reason describing the charter lane order, writer cap or
+    mutual exclusion. Refresh it for each deliberately unlaunched runnable item every wake. It is
+    active only while it is the latest Captain action on the queued execution's current version,
+    is less than 30 minutes old, and its Captain is live and not ended. The board and item view show
+    its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
+    suppress idle-with-work flags but do not change dispatch eligibility or reserve capacity.
   - The record step reports every runtime session named `phx …` with its ID and name. The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` from these reports by matching name words to open writers' item ID prefix or nonce. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
   - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
@@ -235,7 +241,7 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | --- | --- | --- |
 | `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
 | `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
-| `captain_idle_with_work` | Live Captains, but a runnable item has had no writer for 30 min | A Captain launches it, or the charter explains why not |
+| `captain_idle_with_work` | Live Captains, but a runnable item has had no writer for 30 min and no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
 | `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
 | `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |

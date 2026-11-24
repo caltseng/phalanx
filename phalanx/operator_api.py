@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
 from .auth import authenticate_board_read
+from .captains import active_holds
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
@@ -177,7 +178,8 @@ def stamp(moment):
 
 
 def dispatch_context(db, now):
-    return {"paused": bool(db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"])}
+    return {"paused": bool(db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]),
+            "holds": active_holds(db, now)}
 
 
 def conditional_read(request, response, db, now):
@@ -190,7 +192,8 @@ def conditional_read(request, response, db, now):
             (SELECT max(updated_at) FROM executions WHERE {CLOSED} AND updated_at < ?)""",
         (int(now.timestamp() * 1000), now.timestamp(), stamp(now - timedelta(days=1))),
     ).fetchone())
-    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}"
+    holds = tuple(sorted(active_holds(db, now)))
+    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, no-cache"
@@ -208,6 +211,9 @@ def queued_wait(row, now_ms, context):
     if retry_at is not None and retry_at > now_ms:
         at = datetime.fromtimestamp(retry_at / 1000, UTC).isoformat()
         return {"reason": f"Retry scheduled for {at}", "trigger": "The retry delay elapses"}
+    hold = context.get("holds", {}).get(row["id"])
+    if hold:
+        return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}
     return {}
 
 

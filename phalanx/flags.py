@@ -13,7 +13,7 @@ from pydantic import StringConstraints
 
 from . import intake, reconciliation
 from .auth import authenticate_board_read, require_coordinator
-from .captains import STALE, gone_at, is_live, successor_name
+from .captains import IDLE_WITH_WORK, STALE, active_holds, gone_at, is_live, successor_name
 from .intake_api import run
 from .intake_models import Payload, Text
 from .operator_schema import OPEN
@@ -21,7 +21,6 @@ from .operator_schema import OPEN
 
 Kind = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 Subject = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{0,100}$")]
-IDLE_WITH_WORK = timedelta(minutes=30)
 LAUNCH_UNCONFIRMED = timedelta(minutes=10)
 NO_PROGRESS = timedelta(hours=2)
 DERIVED_LIMIT = 200
@@ -94,20 +93,23 @@ def captain_idle_with_work(db, now):
     if not any(is_live(row, now) for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")):
         return []
     cutoff = int((now - IDLE_WITH_WORK).timestamp() * 1000)
-    return [
-        flag("captain_idle_with_work", "Runnable for 30 min with no registered writer",
-             "A Captain launches it, or the charter explains why not",
-             datetime.fromtimestamp(row["ready_since"] / 1000, UTC) + IDLE_WITH_WORK,
-             item_id=row["item_id"], execution_id=row["id"])
-        for row in db.execute(
+    holds = active_holds(db, now)
+    result = []
+    for row in db.execute(
             """SELECT id, item_id, ready_since FROM executions AS execution
                WHERE status = 'queued' AND ready_since <= ? AND dependency_wait_json IS NULL
                  AND NOT EXISTS (SELECT 1 FROM writers
                                  WHERE execution_id = execution.id AND ended_at IS NULL)
-               ORDER BY ready_since, id LIMIT ?""",
-            (cutoff, DERIVED_LIMIT),
-        )
-    ]
+               ORDER BY ready_since, id""", (cutoff,)):
+        if row["id"] in holds:
+            continue
+        result.append(flag("captain_idle_with_work", "Runnable for 30 min with no registered writer",
+             "A Captain launches it, or the charter explains why not",
+             datetime.fromtimestamp(row["ready_since"] / 1000, UTC) + IDLE_WITH_WORK,
+             item_id=row["item_id"], execution_id=row["id"]))
+        if len(result) >= DERIVED_LIMIT:
+            break
+    return result
 
 
 OPEN_WRITERS = """

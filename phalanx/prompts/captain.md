@@ -53,7 +53,7 @@ Do these steps in order and keep each wake short:
      1. Run `phx shift launch --captain <id> --item <item>`. This prepares the item worktree and registers
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
         If the charter's `max_writers` cap refuses it, wait for a place to open and continue
-        other coordination. This is a normal wait, not a flag or an escalation.
+        other coordination. Record the hold below. This is a normal wait, not a flag or an escalation.
      2. Search your sessions for the returned `session_name`. If one exists, confirm that one instead.
      3. Otherwise create one new worker session with your session tools. It runs autonomously, is named
         `session_name` and gets `kickoff` as its first prompt, which names the item's `worktree`. Open it
@@ -94,7 +94,14 @@ Do these steps in order and keep each wake short:
 
    The kickoff is a writer's instructions. Never restate, summarize or extend them. If the worker prompt
    changed after a writer's kickoff, send it the changed section verbatim from `phx shift prompt worker`.
-5. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
+5. **Record holds.** For every runnable queued item you deliberately do not launch, record or refresh
+   `phx shift action --captain <id> --item <item> --action held --reason "<charter reason>"`.
+   Include the concrete charter lane order, writer cap or mutual exclusion that requires the wait,
+   including items deferred beyond this wake's launch batch. Refresh each hold every wake while it
+   applies. The latest action on the current execution version must be `held`; it lapses after
+   30 minutes, when you become stale or end, or when the version changes. Holds explain waits on the
+   board and suppress idle-with-work flags; they do not prevent another Captain from launching work.
+6. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
    `--session <native session ID> "<name>"` for every unarchived session whose name starts with `phx `,
    or `--no-sessions` if there are none. The server flags sessions that no writer or Captain owns.
 
