@@ -262,6 +262,74 @@ class WriterTest(ServerFixture, unittest.TestCase):
                      "--handoff", "Outline drafted", "--option", "Ops")
         self.assertEqual(asked["state"]["status"], "waiting_for_input")
         self.assertEqual(asked["state"]["wait"]["reason"], "Which audience?")
+        self.assertIsNone(work("status")["last_reply"])
+        self.assertIsNone(work("next")["last_reply"])
+        route = f"/v1/items/{item_id}/executions/{execution_id}"
+        for index, actor in enumerate(("owner", "captain")):
+            with self.subTest(answered_by=actor):
+                answer = f"Use the {actor}'s exact instructions.\n  Preserve this detail."
+                body = {"expected_version": asked["version"], "answer": answer}
+                if actor == "captain":
+                    body["answered_by"] = actor
+                headers = {"Idempotency-Key": f"reply-{index}"}
+                queued = self.ok(route + "/reply", OWNER, body, headers=headers)
+                self.assertEqual(self.ok(route + "/reply", OWNER, body, headers=headers), queued)
+                self.ok(route + "/reply", token, body, 403,
+                        headers={"Idempotency-Key": f"writer-reply-{index}"})
+                self.ok(route + "/reply", OWNER, body, 409,
+                        headers={"Idempotency-Key": f"stale-reply-{index}"})
+                timeline = self.ok(route + "/timeline", OWNER)
+                persisted = next(event for event in reversed(timeline) if event["event"] == "reply")
+                expected = {"answer": answer, "answered_by": actor, "version": queued["version"],
+                            "created_at": persisted["created_at"]}
+                self.assertEqual(persisted["details"]["answer"], answer)
+                self.assertEqual(self.ok(f"/v1/items/{item_id}", OWNER)["last_reply"], expected)
+                status = work("status")
+                self.assertEqual(status["state"]["status"], "queued")
+                self.assertEqual(status["last_reply"], expected)
+                resumed = work("next")
+                self.assertEqual(resumed["last_reply"], expected)
+                self.assertGreater(resumed["version"], expected["version"])
+                self.assertEqual(resumed["state"]["stage"], asked["state"]["stage"])
+                self.assertNotEqual(resumed["writer"]["attempt_id"], drafted["writer"]["attempt_id"])
+                self.assertEqual(work("next"), resumed)
+                self.assertEqual(work("status")["last_reply"], expected)
+                stale = work("question", "Stale question", "--attempt", drafted["writer"]["attempt_id"],
+                             "--handoff", "Old attempt", code=1)
+                self.assertIn("is not open", stale)
+                if actor == "owner":
+                    asked = work("question", "Which detail?", "--attempt", resumed["writer"]["attempt_id"],
+                                 "--handoff", "Audience chosen")
+
+    def test_writer_replies_are_isolated_by_item_and_execution(self):
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        waiting = self.submit(token, binding, outcome="needs_input",
+                              question={"prompt": "Which scope?", "handoff": "Draft pending"})
+        route = f"/v1/items/{item_id}/executions/{execution_id}"
+        self.ok(route + "/reply", OWNER, {"expected_version": waiting["version"], "answer": "Original only"},
+                headers={"Idempotency-Key": "original-reply"})
+        original_reply = self.ok("/v1/writer", token)["last_reply"]
+        other_id, other_execution = self.item()
+        other, other_token, _ = self.register(other_id, other_execution)
+        self.assertIsNone(other["last_reply"])
+        self.assertIsNone(self.ok("/v1/writer", other_token)["last_reply"])
+        self.assertIsNone(self.ok("/v1/writer/attempt", other_token, method="POST")["last_reply"])
+        self.ok(route + "/timeline", other_token, code=403)
+        self.ok(f"/v1/items/{other_id}/executions/{other_execution}/timeline", token, code=403)
+        resumed = self.ok("/v1/writer/attempt", token, method="POST")
+        self.assertEqual(resumed["last_reply"], original_reply)
+        drafted = self.submit(token, resumed, report_markdown="# Report\n")
+        reviewed = self.submit(token, drafted, report_revision=drafted["state"]["report_draft"])
+        done = self.submit(token, reviewed, report_revision=reviewed["state"]["report_draft"])
+        rerun = self.ok(route + "/rerun", OWNER, {"expected_version": done["version"], "target": "report"})
+        replacement, replacement_token, _ = self.register(item_id, rerun["id"])
+        self.assertIsNone(replacement["last_reply"])
+        self.assertIsNone(self.ok(f"/v1/items/{item_id}", OWNER)["last_reply"])
+        self.assertIsNone(self.ok("/v1/writer", replacement_token)["last_reply"])
+        self.assertIsNone(self.ok("/v1/writer/attempt", replacement_token, method="POST")["last_reply"])
+        self.ok(route + "/timeline", replacement_token, code=403)
+        self.ok("/v1/writer", token, code=401)
 
     def pr_item(self, target, **fields):
         item = self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "Fix it", "target": target,

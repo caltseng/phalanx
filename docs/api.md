@@ -91,6 +91,7 @@ See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the questio
 | `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). Pause stops new writer registrations and attempts; existing results and progress remain accepted. |
 | `POST /v1/items/{item}/executions/{execution}/writer` | Captain registers a named writer intent, expected version, nonce and token digest. Optional `writer_limit` enforces its charter across the named repositories atomically. Replacement requires the current writer ID and stopped attestation. |
 | `PATCH /v1/items/{item}/executions/{execution}/writer` | Captain confirms the native session ID/link for its registered intent. |
+| `GET /v1/writer` | Scoped writer reads its binding, execution, open flags and latest persisted reply. |
 | `POST /v1/writer/attempt` | Scoped writer claims/resumes its own execution's next runnable stage. |
 | `POST /v1/writer/progress` | Scoped writer records progress without a timed lease. |
 
@@ -98,6 +99,10 @@ See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the questio
 Git directory. The server enforces one open writer per execution. A result advances the same
 writer to the next runnable stage with a new attempt; the writer retains ownership through
 waits. It has no timed expiry. See the [complete fencing and evidence contract](direct-sessions.md#writer-registration-and-fencing).
+
+Writer bindings include `last_reply`, scoped to the bound execution: `null` before a reply,
+otherwise `{version, created_at, answer, answered_by}`, the same shape as owner inspection.
+Both `phx work status` and `next` expose it; claiming an attempt does not change the reply.
 
 Unbound queued items show **Awaiting a direct Captain**, even without `runner_affinity`.
 Captains select named eligible items, taking dependencies, priority aging and retry time into
