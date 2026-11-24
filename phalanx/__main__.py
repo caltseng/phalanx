@@ -100,6 +100,17 @@ def main() -> None:
     reply.add_argument("--key", required=True, help="reuse this key when retrying the same reply")
     reply.add_argument("--answered-by", choices=("owner", "captain"), default="owner",
                        help="who answered: the owner, or the Captain triaging a routine question")
+    onboard = commands.add_parser(
+        "onboard", help="register, clone, map and configure validation for a target repository, "
+                        "then report what is still missing")
+    onboard.add_argument("repository", help="Phalanx repository ID")
+    onboard.add_argument("--config", required=True, type=Path, help="runner config to update")
+    onboard.add_argument("--state", required=True, type=Path, help="runner state directory")
+    onboard.add_argument("--remote", help="origin URL to register and clone")
+    onboard.add_argument("--checkout", help="local clone path; cloned when absent or empty")
+    onboard.add_argument("--base-branch", help="default: the existing mapping, then origin/HEAD")
+    onboard.add_argument("--project-id", help="worker runtime project for the checkout")
+    onboard.add_argument("--host-id", help="worker runtime host; default: the one other mappings share")
     cancel = commands.add_parser("cancel", help="cancel an item's current execution")
     cancel.add_argument("item_id")
     cancel.add_argument("--reason", required=True)
@@ -124,6 +135,19 @@ def main() -> None:
             run_captain(args)
         elif args.command == "relay":
             run_relay(args)
+        elif args.command == "onboard":
+            from .onboarding import onboard as run_onboard
+
+            result = run_onboard(
+                args.config, args.state, args.repository, remote=args.remote, checkout=args.checkout,
+                base_branch=args.base_branch, project_id=args.project_id, host_id=args.host_id,
+                owner_token=os.environ.get("PHALANX_OWNER_TOKEN"),
+                runner_token=os.environ.get("PHALANX_RUNNER_TOKEN"),
+                github_token=os.environ.get("PHALANX_GITHUB_TOKEN"),
+            )
+            print(json.dumps(result, indent=2))
+            if not result["complete"]:
+                raise SystemExit(1)
         elif args.command == "work":
             run_work(args)
         elif args.command == "reconcile":

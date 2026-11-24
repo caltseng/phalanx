@@ -91,6 +91,17 @@ A runner executes work on one machine. Give it:
 
 Fetch the desired origin branch into each mapped checkout before the first muster.
 
+### Onboard a repository in one step
+
+Once the config has `base_url` (and `validation_policy`), run:
+
+```powershell
+python -m phalanx onboard registered-repo-id --config runner.json --state C:\phalanx-runner `
+  --remote https://github.com/owner/example --checkout C:/enlistments/example --project-id PROJECT
+```
+
+It registers the remote with the server (with `PHALANX_OWNER_TOKEN`; otherwise it verifies the registration), clones the checkout when it is absent or empty and verifies its origin and base branch (default: origin's HEAD), writes the complete mapping into the config, and adds a validation policy entry whose `ready_checks` list the CI that reported on the base branch tip (with `PHALANX_GITHUB_TOKEN`). `--host-id` defaults to the host the other mappings share. The new entry leaves `local_checks` unset for you to fill in or set to `[]`. The command never overwrites an existing registration, validation entry, or mapping field you did not pass. It prints each step as `done`, `ok`, `missing` (with the action) or `manual`, and exits 1 until nothing is missing. Rerun it to verify. Owner trust in the worker runtime (below) stays manual, and the Captain loop still verifies the runtime project before launching workers.
+
 ### Grant repository trust once
 
 Grant the Captain's runtime standing access to each mapped checkout before the first muster. A runtime that gates a repository on owner trust prevents a worker from running until trust is granted. For Copilot CLI path trust, choose "trust for future sessions" once per checkout, or add the checkout's path to the `trustedFolders` array in `~/.copilot/config.json` ([Copilot CLI configuration](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/configure-copilot-cli)). The GitHub Copilot app also has a per-project repository trust card: the owner must approve it in the project's session even when the path is already trusted in runtime configuration. For direct sessions, approve the configured shared worktrees project (`session_workspace`); do not register a separate project for each worktree.
