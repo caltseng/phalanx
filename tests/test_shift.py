@@ -318,6 +318,18 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual((owned["ended_writers"], owned["cleanup_pending"]), ([], 0))
         self.assertFalse(self.check_archive(item)["can_archive"])
 
+    def test_ignored_build_output_does_not_block_archiving(self):
+        _, item, worktree = self.ended_writer()
+        (worktree / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+        git(worktree, "add", ".gitignore")
+        git(worktree, "commit", "-q", "-m", "Ignore build output")
+        git(worktree, "push", "-q", "origin", "HEAD")
+        cache = worktree / "__pycache__"
+        cache.mkdir()
+        (cache / "module.pyc").write_bytes(b"build output")
+        self.assertTrue(self.check_archive(item)["can_archive"])
+        self.assertTrue((cache / "module.pyc").exists())
+
     def test_local_changes_and_unpushed_commits_block_archiving(self):
         _, item, worktree = self.ended_writer()
         readme = worktree / "README.md"

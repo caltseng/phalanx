@@ -343,7 +343,7 @@ def archive_check(api, config, charter, session_id, reported_by, *, item_id=None
             raise WorkspaceError("Identify the session's worktree, or explicitly pass --no-worktree")
         if worktree:
             path = Path(worktree)
-            if _status(path, "--ignored=matching"):
+            if _status(path):
                 raise WorkspaceError(f"Worktree has local changes or untracked files: {path}")
             entries = _git(path, "ls-files", "-v", "-z")
             if any(not entry.startswith("H ") for entry in entries.split("\0") if entry):

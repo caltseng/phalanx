@@ -171,6 +171,7 @@ def session_flags(db, now):
     flags = []
     for session in sorted(reported.values(), key=lambda entry: (entry["first_seen"], entry["id"])):
         if db.execute("SELECT 1 FROM session_archives WHERE session_id=?", (session["id"],)).fetchone():
+            # archive_flags retains blocked/refused sessions with their recorded reason.
             continue
         if session["id"] in registered or session["name"] in successors:
             continue

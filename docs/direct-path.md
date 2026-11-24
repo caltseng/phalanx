@@ -113,11 +113,15 @@ stale and trust-blocked sessions are not finished. `shift status` includes each 
 `ended_writers`, including writers on closed items absent from the open-item list, and its
 `cleanup_pending` count.
 
+Session archival adds schema migration 18. Deploy it through a drained upgrade of an existing
+store before resuming Captains and writers.
+
 Immediately before the runtime archive call, the creator runs `shift archive-check` with the
 writer's `--item`. The check inspects the verified item worktree, fetches its origin branch and
-requires every local commit to be on that remote branch. Tracked, staged, untracked or ignored
-local files, hidden index changes, in-progress Git operations, a missing remote branch and an
-unavailable Git check all prevent archival. Nothing is discarded or reset. For a helper or Captain
+requires every local commit to be on that remote branch. Tracked or staged changes, untracked
+non-ignored files, hidden index changes, in-progress Git operations, a missing remote branch and an
+unavailable Git check all prevent archival. Gitignored build output does not block archival.
+Nothing is discarded or reset. For a helper or Captain
 with a Git worktree use `--worktree`; use `--no-worktree` only after runtime inspection confirms
 there is no Git worktree or persistent work that archival would remove. `can_archive: true` is
 preservation evidence, not runtime authority: the creator must also verify ownership and that the
