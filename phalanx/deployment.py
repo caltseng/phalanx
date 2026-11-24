@@ -1,0 +1,182 @@
+"""Explicit installation and foreground service entrypoints; never discover live processes."""
+
+import argparse
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+from .muster import _unique, read_environment, resolve_home
+from .reconciler import API
+from .workspaces import any_file_lock
+
+DEFAULT_HOME = ".phalanx_muster"
+
+
+def initialize(home=None, *, api_url=None, port=8000):
+    """Create reviewable configuration only, in a previously nonexistent directory."""
+    selected = home if home is not None else os.environ.get("PHALANX_HOME")
+    root = Path(selected).expanduser() if selected is not None else Path.home() / DEFAULT_HOME
+    if not root.is_absolute():
+        raise ValueError("Installation --home must be absolute")
+    root = root.resolve()
+    if not 1 <= port <= 65535:
+        raise ValueError("Server port must be between 1 and 65535")
+    api_url = api_url if api_url is not None else f"http://127.0.0.1:{port}"
+    API(api_url, "configuration-validation")
+    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    files = {
+        "deployment.json": {
+            "environment_file": str(root / "private.env"),
+            "shift_config": str(root / "shift.json"),
+            "server": {"host": "127.0.0.1", "port": port},
+            "reconciler_config": str(root / "reconciler.json"),
+            "reconciler_state": str(root / "reconciler"),
+        },
+        "shift.json": {
+            "base_url": api_url, "runtime": "SET_RUNTIME",
+            "charter": str(root / "charter.toml"),
+            "worktrees": str(root / "worktrees"),
+            "session_workspace": "SET_NATIVE_WORKSPACE",
+            "repositories": {},
+        },
+        "reconciler.json": {
+            "base_url": api_url, "reconciler_id": "SET_STABLE_RECONCILER_ID", "repositories": {},
+        },
+    }
+    for name, value in files.items():
+        (root / name).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    (root / "private.env.example").write_text(
+        "# Copy to private.env with private OS permissions; supply credentials privately.\n"
+        "# Never regenerate credentials for an existing deployment.\n"
+        f"PHALANX_HOME={root}\nPHALANX_DB={root / 'db' / 'phalanx.sqlite3'}\n"
+        f"PHALANX_API_URL={api_url}\nPHALANX_SHIFT_CONFIG={root / 'shift.json'}\n"
+        "# PHALANX_OWNER_TOKEN=\n# PHALANX_RUNNER_TOKEN=\n# PHALANX_GITHUB_TOKEN=\n"
+        "PHALANX_LOCAL_BOARD=0\n", encoding="utf-8")
+    (root / "charter.toml").write_text(
+        'goal = "SET_GOAL"\nrepositories = []\n'
+        'allowed_actions = ["Implement scoped work and publish PRs under repository rules"]\n'
+        'escalate = ["Missing authority or credentials"]\nstop_when = ["Owner stops the muster"]\n'
+        '[shift]\nmax_writers = 5\nmax_hours = 4\nmax_wakes = 48\n', encoding="utf-8")
+    return root
+
+
+def configuration(path):
+    """Read config and environment into a child environment, leaving this process unchanged."""
+    try:
+        config = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_unique)
+    except (ValueError, UnicodeError):
+        raise ValueError("Invalid deployment configuration JSON") from None
+    expected = {"environment_file", "server", "shift_config", "reconciler_config", "reconciler_state"}
+    if not isinstance(config, dict) or set(config) != expected:
+        raise ValueError("Deployment config needs environment_file, server, shift_config, "
+                         "reconciler_config and reconciler_state")
+    for name in expected - {"server"}:
+        if not isinstance(config[name], str) or not Path(config[name]).is_absolute():
+            raise ValueError(f"Deployment {name} must be an absolute path")
+    server = config["server"]
+    if (not isinstance(server, dict) or set(server) != {"host", "port"}
+            or server["host"] not in ("127.0.0.1", "::1", "localhost")
+            or type(server["port"]) is not int or not 1 <= server["port"] <= 65535):
+        raise ValueError("Deployment server needs a loopback host and a port between 1 and 65535")
+    env = {**read_environment(Path(config["environment_file"])), **os.environ}
+    env.setdefault("PHALANX_SHIFT_CONFIG", config["shift_config"])
+    return config, env
+
+
+@contextmanager
+def service_environment(env):
+    previous = dict(os.environ)
+    os.environ.clear()
+    os.environ.update(env)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
+
+
+def run_service(config, env, service, *, initialize_database=False, once=False, serve=None):
+    if service == "reconciler":
+        command = [sys.executable, "-P", "-m", "phalanx", "reconcile",
+                   "--config", config["reconciler_config"], "--state", config["reconciler_state"]]
+        if once:
+            command.append("--once")
+        return subprocess.call(command, env=env)
+    database = env.get("PHALANX_DB", "")
+    if not database or not Path(database).is_absolute():
+        raise ValueError("Server requires an explicit absolute PHALANX_DB")
+    path = Path(database).resolve()
+    if not path.is_file() and not initialize_database:
+        raise ValueError("Recorded database is missing; refuse to create a replacement. "
+                         "For a new install only, pass --initialize-database")
+    if path.exists() and initialize_database:
+        raise ValueError("--initialize-database is only for a new database")
+    if not initialize_database and not path.is_file():
+        raise ValueError("Recorded database disappeared before startup; refusing to create a replacement")
+    if serve is None:
+        raise ValueError("Server launch requires the server-host entrypoint")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with any_file_lock([path.with_name(path.name + ".service.lock")]) as locked:
+        if locked is None:
+            raise ValueError("A deployment server already owns this database")
+        if path.exists() and initialize_database:
+            raise ValueError("--initialize-database is only for a new database")
+        with service_environment(env):
+            serve(host=config["server"]["host"], port=config["server"]["port"])
+        return 0
+
+
+def add_deploy_command(commands):
+    parser = commands.add_parser("deploy", help="explicit setup and foreground service entrypoints")
+    actions = parser.add_subparsers(dest="deploy_command", required=True)
+    init = actions.add_parser("init", help="create templates only; never overwrite an existing home")
+    init.add_argument("--home", type=Path, help="new absolute directory (default: ~/.phalanx_muster)")
+    init.add_argument("--api-url", help="client API URL (default: loopback at --port)")
+    init.add_argument("--port", type=int, default=8000)
+    for name in ("check", "run", "cli"):
+        action = actions.add_parser(name)
+        action.add_argument("--config", type=Path, help="explicit deployment.json, including legacy layouts")
+        action.add_argument("--home", help="existing home; otherwise PHALANX_HOME or locator")
+        if name == "run":
+            action.add_argument("service", choices=("server", "reconciler"))
+            action.add_argument("--initialize-database", action="store_true")
+            action.add_argument("--once", action="store_true")
+        elif name == "cli":
+            action.add_argument("arguments", nargs=argparse.REMAINDER)
+
+
+def run_deploy(args, *, serve=None):
+    if args.deploy_command == "init":
+        print(f"Templates created in {initialize(args.home, api_url=args.api_url, port=args.port)}; "
+              "configure credentials, mappings, runtime and charter before starting anything.")
+        return 0
+    if args.config is not None and args.home is not None:
+        raise ValueError("Use either --config or --home")
+    path = args.config if args.config is not None else resolve_home(args.home) / "deployment.json"
+    config, env = configuration(path)
+    if args.deploy_command == "check":
+        database = env.get("PHALANX_DB", "")
+        if not database or not Path(database).is_absolute() or not Path(database).is_file():
+            raise ValueError("Recorded absolute PHALANX_DB must exist; check never initializes it")
+        for name in ("shift_config", "reconciler_config"):
+            if not Path(config[name]).is_file():
+                raise ValueError(f"Missing deployment {name}")
+        if not all(env.get(key) for key in
+                   ("PHALANX_OWNER_TOKEN", "PHALANX_RUNNER_TOKEN", "PHALANX_GITHUB_TOKEN")):
+            raise ValueError("Configure owner, runner and GitHub credentials privately")
+        print("Deployment paths and credentials present; no services started or state changed.")
+        return 0
+    if args.deploy_command == "cli":
+        arguments = args.arguments
+        if arguments[:1] == ["--"]:
+            arguments = arguments[1:]
+        return subprocess.call([sys.executable, "-P", "-m", "phalanx", *arguments], env=env)
+    if args.initialize_database and args.service != "server":
+        raise ValueError("--initialize-database applies only to the server")
+    if args.once and args.service != "reconciler":
+        raise ValueError("--once applies only to the reconciler")
+    return run_service(config, env, args.service,
+                       initialize_database=args.initialize_database, once=args.once, serve=serve)

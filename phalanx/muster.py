@@ -56,16 +56,26 @@ def muster_file(home, name):
     return path
 
 
-def load_environment(home):
-    """Load literal private env values, never execute a shell or print their contents."""
-    path = muster_file(home, "private.env")
+def read_environment(path):
+    """Parse private settings without executing shell syntax or exposing values."""
     allowed = {"PHALANX_OWNER_TOKEN", "PHALANX_RUNNER_TOKEN", "PHALANX_GITHUB_TOKEN",
-               "PHALANX_DB", "PHALANX_LOCAL_BOARD"}
+               "PHALANX_DB", "PHALANX_LOCAL_BOARD", "PHALANX_API_URL",
+               "PHALANX_HOME", "PHALANX_SHIFT_CONFIG"}
     values = {}
     try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeError):
         raise MusterError(f"Cannot read private environment {path}") from None
+    if path.suffix.lower() == ".json":
+        try:
+            values = json.loads(text, object_pairs_hook=_unique)
+        except ValueError:
+            raise MusterError(f"Invalid private environment {path}") from None
+        if (not isinstance(values, dict) or set(values) - allowed
+                or not all(isinstance(value, str) and value.strip() for value in values.values())):
+            raise MusterError(f"Invalid private environment {path}; expected supported string settings")
+        return values
+    lines = text.splitlines()
     for number, line in enumerate(lines, 1):
         line = line.strip()
         if not line or line.startswith("#"):
@@ -82,6 +92,12 @@ def load_environment(home):
         if not value:
             raise MusterError(f"Empty private environment value in {path} at line {number}")
         values[key] = value
+    return values
+
+
+def load_environment(home):
+    """Load literal private env values, never execute a shell or print their contents."""
+    values = read_environment(muster_file(home, "private.env"))
     for key, value in values.items():
         os.environ.setdefault(key, value)
 

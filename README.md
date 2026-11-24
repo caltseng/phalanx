@@ -57,7 +57,14 @@ and observation records live behind the API. There are no client SQLite queues o
 
 ## Quickstart: new install
 
-Use CPython 3.12 or later (3.14 for deployment). These steps create new tokens and a new database. In PowerShell, from the repository root:
+Use CPython 3.12 or later (3.14 for deployment). For reproducible setup, use
+[`python -m phalanx deploy init`](docs/deployment.md): it creates credential-free templates
+under `~/.phalanx_muster` by default, never overwrites an existing directory, and starts
+nothing. Configure the generated files, then use the tracked foreground service entrypoints.
+Existing `phalanx-muster` installations keep their paths; adopt tooling only through the
+[service-owner rollout](docs/deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
+
+The following manual alternative creates new tokens and a new database. In PowerShell, from the repository root:
 
 ```powershell
 py -m venv .venv
@@ -65,7 +72,7 @@ py -m venv .venv
 python -m pip install -r requirements.lock -e .
 $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
-$env:PHALANX_DB = "C:/muster/db/phalanx.sqlite3"
+$env:PHALANX_DB = Join-Path $HOME ".phalanx_muster\db\phalanx.sqlite3"
 $env:PHALANX_LOCAL_BOARD = "1"
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
@@ -117,8 +124,9 @@ The selected directory contains `shift.json`, `charter.toml`, `reconciler.json` 
 The shift config can omit `charter` or use `charter.toml` (an absolute path to that same file
 also works). Other config paths, such as checkout and worktree mappings, should be absolute.
 `private.env` holds literal `KEY=VALUE` lines for `PHALANX_RUNNER_TOKEN`,
-`PHALANX_GITHUB_TOKEN`, optionally `PHALANX_OWNER_TOKEN`, `PHALANX_DB` and
-`PHALANX_LOCAL_BOARD`. Blank lines and whole-line `#` comments are allowed; matching outer
+`PHALANX_GITHUB_TOKEN`, optionally `PHALANX_OWNER_TOKEN`, `PHALANX_DB`,
+`PHALANX_LOCAL_BOARD`, `PHALANX_API_URL`, `PHALANX_HOME` and
+`PHALANX_SHIFT_CONFIG`. Blank lines and whole-line `#` comments are allowed; matching outer
 single/double quotes are removed, without escapes, interpolation, inline comments or shell
 execution. Duplicate/unknown keys and empty values fail. Protect this file with your OS's
 private-file permissions; never commit it. Existing environment values take precedence.
@@ -154,6 +162,7 @@ To retrieve one item's correlated timeline through the supported API, see the [p
 ## Documentation
 
 - [Install Phalanx](docs/install.md): first-time setup, credentials, runner setup and repository trust.
+- [Deployment tooling](docs/deployment.md): versioned setup, service entrypoints and reviewed legacy adoption.
 - [Resume an existing install](docs/resume.md): restart order, single-instance checks and status.
 - [Writer operations](docs/writer-operations.md): direct writers, publication, validation flags and delivery.
 - [Direct path](docs/direct-path.md): the GitHub reconciler and a Captain on the direct path.
