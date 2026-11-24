@@ -188,7 +188,27 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   2. It launches the successor with the charter, the parent Captain ID and a nonce, using the same at-most-once launch rule as writers.
   3. It doesn't wait for the successor to take over. It finishes or explicitly abandons each of its own intents, which the server records, so they become actionable by any Captain.
   4. It sets `ended` and stops acting.
-- **Cleanup.** The successor confirms the predecessor is `ended` with no owned intents, then archives the predecessor's chat. A predecessor still `ending` after 30 min is treated as dead (below).
+- **Creator-owned cleanup.** Each Captain archives the writer sessions it created once their
+  executions are completed, failed or cancelled, or their abandoned/replaced writers have ended
+  and their runtime sessions are confirmed stopped. An ending Captain also cleans up its own
+  ended/stopped helpers, never its live successor. Closed items' writers remain discoverable as
+  `ended_writers` on the Captain, with a `cleanup_pending` count. After ending its shift, a Captain
+  with pending writers keeps only a cleanup wake, not dispatch/coordination, until this count is
+  zero. Refusals are escalated once and leave that actionable count.
+  The Captain's creator (including a keeper run that launched it), not its successor, archives
+  its chat after a clean handoff: `ended`, no owned intents or pending writer cleanup, and a
+  registered successor or explicit charter stop condition. A keeper checks its own previous
+  Captain before any live-Captain early exit and retains a cleanup wake/child-ended notification
+  in that same creator session; a fresh keeper run cannot assume its creator authority.
+  A predecessor still `ending` after 30 min is stale, not automatically safe to archive.
+  Immediately before any archive, `shift archive-check` verifies local work is preserved:
+  the worktree is clean and its commits are on its freshly fetched origin branch. Unpushed
+  commits, local changes or unavailable evidence skip archival and raise `orphan_session`.
+  The runtime's session tools perform archival; the core, CLI and API stay runtime-neutral.
+  `shift archive-result` records success, block or refusal with the reason. A refused archive
+  leaves the session untouched and keeps its flag even after the reporter ends; it is never
+  retried in a loop. Only separately verified archival clears it. See the
+  [commands and runtime protocol](direct-path.md#creator-owned-session-cleanup).
 
   As built in step 4:
   - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
@@ -204,7 +224,7 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
 The reconciler is a long-running process, so it, not a chat, notices when no Captain is live.
 
 - **Detect.** No Captain is `active` or `ending` with a heartbeat under 15 min while open work exists. The server raises `no_live_captain`, the board shows a banner with the last Captain and its handoff note, and the reconciler runs the runner's `notify_command`.
-- **Restart.** A runtime scheduler that **starts a new session** on a fixed cadence, such as a scheduled automation that opens a fresh chat, runs a short "Captain keeper" prompt every 30 min. The keeper checks `GET /v1/captains`. If a live Captain exists, it ends without acting. Otherwise it registers and works as a Captain from the charter, or, if its session can't schedule its own wakes, starts a Captain in a new scheduled session and ends. Each runtime adapter documents its scheduler (D8).
+- **Restart.** A runtime scheduler that **starts a new session** on a fixed cadence, such as a scheduled automation that opens a fresh chat, runs a short "Captain keeper" prompt every 30 min. The keeper checks `GET /v1/captains`, first cleaning up its own previous Captain after a clean handoff. If a live Captain exists, it starts nothing. Otherwise it registers and works as a Captain from the charter, or, if its session can't schedule its own wakes, starts a Captain in a new scheduled session and retains only creator cleanup through a wake or child-ended notification. Each runtime adapter documents its scheduler (D8).
 - **Owner fallback.** If no runtime scheduler is configured, or the keeper itself fails, the owner sees the banner and notification and starts a Captain from the charter by hand. Nothing else blocks: workers keep running and posting evidence, and the reconciler keeps recording GitHub state. The keeper doesn't depend on the reconciler. If both are down, the keeper still finds no live Captain through the API and starts one, and that Captain restarts the reconciler.
 
 ### Deviation flags
@@ -213,12 +233,12 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 
 | Flag | Condition | Recovery |
 | --- | --- | --- |
-| `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. The successor or keeper archives it. |
+| `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
 | `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
 | `captain_idle_with_work` | Live Captains, but a runnable item has had no writer for 30 min | A Captain launches it, or the charter explains why not |
 | `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
-| `orphan_session` | A visible session has no registration | Captain registers it to an item or stops it |
+| `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |
 | `no_progress` | No progress post or stage advance for 2 h while `busy` | Captain checks the session, then nudges or replaces it |
 | `writer_stopped` | Writer reported `stopped`/`error` without a result | Captain resumes the same session or replaces the writer |
 | `head_drift`, `checks_failed`, `review_feedback`, `pr_closed` | From GitHub reconciliation | The writer acts, or the Captain relaunches |

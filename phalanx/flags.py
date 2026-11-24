@@ -64,7 +64,8 @@ def captain_stale(db, now):
         reason = (f"Ending since {row['ending_at']} without finishing its handoff" if overdue
                   else f"No heartbeat since {row['heartbeat_at']}")
         flags.append(flag("captain_stale", reason,
-                          "Live Captains take over its intents. The successor or keeper archives it.",
+                          "Live Captains take over its intents. Its creator archives it only after "
+                          "a clean handoff and local-work preservation checks.",
                           gone_at(row), captain_id=row["id"]))
     return flags
 
@@ -169,6 +170,8 @@ def session_flags(db, now):
     by_word = {word: writer for writer in writers for word in (writer["item_id"][:8], writer["nonce"])}
     flags = []
     for session in sorted(reported.values(), key=lambda entry: (entry["first_seen"], entry["id"])):
+        if db.execute("SELECT 1 FROM session_archives WHERE session_id=?", (session["id"],)).fetchone():
+            continue
         if session["id"] in registered or session["name"] in successors:
             continue
         label = f"Session {session['id']} ({session['name']})"
@@ -189,9 +192,20 @@ def session_flags(db, now):
     return flags
 
 
+def archive_flags(db, now):
+    return [
+        flag("orphan_session", f"Session {row['session_id']} archive {row['outcome']}: {row['reason']}",
+             "Preserve local work before archiving; for a runtime refusal, the owner must resolve it. "
+             "Do not retry a refused archive.", at(row["updated_at"]), notify_owner=True)
+        for row in db.execute(
+            "SELECT * FROM session_archives WHERE outcome != 'archived' ORDER BY updated_at LIMIT ?",
+            (DERIVED_LIMIT,))
+    ]
+
+
 # Each function is fn(db, now) -> list of flags in the GET /v1/flags shape.
 DERIVED = (captain_stale, no_live_captain, captain_idle_with_work, writer_flags, session_flags,
-           *reconciliation.DERIVED_FLAGS)
+           archive_flags, *reconciliation.DERIVED_FLAGS)
 
 
 def raise_flag(db, payload):

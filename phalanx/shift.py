@@ -19,7 +19,7 @@ import tomllib
 from urllib.parse import quote, urlencode
 
 from .work_cli import CREDENTIAL, request
-from .workspaces import WorkspaceManager
+from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
 # Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
@@ -169,7 +169,7 @@ def _summary(item):
     }
 
 
-def status(api, charter):
+def status(api, charter, captain_id=None):
     """Flags, Captains and the charter's open items: what a wake reconciles."""
     items, cursor = [], None
     while len(items) < MAX_OPEN_ITEMS:
@@ -185,6 +185,7 @@ def status(api, charter):
         "captains": api("/v1/captains?limit=100")["captains"],
         "items": [_summary(item) for item in items if item["repository_id"] in scope],
         "out_of_scope_open_items": sum(item["repository_id"] not in scope for item in items),
+        **({"captain": api(f"/v1/captains/{_q(captain_id)}")} if captain_id else {}),
     }
 
 
@@ -311,6 +312,61 @@ def prompt(name):
     return resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
 
 
+def archive_result(api, session_id, outcome, reason, reported_by):
+    return api("/v1/session-archives", method="PUT", body={
+        "session_id": session_id, "outcome": outcome, "reason": reason, "reported_by": reported_by})
+
+
+def archive_check(api, config, charter, session_id, reported_by, *, item_id=None, worktree=None,
+                  no_worktree=False):
+    """Check preservation only; the creator uses its runtime's tools to actually archive."""
+    current = api("/v1/session-archives?" + urlencode({"session_id": session_id}))
+    record = current["record"]
+    if record and record["outcome"] in ("archived", "refused"):
+        return {"can_archive": False, **record}
+    if current["active"]:
+        return {"can_archive": False, "reason": "The writer, Captain handoff or creator cleanup has not ended"}
+    try:
+        if current["writers"] and (not item_id or any(
+                writer["item_id"] != item_id for writer in current["writers"])):
+            raise WorkspaceError("Use the registered writer's --item for its archive check")
+        if item_id:
+            item = api(f"/v1/items/{_q(item_id)}")
+            repository = item["repository_id"]
+            if repository not in charter["repositories"]:
+                raise WorkspaceError(f"Repository {repository} is outside the charter")
+            mapping = config["repositories"][repository]
+            remote = next(entry["remote"] for entry in api("/v1/repositories") if entry["id"] == repository)
+            workspace = WorkspaceManager(mapping["checkout"], remote, config["worktrees"]).inspect(item_id)
+            worktree = workspace.path
+        elif not worktree and not no_worktree:
+            raise WorkspaceError("Identify the session's worktree, or explicitly pass --no-worktree")
+        if worktree:
+            path = Path(worktree)
+            if _status(path, "--ignored=matching"):
+                raise WorkspaceError(f"Worktree has local changes or untracked files: {path}")
+            entries = _git(path, "ls-files", "-v", "-z")
+            if any(not entry.startswith("H ") for entry in entries.split("\0") if entry):
+                raise WorkspaceError(f"Index entries can hide local changes: {path}")
+            git_dir = Path(_git(path, "rev-parse", "--absolute-git-dir").strip())
+            if any((git_dir / name).exists() for name in (
+                    "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD",
+                    "rebase-merge", "rebase-apply", "sequencer", "BISECT_START")):
+                raise WorkspaceError(f"Worktree has an in-progress Git operation: {path}")
+            branch = _git(path, "symbolic-ref", "--short", "HEAD").strip()
+            _git(path, "check-ref-format", f"refs/heads/{branch}")
+            ref = f"refs/remotes/origin/{branch}"
+            _git(path, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:{ref}")
+            unpushed = _git(path, "--no-replace-objects", "rev-list", "HEAD", "--not", ref).strip()
+            if unpushed:
+                raise WorkspaceError(f"Worktree has commits not pushed to origin/{branch}: {path}")
+    except WorkspaceError as error:
+        record = archive_result(api, session_id, "blocked", str(error), reported_by)
+        return {"can_archive": False, **record}
+    return {"can_archive": True, "session_id": session_id,
+            "reason": "Branch is pushed and worktree is clean" if worktree else "No worktree to remove"}
+
+
 def handoff(api, charter, captain_id, note, command):
     """Start ending this shift and say how to launch, or find, the successor Captain.
 
@@ -363,7 +419,8 @@ def add_shift_command(commands):
                       help="a visible native session named `phx ...`; repeat for each")
     beat.add_argument("--no-sessions", action="store_true", help="report that no such session is visible")
     beat.add_argument("--handoff-note")
-    actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
+    show_status = actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
+    show_status.add_argument("--captain", help="also read this Captain, including ended-writer cleanup")
     act = actions.add_parser("action", parents=[shared], help="record an action on the item's timeline")
     act.add_argument("--captain", required=True)
     act.add_argument("--item", required=True)
@@ -376,6 +433,20 @@ def add_shift_command(commands):
     retire = actions.add_parser("retire-reconciler", parents=[shared],
                                 help="forget a decommissioned reconciler's heartbeat")
     retire.add_argument("runner_id")
+    check = actions.add_parser("archive-check", parents=[shared],
+                               help="check local work before using runtime session tools to archive")
+    check.add_argument("--session", required=True)
+    check.add_argument("--by", required=True, help="reporting native session ID")
+    location = check.add_mutually_exclusive_group(required=True)
+    location.add_argument("--item")
+    location.add_argument("--worktree", type=Path)
+    location.add_argument("--no-worktree", action="store_true")
+    archived = actions.add_parser("archive-result", parents=[shared],
+                                  help="record a runtime archive result, without invoking the runtime")
+    archived.add_argument("--session", required=True)
+    archived.add_argument("--by", required=True, help="reporting native session ID")
+    archived.add_argument("--outcome", required=True, choices=["archived", "refused", "blocked"])
+    archived.add_argument("--reason", required=True)
     start_writer = actions.add_parser("launch", parents=[shared],
                                       help="prepare an item's worktree and register its writer intent")
     start_writer.add_argument("--captain", required=True)
@@ -420,7 +491,7 @@ def run_shift(args):
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note)
     elif args.shift_command == "status":
-        result = status(API(config), charter)
+        result = status(API(config), charter, args.captain)
     elif args.shift_command == "action":
         result = API(config)(f"/v1/items/{_q(args.item)}/captain-actions", body={
             "captain_id": args.captain, "action": args.action, "reason": args.reason})
@@ -429,6 +500,11 @@ def run_shift(args):
         result = handoff(API(config), charter, args.captain, args.note, command)
     elif args.shift_command == "retire-reconciler":
         result = API(config)(f"/v1/reconcilers/{_q(args.runner_id)}", method="DELETE")
+    elif args.shift_command == "archive-check":
+        result = archive_check(API(config), config, charter, args.session, args.by, item_id=args.item,
+                               worktree=args.worktree, no_worktree=args.no_worktree)
+    elif args.shift_command == "archive-result":
+        result = archive_result(API(config), args.session, args.outcome, args.reason, args.by)
     elif args.shift_command == "launch":
         result = launch(API(config), config, charter, args.captain, args.item, replaces=args.replaces)
     elif args.shift_command == "writer":
