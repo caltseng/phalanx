@@ -221,8 +221,9 @@ selection, not a separate server lane setting. For each runnable item deliberate
 by lane order, overlap or the writer cap, the Captain records
 `shift action --captain ID --item ITEM --action held --reason "<concrete charter reason>"`.
 Refresh each wake: a hold expires after 30 minutes, a version change, or its Captain
-ending/becoming stale. It explains the board wait and suppresses idle-with-work flags;
-it never reserves capacity or prevents another Captain launching the item.
+ending/becoming stale. It explains the board wait and suppresses dispatch-overdue warnings;
+it does not hide informational backlog when the canonical writer limit is full or dispatch is paused.
+A hold never reserves capacity or prevents another Captain launching the item.
 
 ### Creator-owned session cleanup
 

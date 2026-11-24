@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from phalanx import captains, dispatch, finalization, flags, intake, shift, store
+from phalanx import captains, dispatch, finalization, flags, intake, shift, store, writers
 from phalanx.direct_schema import (
     CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA,
 )
@@ -940,6 +940,110 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
     def kinds(self, now):
         with connect(self.path) as db:
             return {(flag["kind"], flag["source"]) for flag in flags.all_flags(db, now)["flags"]}
+
+    def backlog(self, db):
+        intake.register(db, "repo", "https://github.com/e/r.git")
+        captain = captains.register(db, captains.CaptainRegistration(
+            session_ref="chat", charter_revision="c1"))
+        active = intake.create(db, Intake(repository_id="repo", goal="Building", target="report"))
+        binding = writers.register(db, active["id"], active["execution"]["id"], writers.Registration(
+            expected_version=active["execution"]["version"], captain_id=captain["id"],
+            runtime="test", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32))))
+        queued = intake.create(db, Intake(repository_id="repo", goal="Backlog", target="report"))
+        db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (queued["execution"]["id"],))
+        dispatch.set_dispatch(db, DispatchSettings(max_writers=1))
+        return captain, binding, queued
+
+    def test_capacity_backlog_uses_assigned_writers_and_keeps_fresh_holds_visible(self):
+        with write_transaction(self.path) as db:
+            captain, binding, queued = self.backlog(db)
+            captains.record_action(db, queued["id"], captains.Action(
+                captain_id=captain["id"], action="held", reason="Waiting for writer capacity"))
+            for state in ("launching", "busy", "idle", "stopped", "error"):
+                with self.subTest(state=state):
+                    db.execute("UPDATE writers SET state=?", (state,))
+                    (backlog,) = flags.captain_idle_with_work(db, datetime.now(UTC))
+                    self.assertEqual(backlog["kind"], "queue_backlogged")
+                    self.assertEqual(backlog["execution_id"], queued["execution"]["id"])
+                    self.assertEqual(backlog["item_id"], queued["id"])
+                    self.assertIn("Waiting for writer capacity: 1 of 1", backlog["reason"])
+                    self.assertIn("Captain hold: Waiting for writer capacity", backlog["reason"])
+                    self.assertFalse(backlog["notify_owner"])
+            # A lower limit never implies an ended writer or resets the waiting age.
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=2))
+            second = intake.create(db, Intake(repository_id="repo", goal="Second writer", target="report"))
+            writers.register(db, second["id"], second["execution"]["id"], writers.Registration(
+                expected_version=second["execution"]["version"], captain_id=captain["id"],
+                runtime="test", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32))))
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=1))
+            (lowered,) = flags.captain_idle_with_work(db, datetime.now(UTC))
+            self.assertIn("2 of 1", lowered["reason"])
+            self.assertEqual(lowered["first_seen"], backlog["first_seen"])
+
+    def test_queue_age_threshold_applies_to_backlog_and_overdue(self):
+        with write_transaction(self.path) as db:
+            _, _, queued = self.backlog(db)
+            now = datetime.now(UTC)
+            cutoff = int((now - flags.IDLE_WITH_WORK).timestamp() * 1000)
+            for maximum, kind in ((1, "queue_backlogged"), (2, "captain_idle_with_work")):
+                with self.subTest(maximum=maximum):
+                    dispatch.set_dispatch(db, DispatchSettings(max_writers=maximum))
+                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                               (cutoff + 1, queued["execution"]["id"]))
+                    self.assertEqual(flags.captain_idle_with_work(db, now), [])
+                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                               (cutoff, queued["execution"]["id"]))
+                    self.assertEqual(flags.captain_idle_with_work(db, now)[0]["kind"], kind)
+
+    def test_slot_release_changes_backlog_to_overdue_and_assignment_clears_it_over_http(self):
+        with write_transaction(self.path) as db:
+            captain, binding, queued = self.backlog(db)
+        self.start_server(self.path)
+        status, page = self.request("/v1/flags", OWNER)
+        self.assertEqual(status, 200)
+        (backlog,) = page["flags"]
+        self.assertEqual(backlog["kind"], "queue_backlogged")
+        with write_transaction(self.path) as db:
+            writers.release(db, writers.writer_row(db, binding["writer"]["id"]), "Slot released")
+            # Keep the released execution out of this old-backlog assertion.
+            db.execute("UPDATE executions SET ready_since=NULL WHERE id=?", (binding["id"],))
+        status, page = self.request("/v1/flags", OWNER)
+        self.assertEqual(status, 200)
+        (overdue,) = page["flags"]
+        self.assertEqual(overdue["kind"], "captain_idle_with_work")
+        self.assertIn("Dispatch overdue", overdue["reason"])
+        self.assertIn("0 of 1", overdue["reason"])
+        self.assertEqual(overdue["first_seen"], backlog["first_seen"])
+        status, _ = self.request(
+            f"/v1/items/{queued['id']}/executions/{queued['execution']['id']}/writer", RUNNER, {
+                "expected_version": queued["execution"]["version"], "captain_id": captain["id"],
+                "runtime": "test", "nonce": token_urlsafe(16),
+                "token_digest": intake.digest(token_urlsafe(32)),
+            })
+        self.assertEqual(status, 200)
+        self.assertEqual(self.request("/v1/flags", OWNER)[1]["flags"], [])
+
+    def test_dependency_holds_and_new_work_are_not_missed_launches_and_pause_is_informational(self):
+        with write_transaction(self.path) as db:
+            captain, binding, queued = self.backlog(db)
+            now = datetime.now(UTC)
+            intake.create(db, Intake(repository_id="repo", goal="Just arrived", target="report"))
+            db.execute("UPDATE executions SET dependency_wait_json='[]' WHERE id=?",
+                       (queued["execution"]["id"],))
+            self.assertEqual(flags.captain_idle_with_work(db, now), [])
+            db.execute("UPDATE executions SET dependency_wait_json=NULL WHERE id=?",
+                       (queued["execution"]["id"],))
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=2))
+            captains.record_action(db, queued["id"], captains.Action(
+                captain_id=captain["id"], action="held", reason="Charter sequence"))
+            self.assertEqual(flags.captain_idle_with_work(db, now), [])
+            captains.record_action(db, queued["id"], captains.Action(
+                captain_id=captain["id"], action="released", reason="Sequence clear"))
+            self.assertEqual(flags.captain_idle_with_work(db, now)[0]["kind"], "captain_idle_with_work")
+            dispatch.set_dispatch(db, DispatchSettings(paused=True))
+            (paused,) = flags.captain_idle_with_work(db, now)
+            self.assertEqual(paused["kind"], "queue_backlogged")
+            self.assertEqual(paused["reason"], "Waiting for dispatch to resume; 1 of 2 writer slots occupied")
 
     def test_captain_liveness_drives_server_flags(self):
         now = datetime.now(UTC)
