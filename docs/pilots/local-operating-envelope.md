@@ -42,12 +42,12 @@ Completed runs checked for duplicate claims and leftover running jobs, then ran 
 ## Provisional defaults and targets
 
 The original probes below are historical measurements, not instructions for running the
-retired scheduler. Direct writers have no timed expiry; the charter defines their budget.
+retired scheduler. Direct writers have no timed expiry; persisted dispatch settings define their budget.
 PH-19a's latency and recovery targets are unchanged.
 
 | Setting | Starting value |
 | --- | --- |
-| Native writer budget | Set charter `max_writers`; count live, waiting and uncertain intents. Validate 2, 4 and 8 real sessions before raising it. |
+| Native writer budget | Set persisted dispatch `max_writers` in Scribe; count live, waiting and uncertain intents workspace-wide. Validate 2, 4 and 8 real sessions before raising it. |
 | Synthetic claim pacing | Poll every 2 s with ±20% jitter when dispatch and the writer budget permit. Native Captains use their runtime wake schedule. |
 | Progress | Scoped writers post progress without timed expiry. Observe native state independently; stale progress does not authorize replacement. |
 | Priority aging | Start with urgent, normal, and low. Promote by one tier per 5 minutes continuously eligible, capped at urgent. Break ties by oldest eligible time then stable ID. Preserve age across contention and track retry delays separately. Use the oldest ready head per band if that keeps ranking indexed. |
@@ -106,7 +106,7 @@ Interrupted review now exercises explicit stopped-writer replacement, preserved 
 revoked-token rejection, not clock mutation. Report stages continue under the same writer.
 If restart loses the last storage reply, the owner read APIs must confirm that exact
 attempt, version and report revision completed; the ended writer token stays revoked.
-There is no local reservation database. The probe checks charter admission and one open
+There is no local reservation database. The probe checks workspace admission and one open
 attempt per execution. It measures free-writer delay separately from saturated backlog.
 An accepted result already contains the next attempt's binding, so the synthetic writer
 uses it while its version remains current instead of posting another claim. Claim HTTP

@@ -15,7 +15,7 @@ from unittest.mock import Mock, patch
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from phalanx import deployment
+from phalanx import deployment, shift
 from phalanx.__main__ import main
 from phalanx.muster import MusterError
 from phalanx.workspaces import any_file_lock
@@ -51,10 +51,23 @@ class DeploymentTest(unittest.TestCase):
         self.assertFalse((home / "private.env").exists())
         self.assertFalse((home / "db").exists())
         self.assertFalse((home / "worktrees").exists())
-        self.assertIn("max_writers = 5", (home / "charter.toml").read_text())
         example = (home / "private.env.example").read_text()
         self.assertIn(str(home / "db" / "phalanx.sqlite3"), example)
         self.assertIn("PHALANX_API_URL=http://127.0.0.1:8765", example)
+
+    def test_init_charter_is_accepted_after_configuring_repositories(self):
+        home = self.root / "new-install"
+        args = Namespace(deploy_command="init", home=home, api_url=None, port=8000)
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(deployment.run_deploy(args), 0)
+        path = home / "charter.toml"
+        path.write_text(path.read_text(encoding="utf-8").replace(
+            "repositories = []", 'repositories = ["repo"]'), encoding="utf-8")
+        config = json.loads((home / "shift.json").read_text(encoding="utf-8"))
+        config["repositories"] = {"repo": {"checkout": str(self.root / "checkout")}}
+        charter = shift.load_charter(config)
+        self.assertEqual(charter["repositories"], ["repo"])
+        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 48})
 
     def test_init_refuses_existing_directory_without_touching_contents(self):
         home = self.install()

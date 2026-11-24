@@ -22,12 +22,15 @@ from phalanx.reconciler import API, Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
 from phalanx.validation import GateResult, GateState
 from phalanx.workspaces import any_file_lock
-from phalanx.store import connect, migrate, read_transaction, write_transaction
+from phalanx.store import MIGRATIONS, connect, migrate, read_transaction, write_transaction
 from phalanx.transitions import Execution, PullRequest as OutputPR, Revision, Stage, Status, Target, item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
 
 HEAD, BASE, OTHER = "a" * 40, "b" * 40, "c" * 40
+PRE_NORMALIZATION_VERSION = next(
+    index for index, migration in enumerate(MIGRATIONS)
+    if any("json_set(state_json, '$.stage', 'delivery')" in statement for statement in migration))
 
 
 class ObservationRouteTest(ServerFixture, unittest.TestCase):
@@ -321,9 +324,10 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                                    (json.dumps(raw), item["execution"]["id"]))
                         db.execute("UPDATE transition_history SET state_json=? WHERE execution_id=?",
                                    (json.dumps(raw), item["execution"]["id"]))
-                        # Restore schema v19, before closed-stage normalization and compaction telemetry.
+                        # Undo later columns before replaying closed-stage normalization.
                         db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
-                        db.execute("PRAGMA user_version=19")
+                        db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_writers")
+                        db.execute(f"PRAGMA user_version={PRE_NORMALIZATION_VERSION}")
                         saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
                                  for table in ("work_items", "attempts", "transition_history", "reports")}
                         metadata = tuple(db.execute(
@@ -371,7 +375,8 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                                (json.dumps({**asdict(ready), "stage": "pr_reconciliation"}),
                                 item["execution"]["id"]))
                     db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
-                    db.execute("PRAGMA user_version=19")
+                    db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_writers")
+                    db.execute(f"PRAGMA user_version={PRE_NORMALIZATION_VERSION}")
                 migrate(self.path)
                 rows = api.call("/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]
                 self.assertEqual(len(rows), 1)

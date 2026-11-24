@@ -80,7 +80,7 @@ End each created PR description with
 2. The Captain re-reads its charter and API/GitHub/native session state. It chooses named
    eligible work, records a writer intent/nonce and scoped token digest before launching
    one native session. Registration atomically enforces one open writer per execution and
-   the charter's `max_writers` across its repositories. Dispatch pause stops new admissions.
+   the persisted dispatch `max_writers` across all repositories. Dispatch pause stops new admissions.
 3. The writer uses an isolated item worktree, reads repository instructions and performs
    its stage. `phx work` submits progress, result/evidence or a focused question using the
    credential in the item's Git directory. Never expose it in chat or commits.
@@ -163,7 +163,7 @@ review and storage always reference the exact immutable draft revision.
 
 ### Captain shifts and continuity
 
-An operator-owned charter defines goal, repo scope, authority, writer budget, escalation and
+An operator-owned charter defines goal, repo scope, authority, escalation and
 stop conditions. Captain wakes every five minutes and hands off after four hours, 48 wakes,
 first compaction or degradation by default. Overlap is bounded to thirty minutes. The
 predecessor finishes/abandons uncertain intents and performs creator-owned cleanup before
@@ -183,8 +183,11 @@ heartbeat and wakes instead of the charter hash; charter revision enforcement is
 
 ## Settings and dispatch gates
 
-- Charter `max_writers` bounds new registered writers across its repositories. Intents and
-  waiting writers count. Replacements add no extra place; reductions do not end writers.
+- Persisted dispatch `max_writers` (initially 5) bounds new registered writers across the
+  workspace. Owners edit it in Scribe or the dispatch settings API. Intents and waiting
+  writers count; queued items without writers do not. Replacements add no extra place;
+  reductions do not end writers. Charter `[shift] max_writers` is rejected with
+  guidance to remove it and use dispatch settings instead.
 - Pause blocks new registrations/attempts while existing progress/results continue.
 - Captains consider repo mappings, charter scope, affinity, dependencies and retry time.
   Rank eligible work by urgent/normal/low priority aged toward urgent, then oldest ready

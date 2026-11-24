@@ -4,7 +4,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx.store import migrate
+from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
+from phalanx.dispatch_schema import CONCURRENCY_SCHEMA
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
@@ -15,6 +16,51 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         migrate(self.path)
         self.start_server(self.path)
         self.request("/v1/repositories", OWNER, {"id": "repo", "remote": "https://github.com/e/r.git"})
+
+    def test_capacity_is_owner_controlled_validated_and_persistent(self):
+        route = "/v1/dispatch/settings"
+        initial = self.get(route, RUNNER)
+        self.assertEqual(initial, (200, {"paused": False, "aging_seconds": 300,
+                                       "max_writers": 5, "active_writers": 0}))
+        for token, code in ((None, 401), (RUNNER, 403), ("x" * 32, 401)):
+            self.assertEqual(self.request(route, token, {"max_writers": 9}, method="PUT")[0], code)
+        for value in (0, -1, True, 1.5, "5", None, 2**64):
+            with self.subTest(value=value):
+                self.assertEqual(self.request(route, OWNER, {"max_writers": value}, method="PUT")[0], 422)
+        for field in ("paused", "aging_seconds"):
+            with self.subTest(field=field):
+                self.assertEqual(self.request(route, OWNER, {field: None}, method="PUT")[0], 422)
+        self.assertEqual(self.request(route, OWNER, {"max_writers": 9},
+                                      {"Origin": "https://evil.example"}, method="PUT")[0], 403)
+        self.assertEqual(self.request(route, OWNER, {"paused": True, "aging_seconds": 42,
+                                                    "max_writers": 7}, method="PUT")[0], 200)
+        status, saved = self.request(route, OWNER, {"max_writers": 6}, method="PUT")
+        self.assertEqual((status, saved), (200, {"paused": True, "aging_seconds": 42,
+                                               "max_writers": 6, "active_writers": 0}))
+        migrate(self.path)
+        with connect(self.path, mode="ro") as db:
+            row = db.execute("SELECT * FROM dispatch_settings").fetchone()
+            self.assertEqual((row["paused"], row["aging_seconds"], row["max_writers"]), (1, 42, 6))
+        # A fresh server process reads the same saved limit, not a charter or a default.
+        self.start_server(self.path)
+        self.assertEqual(self.get(route, OWNER), (200, saved))
+
+    def test_upgrade_adds_one_capacity_without_changing_dispatch_or_resetting_on_restart(self):
+        path = self.path.parent / "legacy.sqlite3"
+        with write_transaction(path, create=True) as db:
+            for version, statements in enumerate(MIGRATIONS[:MIGRATIONS.index(CONCURRENCY_SCHEMA)], 1):
+                for statement in statements:
+                    db.execute(statement)
+                db.execute(f"PRAGMA user_version={version}")
+            db.execute("UPDATE dispatch_settings SET paused=1, aging_seconds=99")
+        migrate(path)
+        with connect(path) as db:
+            self.assertEqual(tuple(db.execute(
+                "SELECT paused, aging_seconds, max_writers FROM dispatch_settings").fetchone()), (1, 99, 5))
+            db.execute("UPDATE dispatch_settings SET max_writers=8")
+        migrate(path)
+        with connect(path) as db:
+            self.assertEqual(db.execute("SELECT max_writers FROM dispatch_settings").fetchone()[0], 8)
 
     def test_unpinned_intake_has_a_visible_direct_wait_and_is_launchable(self):
         status, item = self.request("/v1/items", OWNER, {

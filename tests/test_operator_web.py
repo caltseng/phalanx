@@ -171,5 +171,10 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                         self.assertEqual(self.get(path)[0], 401)
                 self.assertEqual(self.request("/v1/items", body={"goal": "x"})[0], 401)
                 self.assertEqual(self.request("/v1/writer/attempt", body={}, method="POST")[0], 401)
+                self.assertEqual(self.get("/v1/dispatch/settings")[1]["max_writers"], 5)
+                self.assertEqual(self.request("/v1/dispatch/settings",
+                                              headers={"Host": "evil.example"})[0], 401)
+                self.assertEqual(self.request("/v1/dispatch/settings", body={"max_writers": 9},
+                                              method="PUT")[0], 401)
             finally:
                 self.stop_server(server)

@@ -32,7 +32,7 @@ are refused.
 
 Execution snapshots are JSON with indexed stage/status columns, one open execution per item
 and one open attempt per execution. A Captain registers a named writer intent after checking
-eligibility, pause and its charter's writer budget. The server stores its scoped token digest;
+eligibility, pause and the persisted workspace writer budget. The server stores its scoped token digest;
 the plaintext credential stays in the worktree's Git directory. `writer/attempt` calls
 `intake.claim_attempt` transactionally for that writer's own queued execution, recording the
 new attempt, pinned dependency evidence, running state and incremented version. Direct writer

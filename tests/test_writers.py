@@ -109,32 +109,48 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertIsNotNone(writer["ended_at"])
         self.assertEqual((writer["end_reason"], writer["attempt_id"]), ("closed as completed", None))
 
-    def test_concurrent_charter_limited_registrations_do_not_overfill(self):
-        items = [self.item(), self.item()]
+    def test_concurrent_registrations_without_charter_limits_do_not_overfill(self):
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        items = [self.item() for _ in range(8)]
         bodies = [{"expected_version": self.version(item_id), "captain_id": self.captain["id"],
                    "runtime": "any-runtime", "nonce": token_urlsafe(16),
-                   "token_digest": intake.digest(token_urlsafe(32)),
-                   "writer_limit": {"max_writers": 1, "repositories": ["repo"]}}
+                   "token_digest": intake.digest(token_urlsafe(32))}
                   for item_id, _ in items]
 
         def register(index):
             item_id, execution_id = items[index]
             return self.request(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER, bodies[index])
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            responses = list(pool.map(register, range(2)))
-        self.assertEqual(sorted(code for code, _ in responses), [200, 409])
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            responses = list(pool.map(register, range(8)))
+        self.assertEqual(sorted(code for code, _ in responses), [200] + [409] * 7)
         winner = next(response for code, response in responses if code == 200)
         refused = next(response for code, response in responses if code == 409)
         self.assertIn("max_writers=1", refused["detail"])
         self.assertIn(winner["writer"]["id"], refused["detail"])
+        winner_index = next(index for index, (code, _) in enumerate(responses) if code == 200)
+        replay_code, replay = register(winner_index)
+        self.assertEqual(replay_code, 200, replay)
+        self.assertEqual(replay["writer"]["id"], winner["writer"]["id"])
 
-    def test_failed_and_cancelled_writers_release_charter_capacity(self):
-        limit = {"max_writers": 1, "repositories": ["repo"]}
+    def test_initial_five_counts_sessions_not_unassigned_queued_items(self):
+        queued = [self.item() for _ in range(10)]
+        for index, (item_id, execution_id) in enumerate(queued[:5]):
+            binding, _, _ = self.register(item_id, execution_id)
+            self.ok(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER,
+                    {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                     "session_id": f"native-{index}",
+                     "state": ("busy", "idle", "error", "stopped", "busy")[index]}, method="PATCH")
+        status = self.ok("/v1/dispatch/settings", OWNER)
+        self.assertEqual((status["max_writers"], status["active_writers"]), (5, 5))
+        self.register(*queued[5], code=409)
+
+    def test_failed_and_cancelled_writers_release_capacity(self):
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         for ending in ("failed", "cancelled"):
             with self.subTest(ending=ending):
                 item_id, execution_id = self.item()
-                binding, _, _ = self.register(item_id, execution_id, writer_limit=limit)
+                binding, _, _ = self.register(item_id, execution_id)
                 action = "close-failure" if ending == "failed" else "cancel"
                 self.ok(f"/v1/items/{item_id}/executions/{execution_id}/{action}", OWNER,
                         {"expected_version": binding["version"], "reason": "Cannot continue"})
@@ -144,14 +160,15 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 closed = finalization.attempt(self.path, execution_id)
                 self.assertEqual(closed["state"]["status"], ending)
                 following, following_execution = self.item()
-                launched, _, _ = self.register(following, following_execution, writer_limit=limit)
+                launched, _, _ = self.register(following, following_execution)
                 self.ok(f"/v1/items/{following}/executions/{following_execution}/writer/withdraw", RUNNER,
                         {"captain_id": self.captain["id"], "writer_id": launched["writer"]["id"],
                          "reason": "never launched"})
 
-    def test_charter_limit_does_not_scan_unrelated_executions(self):
+    def test_capacity_limit_does_not_scan_unrelated_executions(self):
         from phalanx import writers
 
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         item_id, execution_id = self.item()
         binding, _, _ = self.register(item_id, execution_id)
         with write_transaction(self.path) as db:
@@ -159,8 +176,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 item = intake.create(db, Intake(repository_id="repo", goal=f"Work {index}", target="report"))
             payload = writers.Registration(
                 expected_version=item["execution"]["version"], captain_id=self.captain["id"],
-                runtime="any-runtime", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32)),
-                writer_limit={"max_writers": 1, "repositories": ["repo", "other"]})
+                runtime="any-runtime", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32)))
             steps = 0
 
             def budget():
@@ -175,6 +191,38 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 self.assertIn(binding["writer"]["id"], str(refused.exception))
             finally:
                 db.set_progress_handler(None, 0)
+
+    def test_raising_and_lowering_share_one_workspace_budget(self):
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        first_item, first_execution = self.item()
+        first, token, _ = self.register(first_item, first_execution)
+        self.ok("/v1/dispatch/settings", token, {"max_writers": 9}, 403, method="PUT")
+        self.ok("/v1/dispatch/settings", token, code=403)
+        self.ok("/v1/repositories", OWNER, {"id": "other", "remote": "https://github.com/e/other.git"})
+        other = self.ok("/v1/items", OWNER, {"repository_id": "other", "goal": "Other repo",
+                                           "target": "report"}, 201)
+        # A different Captain or repository cannot bypass the saved budget.
+        captain = self.ok("/v1/captains", RUNNER, {"session_ref": "second", "charter_revision": "old"}, 201)
+        self.register(other["id"], other["execution"]["id"], captain=captain["id"], code=409)
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 2}, method="PUT")
+        second, _, _ = self.register(other["id"], other["execution"]["id"], captain=captain["id"])
+        saved = self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.assertEqual((saved["active_writers"], saved["max_writers"]), (2, 1))
+        queued, execution = self.item()
+        self.register(queued, execution, code=409)
+        # Existing work keeps its writer token and next stage when lowered below usage.
+        advanced = self.submit(token, first, report_markdown="# Continue\n")
+        self.assertEqual(advanced["writer"]["id"], first["writer"]["id"])
+        replacement, _, _ = self.register(
+            first_item, first_execution, replaces=first["writer"]["id"], replaced_stopped=True)
+        self.assertEqual(replacement["writer"]["replaced_id"], first["writer"]["id"])
+        for binding in (replacement, second):
+            self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/writer/withdraw",
+                    RUNNER, {"captain_id": binding["writer"]["captain_id"],
+                             "writer_id": binding["writer"]["id"], "reason": "never launched"})
+            if binding is replacement:
+                self.register(queued, execution, code=409)
+        self.register(queued, execution)
 
     def test_queued_binding_survives_steering_and_resumes_its_writer(self):
         item_id, execution_id = self.item()

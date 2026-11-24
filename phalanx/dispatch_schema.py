@@ -45,3 +45,9 @@ STAGE_QUEUE_SCHEMA = (
         (queue_repository, queue_affinity, queue_priority, stage, ready_since, item_id, id)
         WHERE status = 'queued' AND ready_since IS NOT NULL""",
 )
+
+
+CONCURRENCY_SCHEMA = (
+    "ALTER TABLE dispatch_settings ADD COLUMN max_writers INTEGER NOT NULL DEFAULT 5 "
+    "CHECK (typeof(max_writers) = 'integer' AND max_writers > 0)",
+)

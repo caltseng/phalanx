@@ -113,8 +113,9 @@ See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the questio
 
 | Method and path | Request and behavior |
 | --- | --- |
-| `PUT /v1/dispatch/settings` | Owner sets `paused` and optionally `aging_seconds` (default 300). Pause stops new writer registrations and attempts; existing results and progress remain accepted. |
-| `POST /v1/items/{item}/executions/{execution}/writer` | Captain registers a named writer intent, expected version, nonce and token digest. Optional `writer_limit` enforces its charter across the named repositories atomically. Replacement requires the current writer ID and stopped attestation. |
+| `GET /v1/dispatch/settings` | Board-authenticated read of `paused`, `aging_seconds`, canonical `max_writers` (initially 5) and `active_writers`. Local read-only board access also permits this read. |
+| `PUT /v1/dispatch/settings` | Owner changes any of `paused`, `aging_seconds` or `max_writers`; omitted fields are preserved. `max_writers` must be an integer from 1 to 2147483647, not a boolean or string. Null and unknown fields are rejected. Browser writes must be same-origin. Returns saved settings and current usage. Pause stops new writer registrations and attempts; existing results and progress remain accepted. Lowering never stops existing writers. |
+| `POST /v1/items/{item}/executions/{execution}/writer` | Captain registers a named writer intent, expected version, nonce and token digest. Every registration atomically enforces the persisted workspace limit; registration accepts no caller-supplied limit. Replacement requires the current writer ID and stopped attestation. |
 | `PATCH /v1/items/{item}/executions/{execution}/writer` | Captain confirms the native session ID/link for its registered intent. |
 | `GET /v1/writer` | Scoped writer reads its binding, execution, open flags and latest persisted reply. |
 | `POST /v1/writer/attempt` | Scoped writer claims/resumes its own execution's next runnable stage. |

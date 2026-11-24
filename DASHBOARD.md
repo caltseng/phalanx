@@ -332,8 +332,12 @@ These operator routes are read-only; the merged local `+` form uses the existing
 intake route, and later D2 actions will also reuse existing routes. The D1 server reads
 (PH-29a) target the local board at `/operator/` only, with existing authentication unchanged:
 no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data)
-lists the routes. The charter's `max_writers` is enforced atomically at writer registration;
-these board reads add no slot/capacity fields or runners endpoint.
+lists the routes. Persisted dispatch `max_writers` is enforced atomically at writer registration.
+The **Writer concurrency** disclosure shows active sessions and the effective maximum
+(initially 5); owners can save a new positive integer. Local read-only viewers must supply
+an owner token to save. Saves preserve pause/aging settings and survive reload/restart.
+Lowering below usage preserves existing sessions and blocks new admissions. Refresh capacity
+reads current server values; charter settings cannot undo dashboard edits.
 
 - An optional `label` on work items, set at intake (`phalanx intake --label`) and by steering. Steering `label: null` clears it. Labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
 - New summary fields:

@@ -62,7 +62,7 @@ Do these steps in order and keep each wake short:
    - **Queued item with no writer** and no blocked prerequisites:
      1. Run `phx shift launch --captain <id> --item <item>`. This prepares the item worktree and registers
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
-        If the charter's `max_writers` cap refuses it, wait for a place to open and continue
+        If the server's persisted `max_writers` cap refuses it, wait for a place to open and continue
         other coordination. Record the hold below. This is a normal wait, not a flag or an escalation.
      2. Search the full inventory for the returned `session_name` and legacy names containing
         `session_identity.writer_nonce`. Verify the full nonce in the kickoff or structured runtime

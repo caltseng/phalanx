@@ -26,8 +26,10 @@ observations and heartbeats, and lets the server derive flags and verify deliver
 
 The operator supplies a charter file outside every repository. A native **Captain chat**
 runs `phx shift` (shorthand for the configured `python -m phalanx shift` command), re-reads
-that charter each wake, and chooses work within its repository scope, lane order and
-`max_writers` budget. It launches one registered **writer session** per item in an isolated
+that charter each wake, and chooses work within its repository scope and lane order.
+The owner's persisted `max_writers` budget (initially 5), editable under **Writer concurrency**
+in Scribe, applies across all Captains and repositories. The Captain launches one registered
+**writer session** per item in an isolated
 worktree. In the Copilot app all writers open in the shared worktrees folder project,
 `session_workspace`, rather than one project per worktree. Writers run `phx work` from
 their own worktree with a scoped credential. A runtime-scheduled **keeper** starts a
