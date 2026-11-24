@@ -45,6 +45,11 @@
   const report = { ...failure, id: "report", title: "Stored report", outcome: "report_stored", target: "report", status: "completed" };
   const flags = [
     { kind: "deployed", executionId: "done", reason: "deploy succeeded", recovery: "Informational", firstSeen: now, notifyOwner: false },
+    { kind: "queue_backlogged", itemId: "item-queue", executionId: "queue", reason: "Waiting for writer capacity: 5 of 5 writer slots occupied",
+      recovery: "Wait for a registered writer to finish or release its slot", firstSeen: hourAgo, notifyOwner: false },
+    { kind: "captain_idle_with_work", itemId: "item-overdue", executionId: "overdue",
+      reason: "Dispatch overdue: runnable for 30 min; 1 of 5 writer slots occupied",
+      recovery: "A Captain launches it", firstSeen: hourAgo, notifyOwner: false },
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
     { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true },
     { kind: "captain_session", captainId: "cap-ended", reason: "Ended session", recovery: "Review handoff", firstSeen: now, notifyOwner: false }
@@ -136,6 +141,33 @@
     assert(section("needs").textContent.includes("no live captain"), "Owner-notify flag without an item needs the owner");
     assert(section("active").contains(item("run")) && section("queued").contains(item("queue")), "Active and queued split");
     assert(item("queue").closest("li").textContent.includes("draft only"), "Open draft-only policy is visible");
+    const backlogGroup = section("flags").querySelector('[data-kind="queue_backlogged"]');
+    assert(backlogGroup.classList.contains("t-info") && backlogGroup.textContent.includes("Queue backlogged") &&
+      backlogGroup.textContent.includes("5 of 5"), "Full-capacity backlog is visible and informational");
+    assert(backlogGroup.querySelector(".sr-only").textContent === "information" &&
+      !backlogGroup.querySelector(".pennant"), "Normal backlog has a labeled, non-alarm information marker");
+    assert(backlogGroup.querySelector('a[href="/operator/executions/queue"]') &&
+      backlogGroup.querySelector(".age time"), "Backlog retains its execution link and age");
+    assert(item("queue").closest("li").querySelector(".chip.c-info"), "Backlog row chip uses restrained information styling");
+    const overdueGroup = section("flags").querySelector('[data-kind="captain_idle_with_work"]');
+    assert(overdueGroup.classList.contains("t-wait") && overdueGroup.textContent.includes("Dispatch overdue"),
+      "Legacy overdue flag remains compatible and gets an actionable display label");
+    const savedFlags = flags.slice();
+    const capacityFlag = flags.find(flag => flag.kind === "queue_backlogged");
+    flags.splice(0, flags.length, capacityFlag);
+    refresh();
+    await tick();
+    assert(!section("flags").querySelector("h2 .t-wait") &&
+      [...root.querySelectorAll(".counts li")].find(node => node.textContent.includes(" flags")).className === "",
+      "Backlog alone does not turn the section or summary count into a warning");
+    flags[0] = { ...capacityFlag, kind: "captain_idle_with_work", reason: "Dispatch overdue: capacity released" };
+    refresh();
+    await tick();
+    assert(item("queue").closest("li").querySelector(".chip.c-warn") &&
+      section("flags").textContent.includes("Dispatch overdue"), "Slot release refresh replaces information with overdue attention");
+    flags.splice(0, flags.length, ...savedFlags);
+    refresh();
+    await tick();
     assert(item("draft").closest("li").textContent.includes("draft published"), "Draft delivery is not labeled ready");
     assert(item("run").closest("li").textContent.includes("head drift"), "Row carries its flag chip");
     assert(item("run").closest("li").textContent.includes("unconfirmed"), "Launching writer reads as unconfirmed");

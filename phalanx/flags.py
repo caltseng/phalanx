@@ -11,7 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from pydantic import StringConstraints
 
-from . import intake, reconciliation
+from . import dispatch, intake, reconciliation
 from .auth import authenticate_board_read, require_coordinator
 from .captains import IDLE_WITH_WORK, STALE, active_holds, gone_at, is_live, successor_name
 from .intake_api import run
@@ -90,10 +90,13 @@ def no_live_captain(db, now):
 
 
 def captain_idle_with_work(db, now):
+    """Keep the legacy overdue kind; capacity backlog is informational, not Captain failure."""
     if not any(is_live(row, now) for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")):
         return []
     cutoff = int((now - IDLE_WITH_WORK).timestamp() * 1000)
     holds = active_holds(db, now)
+    capacity = dispatch.settings(db)
+    occupied, maximum = capacity["active_writers"], capacity["max_writers"]
     result = []
     for row in db.execute(
             """SELECT id, item_id, ready_since FROM executions AS execution
@@ -101,10 +104,24 @@ def captain_idle_with_work(db, now):
                  AND NOT EXISTS (SELECT 1 FROM writers
                                  WHERE execution_id = execution.id AND ended_at IS NULL)
                ORDER BY ready_since, id""", (cutoff,)):
-        if row["id"] in holds:
+        if capacity["paused"]:
+            kind = "queue_backlogged"
+            reason = f"Waiting for dispatch to resume; {occupied} of {maximum} writer slots occupied"
+            recovery = "The owner resumes dispatch when ready"
+        elif occupied >= maximum:
+            kind = "queue_backlogged"
+            reason = f"Waiting for writer capacity: {occupied} of {maximum} writer slots occupied"
+            recovery = "Wait for a registered writer to finish or release its slot"
+        elif row["id"] in holds:
             continue
-        result.append(flag("captain_idle_with_work", "Runnable for 30 min with no registered writer",
-             "A Captain launches it, or the charter explains why not",
+        else:
+            kind = "captain_idle_with_work"
+            reason = ("Dispatch overdue: runnable for 30 min with no registered writer; "
+                      f"{occupied} of {maximum} writer slots occupied")
+            recovery = "A Captain launches it, or records a valid dependency, sequence or hold reason"
+        if row["id"] in holds:
+            reason += f". Captain hold: {holds[row['id']]}"
+        result.append(flag(kind, reason, recovery,
              datetime.fromtimestamp(row["ready_since"] / 1000, UTC) + IDLE_WITH_WORK,
              item_id=row["item_id"], execution_id=row["id"]))
         if len(result) >= DERIVED_LIMIT:
