@@ -22,16 +22,21 @@ where only a prefix was recorded). The pilot coordination history is session
 The historical Captain records were re-read through `shift status` on November
 24 by the coordinating Captain `b1b0966fca924756bd058f853c7ad8c3`.
 These are source references, not instructions to edit server state.
+The same pilot coordinator subsequently supplied server/GitHub evidence for
+the writer lifecycle and action IDs below, from session `97150add` on November
+24. Events without full IDs retain the prefixes supplied in that report.
 
 ## First direct PR and report runs
 
 The PR pilot was item `9f34efa309704673b1b25ab57be97522`, execution
 `9b6d8340b3d44b208ab8f87dbbbda4d5`, target `checked_in`. Its setup kept it off
 the old runner using `direct-pilot` affinity (coordination history, turn 2).
-Captain `a4b92c82` subsequently reported writer `004ff246`, worker session
-`38287bab`, and the worker's published
+Captain `a4b92c82` registered writer `004ff2469ba4409dad58dcf779f4dcf0` at
+20:39:58 and confirmed native session
+`38287bab-455a-43b4-943d-a553b5d47178` at 20:40:51 (server writer record,
+re-read by the pilot coordinator). Its published
 [phalanx-pilot-py#7](https://github.com/caltseng/phalanx-pilot-py/pull/7)
-(turn 28). This is evidence of the direct PR path, not of a concurrent handoff
+was reported in turn 28. This is evidence of the direct PR path, not of a concurrent handoff
 or keeper restart during that PR's short open interval.
 
 | Time on November 23 | Evidence |
@@ -40,14 +45,15 @@ or keeper restart during that PR's short open interval.
 | 20:46:39 | GitHub created [pilot-py#7](https://github.com/caltseng/phalanx-pilot-py/pull/7) on branch `phalanx/6c94c6f0d4efdad7c35b383c11845fe48cb28e233c5524547ae2491d8d24f428`. |
 | 20:47:11 | GitHub's PR timeline records merge and close, merge commit `30faec1171c6d0cc6f8efff227b486298de45912`. The Captain reported auto-merge and `delivery / waiting_for_external` immediately afterward (turn 28). |
 | 20:47:17 | The same item raised false `pr_closed` although GitHub had merged it (turn 28). [#184](https://github.com/caltseng/phalanx/pull/184) records that the next exact observation cleared it and explains the list-endpoint error. |
+| 20:50:18 | Writer `004ff246` ended; the pilot coordinator's server inspection confirms execution `9b6d8340` completed. No exact completion event/version was supplied. |
 | 21:54:53 | [#184](https://github.com/caltseng/phalanx/pull/184) merged as `7fff033`: branch discovery now re-reads the exact PR before posting its merged/mergeable state. |
 
 [Plan #190](https://github.com/caltseng/phalanx/pull/190) and
 [#198](https://github.com/caltseng/phalanx/pull/198) count pilot-py#7 as the
-first delivered direct pilot. The contemporary wake still showed an external
-wait, and this record does not have the later completion event/version.
-Consequently, neither a clean flag history nor the final combined acceptance
-is claimed for item `9f34efa3`.
+first delivered direct pilot, consistent with the later server inspection.
+The contemporary wake still showed an external wait before completion.
+Neither a clean flag history nor the final combined acceptance is claimed
+for item `9f34efa3`.
 
 The report pilot, item `1b288612b629476c9fcd7fec11c3adfe`, execution
 `6ac8f83c6a52468aa9b671fd45fe9ecd`, reached `report_storage / completed`,
@@ -70,11 +76,19 @@ chain and its findings.
 | --- | --- |
 | 21:29:19 | Captain `a4b92c82dd394167b6097c6b1a5665f8` recorded its ending/handoff. Its note named live item `294506a4` ([#184](https://github.com/caltseng/phalanx/pull/184), writer `c25e0460`, session `0bf353fd`) and item `fb3c5b06` (writer `9a5117cc`, session `b0433fcc`). Source: historical Captain record and coordination turn 38. |
 | 21:30:06 | Successor Captain `83ab6c5161a3461bac3a87f456b09c79` registered, in session `8f01063e-c250-470c-ba0c-72566fb27507`. Source: historical Captain record; turn 38 records its own five-minute wake schedule. |
+| 21:32:00 / 21:32:06 | Successor takeover actions `f57d52d8e6bd4fa3bac38e65918ce058` (item `294506a4`, execution `d59890e5`) and `0b9bb4e9fbb94b7ea5a2990eeadcba28` (item `fb3c5b06`, execution `cffc54b5`) record taking over the existing writers and redirecting reports. #184 was open from 21:15:43 to 21:54:53. |
+| 21:38:48 | Action `90909ad0` on item `294506a4` records rebased #184 head `aa2d453`, evidence of work continuing after takeover. |
 | 21:55:41 | Keeper-started Captain `648eeae0613c4e40b222a128f8686b5d` registered. Source: historical Captain record; [#186](https://github.com/caltseng/phalanx/pull/186) records that it woke once and ended because an app automation run could not attach its own session automation. |
-| Later in that pilot | Keeper run `1b7d7479` created Captain session `9a6fe897` with its own five-minute automation. [#186](https://github.com/caltseng/phalanx/pull/186) explicitly records live verification, but supplies no exact timestamp; none is inferred here. |
+| 21:57:19 / 21:57:26 | Keeper-started Captain action `8b121f1e` on execution `cffc54b5` acted while writer `9a5117cc` was live and #187 was open (21:46:23-22:24:41). Escalation `d5865bcb` records failure to schedule its own wakes. |
+| 21:57:44 | Captain `648eeae0` heartbeated and cleared `no_live_captain`, following the simulated crash of `83ab6c51` and the resulting `captain_stale`/`no_live_captain` flags. Keeper run `48f36f56`, session `433981da-d954-4ac0-961b-3e8f4093c4f5`, performed the restart. |
+| 22:19:06 / 22:23:08 | After run `03f4f58c` was refused chat creation, keeper run `1b7d7479` created project session `9a6fe897-6fb3-4f25-becc-b62ca35c478a` with its own five-minute automation. Its Captain `d3c8b56dfa1e41f9b3c8cfed28db5970` registered at 22:19:06 and ended at 22:23:08 with `Stop condition met`, having inspected all seven charter items. Source: coordinator's server records and [#186](https://github.com/caltseng/phalanx/pull/186). |
 | 22:26 | Deployment of `d4c3e460` (#187) ended the old completed writers, including `fc28aba3`, as `closed as completed`; keeper `6fcab8bd` remained disabled pending #186. Source: coordination turn 46. |
 | About 22:36 | #186 (`1462f9f`, merged 22:35:04) was live; keeper `6fcab8bd` was re-enabled with its next run at 23:00. Source: coordination turns 47-48 and [#186](https://github.com/caltseng/phalanx/pull/186). |
 
+Keeper automation `6fcab8bd-21a4-46f8-9f1d-0c1ecec7d47d` also ran a
+live-Captain control (run session `a6ffb22f`) and exited without registering,
+according to the pilot coordinator's report. The resulting chain was
+`a4b92c82` -> `83ab6c51` -> `648eeae0` -> `d3c8b56d`.
 This proves that a handoff and keeper-driven replacement were exercised, not
 that a clean overlap or a post-fix combined run succeeded.
 [#186](https://github.com/caltseng/phalanx/pull/186) records required
@@ -135,6 +149,10 @@ No verified qualifying run is recorded here. #196 is still open, and the
 earlier Captain chain predates it. Later merges alone cannot establish
 handoff/restart coverage ([#198](https://github.com/caltseng/phalanx/pull/198),
 [#196](https://github.com/caltseng/phalanx/pull/196)).
+The pilot coordinator also reports later handoffs
+`aa3f71b7` -> `11f5960c` -> `f4e99892` -> `b1b0966f` (last about November
+24 05:02, with #200 and churchtree writers live), but no keeper restart in
+that chain. Those handoffs do not fill the missing combined evidence.
 
 For **one Phalanx item delivered after #196**, append the following evidence
 to this section. Any normal Phalanx item can qualify; no synthetic extra item
