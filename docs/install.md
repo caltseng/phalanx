@@ -65,7 +65,7 @@ export PHALANX_LOCAL_BOARD=1
 python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 ```
 
-`PHALANX_DB` defaults to `.phalanx/phalanx.sqlite3` resolved against the server's working directory, so set an absolute path. The server creates the file and its directory if they are missing, or applies pending schema steps to an existing store, before serving requests. It refuses a Phalanx store older than schema version 12 rather than upgrading it. Use one server process per database and local storage. Arrange HTTPS before exposing the API beyond loopback. See [Configuration](configuration.md) for every server setting, including `PHALANX_LEASE_SECONDS` and the local-only `PHALANX_LOCAL_BOARD` flag.
+`PHALANX_DB` defaults to `.phalanx/phalanx.sqlite3` resolved against the server's working directory, so set an absolute path. The server creates the file and its directory if they are missing, or applies pending schema steps to an existing store, before serving requests. It refuses a Phalanx store older than schema version 12 rather than upgrading it. Use one server process per database and local storage. Arrange HTTPS before exposing the API beyond loopback. See [Configuration](configuration.md) for every server setting, including the local-only `PHALANX_LOCAL_BOARD` flag. Direct writers have no timed lease expiry.
 
 ## Check health and credentials
 
