@@ -124,7 +124,7 @@ stateDiagram-v2
 
 | Event | Server behavior |
 | --- | --- |
-| Writer registration | Check expected version, named execution eligibility, dispatch pause, prerequisites and charter writer limit. Atomically enforce one open writer. An unbound queued item visibly awaits a direct Captain. |
+| Writer registration | Check expected version, named execution eligibility, dispatch pause, prerequisites and persisted workspace writer limit. Atomically enforce capacity and one open writer. An unbound queued item visibly awaits a direct Captain and consumes no capacity. |
 | Named writer attempt | Verify the current scoped token and runnable state. Assign a new attempt and pin exact upstream executions/output revisions. A wait exposes its reason and resume trigger. |
 | Valid result | Check attempt, writer binding, version, stage and evidence. Record outcome and history atomically; end that attempt. Open the next runnable attempt for the same writer or retain the writer through the wait. Old attempts/tokens cannot advance state. |
 | Paused dispatch | Refuse new registrations and attempts. Existing attempts can post progress/results. Resume makes runnable work available again. |

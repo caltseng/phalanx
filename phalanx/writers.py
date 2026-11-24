@@ -1,6 +1,6 @@
 """Writer registration: one native worker session per open execution, fenced by a writer token.
 
-A writer claims a named execution, never the queue head. Direct launches enforce their charter's
+A writer claims a named execution, never the queue head. All launches enforce the persisted
 writer cap; dispatch pause also refuses new writers (D6). The writer keeps its execution across
 stages: each accepted stage result opens the next stage's attempt under the same writer.
 """
@@ -13,7 +13,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field, StringConstraints
 
-from . import captains, intake, intake_api
+from . import captains, dispatch, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
 from .flags import all_flags
 from .intake_models import Identifier, Payload, Text, Versioned
@@ -45,7 +45,9 @@ class Registration(Versioned):
     # The open writer this registration replaces. Its Captain attests the old session is stopped.
     replaces: Identifier | None = None
     replaced_stopped: bool = False
-    writer_limit: WriterLimit | None = None
+    writer_limit: WriterLimit | None = Field(
+        default=None, deprecated=True,
+        description="Accepted for old Captains only; owner-controlled dispatch max_writers is authoritative")
 
 
 class Update(Payload):
@@ -174,27 +176,14 @@ def register(db, item_id, execution_id, payload):
         release(db, current, "replaced")
     elif payload.replaces is not None:
         raise intake.Conflict("The writer to replace is no longer registered")
-    if payload.writer_limit is not None:
-        limit = payload.writer_limit
-        repository = db.execute("SELECT repository_id FROM work_items WHERE id=?", (item_id,)).fetchone()[0]
-        if repository not in limit.repositories:
-            raise intake.Conflict("The writer limit must include the item's repository")
-        placeholders = ",".join("?" for _ in limit.repositories)
-        active = db.execute(
-            f"""SELECT w.id, w.item_id, w.session_id FROM writers w
-                WHERE w.ended_at IS NULL
-                  AND EXISTS (SELECT 1 FROM executions e WHERE e.id=w.execution_id
-                              AND e.status NOT IN ('completed', 'failed', 'cancelled'))
-                  AND EXISTS (SELECT 1 FROM work_items i WHERE i.id=w.item_id
-                              AND i.repository_id IN ({placeholders}))
-                ORDER BY w.created_at, w.id""",
-            limit.repositories,
-        ).fetchall()
-        if len(active) >= limit.max_writers:
-            names = ", ".join(f"{writer['id']} (item {writer['item_id']}, "
-                              f"session {writer['session_id'] or 'unconfirmed'})" for writer in active)
-            raise intake.Conflict(f"Wait: charter max_writers={limit.max_writers} reached; "
-                                  f"active writers: {names}. Retry when a writer ends; no escalation needed")
+    maximum = db.execute("SELECT max_writers FROM dispatch_settings WHERE id=1").fetchone()[0]
+    active = dispatch.active_writers(db)
+    # A stopped replacement does not add a session, even after the owner lowers the cap.
+    if len(active) >= maximum and current is None:
+        names = ", ".join(f"{writer['id']} (item {writer['item_id']}, "
+                          f"session {writer['session_id'] or 'unconfirmed'})" for writer in active)
+        raise intake.Conflict(f"Wait: dispatch max_writers={maximum} reached; "
+                              f"active writers: {names}. Retry when a writer ends; no escalation needed")
     state = intake.STATE.validate_json(intake.execution_row(db, item_id, execution_id)["state_json"])
     if state.status == Status.RUNNING:
         raise intake.Conflict("A runner attempt holds this execution")
@@ -307,7 +296,11 @@ EXECUTION = "/items/{item_id}/executions/{execution_id}/writer"
 
 @router.post(EXECUTION, dependencies=[Depends(require_coordinator)])
 def post_writer(request: Request, item_id: Identifier, execution_id: Identifier, body: Registration):
-    return intake_api.run(request, register, item_id, execution_id, body, write=True)
+    result = intake_api.run(request, register, item_id, execution_id, body, write=True)
+    if body.model_dump()["writer_limit"] is not None:
+        result["warnings"] = ["writer_limit is deprecated and ignored; "
+                              "use the owner-controlled /v1/dispatch/settings max_writers"]
+    return result
 
 
 @router.patch(EXECUTION, dependencies=[Depends(require_coordinator)])

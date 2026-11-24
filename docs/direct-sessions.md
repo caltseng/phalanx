@@ -39,7 +39,7 @@ merging. Config, credentials, worktrees, result artifacts and logs stay on the h
 1. The Captain creates a writer token and launch nonce, writes the credential in the item's
    Git directory, and registers the intent with `POST /v1/items/{item}/executions/{execution}/writer`.
    Registration checks the expected version and atomically enforces one open writer per
-   execution. `shift launch` supplies the charter's `writer_limit` across its repositories.
+   execution and the owner's persisted dispatch `max_writers` across all repositories.
    Intents and waiting writers count; replacing a writer consumes no extra place. A full
    limit is a normal wait, not an escalation. Dispatch pause refuses new registrations.
 2. The Captain launches one native session with a concise goal-derived name and the full nonce
@@ -323,6 +323,6 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | D3 | Trusted local checks are reconciler flags, not a Phalanx gate. Repository CI gates merging. |
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
-| D6 | Enforce dispatch pause and the charter's `max_writers` on new registrations. |
+| D6 | Enforce dispatch pause and persisted workspace `max_writers` (initially 5) on new registrations. Owner edits persist through dashboard reloads and Captain heartbeats. |
 | D7 | Shift bounds: four hours, 48 wakes, first compaction or degradation, configurable in charter. |
 | D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |

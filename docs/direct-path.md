@@ -169,20 +169,24 @@ notes = "Optional context for every Captain."
 [shift]
 max_hours = 4
 max_wakes = 48
-max_writers = 4
 ```
 
-`[shift]` is optional. Its positive-integer settings default to `max_hours = 4`,
-`max_wakes = 48` (D7), and `max_writers = 4`. Configure the concurrent-writer cap only
-with `max_writers`, not in `allowed_actions` prose. It counts registered intents and
-confirmed writers on open executions in the charter's repositories, across Captains
+`[shift]` is optional. Its positive-integer settings default to `max_hours = 4` and
+`max_wakes = 48` (D7). Configure concurrency with Scribe's **Writer concurrency**
+control or owner-authenticated `PUT /v1/dispatch/settings` (`{"max_writers": 5}`),
+not in the charter or `allowed_actions` prose. The persisted limit starts at 5.
+Legacy charter `max_writers` and `max_slots` remain validated but are reported as
+ignored by `shift charter`; heartbeats and launches cannot restore stale charter caps.
+The server counts registered intents and
+confirmed writers on open executions across all repositories and Captains
 (including predecessors). Idle or waiting writers still count. Completion, failure,
 cancellation, withdrawal and replacement release the old writer's place; replacement
 does not consume an extra place. Registration checks the cap atomically, so concurrent
 launches cannot overfill it. Replaying a launch remains safe even at the cap.
 If the cap is reached, launch refuses with a wait message naming the cap and active
 writers; retry when a place opens, without escalating or raising a flag. Lowering the
-cap does not stop existing writers. `shift status` prints `active_writers` against
+cap does not stop existing writers. Queued items without registered sessions do not count.
+`shift status` prints the server's `active_writers` against
 `max_writers`. `shift charter` validates the file and prints its revision, the SHA-256
 of its bytes. Each heartbeat re-reads the charter and records that revision.
 

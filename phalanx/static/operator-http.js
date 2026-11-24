@@ -154,6 +154,18 @@
     return {
       owner: signal => read("/v1/owner/status", signal),
       boardAccess: signal => read(EXECUTIONS + "?limit=1", signal),
+      capacity: signal => read("/v1/dispatch/settings", signal),
+      async saveCapacity(maximum) {
+        const response = await fetch("/v1/dispatch/settings", {
+          method: "PUT", redirect: "error", cache: "no-store", credentials: "omit",
+          signal: AbortSignal.timeout(12000),
+          headers: { Accept: "application/json", "Content-Type": "application/json",
+            Authorization: "Bearer " + token },
+          body: JSON.stringify({ max_writers: maximum })
+        });
+        if (!response.ok) throw new Error("Save rejected (HTTP " + response.status + ").");
+        return response.json();
+      },
       repositories: signal => read("/v1/repositories", signal),
       async create(payload, key) {
         const response = await fetch("/v1/items", {
@@ -252,7 +264,91 @@
   const reportContent = document.querySelector("#operator-report-content");
   let unmount;
   let clearCreate;
+  let clearSettings;
   let reportRead;
+
+  function concurrency(source, authenticated) {
+    const panel = document.querySelector("#operator-settings");
+    const form = document.querySelector("#operator-settings-form");
+    const maximum = document.querySelector("#operator-max-writers");
+    const token = document.querySelector("#operator-settings-token");
+    const capacity = document.querySelector("#operator-capacity");
+    const status = document.querySelector("#operator-settings-status");
+    const refresh = document.querySelector("#operator-settings-refresh");
+    const submit = form.querySelector("button");
+    let disposed = false;
+    let busy = false;
+    let generation = 0;
+    panel.hidden = false;
+    document.querySelector("#operator-settings-auth").hidden = authenticated;
+    function display(value) {
+      capacity.textContent = value.active_writers + " active / " + value.max_writers + " maximum writer sessions.";
+      maximum.value = String(value.max_writers);
+    }
+    async function load() {
+      if (busy) return;
+      const current = ++generation;
+      status.textContent = "Loading capacity...";
+      try {
+        const value = await source.capacity(AbortSignal.timeout(12000));
+        if (disposed || generation !== current) return;
+        display(value);
+        status.textContent = "";
+      } catch (error) {
+        if (!disposed && generation === current) status.textContent = "Could not load capacity. " + error.message;
+      }
+    }
+    const toggle = () => { if (panel.open) load(); };
+    async function save(event) {
+      event.preventDefault();
+      if (busy) return;
+      const value = Number(maximum.value);
+      if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647) {
+        status.textContent = "Enter a whole number from 1 to 2147483647.";
+        maximum.focus();
+        return;
+      }
+      const secret = token.value.trim();
+      token.value = "";
+      if (!authenticated && !TOKEN.test(secret)) {
+        status.textContent = "Enter a valid Phalanx owner token to save.";
+        token.focus();
+        return;
+      }
+      busy = true;
+      generation++;
+      submit.disabled = true;
+      refresh.disabled = true;
+      status.textContent = "Saving concurrency...";
+      try {
+        const result = await (authenticated ? source : client(secret)).saveCapacity(value);
+        if (disposed) return;
+        display(result);
+        status.textContent = "Concurrency saved.";
+      } catch (error) {
+        if (!disposed) status.textContent = "Could not confirm the save. " + error.message +
+          " Refresh capacity before retrying.";
+      } finally {
+        busy = false;
+        submit.disabled = false;
+        refresh.disabled = false;
+      }
+    }
+    panel.addEventListener("toggle", toggle);
+    refresh.addEventListener("click", load);
+    form.addEventListener("submit", save);
+    if (panel.open) load();
+    return () => {
+      disposed = true;
+      generation++;
+      panel.hidden = true;
+      token.value = "";
+      maximum.value = "";
+      panel.removeEventListener("toggle", toggle);
+      refresh.removeEventListener("click", load);
+      form.removeEventListener("submit", save);
+    };
+  }
 
   function newItem(source, authenticated) {
     const modal = document.querySelector("#operator-create");
@@ -483,6 +579,7 @@
   function show(source, authenticated = false) {
     source.openReport = output => openReport(source, output);
     clearCreate = newItem(source, authenticated);
+    clearSettings = concurrency(source, authenticated);
     const cursorName = kind => page === "home" ? kind + "_cursor" : "cursor";
     unmount = window.PhalanxOperatorBoard.mount(board, source, {
       page,
@@ -552,6 +649,7 @@
     if (dialog.open) dialog.close();
     clearReport();
     clearCreate?.();
+    clearSettings?.();
     unmount?.();
     unmount = undefined;
     board.hidden = true;

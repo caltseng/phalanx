@@ -10,7 +10,7 @@ from .direct_schema import (
     CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, DIRECT_SCHEMA,
     SESSION_ARCHIVE_SCHEMA,
 )
-from .dispatch_schema import ADOPTION_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
+from .dispatch_schema import ADOPTION_SCHEMA, CONCURRENCY_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
 from .operator_schema import BLOCKER_SCHEMA, DASHBOARD_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
@@ -118,6 +118,7 @@ MIGRATIONS = (
                            'adversarial_review', 'pr_reconciliation', 'pr_revision', 'check_in')""",
     ),
     CAPTAIN_COMPACTION_SCHEMA,
+    CONCURRENCY_SCHEMA,
 )
 
 

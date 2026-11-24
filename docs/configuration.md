@@ -52,7 +52,17 @@ The reconciler reads `reconciler.json` from muster discovery or an explicit `--c
 
 Keep the reconciler scratch directory outside mapped checkouts and private to its account.
 The [shift config and charter](direct-path.md#run-a-captain-on-the-direct-path) define native
-session launching and `max_writers`; there is no per-runner admission limit. The reconciler
+session launching. The persisted dispatch `max_writers` setting is the only concurrency
+limit, initially 5; there is no per-runner or per-charter admission limit. Change it with
+Scribe's **Writer concurrency** control (owner token required to save), or owner-authenticated
+`PUT /v1/dispatch/settings` with `{"max_writers": 5}`. Omitted settings remain unchanged.
+`GET /v1/dispatch/settings` shows the effective limit and active registered sessions.
+The legacy `max_slots` API input aliases `max_writers`; supplying both is rejected.
+Old charter `[shift] max_slots` / `max_writers` values remain readable and validated,
+but `shift charter` reports them in `compatibility.ignored_concurrency`. They never
+change server settings. Upgrading an existing store initializes its canonical limit to 5,
+preserving the approved operational value; subsequent restarts preserve owner edits.
+The reconciler
 runs local checks serially and never configures publication or merging.
 
 Writer credentials live only in the item's Git directory. Captains wake through their runtime

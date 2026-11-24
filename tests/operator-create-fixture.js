@@ -19,6 +19,8 @@
     const win = frame.contentWindow;
     const doc = win.document;
     const posts = [];
+    const settingsWrites = [];
+    let maximum = 5;
     let lostResponse;
     let saved;
     const now = new Date().toISOString();
@@ -37,6 +39,14 @@
           ? json({ role: "owner" }) : json({ detail: "Owner token required" }, 403);
       }
       if (path === "/v1/repositories") return json([{ id: "example" }, { id: "second-repo" }]);
+      if (path === "/v1/dispatch/settings") {
+        if (options.method === "PUT") {
+          settingsWrites.push(options);
+          if (options.headers.Authorization !== "Bearer " + "o".repeat(32)) return json({}, 403);
+          maximum = JSON.parse(options.body).max_writers;
+        }
+        return json({ paused: true, aging_seconds: 99, max_writers: maximum, active_writers: 3 });
+      }
       if (path.startsWith("/v1/operator/executions?")) {
         if (ownerMode && !options.headers.Authorization) return json({ detail: "Bearer token required" }, 401);
         const limit = Number(new URL(path, location.origin).searchParams.get("limit"));
@@ -144,6 +154,33 @@
     await unlock();
     assert(form.elements.goal.value === "" && !fields.disabled, "Success prepares a fresh form");
     close();
+    const settings = doc.querySelector("#operator-settings");
+    const capacity = doc.querySelector("#operator-capacity");
+    const capacityStatus = doc.querySelector("#operator-settings-status");
+    const capacityForm = doc.querySelector("#operator-settings-form");
+    const capacityToken = doc.querySelector("#operator-settings-token");
+    const capacityInput = doc.querySelector("#operator-max-writers");
+    settings.open = true;
+    await until(() => capacity.textContent.includes("3 active / 5 maximum"));
+    assert(doc.querySelector('label[for="operator-max-writers"]'), "Concurrency input is labelled");
+    capacityInput.value = "2";
+    if (!ownerMode) {
+      capacityToken.value = "r".repeat(32);
+      capacityForm.requestSubmit();
+      await until(() => capacityStatus.textContent.includes("HTTP 403"));
+      assert(maximum === 5 && capacityToken.value === "", "Runner cannot save; password cleared");
+      capacityToken.value = "o".repeat(32);
+    }
+    capacityForm.requestSubmit();
+    await until(() => capacityStatus.textContent === "Concurrency saved.");
+    assert(maximum === 2 && capacity.textContent.includes("3 active / 2 maximum"),
+      "Owner can lower below current usage and sees authoritative result");
+    const changed = JSON.parse(settingsWrites.at(-1).body);
+    assert(Object.keys(changed).join() === "max_writers", "Saving does not overwrite pause or aging");
+    maximum = 7;
+    doc.querySelector("#operator-settings-refresh").click();
+    await until(() => capacityInput.value === "7");
+    assert(capacity.textContent.includes("3 active / 7 maximum"), "Refresh reads persisted effective capacity");
     result.textContent = "PASS: owner authorization, inline validation, double submit, lost-response retry, queued row, focus and scroll";
     document.documentElement.dataset.result = "passed";
   } catch (error) {

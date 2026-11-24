@@ -185,7 +185,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         result = subprocess.run(
             [sys.executable, "-m", "phalanx", "server", command, str(argument)],
             env=dict(os.environ, PHALANX_DB=str(database)),
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=REQUEST_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
@@ -224,14 +224,10 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 intake.register(db, "repo", "https://github.com/e/r.git")
                 item = intake.create(db, Intake(repository_id="repo", goal="Keep this", target="report"))
                 db.execute("INSERT INTO runner_limits VALUES ('old', 4)")
-                now = intake.timestamp()
-                # Seed the historical Captain format without using today's Captain response schema.
-                db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, created_at,
-                                  heartbeat_at) VALUES ('old-captain', 'chat', 'charter', 'active', ?, ?)""",
-                           (now, now))
-                writers.register(db, item["id"], item["execution"]["id"], writers.Registration(
-                    expected_version=item["execution"]["version"], captain_id="old-captain", runtime="native",
-                    nonce="historical-writer", token_digest=intake.digest("x" * 32)))
+                row = intake.current_execution(db, item["id"])
+                intake.claim_attempt(db, row, intake.STATE.validate_json(row["state_json"]),
+                                     runner_id="old", lease_digest=intake.digest("x" * 32),
+                                     lease_expires_at=253402300799)
             with connect(path) as db:
                 saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
                          for table in ("work_items", "executions", "attempts", "transition_history")}

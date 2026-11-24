@@ -202,6 +202,8 @@ class Client:
 class Probe:
     def __init__(self, config, path):
         self.config = config
+        # The single workspace budget covers load workers plus independent fault scenarios.
+        self.writer_capacity = config.captains * config.max_writers + 8
         self.path = path
         self.rng = random.Random(config.seed)
         self.metrics = Metrics()
@@ -234,7 +236,9 @@ class Probe:
         with write_transaction(self.path) as db:
             for repository in GENERAL + LANES:
                 intake.register(db, repository, f"https://github.com/example/{repository}.git")
-            dispatch.set_dispatch(db, DispatchSettings(paused=False, aging_seconds=config.aging_seconds))
+            dispatch.set_dispatch(db, DispatchSettings(
+                paused=False, aging_seconds=config.aging_seconds,
+                max_writers=self.writer_capacity))
 
         now_ms = int(time.time() * 1000)
         ready, blocked, closed = [], [], []
@@ -384,7 +388,7 @@ class Probe:
 
     def claim(self, client, runner, repositories, label="claim"):
         # A synthetic Captain selects named work read-only. Registration, fencing and
-        # charter limits are exercised through the production HTTP API, not a test route.
+        # Workspace limits are exercised through the production HTTP API, not a test route.
         with self.lock:
             captain = self.captains.get(runner)
             if captain is None:
@@ -430,12 +434,10 @@ class Probe:
         token = self.writer_tokens.get(item_id)
         if selected["writer_id"] is None:
             token = token_urlsafe(32)
-            cap = self.config.captains * self.config.max_writers if repositories == GENERAL else 8
             status, binding = client.call(
                 label, "POST", f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER,
                 {"expected_version": selected["version"], "captain_id": captain["id"],
-                 "runtime": "synthetic", "nonce": token_urlsafe(16), "token_digest": intake.digest(token),
-                 "writer_limit": {"max_writers": cap, "repositories": repositories}},
+                 "runtime": "synthetic", "nonce": token_urlsafe(16), "token_digest": intake.digest(token)},
             )
             if status == 409:
                 with self.lock:
@@ -1082,7 +1084,7 @@ class Probe:
             for repository, started, ended in db.execute(
                     """SELECT e.queue_repository, w.created_at, w.ended_at
                        FROM writers w JOIN executions e ON e.id=w.execution_id"""):
-                group = "general" if repository in GENERAL else repository
+                group = "workspace"
                 events[group].extend(((started, 1), (ended or "9999", -1)))
             peaks = {}
             for group, entries in events.items():
@@ -1093,8 +1095,7 @@ class Probe:
                 peaks[group] = peak
             checks["peak_registered_writers"] = peaks
             checks["overbooked_writer_groups"] = sorted(
-                group for group in peaks if peaks[group] >
-                (self.config.captains * self.config.max_writers if group == "general" else 8))
+                group for group in peaks if peaks[group] > self.writer_capacity)
             checks["executions_with_two_open_attempts"] = db.execute(
                 """SELECT count(*) FROM (SELECT execution_id FROM attempts WHERE ended_at IS NULL
                    GROUP BY execution_id HAVING count(*) > 1)"""
@@ -1144,7 +1145,8 @@ def parse(argv=None):
     add("--fanout", type=int, default=2_000, help="dependents of one report prerequisite")
     add("--throttled", type=int, default=8, help="items failed with a provider throttle")
     add("--captains", type=int, default=4)
-    add("--max-writers", type=int, default=6, help="writer budget per synthetic Captain")
+    add("--max-writers", type=int, default=6,
+        help="load budget per synthetic Captain; the workspace budget adds 8 fault-scenario sessions")
     add("--duration", type=float, default=150.0, help="minimum load seconds")
     add("--scenario-timeout", type=float, default=600.0)
     add("--seed", type=int, default=19)

@@ -19,6 +19,24 @@
     </form>
     <button id="operator-disconnect" type="button" hidden>Disconnect</button>
     <p id="operator-session-status" role="status">Loading…</p>
+    <details id="operator-settings" hidden>
+      <summary>Writer concurrency</summary>
+      <p id="operator-capacity" role="status">Open to load the effective limit.</p>
+      <button id="operator-settings-refresh" type="button">Refresh capacity</button>
+      <form id="operator-settings-form">
+        <label for="operator-max-writers">Maximum writer sessions</label>
+        <input id="operator-max-writers" name="max_writers" type="number" min="1" max="2147483647" step="1" required
+               aria-describedby="operator-capacity-help">
+        <p id="operator-capacity-help">Shared across all repositories and Captains. Lowering the limit
+          preserves existing sessions and blocks new writers until capacity is available.</p>
+        <div id="operator-settings-auth">
+          <label for="operator-settings-token">Owner token (required to save)</label>
+          <input id="operator-settings-token" type="password" autocomplete="off">
+        </div>
+        <button type="submit">Save concurrency</button>
+      </form>
+      <p id="operator-settings-status" role="status"></p>
+    </details>
     <noscript>Enable JavaScript to use Scribe.</noscript>
   </div>
   <main id="operator-board" class="phalanx-board" hidden></main>

@@ -50,7 +50,7 @@ class CharterTest(unittest.TestCase):
     def test_charter_is_validated_and_revisioned(self):
         charter = self.charter(CHARTER + "[shift]\nmax_wakes = 2\n")
         self.assertEqual(charter["revision"], hashlib.sha256(Path(self.config["charter"]).read_bytes()).hexdigest())
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2, "max_writers": 4})
+        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2})
         for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the queue is empty"]', "[]"),
                      CHARTER.replace('["repo"]', '["repo", "other"]'), CHARTER + "[shift]\nmax_hours = 0\n",
                      CHARTER + "[shift]\nmax_hours = true\n", "goal = [\n"):
@@ -58,10 +58,15 @@ class CharterTest(unittest.TestCase):
                 self.charter(text)
 
     def test_max_writers_is_a_positive_integer(self):
-        self.assertEqual(self.charter(CHARTER + "[shift]\nmax_writers = 7\n")["shift"]["max_writers"], 7)
-        for value in ("0", "-1", "true", "1.5", '"4"'):
-            with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "positive integers.*max_writers"):
-                self.charter(CHARTER + f"[shift]\nmax_writers = {value}\n")
+        for field in ("max_writers", "max_slots"):
+            charter = self.charter(CHARTER + f"[shift]\n{field} = 5\n")
+            self.assertNotIn(field, charter["shift"])
+            self.assertEqual(charter["compatibility"]["ignored_concurrency"], {field: 5})
+            for value in ("0", "-1", "true", "1.5", '"4"'):
+                with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "positive integers.*max_writers"):
+                    self.charter(CHARTER + f"[shift]\n{field} = {value}\n")
+        with self.assertRaisesRegex(shift.ShiftError, "not both"):
+            self.charter(CHARTER + "[shift]\nmax_slots = 2\nmax_writers = 3\n")
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
         for path in (self.checkout / "c.toml", self.root / "worktrees" / "c.toml"):
@@ -251,7 +256,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             shift.launch(self.api, self.config, self.charter, captain, self.item("other")["id"])
 
     def test_writer_cap_counts_intents_and_confirmed_writers_across_captains(self):
-        self.charter["shift"]["max_writers"] = 1
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         other = shift.start(self.api, self.charter, "chat-2")["captain"]["id"]
         item, queued = self.item(), self.item()
@@ -264,7 +269,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 if session:
                     self.api(route, body={"captain_id": captain, "writer_id": writer["id"],
                                           "session_id": session}, method="PATCH")
-                with self.assertRaisesRegex(ValueError, f"Wait: charter max_writers=1.*{writer['id']}"):
+                with self.assertRaisesRegex(ValueError, f"Wait: dispatch max_writers=1.*{writer['id']}"):
                     shift.launch(self.api, self.config, self.charter, other, queued["id"])
                 status = shift.status(self.api, self.charter, other)
                 self.assertEqual((status["active_writers"], status["max_writers"]), (1, 1))
@@ -277,7 +282,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         shift.launch(self.api, self.config, self.charter, other, queued["id"])
 
     def test_replacement_at_writer_cap_releases_only_the_replaced_writer(self):
-        self.charter["shift"]["max_writers"] = 1
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         item = self.item()
         launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
@@ -292,7 +297,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
 
     def test_completed_writer_releases_a_place(self):
-        self.charter["shift"]["max_writers"] = 1
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         launched = shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
         base_url, token = credential(Path(launched["worktree"]))
@@ -308,6 +313,21 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(binding["state"]["status"], "completed")
         self.assertEqual(shift.status(self.api, self.charter)["active_writers"], 0)
         shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
+
+    def test_old_charter_and_heartbeats_do_not_restore_a_stale_limit(self):
+        # The operational charter's approved five is the new store's initial capacity.
+        Path(self.config["charter"]).write_text(CHARTER + "[shift]\nmax_writers = 5\n", encoding="utf-8")
+        charter = shift.load_charter(self.config)
+        captain = shift.start(self.api, charter, "chat")["captain"]["id"]
+        self.assertEqual(shift.status(self.api, charter)["max_writers"], 5)
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 2}, method="PUT")
+        shift.heartbeat(self.api, charter, captain, wake=True)
+        shift.launch(self.api, self.config, charter, captain, self.item()["id"])
+        shift.launch(self.api, self.config, charter, captain, self.item()["id"])
+        with self.assertRaisesRegex(ValueError, "max_writers=2"):
+            shift.launch(self.api, self.config, charter, captain, self.item()["id"])
+        status = shift.status(self.api, charter)
+        self.assertEqual((status["max_writers"], status["active_writers"]), (2, 2))
 
     def test_launch_kickoff_names_the_repository_checks_environment_or_its_absence(self):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]

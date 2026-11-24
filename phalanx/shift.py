@@ -26,7 +26,7 @@ from .display_text import reason_text, short_title
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
 # Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
-SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48, "max_writers": 4}
+SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48}
 # A launch's staged intent. It becomes the live credential once the server accepts its nonce.
 PENDING = "phalanx-writer.pending.json"
 
@@ -97,10 +97,17 @@ def load_charter(config):
     if unmapped:
         raise ShiftError(f"Charter repositories without a checkout mapping: {', '.join(unmapped)}")
     shift = charter.get("shift", {})
-    if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
+    if not isinstance(shift, dict) or set(shift) - {*SHIFT_DEFAULTS, "max_writers", "max_slots"} or not all(
             type(value) is int and value > 0 for value in shift.values()):
-        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes and max_writers")
-    return {**charter, "shift": {**SHIFT_DEFAULTS, **shift}, "revision": hashlib.sha256(data).hexdigest(),
+        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes, max_writers and max_slots")
+    if "max_slots" in shift and "max_writers" in shift:
+        raise ShiftError("Use legacy max_slots or max_writers, not both; concurrency now lives in dispatch settings")
+    legacy = {key: value for key, value in shift.items() if key in ("max_slots", "max_writers")}
+    bounds = {key: value for key, value in shift.items() if key in SHIFT_DEFAULTS}
+    return {**charter, "shift": {**SHIFT_DEFAULTS, **bounds},
+            "compatibility": {"ignored_concurrency": legacy,
+                              "message": "Concurrency is owner-controlled in /v1/dispatch/settings"},
+            "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
 
 
@@ -188,12 +195,13 @@ def status(api, charter, captain_id=None):
             break
     scope = set(charter["repositories"])
     scoped = [_summary(item) for item in items if item["repository_id"] in scope]
+    capacity = api("/v1/dispatch/settings")
     return {
         "flags": api("/v1/flags")["flags"],
         "captains": api("/v1/captains?limit=100")["captains"],
         "items": scoped,
-        "active_writers": sum(item["writer"] is not None for item in scoped),
-        "max_writers": charter["shift"]["max_writers"],
+        "active_writers": capacity["active_writers"],
+        "max_writers": capacity["max_writers"],
         "out_of_scope_open_items": sum(item["repository_id"] not in scope for item in items),
         **({"captain": api(f"/v1/captains/{_q(captain_id)}")} if captain_id else {}),
     }
@@ -309,8 +317,6 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
             "captain_id": captain_id, "runtime": config["runtime"], "nonce": saved["nonce"],
             "token_digest": hashlib.sha256(saved["token"].encode()).hexdigest(),
             "replaces": replaces, "replaced_stopped": replaces is not None,
-            "writer_limit": {"max_writers": charter["shift"]["max_writers"],
-                             "repositories": charter["repositories"]},
         })
         if binding["writer"]["state"] != "ended":
             break
