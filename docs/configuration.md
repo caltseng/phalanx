@@ -58,7 +58,9 @@ Scribe's **Writer concurrency** control (no token prompt on a trusted local-only
 or owner-authenticated
 `PUT /v1/dispatch/settings` with `{"max_writers": 5}`. Omitted settings remain unchanged.
 `GET /v1/dispatch/settings` shows the effective limit and active registered sessions.
-Charter `[shift]` accepts only `max_hours` and `max_wakes`; a `max_writers` entry is
+Charter `[shift]` accepts positive integers `max_hours` (default 4), `max_wakes`
+(default 48) and `max_compactions` (default 5). `max_compactions` is the authoritative
+successful-compaction handoff threshold, not a writer limit. A `max_writers` entry is
 rejected with guidance to remove it and use dispatch settings instead. Remove that entry
 in the same deployment cutover that introduces this implementation, leaving the live
 charter unchanged until then. Upgrading an existing store initializes its canonical limit to 5,

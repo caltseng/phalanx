@@ -1,6 +1,6 @@
 from argparse import Namespace
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
@@ -54,7 +54,7 @@ class CharterTest(unittest.TestCase):
     def test_charter_is_validated_and_revisioned(self):
         charter = self.charter(CHARTER + "[shift]\nmax_wakes = 2\n")
         self.assertEqual(charter["revision"], hashlib.sha256(Path(self.config["charter"]).read_bytes()).hexdigest())
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2})
+        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2, "max_compactions": 5})
         for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the queue is empty"]', "[]"),
                      CHARTER.replace('["repo"]', '["repo", "other"]'), CHARTER + "[shift]\nmax_hours = 0\n",
                      CHARTER + "[shift]\nmax_hours = true\n", "goal = [\n"):
@@ -67,6 +67,38 @@ class CharterTest(unittest.TestCase):
                     shift.ShiftError,
                     "concurrency moved to dispatch settings; remove it from the charter"):
                 self.charter(CHARTER + f"[shift]\nmax_writers = {value}\n")
+
+    def test_compaction_threshold_is_a_positive_integer_charter_setting(self):
+        for value in ("0", "-1", "true", "1.5", '"5"'):
+            with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "max_compactions"):
+                self.charter(CHARTER + f"[shift]\nmax_compactions = {value}\n")
+        for threshold in (1, 3, 8):
+            with self.subTest(threshold=threshold):
+                charter = self.charter(CHARTER + f"[shift]\nmax_compactions = {threshold}\n")
+                now = datetime.now(UTC)
+                captain = {"created_at": now.isoformat(), "wake_count": 0}
+                for count in (threshold - 1, threshold, threshold + 1):
+                    result = shift.shift_bounds(dict(captain, compaction_count=count), charter, now)
+                    self.assertEqual(bool(result["handoff_due"]), count >= threshold)
+                    self.assertEqual(result["max_compactions"], threshold)
+
+    def test_shift_bounds_keep_unknown_counts_and_independent_age_and_wake_limits(self):
+        charter = self.charter(CHARTER)
+        now = datetime.now(UTC)
+        captain = {"created_at": now.isoformat(), "wake_count": 0}
+        for count in (None, 0, 1, 4, 5, 6):
+            with self.subTest(count=count):
+                current = dict(captain, compaction_count=count)
+                bounds = shift.shift_bounds(current, charter, now)
+                self.assertEqual(bounds["compaction_count"], count)
+                self.assertEqual(bounds["handoff_due"],
+                                 ["successful compaction count reached 5"] if count in (5, 6) else [])
+                for key, value, reason in (
+                        ("created_at", (now - timedelta(hours=4)).isoformat(), "shift age reached 4 h"),
+                        ("wake_count", 48, "wake count reached 48")):
+                    due = shift.shift_bounds(dict(current, **{key: value}), charter, now)["handoff_due"]
+                    self.assertIn(reason, due)
+        self.assertIsNone(shift.shift_bounds(captain, charter, now)["compaction_count"])
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
         for path in (self.checkout / "c.toml", self.root / "worktrees" / "c.toml"):
@@ -250,17 +282,45 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=0)
         self.assertEqual(beat["captain"]["compaction_count"], 0)
         self.assertEqual(beat["shift"]["handoff_due"], [])
-        for count in (2, 2, 1, None):
+        for count in (4, 4, 1, None):
             with self.subTest(count=count):
                 beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=count)
-                self.assertEqual(beat["captain"]["compaction_count"], 2)
+                self.assertEqual(beat["captain"]["compaction_count"], 4)
                 self.assertEqual(beat["captain"]["wake_count"], 1)
-                self.assertEqual(beat["shift"]["handoff_due"], ["session compacted"])
+                self.assertEqual(beat["shift"]["handoff_due"], [])
+        for count, expected in ((5, 5), (5, 5), (None, 5), (6, 6), (4, 6), (None, 6)):
+            with self.subTest(count=count, expected=expected):
+                beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=count)
+                self.assertEqual(beat["captain"]["compaction_count"], expected)
+                self.assertEqual(beat["shift"]["handoff_due"], ["successful compaction count reached 5"])
         ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
-        self.assertEqual(ended["compaction_count"], 2)
+        self.assertEqual(ended["compaction_count"], 6)
         successor = shift.start(self.api, self.charter, "new-native-session", captain)["captain"]
         self.assertIsNone(successor["compaction_count"])
-        self.assertEqual(shift.status(self.api, self.charter, captain)["captain"]["compaction_count"], 2)
+        self.assertEqual(shift.status(self.api, self.charter, captain)["captain"]["compaction_count"], 6)
+
+    def test_heartbeat_rereads_changed_compaction_threshold_without_resetting_known_total(self):
+        captain = shift.start(self.api, self.charter, "native-session")["captain"]["id"]
+        beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=4)
+        self.assertEqual(beat["shift"]["handoff_due"], [])
+        Path(self.config["charter"]).write_text(CHARTER + "[shift]\nmax_compactions = 3\n", encoding="utf-8")
+        changed = shift.load_charter(self.config)
+        beat = shift.heartbeat(self.api, changed, captain)
+        self.assertEqual(beat["captain"]["compaction_count"], 4)
+        self.assertEqual(beat["captain"]["charter_revision"], changed["revision"])
+        self.assertEqual(beat["shift"]["handoff_due"], ["successful compaction count reached 3"])
+
+    def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
+        captain = " ".join(shift.prompt("captain").split())
+        keeper = " ".join(shift.prompt("keeper").split())
+        for prompt in (captain, keeper):
+            self.assertIn("[shift].max_compactions", prompt)
+            self.assertIn("checkpoint, not a mandatory handoff", prompt)
+            self.assertIn("first-compaction fallback", prompt)
+            self.assertNotIn("at your first compaction", prompt)
+        for signal in ("three failed actions in a row", "self-raised deviation flag",
+                       "missed heartbeat noticed on waking", "Elapsed-time/wake bounds still apply"):
+            self.assertIn(signal, captain)
 
     def test_launch_refuses_out_of_charter_repositories(self):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]

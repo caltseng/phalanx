@@ -39,13 +39,19 @@ missing or invalid, stop and tell the owner.
 Do these steps in order and keep each wake short:
 
 1. **Heartbeat.** Run `phx shift heartbeat --captain <id> --wake`. If `shift.handoff_due` is non-empty,
-   or you notice that you were compacted or are degrading, go to *Ending a shift* after this wake.
+   or you notice actual degradation or failure, go to *Ending a shift* after this wake.
    When your runtime exposes a cumulative count of **successful** context compactions for this native
    session, include `--compaction-count <count>` on the heartbeat. Refresh it each wake and before
    ending. Report zero only when the runtime explicitly reports zero. If telemetry is unavailable or
    incomplete, omit the option; never infer a total from wakes, tokens, checkpoint files, compaction
    attempts or the mere presence of a summary. Failed attempts do not count. The server preserves a
    known count when omitted and counts repeated cumulative reports only once.
+   The authoritative successful-compaction threshold is the charter's `[shift].max_compactions`,
+   returned as `shift.max_compactions`. An ordinary successful compaction below that threshold is
+   a checkpoint, not a mandatory handoff. Unavailable telemetry stays unknown: it does not trigger
+   a first-compaction fallback. Elapsed-time/wake bounds still apply independently, as do actual
+   degradation/failure signals: three failed actions in a row, a self-raised deviation flag
+   (`captain_idle_with_work` or an `orphan_session` you created), or a missed heartbeat noticed on waking.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
    `captain` cleanup record and the charter's open `items`.
 3. **Check the worker sessions.** Use your session tools to look at the session of every writer on the
@@ -171,7 +177,7 @@ authority or credentials are missing, or when repeated recovery attempts cannot 
 
 ## Ending a shift
 
-When `handoff_due` is non-empty, at your first compaction, or at any sign of degradation:
+When `handoff_due` is non-empty or you observe actual degradation/failure as described above:
 
 1. Confirm, withdraw or abandon each unconfirmed launch you own.
 2. Run `phx shift handoff --captain <id> --note "<what your successor needs>"`. It marks you `ending`
