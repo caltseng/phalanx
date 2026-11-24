@@ -14,7 +14,7 @@ from . import dependencies
 from .finalization_schema import enqueue
 from .pr_models import GITHUB_REMOTE
 from .transitions import (
-    Bypass, Event, Evidence, Execution, Outcome, Stage, Status, Target, TERMINAL, Wait, decide, start,
+    Bypass, Event, Evidence, Execution, Outcome, PublicationMode, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
 
 
@@ -207,15 +207,18 @@ def new_execution(db, item_id, target, *, previous_id=None):
     execution_id = uuid4().hex
     clock = datetime.now(UTC)
     now = clock.isoformat(timespec="microseconds")
-    state_json = encode(asdict(start(target)))
     item = item_row(db, item_id)
     request = json.loads(item["request_json"])
+    mode = PublicationMode(request.get("publication_mode", PublicationMode.READY))
+    state_json = encode(asdict(start(target, mode)))
+    # step5-remove: draft-only delivery must never enter the legacy promotion path.
+    affinity = "@writer" if mode is PublicationMode.DRAFT else request.get("runner_affinity") or ""
     db.execute(
         """INSERT INTO executions (id, item_id, previous_id, version, state_json,
                created_at, updated_at, queue_repository, queue_affinity, queue_priority, ready_since)
            VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)""",
         (execution_id, item_id, previous_id, state_json, now, now, item["repository_id"],
-         request.get("runner_affinity") or "", PRIORITY[request.get("priority", "normal")],
+         affinity, PRIORITY[request.get("priority", "normal")],
          int(clock.timestamp() * 1000)),
     )
     record(db, execution_id, 1, "rerun" if previous_id else "intake", {}, state_json, now)
@@ -252,10 +255,12 @@ def check_current(db, item_id, execution_id, version):
 
 def steer(db, item_id, execution_id, payload):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    if state.status != Status.QUEUED or state.stopping or state.pending_output:
-        raise Conflict("Steering requires queued work. Resolve the active execution or rerun it first.")
-
     edits = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_version", "steered_by"})
+    target_only = state.status not in TERMINAL and set(edits) == {"target"}
+    if (state.status != Status.QUEUED and not target_only) or state.stopping or state.pending_output:
+        raise Conflict("Steering requires queued work or a target-only change to open PR work. "
+                       "Resolve the active execution or rerun it first.")
+
     if not edits or any(value is None for name, value in edits.items() if name != "runner_affinity"):
         raise Conflict("Steering requires at least one edit. Use an empty list to clear list fields.")
     state_json = row["state_json"]
@@ -263,8 +268,6 @@ def steer(db, item_id, execution_id, payload):
         if Target.REPORT in (state.target, payload.target):
             raise Conflict("Steering can change only between ready_for_check_in and checked_in. "
                            "A report and a PR are different outputs; file a new item instead.")
-        if state.stage == Stage.CHECK_IN and payload.target == Target.READY:
-            raise Conflict("The item is already merging its ready PR. Cancel it to stop the merge.")
         state_json = encode(asdict(replace(state, target=payload.target)))
     request = json.loads(item_row(db, item_id)["request_json"])
     previous = {name: request.get(name) for name in edits if name != "dependencies"}

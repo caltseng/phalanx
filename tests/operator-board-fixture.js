@@ -19,7 +19,7 @@
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
-    stage: "development", status: "queued", lastAdvancedAt: hourAgo
+    stage: "development", status: "queued", lastAdvancedAt: hourAgo, publicationMode: "draft"
   };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report_drafting",
@@ -31,7 +31,13 @@
     output: { kind: "pr", url: "https://example.com/pull/1" },
     delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
+  const draft = {
+    ...success, id: "draft", title: "Reviewable draft", outcome: "draft_published",
+    publicationMode: "draft", delivery: undefined,
+    output: { kind: "pr", url: "https://example.com/pull/2" }
+  };
   const flags = [
+    { kind: "deployed", executionId: "done", reason: "deploy succeeded", recovery: "Informational", firstSeen: now, notifyOwner: false },
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
     { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true }
   ];
@@ -59,7 +65,7 @@
       if (kind === "open") {
         return { items: cursor ? [queued] : [waiting, running, queued], nextCursor: cursor ? null : "more-open" };
       }
-      return { items: cursor ? [] : [success, failure], nextCursor: cursor ? null : "older-closed" };
+      return { items: cursor ? [] : [success, failure, draft], nextCursor: cursor ? null : "older-closed" };
     },
     async flags() {
       if (offline) throw new Error("API offline");
@@ -96,12 +102,16 @@
     assert(section("needs").contains(item("wait")) && section("needs").textContent.includes(waiting.waitReason), "Input wait needs the owner");
     assert(section("needs").textContent.includes("no live captain"), "Owner-notify flag without an item needs the owner");
     assert(section("active").contains(item("run")) && section("queued").contains(item("queue")), "Active and queued split");
+    assert(item("queue").closest("li").textContent.includes("draft only"), "Open draft-only policy is visible");
+    assert(item("draft").closest("li").textContent.includes("draft published"), "Draft delivery is not labeled ready");
     assert(item("run").closest("li").textContent.includes("head drift"), "Row carries its flag chip");
     assert(item("run").closest("li").textContent.includes("unconfirmed"), "Launching writer reads as unconfirmed");
     assert(section("captains").textContent.includes("wakes 3") && section("captains").textContent.includes("abcdef1"), "Captain line");
     assert(item("wait").textContent === waiting.title && !root.querySelector("img"), "Untrusted text stays text");
     assert(!root.querySelector('a[href^="javascript:"]'), "Unsafe link omitted");
     assert(root.querySelector('a[href="' + success.output.url + '"]')?.textContent === "#1", "Closed PR link");
+    assert(item("done").closest("li").querySelector(".chip.c-good")?.textContent === "deployed",
+           "Successful post-merge deployment is a non-warning chip on the closed row");
     item("wait").click();
     item("run").click();
     await tick();
@@ -138,6 +148,14 @@
     assert(done.includes("Merged on GitHub") && done.includes("squash or rebase · a40536e00000"),
            "GitHub delivery shown apart from the Phalanx outcome");
     item("done").click();
+    for (const kind of ["deployment_pending", "deployment_failed"]) {
+      flags[0] = { ...flags[0], kind };
+      refresh();
+      await tick();
+      assert(item("done").closest("li").querySelector(".chip.c-warn")?.textContent === kind.replaceAll("_", " "),
+             "Deployment refresh updates the closed row without changing its outcome");
+      assert(item("done").closest("li").textContent.includes("checked in"), "Deployment is separate from check-in");
+    }
     offline = true;
     refresh();
     await tick();

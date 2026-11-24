@@ -15,8 +15,9 @@ from pydantic import StringConstraints
 
 from . import captains, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
+from .flags import all_flags
 from .intake_models import Identifier, Payload, Text, Versioned
-from .transitions import TERMINAL, WRITER_PR_STAGES, Event, Stage, Status
+from .transitions import TERMINAL, WRITER_PR_STAGES, Event, PublicationMode, Stage, Status
 
 
 # step5-remove: the old dispatch loop claims by queue affinity and attempts carry a timed lease.
@@ -165,8 +166,10 @@ def register(db, item_id, execution_id, payload):
                                   "stopped=true to confirm the stop")
         raise intake.Conflict("The execution is closed or closing")
     # step5-remove: an execution the old loop already took past development stays on that path,
-    # including one back in development or self-review with its draft PR open.
-    if state.stage in OLD_PR_STAGES or (state.primary_pr and state.stage not in WRITER_PR_STAGES):
+    # including one back in development or self-review with its draft PR open. Draft-only items
+    # never enter that path, so a draft one back in self-review keeps its writer PR.
+    if state.stage in OLD_PR_STAGES or (state.primary_pr and state.stage not in WRITER_PR_STAGES
+                                        and state.publication_mode is not PublicationMode.DRAFT):
         raise intake.Conflict(f"The execution is in the runner stage {state.stage} or has the runner's "
                               f"PR {state.primary_pr}. Rerun the item to deliver it through a writer")
     if current is not None:
@@ -281,7 +284,10 @@ def progress(db, writer_id, payload):
 
 
 def current(db, writer_id):
-    return binding(db, writer_row(db, writer_id))
+    """The writer's binding plus its execution's open flags, so the writer sees what it must fix."""
+    view = binding(db, writer_row(db, writer_id))
+    view["flags"] = [flag for flag in all_flags(db)["flags"] if flag["execution_id"] == view["id"]]
+    return view
 
 
 EXECUTION = "/items/{item_id}/executions/{execution_id}/writer"

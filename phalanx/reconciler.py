@@ -22,7 +22,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from .github import GitHubClient, GitHubError, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
-from .pr_models import GITHUB_REMOTE
+from .pr_models import DEPLOYMENT_WINDOW, GITHUB_REMOTE
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy
@@ -111,15 +111,19 @@ class Reconciler:
         self.backoff = {}
         self.notified = set()
         self.last_heartbeat = None
+        for repo, mapping in config.get("repositories", {}).items():
+            check = mapping.get("post_merge_check")
+            if check is not None and (not isinstance(check, str) or not check.strip() or len(check) > 255):
+                raise ReconcilerError(f"{repo}: post_merge_check must be a non-empty check-run name (up to 255 characters)")
 
     def run_pass(self):
-        """Observe every open item this host maps, run any unrecorded local checks, and notify the owner."""
+        """Observe open work and opted-in deployments, run local checks, and notify the owner."""
         errors, jobs = [], []
         self.heartbeat(force=True)
         remotes = {repo["id"]: repo["remote"] for repo in self.api.call("/repositories")}
         fetched, policies = {}, {}
         observed = 0
-        for execution in self.open_executions():
+        for execution in self.executions():
             self.heartbeat()
             repo = execution["repository_id"]
             if repo not in self.config.get("repositories", {}) or self.backoff.get(repo, 0) > self.clock():
@@ -154,7 +158,10 @@ class Reconciler:
     def heartbeat(self, force=False):
         now = self.clock()
         if force or self.last_heartbeat is None or now - self.last_heartbeat >= HEARTBEAT_SECONDS:
-            self.api.call(f"/reconcilers/{quote(self.config['runner_id'], safe='')}/heartbeat", {})
+            self.api.call(f"/reconcilers/{quote(self.config['runner_id'], safe='')}/heartbeat", {
+                "deployment_checks": {repo: mapping.get("post_merge_check")
+                                      for repo, mapping in self.config.get("repositories", {}).items()},
+            })
             self.last_heartbeat = now
 
     @contextmanager
@@ -176,10 +183,25 @@ class Reconciler:
             stop.set()
             thread.join()
 
-    def open_executions(self):
+    def executions(self):
+        yield from self.execution_pages("open")
+        if any(mapping.get("post_merge_check") for mapping in self.config.get("repositories", {}).values()):
+            cutoff = datetime.now(UTC) - DEPLOYMENT_WINDOW
+            for execution in self.execution_pages("closed"):
+                # Closed pages are newest first; don't walk historical pages.
+                if datetime.fromisoformat(execution["closed_at"]) <= cutoff:
+                    break
+                mapping = self.config["repositories"].get(execution["repository_id"], {})
+                deployment = execution.get("deployment") or {}
+                if (execution.get("outcome") == "checked_in" and mapping.get("post_merge_check")
+                        and not (deployment.get("state") == "deployed"
+                                 and deployment.get("check_name") == mapping["post_merge_check"])):
+                    yield execution
+
+    def execution_pages(self, kind):
         cursor = None
         while True:
-            query = {"kind": "open", "limit": 100, **({"cursor": cursor} if cursor else {})}
+            query = {"kind": kind, "limit": 100, **({"cursor": cursor} if cursor else {})}
             page = self.api.call("/operator/executions?" + urlencode(query))
             yield from page["items"]
             cursor = page["next_cursor"]
@@ -192,15 +214,21 @@ class Reconciler:
         item = self.api.call(f"/items/{quote(item_id, safe='')}")
         if item["target"] == "report":
             return 0, None
+        mapping = self.config["repositories"][repo]
+        base = item.get("target_branch") or mapping["base_branch"]
+        if execution.get("outcome") == "checked_in" and base != mapping["base_branch"]:
+            return 0, None
         match = GITHUB_REMOTE.fullmatch(remote)
         if match is None:
             raise ReconcilerError(f"{repo} has no registered github.com remote")
         owner, name = match[1].split("/")
         github = self.github_client(owner, name, token=self.github_token)
         branch = item_branch(item_id)
-        pull = self.find_pull(github, owner, branch, execution.get("primary_pr_url"))
+        primary = execution.get("primary_pr_url")
+        if execution.get("outcome") == "checked_in":
+            primary = primary or execution["output"]["url"]
+        pull = self.find_pull(github, owner, branch, primary)
         body = {"observed_at": datetime.now(UTC).isoformat()}
-        base = item.get("target_branch") or self.config["repositories"][repo]["base_branch"]
         checks = ()
         if pull is None:
             checkout = self.checkout(repo, remote, fetched)
@@ -220,9 +248,15 @@ class Reconciler:
             }
             if pull.merged and pull.merge_commit_sha and pull.base_ref == base:
                 # The server records how and when the PR merged with the delivery.
-                body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
+                if execution.get("outcome") != "checked_in":
+                    body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
                 body["pr"]["merged_at"] = pull.merged_at
-            if pull.state == "open":
+                check = self.config["repositories"][repo].get("post_merge_check")
+                # Deployment outages must not delay recording the merge itself.
+                if check and execution.get("outcome") == "checked_in":
+                    body["deployment"] = self.deployment(github, pull.merge_commit_sha, check)
+            draft_only = item.get("execution", {}).get("state", {}).get("publication_mode") == "draft"
+            if pull.state == "open" and not draft_only:
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)
                 # None means the policy doesn't establish this phase's checks, so there is nothing to report.
@@ -245,6 +279,22 @@ class Reconciler:
         if not checks or result["local_checks_recorded"]:
             return 1, None
         return 1, (execution_path + "/local-checks", pull.head_sha, self.checkout(repo, remote, fetched), checks)
+
+    @staticmethod
+    def deployment(github, commit, name):
+        checks = github.get_commit_checks(commit, include_statuses=False)
+        runs = [run for run in checks.check_runs if run.get("name") == name]
+        state = "pending"
+        if runs:
+            if any(not isinstance(run.get("id"), int) or run.get("head_sha") != commit
+                   or not isinstance(run.get("status"), str) for run in runs):
+                raise GitHubError("read deployment check", "invalid check-run response")
+            latest = max(runs, key=lambda run: run["id"])
+            if latest["status"] == "completed":
+                if not isinstance(latest.get("conclusion"), str):
+                    raise GitHubError("read deployment check", "completed check has no conclusion")
+                state = "deployed" if latest["conclusion"] == "success" else "failed"
+        return {"commit": commit, "check_name": name, "state": state}
 
     @staticmethod
     def feedback(github, number):

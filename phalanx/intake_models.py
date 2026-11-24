@@ -1,8 +1,8 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
-from .transitions import Outcome, Stage, Target
+from .transitions import Outcome, PublicationMode, Stage, Target
 from .validation import CHECK_WAIT_LIMIT_RANGE, PreOutcome
 
 
@@ -32,7 +32,6 @@ class Prerequisite(Payload):
 class Intake(Payload):
     repository_id: Identifier
     goal: Text
-    # PR work merges by default; the runner's auto_merge setting and GitHub's rules still gate it.
     target: Target = Target.MERGED
     context_links: list[Text] = Field(default_factory=list, max_length=50)
     acceptance_criteria: list[Text] = Field(default_factory=list, max_length=50)
@@ -40,6 +39,13 @@ class Intake(Payload):
     priority: Literal["low", "normal", "urgent"] = "normal"
     runner_affinity: Identifier | None = None
     dependencies: list[Prerequisite] = Field(default_factory=list, max_length=100)
+    publication_mode: PublicationMode = PublicationMode.READY
+
+    @model_validator(mode="after")
+    def publication_target(self):
+        if self.target is Target.REPORT and self.publication_mode is PublicationMode.DRAFT:
+            raise ValueError("Draft publication requires a PR target")
+        return self
 
 
 class Versioned(Payload):
@@ -53,7 +59,6 @@ class Steering(Versioned):
     priority: Literal["low", "normal", "urgent"] | None = None
     runner_affinity: Identifier | None = None
     dependencies: list[Prerequisite] | None = Field(default=None, max_length=100)
-    # Only between ready_for_check_in and checked_in; the output type can't change.
     target: Target | None = None
     steered_by: Literal["owner", "captain"] = "owner"
 

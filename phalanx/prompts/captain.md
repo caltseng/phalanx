@@ -36,12 +36,15 @@ Do these steps in order and keep each wake short:
 2. **Reconcile.** Run `phx shift status`. Read the `flags`, the `captains` and the charter's open `items`.
 3. **Check the worker sessions.** Use your session tools to look at the session of every writer on the
    charter's open items, including writers an earlier Captain launched: any live Captain looks after a
-   confirmed writer. Report changes with
+   confirmed writer. Inspect runtime-reported repository trust before interpreting activity or errors.
+   A session awaiting owner trust is a **Repository trust blocked** owner blocker, not a stopped or
+   failed writer; handle it as below instead of reporting `stopped` or `error`. Report other changes with
    `phx shift writer --captain <id> --item <item> --execution <execution> --writer <writer> --state busy|idle|stopped|error`.
 4. **Act on a bounded batch.** Handle at most 5 items per wake, oldest first:
    - **Unconfirmed launch** (the writer has no `session_id`): use your session tools to search for a session
      named with the writer's nonce. If you find one, confirm it with
-     `phx shift writer ... --session-id <ID> [--session-url <link>]`. If you are sure no such session
+     `phx shift writer ... --session-id <ID> [--session-url <link>]` and check its runtime trust status
+     as after a new launch below. If you are sure no such session
      exists, withdraw it with `phx shift withdraw ... --reason "never launched"` and launch afresh. Only
      the owning Captain acts on an unconfirmed launch until that Captain is ended or stale, or abandons
      it with `phx shift writer ... --abandon`.
@@ -52,13 +55,27 @@ Do these steps in order and keep each wake short:
      3. Otherwise create one new worker session with your session tools. It runs autonomously, is named
         `session_name` and gets `kickoff` as its first prompt, which names the item's `worktree`. Open it
         in the returned `session_workspace`: one runtime workspace for the whole worktrees folder, which
-        the owner approves once. Never register a workspace per worktree. If `session_workspace` is null,
+        the owner approves once. Runtime path trust alone may not satisfy a separate project trust
+        approval. Never register a workspace per worktree. If `session_workspace` is null,
         stop and ask the owner to set it in the shift config.
      4. Confirm it right away with `phx shift writer ... --session-id <ID> [--session-url <link>]`.
+     5. Inspect the session's runtime-reported repository trust immediately, including when reusing an
+        existing session. If owner approval is pending, handle **Repository trust blocked** below;
+        successful session creation does not mean the writer ran.
+   - **Repository trust blocked:** keep the existing writer and session registered. Record
+     `phx shift action --captain <id> --item <item> --action "Repository trust blocked" --reason "<runtime reason; execution, writer and session IDs; affected project/path; owner approval needed>"`.
+     Notify the owner through your runtime's owner-facing communication with that reason, a session
+     link when available, and where to grant trust. Only the owner may approve it; never grant trust,
+     edit trust configuration, or answer a trust prompt on the owner's behalf. Do not withdraw,
+     replace, relaunch or mark the writer stopped/failed while this block remains, even if the runtime
+     also labels its activity idle, stopped or error. Continue unrelated work. Recheck trust each wake;
+     once the runtime confirms approval, resume the same session through its normal controls if needed,
+     record that the blocker cleared and return to normal state reporting and recovery.
    - **Waiting for input:** answer routine questions with
      `python -m phalanx reply <item> <execution> <answer> --version <version> --key <unique key> --answered-by captain`,
      which needs the owner token. Escalate to the owner only as the charter's escalation rules say.
-   - **Stopped, errored or missing session on an open item:** make sure the old session is stopped, then
+   - **Stopped, errored or missing session on an open item:** first rule out a repository trust block.
+     Make sure the old session is stopped, then
      run `phx shift launch --captain <id> --item <item> --replaces <writer>` and launch its new session as
      above. The old session must never write again.
    - **Flags:** treat each flag on your items as a reason to look. Fix what your allowed actions permit,

@@ -45,7 +45,7 @@ The runner host keeps only configuration, credentials and artifacts: checkout ma
 Each open execution has at most one registered writer, a native worker session. The server enforces that.
 
 1. **Intent.** The Captain generates a writer token and a launch nonce, then writes the token to the item's worktree (see [Evidence submission](#evidence-submission)). It calls `POST /v1/items/{item}/executions/{execution}/writer` with its Captain ID, the expected execution version, the runtime, the nonce and the token's digest, using the nonce as the idempotency key. The server atomically opens an attempt for the current stage in state `launching` and records which Captain owns the intent. A replay returns the same attempt, so a lost response needs no local journal. A concurrent registration by another Captain gets `409 Conflict`. This claims an item by ID, not the queue head, and checks no capacity. Dispatch pause still refuses new writers (D6).
-2. **Launch.** The Captain launches the session with the nonce in its name and kickoff.
+2. **Launch.** The Captain launches the session with the nonce in its name and kickoff. `shift launch` includes the repository's optional `checks_environment` from the [shift config](direct-path.md#run-a-captain-on-the-direct-path): the prepared interpreter or command prefix for local checks, distinct from the Phalanx command. If none is configured, the kickoff says so rather than guessing. Writers use it from their own worktree, never borrow another checkout's environment or install packages, and report a validation gap and request the correct environment when it is missing or unusable.
 3. **Confirm.** The Captain records the native session ID and link with `PATCH .../writer`. If the launch reply is lost, the next wake finds the session by its nonce in the runtime's session list and confirms it. Until a Captain has checked native sessions for the nonce, an unconfirmed intent is never relaunched. After 10 min it is flagged `launch_unconfirmed`. A launch a Captain proves never happened is withdrawn, and a new intent gets a new nonce. Only the owning Captain acts on its own unconfirmed intent, unless that Captain has [ended or gone stale](#captain-shifts-and-handoff) or handed the intent off. This keeps the relay's at-most-once launch guarantee without the relay.
 4. **Fencing.** Every write carries the attempt ID, expected version and writer token, and a stale token is rejected. A second registration for the same execution gets `409 Conflict` unless it names `replaces: <attempt>`. Replacing a writer requires the Captain to attest the old session is stopped, and the server revokes the old token in the same transaction. Unpushed local changes are never discarded on replacement. The new writer resumes from the worktree, or the stored handoff if the worktree is gone.
 5. **No timed lease for writers.** A writer token is valid until the attempt ends or is revoked. Liveness comes from the Captain's session status reports and worker progress, and silence raises a [flag](#deviation-flags) rather than expiring the writer. A busy worker and a hung one look the same from outside, so the Captain decides.
@@ -71,6 +71,39 @@ A writer-bound PR item goes `development` → `self_review` → `publication` �
 2. **Delivery.** The execution waits as `delivery / waiting_for_external` with no attempt, and the reconciler's observations drive it (see the next section). The writer stays registered. It watches the PR on GitHub and fixes failing checks, review feedback and conflicts by pushing to the open PR, which needs no attempt. The Captain sees the same problems as `checks_failed`, `review_feedback`, conflict and `head_drift` flags. The next observation picks up the new head.
 3. **Closed without merge.** The server asks the owner. A reply queues `delivery` for the writer, which reopens the PR or explains, then posts a result to return to the wait.
 
+PR intake defaults to `checked_in`; explicit `ready_for_check_in` and `report` targets are
+unchanged. An owner or Captain can steer an open PR item's target, including in direct
+`delivery`, between `ready_for_check_in` and `checked_in`. Only queued work accepts other edits
+alongside the target change. The timeline records the actor
+and before/after targets. The writer reads the latest target on each delivery pass and enables
+GitHub auto-merge only for `checked_in`, disabling it if retargeted to `ready_for_check_in`.
+GitHub's required reviews, checks and rulesets still gate a merge (D2); no new setting is needed.
+Steering never changes to or from `report`, and a completed ready item still requires a rerun.
+
+**Draft-only publication.** Intake can set `"publication_mode": "draft"` (default: `"ready"`)
+for either PR target. This is a delivery ceiling, including for `checked_in`: the writer opens
+with `gh pr create --draft --base <target>`, never promotes or merges, and never enables auto-merge.
+When reusing an open ready PR it disables auto-merge and converts it to draft. The mode is
+snapshotted on the execution, retained on reruns, and included in the writer's kickoff and status.
+Draft-only items are reserved for direct writers and cannot enter the legacy runner's promotion path.
+
+The publication result still only records the primary PR URL. Delivery completes only when the
+trusted reconciler observes that exact PR open, unmerged and draft, on the deterministic item branch,
+at the self-reviewed candidate and target base branch. This verifies publication, not CI or merge
+readiness: draft-only delivery needs no check policy, ready-only CI, review approval or mergeability.
+A wrong base keeps waiting, and a ready PR also raises `draft_required`. A head other than the
+reviewed candidate, such as a push after self-review, queues `self_review` for the observed head:
+the writer reviews it and publishes the same PR again, so only a self-reviewed head is delivered.
+Writers see their execution's flags in `phx work status`. A closed PR asks
+the owner as usual. An actual merge remains a GitHub delivery fact, never reported as a draft.
+Completing a draft ends the writer without setting a ready milestone or releasing ready/check-in
+dependencies. The board labels open work **draft only** and its completed outcome **draft published**,
+distinct from **ready for check in** and **checked in**.
+
+For example: `python -m phalanx intake churchtree "Prepare a reviewable PR" --target ready_for_check_in --publication-mode draft`.
+`ingest-issue` accepts the same option. This is an explicit intake setting; no change to
+`pr_promotion` or other runner-only stages is involved.
+
 Pre-PR local checks are flags, not a gate (D3). The reconciler runs the trusted policy's local checks on each new head and posts them as flags. Repository rules and required checks gate the merge. An independent reviewer session for `adversarial_review` isn't part of the direct path yet.
 
 ## GitHub reconciliation
@@ -86,6 +119,27 @@ The reconciler runs periodically for each open PR item and for due external wait
 | Branch commits reachable from the base with no PR (git ancestry) | A flag only. |
 
 GitHub rate limits back off and never block other items.
+
+Post-merge deployment is an optional observation, not a lifecycle stage or
+completion gate. A repository mapping's `post_merge_check` names its
+post-merge deployment check run. For configured repositories the reconciler
+observes executions checked into the mapping's `base_branch` for at most 24 hours
+after check-in, stopping earlier on success and never enumerating older closed pages.
+It reads that check on the exact delivered merge commit. The latest run derives a board flag: missing or
+unfinished is `deployment_pending`, completed success is `deployed`, and
+any other completed conclusion is `deployment_failed`. Rechecks replace the
+flag after retries before success. After the window, successes have no flag,
+failures remain visible, and still-pending signals become one owner-notifying
+`deployment_missing` flag with the deadline as its stable first-seen time.
+Closed executions never raise `observation_stale`. Heartbeats carry each mapped
+repository's current check name (or none); removing or changing it records a
+disabled signal for previously observed deployments without GitHub reads, even
+outside the polling window.
+Closed executions accept only deployment observations matching their
+delivered PR, head and merge commit; their state, output and version do not
+change. Repositories without this setting have no deployment signal or
+extra post-merge polling. GitHub owns the workflow; no runtime runs a
+deployment stage and a pending or failed deploy never reopens delivery.
 
 For a writer's execution in `delivery`, the server applies each observation of its primary PR as a state transition (`pr_observed`). The observation sets the current head. Each PR observation names the branch the PR must merge into: the item's `target_branch`, else the repository's `base_branch` from the reconciler's mapping. A PR on another base never reaches `ready_for_check_in` and raises a `wrong_base` flag, and a merge into another base asks the owner instead of delivering. A merge completes the execution and ends its writer. Every post is reapplied, so a lost apply recovers on the next pass, and an unchanged observation doesn't bump the execution's version. A snapshot older than one already recorded is ignored unless it shows a merge. A `ready_for_check_in` milestone, and the target, need required checks green, so they need the repository's trusted validation policy. Without one the execution keeps waiting, visibly, until merged. Executions on the old path only record observations.
 
@@ -113,7 +167,7 @@ There is no relay polling and no foreground polling loop.
 
    New work must be filed as an item before a session is launched for it. Any visible session without a registered writer, reviewer or Captain registration is flagged `orphan_session`.
 
-   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. The README's [Captain section](../README.md#run-a-captain-on-the-direct-path) shows the setup.
+   As built in step 4, `python -m phalanx shift` is the Captain's client, and its packaged prompt (`shift prompt captain`) is the fixed loop. The charter is a TOML file whose revision is the SHA-256 of its bytes, and `shift` refuses one inside a checkout, worktree or Git repository. `shift launch` stages the writer token and nonce in the item worktree's Git directory before registering, so rerunning it replays the same intent, and makes them the live credential only once the server accepts the nonce. [Run a Captain on the direct path](direct-path.md#run-a-captain-on-the-direct-path) shows the setup.
 4. **Deviation detection.** See [Deviation flags](#deviation-flags). The reconciler and server raise these flags. They never block.
 5. **Escalation.** Escalate to the owner only for trust, scope changes, destructive actions (overwriting a foreign head, closing PRs, deleting branches or data), missing credentials or authority, and exhausted retry caps. The Captain decides everything else and logs it (`answered_by: captain`, [decisions.md](decisions.md)).
 
@@ -188,7 +242,7 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 
 ## What gets removed
 
-- **Relay:** `captain_relay.py`, `captain-relay.sqlite3`, `phalanx relay`, standing relay serve, `relay_stalled` (decision 65), and the README relay sections. The PH-11b decision is superseded.
+- **Relay:** `captain_relay.py`, `captain-relay.sqlite3`, `phalanx relay`, standing relay serve, `relay_stalled` (decision 65), and the relay guide ([captain-relay.md](captain-relay.md)). The PH-11b decision is superseded.
 - **Slot gating and admission:**
   - the attended slot journal and `phx attended prepare|receipt|renew|submit`;
   - `attended-recover`, `captain_loop.py`'s slot scheduling and the bridge adapter;
@@ -248,7 +302,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
    - merged-to-delivered for all three merge methods;
    - a shift handoff with overlap, and a keeper restart after every Captain is gone.
 
-   Then remove the relay, slots, adoption, runner-only stages and every runner-local SQLite store, and update AGENTS.md (D1, D3), SPEC.md, STATE_MACHINE.md, the HTML diagram and README.
+   Then remove the relay, slots, adoption, runner-only stages and every runner-local SQLite store, and update AGENTS.md (D1, D3), SPEC.md, STATE_MACHINE.md, the HTML diagram, README and the operator guides under docs/.
 
 ## Decisions
 
@@ -326,7 +380,7 @@ Main at `40be235`, 2026-11-23.
 - **Relay stall:** after 180 s, with a request waiting, a relay stall is reported and the owner notified ([captain_loop.py:36-37](../phalanx/captain_loop.py), [captain_loop.py:662-699](../phalanx/captain_loop.py)).
 - **Overdue workers:** `worker_overdue` is raised at 3 h ([captain_loop.py:468](../phalanx/captain_loop.py), decision 60).
 - **Lease renewal:** renewal is the worker heartbeat ([dispatch.py:212-225](../phalanx/dispatch.py)), and `last_advanced_at` is tracked for the board ([operator_schema.py:55-63](../phalanx/operator_schema.py)).
-- **Relay chat:** a session automation wakes the relay chat every 5 min, and its persistence across a reboot is unverified (README "Standing relay serve" and "Runtime mapping"; the runtime runbook). The relay store uses `BEGIN IMMEDIATE` with a 30 s timeout ([captain_relay.py:34-40](../phalanx/captain_relay.py)), and contention is tracked as 108f6009.
+- **Relay chat:** a session automation wakes the relay chat every 5 min, and its persistence across a reboot is unverified ([Standing relay serve](captain-relay.md#standing-relay-serve) and [Runtime mapping](captain-relay.md#runtime-mapping); the runtime runbook). The relay store uses `BEGIN IMMEDIATE` with a 30 s timeout ([captain_relay.py:34-40](../phalanx/captain_relay.py)), and contention is tracked as 108f6009.
 - **Captain answers:** Captain answers are attributed (`answered_by: captain`), and decisions go to [decisions.md](decisions.md).
 
 **Missing**
