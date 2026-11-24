@@ -140,6 +140,24 @@ alone authorizes replacement.
 
 Both owner and runner tokens can call these routes. With `PHALANX_LOCAL_BOARD=1`, loopback requests can read them without a token.
 
+Dashboard-only owner actions use these narrow adapters, not implicit owner authorization
+for `/v1`:
+
+| Route | Contract |
+| --- | --- |
+| `GET /operator/api/repositories` | Existing registered-repository list for the creation form. |
+| `POST /operator/api/items` | Same body, validation, target/publication rules, response and `Idempotency-Key` receipt as `POST /v1/items`. |
+| `GET /operator/api/dispatch/settings` | Canonical dispatch settings and current active-writer usage. |
+| `PUT /operator/api/dispatch/settings` | Same validated partial update and response as owner-authenticated `PUT /v1/dispatch/settings`; omitted fields are preserved. |
+
+These adapters require an owner bearer token unless the server explicitly enables local-board
+mode and verifies a direct loopback peer and local Host. Tokenless writes additionally require
+an exact same Origin; null/untrusted origins, non-same-origin Fetch Metadata and forwarding
+headers are rejected. A supplied credential is always validated, never replaced with local
+authority. Authenticated nonbrowser clients without browser headers continue to work.
+Do not enable local mode behind proxies/tunnels or on shared/hosted deployments.
+The [local-board setup](work-items.md#operator-work-board) covers the service-owner checks.
+
 | Route | Response |
 | --- | --- |
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |

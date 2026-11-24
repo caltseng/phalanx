@@ -6,6 +6,16 @@ Run the localhost HTTP and persistence tests with `python -m unittest discover -
 
 The [CI workflow](../.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14, and Ubuntu and macOS with CPython 3.14. Each run is split into three parallel jobs with `python tests/shard.py INDEX 3`, which deals the discovered tests round-robin so each test runs exactly once, and the single `Tests` check passes only when every shard passes.
 
+`tests/operator-create-fixture.html` exercises the real shell/client with mocked transport,
+including owner connections (`?owner`) and tokenless local mode. For the real-API flow, use
+an isolated temporary database/server bound to loopback with `PHALANX_LOCAL_BOARD=1` and
+one test repository registered. In that test app only, mount the repository root at
+`/fixtures` using `StaticFiles`, then open `/fixtures/tests/operator-create-fixture.html?live`.
+It creates a report work item, changes the isolated canonical capacity, and checks server
+validation, persistence, tokenless requests, focus restoration and unchanged `/v1`
+authorization. Never expose this fixture mount or run
+its writes on a production muster. No browser package installation is required.
+
 ## Route permissions and transactions
 
 Use `phalanx.auth` route dependencies: `require_owner` for owner writes,
@@ -13,6 +23,10 @@ Use `phalanx.auth` route dependencies: `require_owner` for owner writes,
 coordination, and `require_writer` for scoped writer operations. Board reads use the
 separate opt-in local-read dependency, never write authorization. See the
 [architecture map](architecture.md) for ownership and code entry points.
+Only explicitly selected `/operator/api/` actions use `require_board_owner`, plus
+`require_same_origin` for writes. That dependency admits trusted local dashboard requests
+under the explicit local-board flag, without returning or injecting the server's owner token.
+Do not apply it to a shared API router or unrelated owner/runner/writer routes.
 
 Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. Neither reads nor writes wait more than one turn of the other, however deep the write queue gets in DELETE journal mode. The gate adds no timeout of its own, because one write turn may legitimately outlast the busy timeout across `BEGIN` and `COMMIT`. Don't call it inside a write transaction.
 

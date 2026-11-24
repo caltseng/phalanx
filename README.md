@@ -94,7 +94,11 @@ python -m phalanx register example https://github.com/example/project.git
 python -m phalanx intake example "Review the test coverage" --target report --key test-coverage-1
 ```
 
-Open `http://127.0.0.1:8000/operator/` to watch it. To run the work, set up a runner and start a muster as described in [Install Phalanx](docs/install.md), which also covers macOS and Linux, repository trust and the GitHub token.
+Open `http://127.0.0.1:8000/operator/` to view and create work without pasting a token on
+this explicitly enabled, directly accessed loopback-only board. `/v1` writes still require
+their bearer credentials; leave local-board mode off behind proxies/tunnels or on hosted
+servers. See [local-board security and rollout](docs/work-items.md#operator-work-board).
+To run the work, set up a runner and start a muster as described in [Install Phalanx](docs/install.md), which also covers macOS and Linux, repository trust and the GitHub token.
 
 `intake` and `ingest-issue` default to `--target checked_in`. On the direct path the writer
 enables GitHub auto-merge only for that target; required reviews, checks and rulesets still gate

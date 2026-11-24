@@ -53,6 +53,11 @@ def scope_writer(request, writer):
 
 def is_local(request: Request) -> bool:
     # The Host check blocks DNS rebinding; the client check blocks remote callers spoofing Host.
+    # Proxy metadata cannot establish a trusted direct local connection.
+    if (len(request.headers.getlist("host")) != 1
+            or any(name == "forwarded" or name.startswith("x-forwarded-") or name == "x-real-ip"
+                   for name in request.headers)):
+        return False
     try:
         loopback = ipaddress.ip_address(request.client.host).is_loopback
     except (AttributeError, ValueError):
@@ -65,7 +70,8 @@ def authenticate_board_read(
     authorization: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> Role | Literal["local"]:
     """Read-only board routes skip the token when the server opted into a local board."""
-    if authorization is None and request.app.state.local_board and is_local(request):
+    if ("authorization" not in request.headers and authorization is None
+            and request.app.state.local_board and is_local(request)):
         return "local"
     return authenticate(request, authorization)
 
@@ -82,7 +88,27 @@ def require_same_origin(request: Request):
     site = request.headers.get("sec-fetch-site")
     if ((origin is not None and origin != f"{request.url.scheme}://{request.url.netloc}")
             or (site is not None and (site != "same-origin" or origin is None))):
-        raise HTTPException(403, "Work-item creation requires a same-origin request")
+        raise HTTPException(403, "Browser writes require a same-origin request")
+
+
+def require_board_owner(
+    request: Request,
+    authorization: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> Role | Literal["local"]:
+    """Grant only explicitly wired dashboard actions direct local authority."""
+    if ("authorization" not in request.headers and authorization is None
+            and request.app.state.local_board and is_local(request)):
+        origin = request.headers.get("origin")
+        site = request.headers.get("sec-fetch-site")
+        expected = f"{request.url.scheme}://{request.headers['host']}"
+        if (len(request.headers.getlist("origin")) > 1
+                or len(request.headers.getlist("sec-fetch-site")) > 1
+                or (origin is not None and origin != expected)
+                or (site is not None and site != "same-origin")
+                or (request.method not in ("GET", "HEAD") and origin != expected)):
+            raise HTTPException(403, "Local dashboard actions require a same-origin request")
+        return "local"
+    return require_owner(authenticate(request, authorization))
 
 
 def require_runner(role: Annotated[Role, Depends(authenticate)]) -> Role:
