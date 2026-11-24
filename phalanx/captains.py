@@ -43,6 +43,7 @@ class Session(Payload):
 class Heartbeat(Payload):
     charter_revision: Short
     wake_count: Annotated[int, Field(strict=True, ge=0)]
+    compaction_count: Annotated[int, Field(strict=True, ge=0, le=9007199254740991)] | None = None
     state: CaptainState
     focus: list[Identifier] = Field(default_factory=list, max_length=100)
     sessions: list[Session] = Field(default_factory=list, max_length=500)
@@ -164,6 +165,7 @@ def view(db, row, now=None):
     return {
         "id": row["id"], "session_ref": row["session_ref"], "charter_revision": row["charter_revision"],
         "parent_id": row["parent_id"], "state": row["state"], "wake_count": row["wake_count"],
+        "compaction_count": row["compaction_count"],
         "focus": json.loads(row["focus_json"]), "sessions": json.loads(row["sessions_json"]),
         "handoff_note": row["handoff_note"], "created_at": row["created_at"],
         "heartbeat_at": row["heartbeat_at"], "ending_at": row["ending_at"], "live": is_live(row, now),
@@ -212,11 +214,15 @@ def heartbeat(db, captain_id, payload):
     sessions = [{**session.model_dump(exclude_none=True), "first_seen": seen.get(session.id, now)}
                 for session in payload.sessions]
     ending_at = row["ending_at"] or (now if payload.state == "ending" else None)
+    # Native counters are cumulative for this session; retries and older reports cannot add or undo one.
+    compaction_count = row["compaction_count"]
+    if payload.compaction_count is not None:
+        compaction_count = max(compaction_count or 0, payload.compaction_count)
     db.execute(
         """UPDATE captains SET charter_revision=?, wake_count=?, state=?, focus_json=?, sessions_json=?,
-               handoff_note=?, heartbeat_at=?, ending_at=? WHERE id=?""",
+               handoff_note=?, heartbeat_at=?, ending_at=?, compaction_count=? WHERE id=?""",
         (payload.charter_revision, payload.wake_count, payload.state, intake.encode(payload.focus),
-         intake.encode(sessions), payload.handoff_note, now, ending_at, captain_id),
+         intake.encode(sessions), payload.handoff_note, now, ending_at, compaction_count, captain_id),
     )
     return view(db, captain_row(db, captain_id))
 

@@ -58,7 +58,7 @@ NEEDS YOU 1
 FLAGS 2
  [flag] ▸ head drift ×2                       Head moved after validation; revalidate                                         6m ago
 CAPTAINS 1/1
- [pike] Captain 52940744 live    ♥ heartbeat 30s ago  wakes 8  charter e04f548  focus: PH-15, PH-12, PH-14
+ [pike] Captain 52940744 live    ♥ heartbeat 30s ago  wakes 8  compactions 0  focus: PH-15, PH-12, PH-14
  ▸ Ended (12)
 ACTIVE 4
  [pike] PH-15 Add direct GitHub check-in co…   phalanx  development   4m ago  —    busy         running
@@ -74,6 +74,10 @@ RECENTLY CLOSED 25+
  ✓ PH-17 Add bounded operator queue and tim…  phalanx  Merged  closed 9m ago   #21  took 1h 4m
  …
 ```
+
+Captain rows show the native session's reported successful compaction count, or
+`compactions unavailable` when telemetry is unknown (including historical Captains).
+The charter revision remains in the API for enforcement, not in the main row.
 
 ## Who uses it
 

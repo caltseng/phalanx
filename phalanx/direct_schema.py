@@ -91,3 +91,7 @@ SESSION_ARCHIVE_SCHEMA = (
     """CREATE INDEX unresolved_session_archives ON session_archives(updated_at)
        WHERE outcome != 'archived'""",
 )
+
+CAPTAIN_COMPACTION_SCHEMA = (
+    "ALTER TABLE captains ADD COLUMN compaction_count INTEGER CHECK (compaction_count >= 0)",
+)

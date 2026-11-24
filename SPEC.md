@@ -175,6 +175,12 @@ without a Captain. Stale Captain/reconciler, no progress, unconfirmed launches, 
 writers and orphan sessions are visible flags with recovery actions. Archival requires
 preserved local work and runtime creator authority; server records do not perform archival.
 
+Captain heartbeats may report the native session's cumulative successful compaction count.
+Persist the greatest reported count; duplicate, older or omitted telemetry cannot inflate or
+erase it. Historical and unsupported runtime counts stay unknown, never inferred from wakes,
+tokens, checkpoints or failed attempts. Scribe labels this count (or unavailable) beside
+heartbeat and wakes instead of the charter hash; charter revision enforcement is unchanged.
+
 ## Settings and dispatch gates
 
 - Charter `max_writers` bounds new registered writers across its repositories. Intents and

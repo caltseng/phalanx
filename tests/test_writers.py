@@ -11,7 +11,9 @@ import unittest
 from unittest.mock import patch
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store
-from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA
+from phalanx.direct_schema import (
+    CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA,
+)
 from phalanx.dispatch_api import DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.pr_models import DEPLOYMENT_WINDOW
@@ -708,6 +710,19 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "No PR", "target": "report",
                                     "publication_mode": "draft"}, 422)
 
+    def test_compaction_counter_validation_and_omitted_telemetry(self):
+        route = f"/v1/captains/{self.captain['id']}"
+        body = {"charter_revision": "new-charter", "wake_count": 8, "state": "active"}
+        self.assertIsNone(self.captain["compaction_count"])
+        for invalid in (-1, True, 1.5, "2", 9007199254740992):
+            with self.subTest(invalid=invalid):
+                self.ok(route, RUNNER, dict(body, compaction_count=invalid), 422, method="PUT")
+        for count, expected in ((None, None), (0, 0), (3, 3), (3, 3), (1, 3), (None, 3)):
+            beat = self.ok(route, RUNNER, dict(body, compaction_count=count), method="PUT")
+            self.assertEqual(beat["compaction_count"], expected)
+            self.assertEqual((beat["charter_revision"], beat["wake_count"]), ("new-charter", 8))
+        self.assertEqual(self.ok(route, RUNNER, body, method="PUT")["compaction_count"], 3)
+
     def test_captain_sessions_actions_handoff_and_reconciler_retirement(self):
         item_id, execution_id = self.item()
         binding, _, body = self.register(item_id, execution_id)
@@ -1022,6 +1037,20 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                     db.execute(statement)
                 db.execute(f"PRAGMA user_version = {version}")
         return path
+
+    def test_upgrade_keeps_historical_compaction_counts_unknown(self):
+        path = self.previous_store(CAPTAIN_COMPACTION_SCHEMA)
+        with write_transaction(path) as db:
+            now = intake.timestamp()
+            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, wake_count,
+                              created_at, heartbeat_at) VALUES ('c', 'chat', 'c1', 'ended', 12, ?, ?)""",
+                       (now, now))
+        migrate(path)
+        with connect(path) as db:
+            captain = captains.view(db, captains.captain_row(db, "c"))
+        self.assertIsNone(captain["compaction_count"])
+        self.assertEqual((captain["state"], captain["wake_count"], captain["charter_revision"]),
+                         ("ended", 12, "c1"))
 
     def test_upgrade_resets_sessions_stored_as_bare_ids(self):
         path = self.previous_store(CAPTAIN_SHIFT_SCHEMA)

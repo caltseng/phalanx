@@ -50,10 +50,10 @@
     { kind: "captain_session", captainId: "cap-ended", reason: "Ended session", recovery: "Review handoff", firstSeen: now, notifyOwner: false }
   ];
   const captains = [
-    { id: "cap-ended", state: "ended", live: false, stale: false, heartbeatAt: hourAgo },
+    { id: "cap-ended", state: "ended", live: false, stale: false, heartbeatAt: hourAgo, compactionCount: 2 },
     { id: "cap-stale", state: "active", live: false, stale: true, heartbeatAt: hourAgo },
     { id: "cap-1", sessionRef: "s", state: "active", live: true, stale: false, heartbeatAt: now,
-      wakeCount: 3, charterRevision: "abcdef1234", focus: ["item-run"] }
+      wakeCount: 3, compactionCount: 0, charterRevision: "abcdef1234", focus: ["item-run"] }
   ];
   let offline = false;
   let pending;
@@ -139,9 +139,18 @@
     assert(item("draft").closest("li").textContent.includes("draft published"), "Draft delivery is not labeled ready");
     assert(item("run").closest("li").textContent.includes("head drift"), "Row carries its flag chip");
     assert(item("run").closest("li").textContent.includes("unconfirmed"), "Launching writer reads as unconfirmed");
-    assert(section("captains").textContent.includes("wakes 3") && section("captains").textContent.includes("abcdef1"), "Captain line");
+    const captainLine = () => section("captains").querySelector(".captains li");
+    assert(captainLine().textContent.includes("wakes 3") && captainLine().textContent.includes("compactions 0") &&
+      captainLine().textContent.includes("focus:") && !section("captains").textContent.includes("abcdef1"),
+      "Captain line labels native zero and retains wakes/focus without charter hash");
+    assert(section("captains").textContent.includes("compactions unavailable"), "Missing runtime telemetry is not zero");
     const ended = () => section("captains").querySelector(".ended-captains");
     assert(!ended().open && ended().querySelector("summary").textContent === "Ended (1)", "Ended Captains collapsed by default");
+    assert(ended().textContent.includes("compactions 2"), "Ended Captain retains session count");
+    captains[2].compactionCount = 1;
+    refresh();
+    await tick();
+    assert(captainLine().textContent.includes("compactions 1"), "Compaction telemetry refreshes on normal polling");
     assert(section("captains").querySelector(".captains li").textContent.includes("cap-1"), "Live Captains sort first");
     assert(/heartbeat \d+s ago/.test(section("captains").textContent), "Heartbeat age has context and ago");
     assert(section("captains").querySelector("time").getAttribute("aria-label").includes("T"), "Absolute time accessible");

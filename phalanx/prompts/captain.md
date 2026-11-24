@@ -33,6 +33,12 @@ Do these steps in order and keep each wake short:
 
 1. **Heartbeat.** Run `phx shift heartbeat --captain <id> --wake`. If `shift.handoff_due` is non-empty,
    or you notice that you were compacted or are degrading, go to *Ending a shift* after this wake.
+   When your runtime exposes a cumulative count of **successful** context compactions for this native
+   session, include `--compaction-count <count>` on the heartbeat. Refresh it each wake and before
+   ending. Report zero only when the runtime explicitly reports zero. If telemetry is unavailable or
+   incomplete, omit the option; never infer a total from wakes, tokens, checkpoint files, compaction
+   attempts or the mere presence of a summary. Failed attempts do not count. The server preserves a
+   known count when omitted and counts repeated cumulative reports only once.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
    `captain` cleanup record and the charter's open `items`.
 3. **Check the worker sessions.** Use your session tools to look at the session of every writer on the
