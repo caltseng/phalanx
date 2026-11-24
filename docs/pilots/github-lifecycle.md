@@ -2,7 +2,7 @@
 
 GitHub exposes enough state for PH-13 to publish and recover a draft and for PH-14 to gate and verify promotion. Use Git for revision-conditional branch publication, REST for PR reads and writes, and GraphQL for ready promotion. The key limits are the lack of a head precondition on creation and promotion, and the lack of a base precondition on the ordinary merge call.
 
-This historical report combines documented contracts with read-only inspection of [Phalanx PR #1](https://github.com/caltseng/phalanx/pull/1). Its runner-stage implementation remains only until PH-DS5 part 2. Current writers publish directly; the [design spec](../../SPEC.md) and [state machine](../../STATE_MACHINE.md) govern transitions.
+This historical provider-contract report combines research with read-only inspection of [Phalanx PR #1](https://github.com/caltseng/phalanx/pull/1). Its original execution machinery has been deleted. Current writers publish directly; the [design spec](../../SPEC.md) and [state machine](../../STATE_MACHINE.md) govern transitions, permissions and recovery instead of the original pilot procedure below.
 
 ## PH-13 publication and recovery
 
@@ -16,15 +16,6 @@ This historical report combines documented contracts with read-only inspection o
 Before a write, persist its intent with item and attempt IDs, state version, operation, repo and ref identities, expected remote head and observed base tip when relevant, desired candidate SHA, and PR ID when known. Confirm the current claim immediately before the call. Serialize conflicting writes for the item on the runner and keep a sent or uncertain intent visible until reconciled. An expired claim stops the old attempt from advancing server state. GitHub does not receive that claim, so a successor must account for a prior in-flight write before it submits a conflicting one.
 
 For a lost push response, inspect the remote ref. At the desired SHA, adopt the effect under the current claim. At the recorded old SHA or expected absence, retry the same conditional write after accounting for the prior writer. Any other value routes to reconciliation. Keep the original lease expectation through retries rather than silently replacing it with a fresh remote value.
-
-### Runner integration
-
-`DraftPublisher.publish` handles first draft publication on one device. Build the intent from the server's registered repository, item and base, the runner's expected remote revisions, and the candidate verified from PH-11 worker handoff. An optional worker PR number or URL is not publication evidence. Share one runner-owned journal directory across local processes. It contains the intent, latest attempt and state version, pending operation, and known or verified PR number. The per-item lock serializes the local calls, including recovery. A process that loses its claim leaves the journal available to a successor with the same intent.
-
-`DraftStageRunner` connects this workflow to the server. Pass the dispatch assignment and lease, the runner's repository default if the item has no explicit target, and the development checkpoint for that execution. The checkpoint carries the worktree, candidate, and the base ref and SHA captured during development. It can carry a previously recorded topic SHA when recovery requires one. Publication checks those inputs against the server and local Git before writing. It uses the recorded base SHA through draft creation and evidence submission, even if the remote moves. The claim check is read-only and does not renew the lease. The caller owns lease heartbeats. Successful evidence is sealed locally before submission so a lost acknowledgement can replay the same authenticated request even after the attempt has ended.
-
-There is no CLI scheduler or queue claim endpoint for these stages. Their retained local
-publication journals and HTTP contracts are covered by fixture/bare-remote tests until part 2.
 
 ## PH-14 validation and promotion
 

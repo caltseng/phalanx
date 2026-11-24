@@ -13,6 +13,8 @@ import unittest
 from unittest.mock import patch
 from uuid import uuid4
 
+from phalanx import intake
+from phalanx.intake_models import Intake
 from phalanx.github import CommitChecks, GitHubError, PullRequest
 from phalanx.github_checks import CheckCollection
 from phalanx.pr_models import DEPLOYMENT_WINDOW
@@ -20,16 +22,34 @@ from phalanx.reconciler import API, Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
 from phalanx.validation import GateResult, GateState
 from phalanx.workspaces import any_file_lock
-from phalanx.store import migrate, read_transaction, write_transaction
+from phalanx.store import MIGRATIONS, connect, migrate, read_transaction, write_transaction
 from phalanx.transitions import Execution, PullRequest as OutputPR, Revision, Stage, Status, Target, item_branch
 
-from test_bootstrap import OWNER, RUNNER, ServerFixture
-from test_pr_observations import BASE, HEAD, OTHER, PullObservationFixture
+from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
+
+HEAD, BASE, OTHER = "a" * 40, "b" * 40, "c" * 40
 
 
-class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
+class ObservationRouteTest(ServerFixture, unittest.TestCase):
     def setUp(self):
-        super().setUp()
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.path = Path(temporary.name) / "queue.sqlite3"
+        migrate(self.path)
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "git@github.com:Example/Repo.git")
+            item = intake.create(db, Intake(repository_id="repo", goal="Update tests",
+                                            target="ready_for_check_in", target_branch="main"))
+        self.start_server(self.path)
+        self.head_ref = item_branch(item["id"])
+        self.item = f"/v1/items/{item['id']}"
+        self.execution = f"{self.item}/executions/{item['execution']['id']}"
+        assignment = claim_stage(self.path, item["id"], "w" * 32)
+        claim = assignment["execution"]
+        self.assertEqual(self.request(self.execution + "/result", "w" * 32, {
+            "attempt_id": assignment["attempt_id"], "stage": "development",
+            "expected_version": claim["version"], "outcome": "succeeded", "candidate": HEAD,
+        })[0], 200)
         self.start = datetime.now(UTC) - timedelta(hours=1)
         self.post = f"{self.execution}/github-observation"
 
@@ -266,7 +286,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         migrate(self.path)
         self.start_server(self.path)
 
-    def test_closed_runner_stage_still_loads_lists_and_reconciles(self):
+    def test_each_retired_closed_stage_migrates_loads_lists_and_reconciles(self):
         api = API(self.url, RUNNER)
         self.assertEqual(self.request("/v1/repositories", OWNER, {
             "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
@@ -277,38 +297,64 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         merged_at = datetime.now(UTC).isoformat()
         revision = Revision(HEAD, BASE)
         closed = Execution(
-            Target.MERGED, Stage.PR_RECONCILIATION, Status.COMPLETED, candidate=HEAD,
+            Target.MERGED, Stage.DELIVERY, Status.COMPLETED, candidate=HEAD,
             primary_pr=primary, ready_revision=revision,
             final_output=OutputPR(primary, revision, merge_commit=BASE,
                                   merge_method="merge", merged_at=merged_at))
-        with write_transaction(self.path) as db:
-            db.execute("UPDATE executions SET state_json=? WHERE id=?",
-                       (json.dumps(asdict(closed)), item["execution"]["id"]))
-        loaded = api.call(f"/items/{item['id']}")["execution"]["state"]
-        self.assertEqual((loaded["stage"], loaded["status"]), ("pr_reconciliation", "completed"))
-        row, = api.call("/operator/executions?kind=closed&outcome=checked_in")["items"]
-        self.assertEqual(row["stage"], "pr_reconciliation")
-        timeline = api.call(f"/operator/executions/{row['id']}/timeline")
-        self.assertEqual(timeline["item"]["id"], row["id"])
         merged = replace(pull_request(HEAD, item_branch(item["id"]), state="closed"),
                          merged=True, merge_commit_sha=BASE, merged_at=merged_at)
         github = FakeGitHub([merged])
-        config = {"runner_id": "local", "repositories": {
+        config = {"reconciler_id": "local", "repositories": {
             "repo": {"base_branch": "main", "post_merge_check": "deploy"}}}
         reconciler = Reconciler(config, self.root / "state", api, github_token="token",
                                 github_client=lambda *args, **kwargs: github)
-        with patch.object(github, "get_commit_checks", create=True,
-                          return_value=CommitChecks(BASE, (), ())):
-            self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
-        self.assertEqual(api.call(f"/items/{item['id']}")["execution"]["state"], loaded)
-        row, = api.call("/operator/executions?kind=closed&outcome=checked_in")["items"]
-        self.assertEqual(row["deployment"]["state"], "pending")
+        retired = ("pr_creation", "pre_pr_validation", "pr_promotion", "pr_validation",
+                   "adversarial_review", "pr_reconciliation", "pr_revision", "check_in")
+        for stage in retired:
+            for status in ("completed", "failed", "cancelled"):
+                with self.subTest(stage=stage, status=status):
+                    raw = {**asdict(closed), "stage": stage, "status": status}
+                    if status != "completed":
+                        raw["final_output"] = {"reference": "/historical-report", "draft_revision": None}
+                    with write_transaction(self.path) as db:
+                        db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                                   (json.dumps(raw), item["execution"]["id"]))
+                        db.execute("UPDATE transition_history SET state_json=? WHERE execution_id=?",
+                                   (json.dumps(raw), item["execution"]["id"]))
+                        # Model an existing deployment immediately before the appended schema step.
+                        db.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")
+                        saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
+                                 for table in ("work_items", "attempts", "transition_history", "reports")}
+                        metadata = tuple(db.execute(
+                            "SELECT version, created_at, updated_at, previous_id FROM executions WHERE id=?",
+                            (item["execution"]["id"],)).fetchone())
+                    migrate(self.path)
+                    migrate(self.path)
+                    with connect(self.path, mode="ro") as db:
+                        row = intake.execution_row(db, item["id"], item["execution"]["id"])
+                        self.assertEqual(intake.STATE.validate_json(row["state_json"]).stage, Stage.DELIVERY)
+                        self.assertEqual(tuple(row[key] for key in (
+                            "version", "created_at", "updated_at", "previous_id")), metadata)
+                        for table, rows in saved.items():
+                            self.assertEqual([tuple(row) for row in db.execute(f"SELECT * FROM {table}")], rows)
+                    loaded = api.call(f"/items/{item['id']}")["execution"]["state"]
+                    self.assertEqual(loaded, {**raw, "stage": "delivery"})
+                    row, = api.call("/operator/executions?kind=closed")["items"]
+                    self.assertEqual((row["stage"], row["status"]), ("delivery", status))
+                    timeline = api.call(f"/operator/executions/{row['id']}/timeline")
+                    self.assertEqual(timeline["item"]["id"], row["id"])
+                    self.assertIn(stage, {event["stage"] for event in timeline["events"]})
+                    with patch.object(github, "get_commit_checks", create=True,
+                                      return_value=CommitChecks(BASE, (), ())):
+                        result = reconciler.run_pass()
+                    self.assertEqual((result["checked"], result["errors"]), (0, []))
+                    self.assertEqual(api.call(f"/items/{item['id']}")["execution"]["state"], loaded)
 
     def test_real_operator_summary_advances_a_merged_ready_execution_to_checked_in(self):
         api = API(self.url, RUNNER)
         self.assertEqual(self.request("/v1/repositories", OWNER, {
             "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
-        config = {"runner_id": "local", "repositories": {"repo": {"base_branch": "main"}}}
+        config = {"reconciler_id": "local", "repositories": {"repo": {"base_branch": "main"}}}
         for merged_head in (HEAD, OTHER):
             with self.subTest(merged_head=merged_head):
                 status, item = self.request("/v1/items", OWNER, {
@@ -321,7 +367,10 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                                   final_output=OutputPR(primary, revision))
                 with write_transaction(self.path) as db:
                     db.execute("UPDATE executions SET state_json=? WHERE id=?",
-                               (json.dumps(asdict(ready)), item["execution"]["id"]))
+                               (json.dumps({**asdict(ready), "stage": "pr_reconciliation"}),
+                                item["execution"]["id"]))
+                    db.execute(f"PRAGMA user_version={len(MIGRATIONS) - 1}")
+                migrate(self.path)
                 rows = api.call("/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["output"], {"kind": "pr", "url": primary})
@@ -351,7 +400,7 @@ class ReconcilerPassTest(unittest.TestCase):
         self.root = Path(temporary.name)
         self.now = 1000.0
         self.github = {}
-        self.config = {"runner_id": "local", "repositories": {}}
+        self.config = {"reconciler_id": "local", "repositories": {}}
 
     def reconciler(self, api, **options):
         return Reconciler(self.config, self.root / "state", api, github_token="token",
@@ -641,7 +690,7 @@ class ReconcilerPassTest(unittest.TestCase):
                 api.calls.append(path)
                 if "cursor=next" in path:
                     return {"items": [ready], "next_cursor": None}
-                return {"items": [dict(ready, stage="pr_reconciliation")], "next_cursor": "next"}
+                return {"items": [dict(ready, primary_pr_url=None)], "next_cursor": "next"}
             return original_call(path, body)
 
         api.call = call

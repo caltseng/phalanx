@@ -1,10 +1,9 @@
 # Direct sessions: coordination, not a gate
 
 **Status: live.** Caleb accepted the principle and defaults in decisions 68-71.
-Captains, writers, shifts and GitHub reconciliation are the running path. PH-DS5 part 1
-has removed the previous session transport and admission machinery in
-[#209](https://github.com/caltseng/phalanx/pull/209). Part 2 will remove the remaining
-runner-only stages and local SQLite stores. See [the operating guide](direct-path.md) and
+Captains, writers, shifts and GitHub reconciliation are the only execution path. PH-DS5
+removes the previous transport, admission machinery, separate PR-stage executor and client
+SQLite stores. See [the operating guide](direct-path.md) and
 [pilot evidence](pilots/direct-sessions.md).
 
 ## Principle
@@ -268,18 +267,11 @@ attestation and preserved work. Server restart retains bindings and token digest
 retry identical posts. A dead reconciler or Captain raises flags while other work continues.
 See [Recovery](recovery.md).
 
-## What gets removed
+## Durable state
 
-PH-DS5 part 1 has deleted the previous session transport, CLI scheduler, numbered
-reservations and expired-attempt recovery. Server schema change 19 drops only their two
-tables. Existing local files are left untouched and no longer read.
-
-### Local SQLite stores awaiting part 2
-
-PH-DS5 part 2 will remove `draft-publication.sqlite3`, `draft-observations.sqlite3`,
-`published-validation.sqlite3` and `publication/pr-notes.sqlite3` with their runner-only
-stage code. It will not delete files or live queue records. The direct path keeps configuration,
-credentials, the charter, worktrees, artifacts and OS file locks, not a local queue database.
+Only the API opens the queue database. Clients keep configuration, credentials, the charter,
+worktrees, artifacts and OS file locks, not local SQLite stores. Existing unused files are
+left untouched; upgrades never delete live queue records.
 
 ## Migration order
 
@@ -291,8 +283,10 @@ credentials, the charter, worktrees, artifacts and OS file locks, not a local qu
    handoff and keeper restart in the [pilot](pilots/direct-sessions.md). Retire the previous
    transport and reservations in part 1, then runner-only stages/local stores in part 2.
    Each removal updates the specs and operational docs and runs full CI and the envelope probe.
-   Dropped schema objects use one appended `MIGRATIONS` entry (decision 67); no row rewrites,
-   compatibility layers or new migration machinery.
+   Dropped schema objects use one appended `MIGRATIONS` entry (decision 67), not compatibility
+   layers or new migration machinery. The part 2 entry also normalizes removed stage names
+   only on closed execution snapshots to `delivery`; immutable history, attempts, outputs,
+   versions and timestamps are preserved.
 
 ## Decisions
 

@@ -50,19 +50,18 @@ other execution flags. See [creator-owned cleanup](direct-path.md#creator-owned-
 | `GET /items/{item_id}/executions/{execution_id}/report` | Owner or runner | Retrieve the final stored Markdown. |
 | `POST /items/{item_id}/executions/{execution_id}/cancel` | Owner | Request cancellation with `expected_version` and `reason`. |
 | `POST /items/{item_id}/executions/{execution_id}/rerun` | Owner | Create a linked execution from the current closed execution with `expected_version` and an explicit `target`. |
-| `POST /items/{item_id}/executions/{execution_id}/result` | Writer, or remaining runner-stage caller | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
-| `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Runner | Confirm a cancellation under a live lease after accounting for the worker and its effects. |
+| `POST /items/{item_id}/executions/{execution_id}/result` | Writer | Submit `outcome`, stage-specific evidence and the current attempt preconditions. |
+| `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Writer | Confirm a cancellation under the current writer binding after accounting for the worker and its effects. |
 
 Intake requires `repository_id` and `goal`; `target` defaults to `checked_in`, preserving explicit `ready_for_check_in` and `report` requests. Optional fields include `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the item's output type.
 
 Results require a matching `attempt_id`, `stage` and `expected_version`, authenticated with
-the current writer token. Remaining runner-stage callers instead supply their runner token
-and current `Phalanx-Lease`. A successful report-drafting result sends `report_markdown`;
+the current writer token. A successful report-drafting result sends `report_markdown`;
 the server persists it and derives a SHA-256 revision. Report review and storage send
 `report_revision`; final storage and execution closure are atomic. A `needs_input` result
 supplies `question.prompt` and `question.handoff`, with optional `options` and
 `proposed_default`. Active cancellation preserves the attempt while effects are reconciled.
-Writer stop confirmation uses its scoped credential; runner-stage confirmation needs a live lease.
+Writer stop confirmation uses its scoped credential.
 
 ### Prerequisites and queued steering
 
@@ -83,7 +82,7 @@ Milestone changes refresh up to 32 dependents in the upstream transaction. Large
 
 ### Questions and external waits
 
-See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the question and reply flow. Runners can post `/external-wait` under an execution with the live attempt lease, expected version and an idempotency key. Include the attempt and stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Both use the runner token. A recheck queues the same stage for verification.
+See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the question and reply flow. Writers can post `/external-wait` under an execution with their scoped credential, current attempt, expected version and an idempotency key. Include the stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Trusted clients poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Those two recheck operations use the trusted service token. A recheck queues the same stage for verification.
 
 ## Direct writers and dispatch
 
@@ -94,7 +93,6 @@ See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the questio
 | `PATCH /v1/items/{item}/executions/{execution}/writer` | Captain confirms the native session ID/link for its registered intent. |
 | `POST /v1/writer/attempt` | Scoped writer claims/resumes its own execution's next runnable stage. |
 | `POST /v1/writer/progress` | Scoped writer records progress without a timed lease. |
-| `POST /v1/dispatch/runners/{runner_id}/attempts/{attempt_id}/renew` | Remaining runner-stage callers renew the original live `Phalanx-Lease`; optional `worker` reference/link and `blocker` update board evidence. Returns `lease_expires_at`. This route retires in part 2. |
 
 `phx shift` registers and manages Captains; `phx work` uses the scoped credential in the item's
 Git directory. The server enforces one open writer per execution. A result advances the same
@@ -130,7 +128,7 @@ Intake accepts `label` (also `phalanx intake --label`); steering can change or c
 execution transition. Wait details include the reason, resume trigger and age. Scheduled
 retries and external rechecks appear as `retry_at_ms` and `recheck_at_ms`. `primary_pr_url`
 identifies the primary PR. Writer fields expose its native session and progress, while
-`worker_reference` and `worker_url` retain remaining runner-stage attempt evidence.
+`worker_reference` and `worker_url` retain historical attempt evidence.
 `version` is the version a reply must name. Timelines list blocking `prerequisites` and the
 current `question`. Report output URLs use the authenticated report route.
 Timelines also include nullable `previous_execution_id` and `next_execution_id` for rerun
@@ -172,7 +170,7 @@ includes this event (other response fields omitted):
   "version": 4,
   "attempt_id": "result-attempt-1",
   "worker_reference": "worker-1",
-  "from_stage": "pr_promotion",
+  "from_stage": "self_review",
   "stage": "development",
   "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",
   "pr_url": "https://github.com/a/b/pull/42",
@@ -190,6 +188,11 @@ Task bodies, reports, review notes and other arbitrary evidence are not copied
 into these reasons. Existing pause/retry waits are unchanged; no slot, capacity or
 rank-position wait reasons are inferred on the direct path.
 
-## Runner PR observations
+## GitHub observations
 
-The [runner PR observation API](runner-pr-observations.md) records evidence for publication, promotion and PR validation. The result API rejects caller-supplied PR observations.
+The trusted reconciler posts timestamped facts to
+`POST /items/{item_id}/executions/{execution_id}/github-observation`, local-check facts to
+`POST /items/{item_id}/executions/{execution_id}/local-checks`, and its heartbeat to
+`POST /reconcilers/{id}/heartbeat`. These require the trusted service token, not a writer
+credential or stage attempt. The result API rejects fabricated provider observations.
+See [reconciliation](direct-path.md#run-the-github-reconciler).

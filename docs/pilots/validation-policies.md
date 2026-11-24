@@ -1,12 +1,12 @@
 # Acceptance repository validation policy
 
-The runner validation policy for the PH-14a live runs on
+The reconciler validation policy, based on the PH-14a live runs on
 [phalanx-pilot-py](https://github.com/caltseng/phalanx-pilot-py) and
 [phalanx-pilot-web](https://github.com/caltseng/phalanx-pilot-web). The format
-is described in [runner-validation-policy.md](../runner-validation-policy.md).
+is described in [validation-policy.md](../validation-policy.md).
 
-Save it outside every checkout, for example `C:\phalanx-runner\validation.json`,
-and set `"validation_policy"` in the runner config to that path. Before use:
+Save it outside every checkout, for example `C:\muster\validation.json`,
+and set `"validation_policy"` in the reconciler config to that path. Before use:
 
 - Replace each key with the repository ID registered on the server.
 - Replace each `argv[0]` with an absolute interpreter on the runner host. On

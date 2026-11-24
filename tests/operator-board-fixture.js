@@ -12,10 +12,10 @@
   };
   const running = {
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
-    repo: "example/service", stage: "pr_revision", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
+    repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
     primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
     writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1" },
-    legacy: { workerRef: "opaque-worker-7" }
+    historicalWorker: { workerRef: "opaque-worker-7" }
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
@@ -64,8 +64,8 @@
     question: item.id === "wait" ? { prompt: "Which target?", options: ["staging", "prod"], proposedDefault: "staging" } : null,
     dependencies: [{ title: "Build", milestone: "verified", status: "satisfied" }],
     events: [{
-      at: now, event: "result", fromStage: cursor ? "development" : "pr_revision",
-      stage: cursor ? "pr_revision" : "development", status: "queued", reason: "Review loop"
+      at: now, event: "result", fromStage: cursor ? "development" : "self_review",
+      stage: cursor ? "self_review" : "development", status: "queued", reason: "Review loop"
     }],
     nextCursor: cursor ? null : "older-events"
   });

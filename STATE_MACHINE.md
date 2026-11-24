@@ -82,29 +82,13 @@ Trusted local checks are reconciler flags, not a Phalanx gate (D3). Writers foll
 checks; GitHub reviews, checks and rulesets gate merging. Optional post-merge deployment
 observations are flags, not stages or delivery gates.
 
-### Remaining runner-stage contracts (PH-DS5 part 2)
+### Closed execution history
 
-The following stage implementations, lease renewals, observation routes and runner-local
-SQLite stores remain temporarily for part 2. They have **no CLI scheduler or queue claim
-endpoint**. Direct writers never enter them and cannot register over an execution already
-at a runner-only PR stage or carrying its draft PR.
-
-| Stage | Retained behavior |
-| --- | --- |
-| `pr_creation` | Publish/reconcile a draft, verify head, then self-review. An existing foreign head returns to development; a closed PR asks for input. |
-| `pre_pr_validation` | Trusted candidate-local checks or authorized bypass precede promotion. Failures return findings; pure timeout retries with backoff. Host check concurrency remains a local-check guard, not item admission. |
-| `pr_promotion` | Update/verify the candidate and draft-only gates, then mark ready. A conflict goes to revision; failed gates/foreign head return to development. Never convert ready to draft here. |
-| `pr_validation` | Observe current CI/required previews, waiting with a recheck, then reconcile. |
-| `adversarial_review` | Review the assigned current diff independently; pass to reconciliation or send blocking findings to revision. |
-| `pr_reconciliation` | Verify exact head-bound checks, review and mergeability. Route unreviewed diffs to review and failures/conflicts/feedback to revision; complete ready-only work or proceed to check-in. |
-| `pr_revision` | Fix findings on the existing PR, review the new diff, run relevant checks and push. Return to validation, or promotion for a draft. |
-| `check_in` | Reconcile prior merge, then use an authorized expected-head merge and verify provider provenance. GitHub rules still gate it. |
-
-These callers authenticate with their current live lease. No expired-attempt recovery
-endpoint remains. Preserve any such attempt's work, verify its worker stopped, then use
-owner cancel/rerun rather than inventing a replacement lease. Details of the retained
-evidence remain in [runner PR observations](docs/runner-pr-observations.md) and
-[validation policy](docs/runner-validation-policy.md).
+Schema migration 20 normalizes removed stage names only on completed, failed or cancelled
+execution snapshots to `delivery`. Outputs, versions, timestamps, attempts and immutable
+transition history are retained. Historical timelines may still show their original names;
+they are evidence, not runnable stages. Closed ready PRs still accept later verified owner
+merges under the same terminal enrichment rules.
 
 ## Execution status
 
@@ -168,7 +152,8 @@ Cover PR/report completion, both PR targets, draft ceiling/head re-review, all m
 owner merges, target steering, failed checks/feedback/conflicts, exact reviewed revisions,
 duplicate/idempotent posts, stale credentials, lost launches, racing Captains, stopped writer
 replacement with preserved work, pause, questions/replies, cancellation, report-storage
-outages and reruns. Keep remaining runner-stage coverage until part 2 deletes those stages.
+outages and reruns. Cover loading, listing, board rendering and reconciliation for closed
+executions carrying every removed stage value before migration.
 
 Dependency coverage includes parallel cross-repository prerequisites, exact output pins,
 ready-only versus merged milestones, failed upstream reports, cycles, missed notifications,

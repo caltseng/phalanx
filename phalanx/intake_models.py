@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from .transitions import Outcome, PublicationMode, Stage, Target
-from .validation import CHECK_WAIT_LIMIT_RANGE, PreOutcome
+from .validation import CHECK_WAIT_LIMIT_RANGE
 
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16000)]
@@ -112,13 +112,6 @@ class ExternalWait(AttemptEvent):
     wait_limit_seconds: WaitLimit | None = None
 
 
-class LocalCheckResult(Payload):
-    name: Text
-    outcome: PreOutcome
-    reason: Text | None = None
-    authorization: Text | None = None
-
-
 class Result(AttemptEvent):
     outcome: Outcome
     retry_after_seconds: Annotated[int, Field(strict=True, ge=0, le=10**12)] | None = None
@@ -130,8 +123,6 @@ class Result(AttemptEvent):
     report_revision: RevisionID | None = None
     report_review_notes: Text | None = None
     reviewed_candidate: Text | None = None
-    prevalidated_candidate: Text | None = None
     review_notes: Text | None = None
-    local_checks: list[LocalCheckResult] | None = Field(default=None, max_length=50)
     # The PR a writer opened at publication. The reconciler's observation records the primary PR.
     pr_url: PullUrl | None = None

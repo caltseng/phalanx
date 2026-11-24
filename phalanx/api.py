@@ -5,9 +5,9 @@ import sqlite3
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import dependencies, dispatch, finalization
+from . import dependencies, finalization
 from .auth import require_owner, require_runner
-from .config import Credentials, database_path, lease_seconds, local_board
+from .config import Credentials, database_path, local_board
 from .captains import router as captains_router
 from .dispatch_api import router as dispatch_router
 from .flags import router as flags_router
@@ -25,7 +25,6 @@ async def lifespan(app: FastAPI):
     app.state.local_board = local_board()
     app.state.database_path = database_path()
     app.state.muster_home = configured_home()
-    dispatch.LEASE_SECONDS = lease_seconds()
     migrate(app.state.database_path)
     with write_transaction(app.state.database_path) as db:
         dependencies.start_reconciliation(db)

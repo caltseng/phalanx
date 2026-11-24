@@ -14,9 +14,9 @@ from urllib.request import Request, urlopen
 from phalanx.finalization import BACKOFF_SECONDS, attempt
 from phalanx.intake import apply, check_current, claim_attempt, digest, encode
 from phalanx.store import connect, write_transaction
-from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
+from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Status, Wait
 
-from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
 from timing import WAIT_SECONDS
 
 
@@ -31,13 +31,15 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.path = Path(temporary.name) / "queue.sqlite3"
         self.server = self.start_server(self.path)
 
-    def submit(self, path, body, *, token=OWNER, key=None, lease=None):
+    def submit(self, path, body, *, token=OWNER, key=None):
         headers = {}
         if key:
             headers["Idempotency-Key"] = key
-        if lease:
-            headers["Phalanx-Lease"] = lease
-        return self.request(path, token, body, headers)
+        status, response = self.request(path, token, body, headers)
+        if isinstance(response, dict) and "writer" in response:
+            response = {key: value for key, value in response.items()
+                        if key not in {"writer", "item_id"}}
+        return status, response
 
     def create(self, target="report"):
         self.assertEqual(self.submit("/v1/repositories", {"id": "example", "remote": REMOTE})[0], 200)
@@ -48,13 +50,8 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         execution = f"{base}/executions/{item['execution']['id']}"
         return item, body, base, execution
 
-    def claim(self, item, execution, *, lease=LEASE):
-        with write_transaction(self.path) as db:
-            row, state = check_current(db, item["id"], execution["id"], execution["version"])
-            claim = claim_attempt(
-                db, row, state, runner_id="local", lease_digest=digest(lease),
-                lease_expires_at=int(time()) + 3600,
-            )
+    def claim(self, item, execution):
+        claim = claim_stage(self.path, item["id"], LEASE)
         updated = claim["execution"]
         return {"expected_version": updated["version"], "attempt_id": claim["attempt_id"],
                 "stage": updated["state"]["stage"], "outcome": "succeeded"}
@@ -188,43 +185,43 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         item, _, base, route = self.create()
         path = route + "/result"
         claim = self.claim(item, item["execution"])
-        self.assertEqual(self.submit(path, claim, token=RUNNER, lease=LEASE)[0], 409)
+        self.assertEqual(self.submit(path, claim, token=LEASE)[0], 409)
         body = dict(claim, report_markdown="# Draft 1\n")
-        self.assertEqual(self.submit(path, body, lease=LEASE)[0], 403)
-        self.assertEqual(self.submit(path, body, token=RUNNER, lease="z" * 32)[0], 409)
+        self.assertEqual(self.submit(path, body, token=OWNER)[0], 403)
+        self.assertEqual(self.submit(path, body, token="z" * 32)[0], 401)
         self.assertEqual(self.submit(path, dict(body, stage="report_review"),
-                                     token=RUNNER, lease=LEASE)[0], 409)
-        status, reviewing = self.submit(path, body, token=RUNNER, lease=LEASE, key="draft")
+                                     token=LEASE)[0], 409)
+        status, reviewing = self.submit(path, body, token=LEASE, key="draft")
         self.assertEqual(status, 200, reviewing)
         revision = reviewing["state"]["report_draft"]
         self.assertEqual(self.get(route + "/drafts/" + revision, RUNNER), (200, "# Draft 1\n"))
-        self.assertEqual(self.submit(path, body, token=RUNNER, lease=LEASE)[0], 409)
-        self.assertEqual(self.submit(path, body, token=RUNNER, lease=LEASE, key="draft"), (200, reviewing))
+        self.assertEqual(self.submit(path, body, token=LEASE)[0], 409)
+        self.assertEqual(self.submit(path, body, token=LEASE, key="draft"), (200, reviewing))
 
         claim = self.claim(item, reviewing)
         bad_review = dict(claim, report_revision="0" * 64)
-        self.assertEqual(self.submit(path, bad_review, token=RUNNER, lease=LEASE)[0], 409)
+        self.assertEqual(self.submit(path, bad_review, token=LEASE)[0], 409)
         status, redraft = self.submit(path, dict(claim, outcome="changes_required", report_revision=revision),
-                                     token=RUNNER, lease=LEASE)
+                                     token=LEASE)
         self.assertEqual(status, 200, redraft)
         self.assertEqual(redraft["state"]["stage"], "report_drafting")
         claim = self.claim(item, redraft)
         status, reviewing = self.submit(path, dict(claim, report_markdown="# Final\n"),
-                                       token=RUNNER, lease=LEASE)
+                                       token=LEASE)
         self.assertEqual(status, 200, reviewing)
         revision = reviewing["state"]["report_draft"]
         claim = self.claim(item, reviewing)
-        status, storage = self.submit(path, dict(claim, report_revision=revision), token=RUNNER, lease=LEASE)
+        status, storage = self.submit(path, dict(claim, report_revision=revision), token=LEASE)
         self.assertEqual(status, 200, storage)
         claim = self.claim(item, storage)
-        self.assertEqual(self.submit(path, claim, token=RUNNER, lease=LEASE)[0], 409)
+        self.assertEqual(self.submit(path, claim, token=LEASE)[0], 409)
         self.assertEqual(self.get(route + "/report", OWNER)[0], 404)
         # Reconcile a matching artifact already present from an interrupted write.
         with write_transaction(self.path) as db:
             db.execute("INSERT INTO reports VALUES (?, ?)", (storage["id"], "# Final\n"))
             db.execute("""CREATE TRIGGER no_duplicate_report BEFORE INSERT ON reports
                           BEGIN SELECT RAISE(ABORT, 'duplicate report write'); END""")
-        status, complete = self.submit(path, dict(claim, report_revision=revision), token=RUNNER, lease=LEASE)
+        status, complete = self.submit(path, dict(claim, report_revision=revision), token=LEASE)
         self.assertEqual(status, 200, complete)
         self.assertEqual(complete["state"]["status"], "completed")
         self.stop_server(self.server)
@@ -232,24 +229,24 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(base, OWNER)[1]["execution"], complete)
         self.assertEqual(self.get(complete["state"]["final_output"]["reference"], OWNER), (200, "# Final\n"))
 
-    def test_pr_result_rejects_fabricated_provider_evidence_and_expired_lease(self):
+    def test_pr_result_rejects_fabricated_provider_evidence_and_stale_fence(self):
         item, _, base, route = self.create("ready_for_check_in")
         path = route + "/result"
         claim = self.claim(item, item["execution"])
         with write_transaction(self.path) as db:
-            db.execute("UPDATE attempts SET lease_expires_at=0 WHERE id=?", (claim["attempt_id"],))
+            db.execute("UPDATE attempts SET lease_digest='revoked' WHERE id=?", (claim["attempt_id"],))
         body = dict(claim, candidate="abc")
-        self.assertEqual(self.submit(path, body, token=RUNNER, lease=LEASE)[0], 409)
+        self.assertEqual(self.submit(path, body, token=LEASE)[0], 409)
         with write_transaction(self.path) as db:
-            db.execute("UPDATE attempts SET lease_expires_at=? WHERE id=?",
-                       (int(time()) + 3600, claim["attempt_id"]))
-        status, publication = self.submit(path, body, token=RUNNER, lease=LEASE)
+            db.execute("UPDATE attempts SET lease_digest=? WHERE id=?",
+                       (digest(LEASE), claim["attempt_id"]))
+        status, publication = self.submit(path, body, token=LEASE)
         self.assertEqual(status, 200, publication)
         claim = self.claim(item, publication)
         fake_pr = {"url": "https://github.com/example/project/pull/1", "draft": True,
                    "revision": {"head": "abc", "base": "def"}}
-        self.assertEqual(self.submit(path, dict(claim, pr=fake_pr), token=RUNNER, lease=LEASE)[0], 422)
-        self.assertEqual(self.submit(path, claim, token=RUNNER, lease=LEASE)[0], 409)
+        self.assertEqual(self.submit(path, dict(claim, pr=fake_pr), token=LEASE)[0], 422)
+        self.assertEqual(self.submit(path, claim, token=LEASE)[0], 409)
         active = self.get(base, OWNER)[1]["execution"]["state"]
         self.assertEqual(active["status"], "running")
         self.assertIsNone(active["primary_pr"])
@@ -268,15 +265,14 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             "stage": claim["stage"], "reason": "Waiting for CI", "gate": "ci",
             "revision": {"head": "head-one", "base": "base-one"},
         }
-        self.assertEqual(self.submit(route + "/external-wait", external, token=RUNNER,
-                                     lease=LEASE, key="stopping")[0], 409)
+        self.assertEqual(self.submit(route + "/external-wait", external, token=LEASE, key="stopping")[0], 409)
         self.assertIsNone(stopping["state"]["final_output"])
         self.assertEqual(self.submit(route + "/cancel", cancellation, key="cancel"), (200, stopping))
         self.assertEqual(self.submit(route + "/result", dict(claim, report_markdown="# Late"),
-                                     token=RUNNER, lease=LEASE)[0], 409)
+                                     token=LEASE)[0], 409)
         stop = {field: claim[field] for field in ("attempt_id", "stage")}
         stop["expected_version"] = stopping["version"]
-        status, cancelled = self.submit(route + "/stop-confirmed", stop, token=RUNNER, lease=LEASE)
+        status, cancelled = self.submit(route + "/stop-confirmed", stop, token=LEASE)
         self.assertEqual(status, 200, cancelled)
         self.assertEqual(cancelled["state"]["status"], "cancelled")
         report = self.get(route + "/report", RUNNER)
@@ -322,9 +318,9 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         question = {"prompt": "Which scope?", "options": ["Current", "Expanded"],
                     "proposed_default": "Current", "handoff": "Draft is in notes.md"}
         result = dict(claim, outcome="needs_input")
-        self.assertEqual(self.submit(route + "/result", result, token=RUNNER, lease=LEASE)[0], 409)
+        self.assertEqual(self.submit(route + "/result", result, token=LEASE)[0], 409)
         status, waiting = self.submit(route + "/result", dict(result, question=question),
-                                      token=RUNNER, lease=LEASE, key="wait")
+                                      token=LEASE, key="wait")
         self.assertEqual(status, 200, waiting)
         self.assertEqual(waiting["state"]["status"], "waiting_for_input")
         with connect(self.path) as db:
@@ -388,7 +384,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
                     "proposed_default": "unittest", "handoff": "Tests are drafted"}
         status, waiting = self.submit(route + "/result",
                                       dict(claim, outcome="needs_input", question=question),
-                                      token=RUNNER, lease=LEASE, key="wait")
+                                      token=LEASE, key="wait")
         self.assertEqual(status, 200, waiting)
         self.assertIsNone(self.get(f"/v1/items/{item['id']}", OWNER)[1]["last_reply"])
         answer = {"expected_version": waiting["version"], "answer": "unittest"}
@@ -428,12 +424,12 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         body.update(reason="Waiting for CI", gate="ci",
                     revision={"head": "head-one", "base": "base-one"}, retry_after_seconds=60)
         path = route + "/external-wait"
-        self.assertEqual(self.submit(path, body, token=RUNNER, lease="z" * 32, key="wait")[0], 409)
+        self.assertEqual(self.submit(path, body, token="z" * 32, key="wait")[0], 401)
         earliest = int(time() * 1000) + 60_000
-        status, waiting = self.submit(path, body, token=RUNNER, lease=LEASE, key="wait")
+        status, waiting = self.submit(path, body, token=LEASE, key="wait")
         self.assertEqual(status, 200, waiting)
         self.assertEqual(waiting["state"]["status"], "waiting_for_external")
-        self.assertEqual(self.submit(path, body, token=RUNNER, lease=LEASE, key="wait"),
+        self.assertEqual(self.submit(path, body, token=LEASE, key="wait"),
                          (200, waiting))
         due_path = "/v1/runner/due-rechecks?limit=1"
         self.assertEqual(self.get(due_path, OWNER)[0], 403)
@@ -475,7 +471,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             body = {name: claim[name] for name in ("expected_version", "attempt_id", "stage")}
             body.update(reason="Draft checks pending", gate="draft_checks", retry_after_seconds=5,
                         revision={"head": "head-one", "base": "base-one"}, wait_limit_seconds=60)
-            status, updated = self.submit(route + "/external-wait", body, token=RUNNER, lease=LEASE, key=key)
+            status, updated = self.submit(route + "/external-wait", body, token=LEASE, key=key)
             self.assertEqual(status, 200, updated)
             return updated
 
@@ -518,14 +514,15 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         execution = item["execution"]
         with write_transaction(self.path) as db:
             row, state = check_current(db, item["id"], execution["id"], execution["version"])
-            state = replace(state, stage=Stage.PR_RECONCILIATION, primary_pr=url,
+            state = replace(state, stage=Stage.DELIVERY, primary_pr=url,
                             candidate=revision.head)
             claim = claim_attempt(db, row, state, runner_id="local", lease_digest=digest(LEASE),
                                   lease_expires_at=int(time()) + 3600)
             row, state = check_current(db, item["id"], execution["id"], claim["execution"]["version"])
             waiting = apply(
-                db, row, state, Event.RESULT, attempt_id=claim["attempt_id"], details={},
-                outcome=Outcome.SUCCEEDED, evidence=Evidence(pr=PullRequest(url, revision, closed=True)),
+                db, row, replace(state, status=Status.WAITING_FOR_EXTERNAL), Event.PR_OBSERVED,
+                attempt_id=claim["attempt_id"], details={},
+                evidence=Evidence(pr=PullRequest(url, revision, closed=True)),
                 wait=Wait("PR closed without merge", "owner reply"),
             )
         self.assertEqual(waiting["state"]["status"], "waiting_for_input")
@@ -534,7 +531,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             key="resume-closed-pr",
         )
         self.assertEqual(status, 200, queued)
-        self.assertEqual(queued["state"]["stage"], "pr_reconciliation")
+        self.assertEqual(queued["state"]["stage"], "delivery")
 
     def test_cancel_storage_error_rolls_back_and_recovers_after_restart(self):
         item, _, base, route = self.create()
@@ -576,7 +573,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         item, _, _, route = self.create("checked_in")
         claim = self.claim(item, item["execution"])
         result = dict(claim, outcome="failed", wait={"reason": "Build unavailable", "trigger": "owner reply"})
-        status, waiting = self.submit(route + "/result", result, token=RUNNER, lease=LEASE)
+        status, waiting = self.submit(route + "/result", result, token=LEASE)
         self.assertEqual(status, 200, waiting)
         body = {"expected_version": waiting["version"], "reason": "Build remains unavailable"}
         with write_transaction(self.path) as db:

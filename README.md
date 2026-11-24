@@ -49,11 +49,9 @@ observation records that merge and releases check-in dependents. For `checked_in
 writer enables GitHub auto-merge under repository rules. Reports instead use drafting,
 review and storage; draft-only publication is a separate ceiling.
 
-[PH-DS5 part 1 / #209](https://github.com/caltseng/phalanx/pull/209), following
-[plan #190](https://github.com/caltseng/phalanx/pull/190), has deleted the legacy Captain
-CLI loop, relay chat transport, slots and attended recovery, including their operating
-docs. They are not another runnable path. Remaining runner-only PR stages and local
-SQLite journals await PH-DS5 part 2; they are not used by direct writers.
+Native Captain/writer sessions and the reconciler are the only execution path. Clients
+keep worktrees, configuration, credentials, artifacts and OS locks; all durable execution
+and observation records live behind the API. There are no client SQLite queues or journals.
 
 ## Quickstart: new install
 
@@ -113,7 +111,7 @@ fields, relative paths and missing directories fail; Phalanx never scans for ano
 or falls back after an invalid override. Discovery never initializes, migrates, moves or deletes
 state. It is optional: existing explicit config commands still work without a locator.
 
-The selected directory contains `shift.json`, `charter.toml`, `runner.json` and `private.env`.
+The selected directory contains `shift.json`, `charter.toml`, `reconciler.json` and `private.env`.
 The shift config can omit `charter` or use `charter.toml` (an absolute path to that same file
 also works). Other config paths, such as checkout and worktree mappings, should be absolute.
 `private.env` holds literal `KEY=VALUE` lines for `PHALANX_RUNNER_TOKEN`,
@@ -132,7 +130,7 @@ python -m phalanx reconcile
 ```
 
 Without explicit configs, `shift` derives `shift.json` and the charter, and `reconcile` derives
-`runner.json` and its scratch directory `<muster>/reconciler` (overridable with `--state`).
+`reconciler.json` and its scratch directory `<muster>/reconciler` (overridable with `--state`).
 Both accept `--home`; `shift` accepts it before or after its action. Explicit `--config`
 and `PHALANX_SHIFT_CONFIG` retain their existing behavior without loading `private.env`;
 an explicit `--home` instead selects the muster layout. Explicit reconciler configs still need
@@ -155,12 +153,12 @@ To retrieve one item's correlated timeline through the supported API, see the [p
 
 - [Install Phalanx](docs/install.md): first-time setup, credentials, runner setup and repository trust.
 - [Resume an existing install](docs/resume.md): restart order, single-instance checks and status.
-- [Runner operations](docs/runner-operations.md): direct writers, publication, validation flags and delivery.
+- [Writer operations](docs/writer-operations.md): direct writers, publication, validation flags and delivery.
 - [Direct path](docs/direct-path.md): the GitHub reconciler and a Captain on the direct path.
 - [Recovery and troubleshooting](docs/recovery.md): writer discovery and replacement, and SQLite backup and restore.
 - [Work items](docs/work-items.md): filing, draft-only PR delivery, GitHub issue import, answering questions and the operator board.
-- [Configuration](docs/configuration.md): environment variables and the runner config.
+- [Configuration](docs/configuration.md): environment variables and the reconciler config.
 - [API reference](docs/api.md) and [developing Phalanx](docs/development.md): routes, leases, transactions and tests.
-- [Validation policy](docs/runner-validation-policy.md), [PR observations](docs/runner-pr-observations.md), [pilot reports](docs/pilots/) and [decision log](docs/decisions.md).
+- [Validation policy](docs/validation-policy.md), [GitHub observations](docs/direct-path.md#run-the-github-reconciler), [pilot reports](docs/pilots/) and [decision log](docs/decisions.md).
 
 Design: the [spec](SPEC.md), [state machine](STATE_MACHINE.md), [roadmap](ROADMAP.md) and [implementation plan](IMPLEMENTATION_PLAN.md). Open [state-machine.html](state-machine.html) locally in a browser to explore the lifecycle and execution status graphs.

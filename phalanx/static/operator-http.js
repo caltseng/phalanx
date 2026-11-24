@@ -111,8 +111,8 @@
         resumeTrigger: row.resume_trigger,
         retryAt: epochMs(row.retry_at_ms),
         recheckAt: epochMs(row.recheck_at_ms),
-        // Remaining runner-stage attempts, pending PH-DS5 part 2.
-        legacy: {
+        // Preserved worker references on historical attempts.
+        historicalWorker: {
           workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
           chatUrl: httpsUrl(row.worker_url)
         },

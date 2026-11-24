@@ -1,11 +1,11 @@
-"""Direct dispatch settings, visible intake and retained runner-stage renewal."""
+"""Direct dispatch settings and visible intake."""
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 from phalanx.store import migrate
-from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
+from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
 class DispatchTest(ServerFixture, unittest.TestCase):
@@ -37,13 +37,3 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         status, binding = self.request(route, RUNNER, body)
         self.assertEqual(status, 200, binding)
         self.assertEqual(binding["state"]["status"], "running")
-
-    def test_remaining_runner_stage_renewal_is_fenced(self):
-        _, item = self.request("/v1/items", OWNER, {
-            "repository_id": "repo", "goal": "Renewal fixture", "target": "report",
-        })
-        assignment = claim_stage(self.path, item["id"], "x" * 32)
-        route = f"/v1/dispatch/runners/local/attempts/{assignment['attempt_id']}/renew"
-        self.assertEqual(self.request(route, RUNNER, {}, {"Phalanx-Lease": "y" * 32})[0], 409)
-        self.assertEqual(self.request(route, RUNNER, {})[0], 422)
-        self.assertEqual(self.request(route, RUNNER, {}, {"Phalanx-Lease": "x" * 32})[0], 200)

@@ -55,7 +55,7 @@ class ObservedPull(Payload):
 
 
 class LocalChecks(Payload):
-    """Trusted runner-local checks on one observed PR head. Empty failures means they passed."""
+    """Trusted reconciler checks on one observed PR head. Empty failures means they passed."""
 
     head: SHA
     failures: list[Reason] = Field(default_factory=list, max_length=50)

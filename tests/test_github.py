@@ -4,11 +4,9 @@ from collections import deque
 from urllib.parse import parse_qs, urlsplit
 
 from phalanx.github import (
-    ATTRIBUTION,
     GitHubClient,
     GitHubError,
     HTTPResponse,
-    UncertainGitHubWrite,
 )
 
 HEAD = "a" * 40
@@ -135,25 +133,18 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(query, {"head": ["owner:phalanx/topic"], "state": ["all"],
                                  "per_page": ["100"]})
 
-    def test_publication_lookup_guards_each_page_and_does_not_accept_partial_results(self):
+    def test_lookup_does_not_accept_partial_results(self):
         next_url = f"{API}/repositories/123/pulls?page=2"
         self.responses.extend([response([pull()], next_url=next_url), response([])])
-        calls = []
-
-        def checked():
-            calls.append(len(self.requests))
-
         with self.assertRaisesRegex(GitHubError, "pagination limit"):
             self.client.list_matching_pull_requests(
-                head_owner="owner", head="phalanx/topic", authorize=checked, page_limit=1,
+                head_owner="owner", head="phalanx/topic", page_limit=1,
             )
-        self.assertEqual(calls, [0])
         self.responses.appendleft(response([pull()], next_url=next_url))
         matches = self.client.list_matching_pull_requests(
-            head_owner="owner", head="phalanx/topic", authorize=checked, page_limit=2,
+            head_owner="owner", head="phalanx/topic", page_limit=2,
         )
         self.assertEqual([p.number for p in matches], [7])
-        self.assertEqual(calls, [0, 1, 2])
 
     def test_pagination_rejects_a_link_to_another_host(self):
         self.responses.append(response([pull()], next_url="https://elsewhere.example/pulls"))
@@ -162,46 +153,6 @@ class GitHubClientTests(unittest.TestCase):
                                                     base="main")
         self.assertEqual(len(self.requests), 1)
 
-    def test_create_draft_normalizes_footer(self):
-        self.responses.append(response(pull(), status=201))
-        self.client.create_draft(head="phalanx/topic", base="main", title="Title",
-                                 body=f"Body\r\n\r\n{ATTRIBUTION}\r\n{ATTRIBUTION}")
-        request = self.requests[0]
-        self.assertEqual(request.method, "POST")
-        self.assertEqual(json.loads(request.data), {
-            "head": "phalanx/topic", "base": "main", "title": "Title",
-            "body": f"Body\n\n{ATTRIBUTION}", "draft": True,
-        })
-
-    def test_writes_with_lost_or_unusable_responses_are_uncertain(self):
-        self.responses.extend([
-            TimeoutError(),
-            HTTPResponse(201, {}, b"truncated"),
-            response({}, status=503),
-            response({"number": 7}, status=201),
-        ])
-        for call_count in range(1, 5):
-            with self.assertRaises(UncertainGitHubWrite):
-                self.client.create_draft(head="phalanx/topic", base="main", title="Title", body="")
-            self.assertEqual(len(self.requests), call_count)
-
-    def test_promotion_uses_node_id_and_surfaces_graphql_errors(self):
-        self.responses.extend([
-            response({"data": {"markPullRequestReadyForReview": {
-                "pullRequest": {"id": "PR_7", "isDraft": False},
-            }}}),
-            response({"data": None, "errors": [{"message": "Unknown outcome"}]}),
-        ])
-        self.client.mark_ready("PR_7")
-        request = self.requests[0]
-        self.assertEqual(request.full_url, "https://github.example/api/graphql")
-        self.assertEqual(request.method, "POST")
-        payload = json.loads(request.data)
-        self.assertIn("markPullRequestReadyForReview", payload["query"])
-        self.assertEqual(payload["variables"], {"id": "PR_7"})
-        with self.assertRaises(UncertainGitHubWrite):
-            self.client.mark_ready("PR_7")
-        self.assertEqual(len(self.requests), 2)
 
     def test_feedback_pages_past_resolved_threads(self):
         def page(threads, cursor):
@@ -233,29 +184,6 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(evidence.check_runs, ({"id": 1}, {"id": 2}))
         self.assertEqual(evidence.statuses, ({"id": 3}, {"id": 4}))
         self.assertTrue(all(request.full_url.startswith(url) for request in self.requests))
-
-    def test_merge_requires_explicit_method_and_head(self):
-        with self.assertRaises(ValueError):
-            self.client.merge(7, expected_head="phalanx/topic", method="squash")
-        with self.assertRaises(ValueError):
-            self.client.merge(7, expected_head=HEAD, method="auto")
-        self.assertEqual(self.requests, [])
-        self.responses.append(response({"merged": True, "sha": MERGE}))
-        self.assertEqual(self.client.merge(7, expected_head=HEAD, method="squash"), MERGE)
-        request = self.requests[0]
-        self.assertEqual(request.method, "PUT")
-        self.assertTrue(request.full_url.endswith("/pulls/7/merge"))
-        self.assertEqual(json.loads(request.data), {"sha": HEAD, "merge_method": "squash"})
-
-    def test_merge_distinguishes_stale_head_from_ambiguous_success(self):
-        self.responses.extend([response({}, status=409), response({"merged": True})])
-        with self.assertRaises(GitHubError) as failure:
-            self.client.merge(7, expected_head=HEAD, method="rebase")
-        self.assertNotIsInstance(failure.exception, UncertainGitHubWrite)
-        self.assertEqual(failure.exception.status, 409)
-        with self.assertRaises(UncertainGitHubWrite):
-            self.client.merge(7, expected_head=HEAD, method="rebase")
-        self.assertEqual(len(self.requests), 2)
 
 
 if __name__ == "__main__":

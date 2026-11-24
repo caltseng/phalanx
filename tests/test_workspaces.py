@@ -133,8 +133,6 @@ class WorkspaceTests(unittest.TestCase):
         self.git(self.checkout, "update-ref", "-d", refs)
         with self.assertRaisesRegex(WorkspaceError, "ownership"):
             self.prepare()
-        with self.assertRaisesRegex(WorkspaceError, "ownership"):
-            self.manager.cleanup("item", closed=True, expected_head=workspace.head)
         self.git(self.checkout, "worktree", "remove", str(workspace.path))
         workspace.path.mkdir()
         (workspace.path / "keep").touch()
@@ -159,46 +157,6 @@ class WorkspaceTests(unittest.TestCase):
         head = self.git(workspace.path, "rev-parse", "HEAD")
         self.git(self.checkout, "worktree", "remove", str(workspace.path))
         self.assertEqual(self.manager.prepare("item", base="missing-base").head, head)
-
-    def test_cleanup_requires_closed_clean_at_recorded_head(self):
-        workspace = self.prepare()
-        remove = self.manager.cleanup
-        with self.assertRaisesRegex(WorkspaceError, "closed"):
-            remove("item", closed=False, expected_head=workspace.head)
-        with self.assertRaisesRegex(WorkspaceError, "recorded checkpoint"):
-            remove("item", closed=True, expected_head="0" * 40)
-
-        for relative in ("untracked", "ignored/local"):
-            extra = workspace.path / relative
-            extra.parent.mkdir(exist_ok=True)
-            extra.write_text("local data")
-            self.assertEqual(self.prepare().dirty, relative == "untracked")
-            with self.assertRaisesRegex(WorkspaceError, "local changes"):
-                remove("item", closed=True, expected_head=workspace.head)
-            self.assertEqual(extra.read_text(), "local data")
-            extra.unlink()
-        (workspace.path / "ignored").rmdir()
-
-        tracked = workspace.path / "source"
-        self.git(workspace.path, "update-index", "--assume-unchanged", "source")
-        tracked.write_text("hidden data")
-        with self.assertRaisesRegex(WorkspaceError, "index entries"):
-            remove("item", closed=True, expected_head=workspace.head)
-        self.assertEqual(tracked.read_text(), "hidden data")
-        self.git(workspace.path, "update-index", "--no-assume-unchanged", "source")
-        self.git(workspace.path, "restore", "source")
-
-        head_path = Path(self.git(workspace.path, "rev-parse", "--path-format=absolute",
-                                  "--git-path", "MERGE_HEAD"))
-        head_path.write_text(workspace.head + "\n")
-        with self.assertRaisesRegex(WorkspaceError, "in-progress"):
-            remove("item", closed=True, expected_head=workspace.head)
-        head_path.unlink()
-
-        self.assertTrue(remove("item", closed=True, expected_head=workspace.head))
-        self.assertFalse(workspace.path.exists())
-        self.assertFalse(remove("item", closed=True, expected_head=workspace.head))
-        self.assertEqual(self.git(self.checkout, "rev-parse", workspace.branch), workspace.head)
 
     def test_setup_bypasses_checkout_and_reference_hooks_and_git_env_overrides(self):
         hooks = self.directory / "hooks"

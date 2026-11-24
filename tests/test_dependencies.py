@@ -54,7 +54,7 @@ class DependencyTests(unittest.TestCase):
             report = replace(start(Target.REPORT), stage=Stage.REPORT_STORAGE, status=Status.COMPLETED,
                              final_output=StoredReport("/report", report_revision))
             report_execution = self.set_state(db, "report", report, "# Report")
-            ready = replace(start(Target.MERGED), stage=Stage.CHECK_IN,
+            ready = replace(start(Target.MERGED), stage=Stage.DELIVERY,
                             primary_pr=url, candidate=revision.head, ready_revision=revision)
             pr_execution = self.set_state(db, "pr", ready)
 
@@ -67,12 +67,12 @@ class DependencyTests(unittest.TestCase):
             self.assertEqual((pinned.execution_id, pinned.reviewed_revision), (pr_execution, revision))
             output = PullRequest(url, revision)
             self.set_state(db, "pr", replace(ready, target=Target.READY, status=Status.COMPLETED, final_output=output))
-            self.assertIn("without check-in", resolve_dependencies(db, "consumer")[1][0].reason)
+            self.assertIn("primary PR to merge", resolve_dependencies(db, "consumer")[1][0].reason)
             self.assertEqual(resolve_dependencies(db, "ready"), ((pinned,), ()))
 
             rerun = new_execution(db, "pr", Target.MERGED, previous_id=pr_execution)
             self.assertEqual(resolve_dependencies(db, "ready")[1][0].execution_id, rerun["id"])
-            merged = replace(ready, stage=Stage.CHECK_IN, status=Status.COMPLETED,
+            merged = replace(ready, stage=Stage.DELIVERY, status=Status.COMPLETED,
                              final_output=replace(output, merge_commit="verified-merge"))
             self.set_state(db, "pr", merged)
             resolved, unmet = resolve_dependencies(db, "consumer")

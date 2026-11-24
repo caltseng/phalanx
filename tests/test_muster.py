@@ -40,7 +40,9 @@ class LocatorTest(unittest.TestCase):
             "repositories": {"repo": {"checkout": str(self.root / "checkout")}},
         }), encoding="utf-8")
         (self.home / "charter.toml").write_text('goal = "test"\n', encoding="utf-8")
-        (self.home / "runner.json").write_text('{"base_url": "http://127.0.0.1:8000"}', encoding="utf-8")
+        (self.home / "reconciler.json").write_text(json.dumps({
+            "base_url": "http://127.0.0.1:8000", "reconciler_id": "test", "repositories": {},
+        }), encoding="utf-8")
         (self.home / "private.env").write_text(
             f'PHALANX_RUNNER_TOKEN="{RUNNER}"\nPHALANX_GITHUB_TOKEN=github-secret\n', encoding="utf-8")
 
@@ -139,6 +141,10 @@ class LocatorTest(unittest.TestCase):
             with patch("sys.argv", ["phalanx", "reconcile", "--once"]), redirect_stdout(io.StringIO()):
                 main()
             self.assertEqual(worker.call_args.args[1], self.home / "reconciler")
+            self.assertEqual(worker.call_args.args[0], {
+                "base_url": "http://127.0.0.1:8000", "reconciler_id": "test", "repositories": {}})
+            self.assertEqual(worker.call_args.args[2].base_url, "http://127.0.0.1:8000")
+            self.assertEqual(worker.call_args.args[2].token, RUNNER)
         with patch.object(muster, "resolve_home", side_effect=AssertionError("must not discover")):
             with patch("sys.argv", ["phalanx", "shift", "charter", "--config",
                                    str(self.home / "shift.json")]), patch.object(
@@ -148,7 +154,7 @@ class LocatorTest(unittest.TestCase):
             with patch.object(reconciler, "Reconciler") as worker:
                 worker.return_value.run.return_value = {"errors": []}
                 with patch("sys.argv", ["phalanx", "reconcile", "--config",
-                        str(self.home / "runner.json"), "--state", str(self.root / "scratch"), "--once"]):
+                        str(self.home / "reconciler.json"), "--state", str(self.root / "scratch"), "--once"]):
                     main()
                 self.assertEqual(worker.call_args.args[1], self.root / "scratch")
         for argv in (["phalanx", "muster", "--home", str(self.home), "status"],
@@ -156,6 +162,19 @@ class LocatorTest(unittest.TestCase):
             with patch("sys.argv", argv), patch("phalanx.__main__.run_muster") as run:
                 main()
                 self.assertEqual(run.call_args.args[0].home, str(self.home))
+
+    def test_reconciler_config_requires_its_identity_url_and_mappings(self):
+        self.files()
+        config_path = self.home / "reconciler.json"
+        valid = json.loads(config_path.read_text(encoding="utf-8"))
+        for invalid in (
+            [], {}, {**valid, "base_url": 1}, {**valid, "reconciler_id": " "},
+            {**valid, "reconciler_id": None}, {**valid, "repositories": []},
+        ):
+            config_path.write_text(json.dumps(invalid), encoding="utf-8")
+            with self.subTest(config=invalid), self.assertRaisesRegex(
+                    reconciler.ReconcilerError, "base_url, reconciler_id and repositories"):
+                reconciler.run_reconcile(Namespace(config=config_path, state=self.root / "scratch"))
 
 
 class StatusAPITest(ServerFixture, unittest.TestCase):

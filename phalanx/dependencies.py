@@ -104,7 +104,7 @@ def milestone_evidence(state: Execution):
         return state.status
     if state.status == Status.COMPLETED:
         return state.final_output
-    if (state.stage in (Stage.CHECK_IN, Stage.DELIVERY)
+    if (state.stage == Stage.DELIVERY
             and state.ready_revision and state.ready_revision.head == state.candidate
             and state.primary_pr):
         return state.primary_pr, state.ready_revision
@@ -173,7 +173,7 @@ def resolve_dependencies(
             continue
         elif state.status == Status.COMPLETED and isinstance(output, PullRequest) and output.draft:
             reason = "Prerequisite completed as a draft, not ready for check-in. Rerun or replace it."
-        elif (state.stage in (Stage.CHECK_IN, Stage.DELIVERY)
+        elif (state.stage == Stage.DELIVERY
               and state.ready_revision and state.primary_pr
               and state.ready_revision.head == state.candidate):
             resolved.append(ResolvedDependency(

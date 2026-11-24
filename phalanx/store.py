@@ -106,6 +106,14 @@ MIGRATIONS = (
         "DROP TABLE attempt_adoptions",
         "DROP TABLE runner_limits",
     ),
+    (
+        # Closed outputs remain readable without keeping retired stages in the runtime.
+        # Preserve their immutable timeline, attempts, outputs, versions and timestamps.
+        """UPDATE executions SET state_json=json_set(state_json, '$.stage', 'delivery')
+           WHERE status IN ('completed', 'failed', 'cancelled')
+             AND stage IN ('pr_creation', 'pre_pr_validation', 'pr_promotion', 'pr_validation',
+                           'adversarial_review', 'pr_reconciliation', 'pr_revision', 'check_in')""",
+    ),
 )
 
 

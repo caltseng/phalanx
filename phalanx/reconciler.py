@@ -162,7 +162,7 @@ class Reconciler:
     def heartbeat(self, force=False):
         now = self.clock()
         if force or self.last_heartbeat is None or now - self.last_heartbeat >= HEARTBEAT_SECONDS:
-            self.api.call(f"/reconcilers/{quote(self.config['runner_id'], safe='')}/heartbeat", {
+            self.api.call(f"/reconcilers/{quote(self.config['reconciler_id'], safe='')}/heartbeat", {
                 "deployment_checks": {repo: mapping.get("post_merge_check")
                                       for repo, mapping in self.config.get("repositories", {}).items()},
             })
@@ -447,7 +447,7 @@ def command_notifier(argv):
 def add_reconcile_command(commands):
     parser = commands.add_parser(
         "reconcile", help="observe GitHub and git for open items, run pre-PR checks, and notify on flags")
-    parser.add_argument("--config", type=Path, help="runner configuration JSON (otherwise discover muster)")
+    parser.add_argument("--config", type=Path, help="reconciler configuration JSON (otherwise discover muster)")
     parser.add_argument("--state", type=Path, help="scratch directory outside every checkout")
     parser.add_argument("--home", help="existing muster directory (otherwise PHALANX_HOME or user locator)")
     parser.add_argument("--interval-seconds", type=float, default=PASS_SECONDS)
@@ -457,12 +457,17 @@ def add_reconcile_command(commands):
 def run_reconcile(args):
     if args.config is None or getattr(args, "home", None) is not None:
         from .muster import direct_config
-        home, args.config = direct_config("runner", getattr(args, "home", None))
+        home, args.config = direct_config("reconciler", getattr(args, "home", None))
         if args.state is None:
             args.state = home / "reconciler"
     if args.state is None:
         raise ReconcilerError("Pass --state with an explicit --config")
     config = json.loads(args.config.read_text(encoding="utf-8-sig"))
+    if (not isinstance(config, dict)
+            or any(not isinstance(config.get(key), str) or not config[key].strip()
+                   for key in ("base_url", "reconciler_id"))
+            or not isinstance(config.get("repositories"), dict)):
+        raise ReconcilerError("Reconciler config needs base_url, reconciler_id and repositories")
     github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
     if not github_token:
         raise ReconcilerError("Set PHALANX_GITHUB_TOKEN for the reconciler")

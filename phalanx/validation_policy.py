@@ -1,4 +1,4 @@
-"""Strict validation policy loaded only from an operator-owned runner file."""
+"""Strict validation policy loaded only from an operator-owned reconciler file."""
 
 from dataclasses import dataclass
 import json
@@ -25,13 +25,10 @@ class ValidationPolicyError(ValueError):
 
 @dataclass(frozen=True)
 class PublishedValidationPolicy:
-    """Complete ready-phase policy from trusted runner configuration."""
+    """Complete ready-phase policy from trusted reconciler configuration."""
 
     required: tuple[RequiredCheck, ...] | None
     read_preview: PreviewReader | None = None
-    # Pending ready checks; None leaves the server defaults.
-    recheck_seconds: int | None = None
-    wait_limit_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -145,7 +142,7 @@ def _invalid_constant(value):
 def load_validation_policy(config_path: Path, repository_id: str) -> RepositoryValidationPolicy:
     """Load all schema entries, then select an exact registered repository ID.
 
-    The caller must supply an absolute, trusted runner-local path outside all
+    The caller must supply an absolute, trusted host path outside all
     worker-writable checkouts. Never derive it from the work packet, repository
     contents, or worker result. Missing/malformed policy raises an actionable
     error; null phase lists remain unavailable, while [] is explicitly empty.
