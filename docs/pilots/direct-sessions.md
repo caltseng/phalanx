@@ -1,11 +1,12 @@
 # PH-DS4 direct-sessions pilot evidence
 
-Evidence snapshot: November 24, 2026, approximately 05:50 UTC. All times below
-are UTC. **PH-DS4 is not yet accepted.** The gate is this evidence record plus
-one combined post-#196 delivery with a Captain handoff and keeper restart while
-its PR is open, as specified by [plan PR #198](https://github.com/caltseng/phalanx/pull/198)
-(merged as `5b1356d`). Earlier delivery and continuity runs are evidence, not a
-substitute for that combined run.
+Updated November 24, 2026, after #209's observed check-in at 09:07:45 UTC.
+All times below are UTC. **PH-DS4's combined handoff/keeper gate is accepted** by
+the coordinating session on the evidence in
+[Post-#196 handoff and keeper gate](#post-196-handoff-and-keeper-gate).
+The earlier sections retain their approximately 05:50 snapshot and its then-open
+findings. The gate came from [plan PR #198](https://github.com/caltseng/phalanx/pull/198)
+(merged as `5b1356d`); earlier deliveries alone did not pass it.
 
 ## Sources and interpretation
 
@@ -124,7 +125,7 @@ that Phalanx's own PRs now ship through direct writers, citing #154 and
 not a claim that every cited PR merged or that all shared one handoff/restart.
 The per-PR merge events above distinguish delivered code from open work.
 
-### #196 status and the title failure it addresses
+### #196 at the earlier snapshot and the title failure it addresses
 
 At this snapshot, [#196](https://github.com/caltseng/phalanx/pull/196) is
 **OPEN, ready (not draft), not merged**, at head
@@ -143,7 +144,9 @@ another title pass. The owner cleared the stale prefix by hand. This is
 explicit counter-evidence to claiming intervention-free delivery, not merely
 a pending cosmetic check ([#196](https://github.com/caltseng/phalanx/pull/196)).
 
-## Final combined pilot: remaining evidence, NOT PASSED
+## Gate checklist at the earlier snapshot (then NOT PASSED)
+
+This checklist is preserved as the earlier snapshot's requirements, not the current gate result.
 
 No verified qualifying run is recorded here. #196 is still open, and the
 earlier Captain chain predates it. Later merges alone cannot establish
@@ -188,3 +191,76 @@ overlap plus keeper recovery after every Captain is gone. None is newly
 certified by this record; see the PH-DS5 row recorded in
 [#198](https://github.com/caltseng/phalanx/pull/198) and the
 [migration acceptance contract](../direct-sessions.md#migration-order).
+
+## Post-#196 handoff and keeper gate
+
+**Result: accepted combined PH-DS4 evidence, with no rerun required.** The
+owner-operator coordinating session `97150add-b33c-46ee-b739-ae965836d2e0`
+accepted the natural first-compaction handoff while PH-DS5's writer was active,
+the deliberate keeper restart while #207 was open, and subsequent verified
+delivery. This is a combined record, **not** a claim that one PR was open across
+both the first handoff and the restart. #209 was published later. The broader
+PH-DS5 acceptance cases are not all newly certified by this gate.
+
+### Independently verified
+
+The documentation writer re-read `GET /v1/captains?limit=100`, both items'
+execution timelines and closed operator summaries, plus `gh pr view` for
+#196, #207, #208 and #209, on November 24. Captain records retain the latest
+heartbeat and handoff note, not a heartbeat-event history.
+
+| Time | Retained API/GitHub evidence |
+| --- | --- |
+| 05:58:33 | [#196](https://github.com/caltseng/phalanx/pull/196) merged as `0c5a093dda42f7b16083313ea9ebb7ee2f134923`. The earlier open-PR snapshot above is historical. |
+| 06:17:13 | The PH-DS5 item's Captain action records writer `940ff45d0f484fe793e52023a4b69a67`, native session `7f3334a8-4604-41ce-9ce0-bcd4ec90cf37`, confirmed busy with no reported trust block. Item `1279ccb6d8fa43b6bdd77621dd79914a`, execution `9af23669543a4c868a3c6c712e3f7c54`, was running development. |
+| 06:43:08 / 06:44:35 | Captain `d1ae000a2776479f8c0ba7df6e3bc8b3` (chat `e7b4686f-c042-432d-b4e6-34ed5f0a188e`) entered **ending** at 06:43:08.76 with a first-compaction handoff naming that live writer. Its final heartbeat is 06:44:35.62. Successor `da4397c563a444b1abda857f2f5f6c36` (chat `d3d08b37-24bc-4342-9897-1ed107982e15`, parent `d1ae000a`) registered at 06:44:35.25. At 06:45:30 its item action records routing reports to the successor, not replacing the writer. |
+| 06:56:48-06:57:38 | Row-11 item `2d9b239961f2420aaa49e69dac60fb0e`, execution `c7cb9d817ba54886914510d5fa860596`, writer `d963985f1c9e4521b5b853ee71aff275` (named in `d1ae000a`'s handoff), accepted candidate `69fdbacd790f54a5af06ba87c8ba5d38e77b7594` (v3), self-review (v5) and writer-owned publication of [#207](https://github.com/caltseng/phalanx/pull/207) (v7). GitHub created the ready PR at 06:57:23; it stayed open across the keeper restart. |
+| 07:05:13 | #207's execution completed ready-only at v8, not yet checked in. |
+| 07:31:48 / 07:32:28-30 | Captain `db02d2b3837e447a952b2932bdf48905` registered `baa6b9cf-e77a-49a9-90c8-8d53fb1c152d` as its session reference, then entered ending at 07:32:28 and recorded ended at 07:32:30. Its handoff note explicitly says this was the app project-session ID, not native chat ID, and names the correction. **Known prompt-adherence gap:** the packaged Captain prompt already required the native ID. This is not a missing prompt requirement or successful registration claim. |
+| 07:32:32 / 07:33:11 | Corrected Captain `e28eea7ee07b4fbba623c883d94088d6`, native chat `43a0595d-389b-4f74-9b34-671672f5f6b1`, registered with parent `da4397c5`. Its 07:33:11.77 timeline action routes the existing PH-DS5 writer's reports to it, explicitly with no replacement. |
+| 07:38:23 | `da4397c5`'s final stored heartbeat/end write has note `Keeper drill crash (06:58:50Z); keeper successor e28eea7ee07b4fbba623c883d94088d6 took over`. The crash-time heartbeat is supplied through this note, not a retained heartbeat snapshot. |
+| 07:38:53 / 08:08:15 | #207 merged as `cd46be7d40ed2b1780c7ebe75bbf0c44892b046b`; urgent fix [#208](https://github.com/caltseng/phalanx/pull/208) later merged as `c213c5ce0db9530b3d53c153ed7fd97fef12aeb3`. #208's body identifies the first deploy's reconciler `KeyError: 'revision'`: compact operator `output` lacked the revision. The fix adds `output_revision` and isolates per-execution observation failures. |
+| 08:09:14 / 08:09:16 | Urgent item `6cdfafb115284c00918837f71f4db152`, execution `188b1f7f6c164a39acbd2f2a1452d7e4`, completed delivery v10 as checked in. #207 then received a server-owned `pr_observed` v9 at 08:09:16.49: status remains completed, target remains ready-only, output now records the verified merge and board outcome is `checked_in`. Its retained timeline shows observation-based enrichment, not a manual lifecycle edit. |
+| 09:00:38-09:00:59 | The inherited PH-DS5 writer published ready [#209](https://github.com/caltseng/phalanx/pull/209) at head `e2fdc170ea062ce534182a7159a3add881800da9` and posted its URL (v17) under `e28eea7e`'s shift. Development and self-review results name that exact head. |
+| 09:02:17-09:03:42 | `e28eea7e` handed off after first compaction, final heartbeat 09:03:26.95. Successor `2cecc858044e4f389f0fe72d9052c0fa`, parent `e28eea7e`, registered at 09:03:42.96. Thus publication was under the keeper successor; final readiness/merge were observed under its successor, not while `e28eea7e` was still active. |
+| 09:05:39 / 09:06:53 / 09:07:45 | #209 completed ready-only at v18 after required checks were satisfied, with empty feedback and the exact head above. GitHub then records the owner merge as `fe859348905ebf4efba0403df6719e686a993fe7` at 09:06:53. The reconciler enriched delivery at v19, 09:07:45.82, with `checked_in` outcome. No writer replacement or manual state edit is recorded in this delivery sequence. |
+
+#209's own report and decision 87 disclose its separate envelope timing exception:
+invariants/fault checks passed, timing targets did not. The PH-DS4 gate does not waive
+those targets or relabel them passed.
+
+### Supplied by coordinating sessions
+
+The following details are accepted coordinating evidence, **not independently
+verified API/gh facts by this documentation writer**. Owner-operator session
+`97150add-b33c-46ee-b739-ae965836d2e0` supplied the drill/run/action details and
+authorized this two-tier record; implementation coordinator `ff9ebb04` supplied
+the host deployment/rollback account.
+
+- About 06:59, `da4397c5` cleared its wake automation under charter revision
+  `8e7d23aa`, simulating a crash while leaving writers untouched. Last heartbeat
+  before the drill was 06:58:50, so the 15-minute stale threshold was 07:13:50.
+- Keeper run `18c3b061`, session `dd7bbec1-f96b-4ad4-8ce6-e28ee07b740c`,
+  ran 07:30:49-07:31:40 and started a successor. The app retained only its latest
+  automation run, not this run's historical API record.
+- The owner-operator read the server's `captain_actions` table: takeover action
+  `6fefef04` is the 07:33:11.77 successor-routing event on execution `9af23669`
+  v6. Holds `753fdd86` (execution `c6b9d7fe` v2), `e68788bc` (`dd458ce5` v2)
+  and `2e2895c9` (`a44374df` v1) were recorded at 07:33:14, 07:33:16 and
+  07:33:18. The supported API timelines expose the corresponding actions and
+  times but omit their action UUIDs; the documentation writer did not query
+  the server database.
+- The first #207 deploy crash-looped the reconciler; the host rolled back to
+  `efe2fb0e` pending urgent item `6cdfafb1` / #208. The exception and fix are
+  corroborated by #208; the rollback revision is the implementation coordinator's
+  deployment evidence.
+- The coordinating sessions accepted the resulting #207 observation and PH-DS5
+  delivery as satisfying the combined gate without manual state edits or false
+  execution flags. Retained delivery observations corroborate the heads/checks/
+  outputs; they are not a complete historical flag audit.
+
+`captain_stale` and `no_live_captain` are derived **at read time** and were not
+snapshotted during this drill. The stale threshold above is calculated from
+the supplied heartbeat, not proof of a persisted flag event. Existing unrelated
+orphan-session cleanup flags are not evidence of delivery failure or proof that
+every global flag was absent.

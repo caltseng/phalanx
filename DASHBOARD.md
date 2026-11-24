@@ -4,6 +4,13 @@ Status: **accepted by Caleb** (#112). Implementation rows go into [IMPLEMENTATIO
 
 The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API routes (`/v1/operator/*`) and its code keep the `operator` name. The local board at `/operator/` implements the home page, row anatomy and inline detail described below. It follows the direct-sessions model ([docs/direct-sessions.md](docs/direct-sessions.md)): items and executions, writers, Captains and flags.
 
+**Shipped versus planned:** PH-29a's server reads shipped in
+[#144](https://github.com/caltseng/phalanx/pull/144). The local home/inline board, server-owned
+Captain liveness, glyphs, merged display label and owner-authenticated `+` intake are also
+merged (#180, #201, #204 and #205). The full route table, filter/search UI, Markdown report
+rendering, hosted sign-in and later phases below remain design goals, not available pages.
+PH-29c detail-page work and PH-29d acceptance are not claimed here.
+
 ## Goal
 
 The dashboard is a website, reachable from the internet, where each Phalanx user can see what Phalanx is doing across their workspace's repositories, what needs them, and what it delivered. They can use it from a phone or a laptop, and later act on it there too. It serves many users across workspaces ([SPEC.md](SPEC.md#users-and-workspaces)), with Caleb as the first. It must stay fast and readable with thousands of items, tens of workers running at once, and years of history.
@@ -190,7 +197,7 @@ Clicking a title, or pressing Enter on it, expands the detail in place under its
 Built now:
 
 - **Request:** the full goal.
-- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry and recheck times, attempt, writer and its session, PR or report, and IDs. Old runner-path facts (worker reference, worker chat and slot note) are isolated in one function for removal in direct sessions step 5.
+- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry and recheck times, attempt, writer and its session, PR or report, and IDs. Historical runner attempt worker references/links remain until PH-DS5 part 2; admission slots and their board note were removed in part 1.
 - **Flags** on this item, with their recovery and age.
 - **Question** with its options, proposed default and the exact `reply` command.
 - **Prerequisites** with their milestone and reason.
@@ -226,7 +233,7 @@ Computed on the server from work history and shown on History and group pages:
 
 - **Origin:** the hosted API origin serves the dashboard ([PH-20](IMPLEMENTATION_PLAN.md)), so it needs no CORS and no separate API base URL.
 - **Sign-in:** Google sign-in from PH-27. The session cookie is HttpOnly, Secure and SameSite=Lax. Sessions expire, and sign-out deletes the session on the server.
-- **Local board:** until PH-27, a local server started with `PHALANX_LOCAL_BOARD=1` serves the read-only board routes without a token to loopback clients with a loopback `Host` ([decision 57](docs/decisions.md)). A hosted server leaves the flag unset.
+- **Local board:** until PH-27, a local server started with `PHALANX_LOCAL_BOARD=1` serves the board read routes without a token to loopback clients with a loopback `Host` ([decision 59](docs/decisions.md)). This does not authorize `+` intake: it always needs an owner bearer token and same-origin browser checks. A hosted server leaves the flag unset.
 - **Workspace scope:** every dashboard request is scoped to the signed-in user's selected workspace and checked against their role on the server. The browser only hides controls for convenience; it never enforces access.
 - **Write actions (D2):** the cookie authorizes owner write routes only with CSRF protection, using an Origin check plus a required custom header. Destructive actions ask for confirmation. Each action records the signed-in email in the item timeline, the same way reply authors are recorded today. Runner routes never accept the cookie.
 - **Caching:** static assets have hashed names and cache for a long time. Conditional board reads use `private, no-cache`; other API responses are `no-store`.
@@ -242,7 +249,12 @@ Computed on the server from work history and shown on History and group pages:
 
 ## API additions
 
-All are read-only except the D2 actions, which reuse existing routes. The D1 server reads (PH-29a) target the local board at `/operator/` only, with existing authentication unchanged: no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data) lists the routes. Direct-path capacity is advisory (D6); these reads add no slot/capacity fields or runners endpoint.
+These operator routes are read-only; the merged local `+` form uses the existing owner
+intake route, and later D2 actions will also reuse existing routes. The D1 server reads
+(PH-29a) target the local board at `/operator/` only, with existing authentication unchanged:
+no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data)
+lists the routes. The charter's `max_writers` is enforced atomically at writer registration;
+these board reads add no slot/capacity fields or runners endpoint.
 
 - An optional `label` on work items, set at intake (`phalanx intake --label`) and by steering. Steering `label: null` clears it. Labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
 - New summary fields:
@@ -250,7 +262,7 @@ All are read-only except the D2 actions, which reuse existing routes. The D1 ser
   - `revision_round`: 1, plus one each time the execution re-enters development, PR revision or report drafting;
   - `duplicate_count`: other open PRs on the item branch in the latest reconciler observation, or `null` when not observed;
   - `pr`: the PR in the latest reconciler GitHub observation, with `url`, `number`, `state` (`open`, `closed` or `merged`), `draft`, `head_sha`, `head_ci`, `additions` and `deletions`. `head_ci` is the gate result observed on that head. Each field is `null` when not observed; `pr` is `null` before an observation or when the latest observation found no PR. Writer-supplied PR URLs and lifecycle evidence never populate these facts.
-  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. Queued rows without another reason show, in order: dispatch paused, a scheduled retry, or next to run through a Captain dispatching a writer. Runner presence and capacity never infer a direct-path wait.
+  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. Existing lifecycle/prerequisite waits take precedence; otherwise queued rows show dispatch pause, a scheduled retry, a current deliberate Captain hold, or **Awaiting a direct Captain** for unbound work. A queued row with a writer and no wait says a Captain dispatches a writer. Runner presence and capacity never infer a direct-path wait.
 
     Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
 - `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch `paused` (false means on); the oldest eligible queued timestamp and age; and `generated_at` for data age.

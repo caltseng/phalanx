@@ -53,6 +53,37 @@ Runners submit a structured `question` with `prompt`, `handoff`, optional `optio
 
 ## Operator work board
 
-Open `http://127.0.0.1:8000/operator/` on the running server. With `PHALANX_LOCAL_BOARD=1`, the board opens without a token: its read-only routes (`/v1/operator/*` and the stored report route) skip authentication for requests from a loopback client with a `localhost`, `127.0.0.1` or `[::1]` `Host` header. Every other route still requires its token. Leave the flag unset on a hosted server, including one behind a reverse proxy or tunnel on the same machine, because those connect from loopback too. Without the flag, the board asks for the owner token and holds it in memory until you disconnect or reload. The board uses the same-origin read API and opens stored field reports as plain text. Its static assets use origin-root paths and hold no secrets, so a hosted server serves it at `/operator/` on its own origin.
+Open `http://127.0.0.1:8000/operator/` on the running server. With
+`PHALANX_LOCAL_BOARD=1`, board reads skip authentication for requests from a loopback
+client with a `localhost`, `127.0.0.1` or `[::1]` `Host` header. This covers
+`/v1/operator/*`, stored reports, `GET /v1/captains`, `GET /v1/captains/{id}` and
+`GET /v1/flags`. It does not open intake, session archival records, muster status or
+other authenticated operations; a supplied bearer token is still validated. Leave the
+flag unset on a hosted server, including behind a same-machine reverse proxy or tunnel.
+Without the flag, the board asks for a bearer token and holds it in memory until you
+disconnect or reload. The board uses same-origin reads and opens stored field reports
+as plain text. Its static assets use origin-root paths and hold no secrets.
 
-The board is read-only. It shows each item's prerequisite blockers, any scheduled retry or external recheck, its worker reference and chat link, its current PR and its final output. When an item is waiting for an answer, its detail shows the question and the `reply` command to answer it. Its data comes from the [operator board API](api.md#operator-board-data).
+Scribe shows **Needs you**, **Flags**, live/stale **Captains** (ended Captains are collapsed),
+**Active**, **Queued and waiting**, and **Recently closed**. Rows expose stage/status,
+the execution's current target, age, registered writer/session, prerequisite or deliberate
+charter hold, retries/rechecks, PR and final output. Running work/live Captains share a
+pikehead; queued/waiting work uses shields and flags use pennants, with text labels as well
+as glyphs. Expanding a row loads paginated history, stage returns, prerequisites and any
+question with its exact `reply` command. Reports currently open as plain text.
+
+The header **+ / New work item** is the local board's write action: it files through the
+existing owner-authenticated intake API, defaults to **Merged** (`checked_in`), and accepts
+goal, acceptance criteria, target, priority, label, publication mode and dependencies.
+An anonymous local reader must supply an owner token in the modal; a read credential never
+grants write authority. The modal discards its temporary credential on close, stores no
+token in browser storage, and retains the exact request/idempotency key after an uncertain
+response for safe retry. Browser writes must be same-origin. See the
+[form contract](../DASHBOARD.md#new-work-item-local-board).
+
+Other board actions still use the CLI/API; detail pages, search/filter controls and rendered
+Markdown reports remain planned. The already-merged [server reads](api.md#operator-board-data)
+support labels, groups, filters, overview counts and conditional ETags; that API support
+does not mean all corresponding UI has shipped. PR/CI/size/duplicate facts come only from
+reconciler observations and stay unknown when unobserved, never inferred from a writer's URL.
+**Merged** is a display label; API targets remain unchanged.

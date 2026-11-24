@@ -10,6 +10,51 @@ Phalanx is an agentic orchestrator for work across repositories. Work items live
 
 The HTTP API server and durable store run locally, with visible worker sessions launched by Captain chats through their runtime's native tools. Phalanx is runtime-neutral: Codex, GitHub Copilot CLI or app, Claude Code, or any runtime with visible sessions can follow the [direct-session contract](docs/direct-sessions.md). The same server is intended to move to cloud hosting while agents keep running locally.
 
+## Architecture
+
+The HTTP API server owns the SQLite queue, executions, attempts, questions, reports and
+timestamped evidence. It also serves **Scribe**, the local work board at `/operator/`.
+Clients reach queue state only through the API; Git checkouts and credentials stay on
+their host. `python -m phalanx reconcile` independently reads GitHub and git, posts
+observations and heartbeats, and lets the server derive flags and verify delivery.
+
+The operator supplies a charter file outside every repository. A native **Captain chat**
+runs `phx shift` (shorthand for the configured `python -m phalanx shift` command), re-reads
+that charter each wake, and chooses work within its repository scope, lane order and
+`max_writers` budget. It launches one registered **writer session** per item in an isolated
+worktree. In the Copilot app all writers open in the shared worktrees folder project,
+`session_workspace`, rather than one project per worktree. Writers run `phx work` from
+their own worktree with a scoped credential. A runtime-scheduled **keeper** starts a
+Captain when none is live, including after a stale Captain, without restarting its writers.
+See [the direct-path operating guide](docs/direct-path.md).
+
+```text
+Owner intake -> API + SQLite <-> Scribe (/operator/)
+                    ^
+Charter -> Captain (phx shift) -> writers (phx work) -> GitHub PR
+Keeper  -> fresh Captain             |                     |
+                    +---------------+   reconciler <------+
+                                              |
+                                              +-> API delivery evidence
+```
+
+Intake defaults to `checked_in`; choose `ready_for_check_in` for owner-only merging or
+`report` for Markdown. Runner affinity is retained request metadata: this muster used
+`direct-hold` to keep work off the former scheduler, but direct registration needs no such
+sentinel. Charter lanes are Captain policy, explained by refreshed `held` actions, not
+server queues or reserved slots. PR work flows through `development`, `self_review`,
+`publication` and `delivery`. For ready-only work, the writer opens a ready PR, required
+checks pass, and the reconciler verifies completion. The owner merges; a later reconciler
+observation records that merge and releases check-in dependents. For `checked_in`, the
+writer enables GitHub auto-merge under repository rules. Reports instead use drafting,
+review and storage; draft-only publication is a separate ceiling.
+
+[PH-DS5 part 1 / #209](https://github.com/caltseng/phalanx/pull/209), following
+[plan #190](https://github.com/caltseng/phalanx/pull/190), has deleted the legacy Captain
+CLI loop, relay chat transport, slots and attended recovery, including their operating
+docs. They are not another runnable path. Remaining runner-only PR stages and local
+SQLite journals await PH-DS5 part 2; they are not used by direct writers.
+
 ## Quickstart: new install
 
 Use CPython 3.12 or later (3.14 for deployment). These steps create new tokens and a new database. In PowerShell, from the repository root:

@@ -8,10 +8,19 @@ These are design calls for Phalanx. Most are best guesses the Captain made witho
 
 Mark a row Caleb only for his explicit decision. To override, edit the row, set Decided by to Caleb and note the change. The Captain appends new decisions as it makes them. Worker questions it answers are also recorded on the item as `answered_by: captain`.
 
-**Historical mechanisms:** PH-DS5 part 1 removes the implementations described in rows
+**Historical mechanisms:** PH-DS5 part 1 has removed the implementations described in rows
 56, 60, 64, 65, 72 and 73. Those rows remain as decision history, not operating instructions.
 Row 63's execution-continuity principle now uses one registered writer across fenced stages.
 Rows 68-71 and [direct sessions](direct-sessions.md) describe the running architecture.
+Earlier validation/promotion/check-in rows describe the retained runner-only stages unless
+explicitly marked direct; those stages await part 2, not a second runnable scheduler.
+In particular, direct draft-only publication follows its explicit ceiling rather than
+the old promotion path, and direct targets/auto-merge follow rows 81/85/86 rather than a
+global runner setting. Row 71 records the original defaults: the later charter
+`max_writers` implementation now enforces the concurrent-writer budget at registration,
+and a scoped writer credential spans separately fenced attempts, not just one attempt.
+Row 59's local-read allowlist now also covers Captain and flag reads for the direct
+board; it still never authorizes intake or other writes.
 
 | # | Area | Decision | Why | Decided by |
 | --- | --- | --- | --- | --- |

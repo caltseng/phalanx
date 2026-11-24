@@ -4,7 +4,12 @@ On the direct path, a Captain chat launches native worker sessions that post the
 
 ## Run the GitHub reconciler
 
-The reconciler reads GitHub and git for every open item whose repository the runner configuration maps, and posts timestamped observations through the API. It holds no lease or slot, never changes an item's state and never blocks work.
+The reconciler reads GitHub and git for mapped open items, completed direct ready PRs
+awaiting an owner merge, and configured recent deployments. It posts timestamped
+observations through the API, without a worker attempt or lease. The server applies those
+observations to delivery and later owner-merge enrichment; the reconciler never writes
+queue storage directly or performs GitHub writes. Provider failures back off without
+blocking unrelated work.
 
 The server derives flags from the latest observation of each open execution: `head_drift`, `pr_closed`, `merge_conflict`, `wrong_base` (the PR's base isn't the item's target branch), `checks_failed`, `review_feedback`, `unpublished_branch_merged` (item branch reachable from its base with no PR) and `pre_pr_checks_failed`. An observation older than 15 minutes keeps its flags, marked with when it was seen, and adds `observation_stale`. While the observed head differs from the execution's recorded candidate, only `head_drift` reports it: `merge_conflict`, `checks_failed` and `pre_pr_checks_failed` describe that superseded head, so they wait for an observation of the candidate. Each reconciler with no heartbeat for 15 minutes raises its own `reconciler_stale`. An incomplete GitHub read posts nothing, so earlier flags stand, and backs that repository off until a later pass.
 
@@ -65,7 +70,65 @@ Example explicit shift config:
 - `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.
 - `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
 
-`shift launch` includes that repository's exact `checks_environment` in the writer kickoff. When omitted, the kickoff explicitly says it is not configured; it never guesses a Python or environment. The worker prompt requires checks to use that environment from the item's worktree, forbids borrowing another checkout's environment or installing packages, and tells the writer to report the validation gap and request the correct environment with `phx work question` if it is missing or unusable.
+`shift launch` includes that repository's exact `checks_environment` in the writer kickoff.
+It takes the target from the **current execution's** `state.target`, not the original intake
+request, so reruns and target steering are reflected. When the environment is omitted, the
+kickoff explicitly says it is not configured; it never guesses a Python or environment.
+The worker prompt requires checks to use that environment from the item's worktree,
+forbids borrowing another checkout's environment or installing packages, and tells the
+writer to report the validation gap and request the correct environment with
+`phx work question` if it is missing or unusable.
+
+### Shared non-Python checks environment: churchtree
+
+The operator-provisioned npm/Playwright environment exists at
+`C:\phalanx-muster\envs\churchtree`. The live explicit shift config is
+`C:\phalanx-muster\captain.json` (not the optional locator layout's `shift.json`).
+Its `churchtree` mapping uses checkout `C:\phalanx-muster\checkouts\churchtree`,
+base `main`, and this exact value:
+
+```json
+{"checks_environment": "& \"C:\\phalanx-muster\\envs\\churchtree\\checks.ps1\""}
+```
+
+Writers invoke it **from their item worktree**, for example:
+
+```powershell
+& "C:\phalanx-muster\envs\churchtree\checks.ps1" npm run ci
+```
+
+The prefix is a PowerShell command wrapper, not a Python interpreter. It runs the
+requested command without changing directory. The November 24 environment contains
+`package.json`, `package-lock.json`, `lock.sha256`, shared `node_modules` with Playwright
+`1.65.1`, and browsers in `ms-playwright` (Chromium/headless shell build 1255, ffmpeg 1013
+and winldd 1007). It sets `PLAYWRIGHT_BROWSERS_PATH` to
+`C:\phalanx-muster\envs\churchtree\ms-playwright`.
+
+To provision or refresh this layout, the **operator**, not a writer:
+
+1. Copies the intended repository revision's `package.json` and `package-lock.json`
+   into the external environment directory, prepares Node/npm matching repository
+   requirements, and runs `npm ci` there.
+2. Installs the required Playwright browsers there with
+   `PLAYWRIGHT_BROWSERS_PATH` set to the external `ms-playwright` directory (for this
+   repository, `npx playwright install chromium`).
+3. Records the lowercase SHA-256 of the provisioned lockfile after normalizing CRLF to
+   LF, as UTF-8 without a BOM, in `lock.sha256`; maintains `checks.ps1` and puts the exact
+   command prefix in the shift config. The inspected snapshot's hash is
+   `6a51aa579c5fa36c4b5a7ebf309e91d2c8d364d779ebb36602ceb3263158c1c5`.
+
+Before any check, the wrapper hashes the **worktree's** `package-lock.json` with the same
+normalization. A missing or changed lockfile exits 1 with
+`churchtree checks env stale: package-lock.json differs from the provisioned env`.
+The writer reports that validation gap with `phx work question`; it never installs,
+updates the shared environment, or overwrites the expected hash to bypass the mismatch.
+The operator must reprovision for the new lockfile.
+
+When `node_modules` is absent, the wrapper creates an untracked Windows junction at
+`<item worktree>\node_modules` pointing to the shared environment's `node_modules`.
+It does not replace an existing path or install packages. Keep that link out of commits;
+repository/local ignore rules should exclude it. Package resolution then uses the shared
+dependencies while builds/tests still operate on the writer's worktree.
 
 ### Charter
 
@@ -117,6 +180,22 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 | `shift archive-check --session ID --by SESSION (--item ITEM \| --worktree PATH \| --no-worktree)` | Checks whether the session's writer/handoff has ended and local work is preserved. Fetches the actual origin branch and refuses dirty worktrees or unpushed commits. Does not archive |
 | `shift archive-result --session ID --by SESSION --outcome archived\|blocked\|refused --reason REASON` | Records the runtime outcome durably. A block or refusal keeps `orphan_session`; only verified archival clears it. Refusals suppress further attempts |
 
+### Intake routing and charter lanes
+
+Intake defaults to `checked_in`; explicit ready-only and report targets are preserved.
+The current muster retains `runner_affinity: "direct-hold"` on direct work. Before
+PH-DS5 part 1 it excluded the old runner; there is now no queue claim scheduler or
+special direct-hold gate. Named writer registration does not filter by affinity.
+Unbound queued work, including intake with no affinity, visibly awaits a direct Captain.
+
+Lane order and mutual exclusion belong to the operator's charter and the Captain's
+selection, not a separate server lane setting. For each runnable item deliberately deferred
+by lane order, overlap or the writer cap, the Captain records
+`shift action --captain ID --item ITEM --action held --reason "<concrete charter reason>"`.
+Refresh each wake: a hold expires after 30 minutes, a version change, or its Captain
+ending/becoming stale. It explains the board wait and suppresses idle-with-work flags;
+it never reserves capacity or prevents another Captain launching the item.
+
 ### Creator-owned session cleanup
 
 The runtime's session tools, not Phalanx core, CLI or API, archive sessions. Each Captain archives
@@ -158,7 +237,7 @@ A successor does not inherit creator-only runtime authority.
 
 ### In the GitHub Copilot app
 
-1. Start a new chat. Ask it to run `python -m phalanx shift prompt captain --config <shift config>` and follow the printed prompt. Its first wake registers it with `shift start --session-ref <its session ID>`.
+1. Start a new chat. Ask it to run `python -m phalanx shift prompt captain --config <shift config>` and follow the printed prompt. Its first wake registers it with `shift start --session-ref <its native session ID>`. Use the ID listed by the runtime's session tools, not an app project-session/workspace ID; confusing them produces an incorrect registration even if the command succeeds.
 2. Have the Captain wake every 5 minutes (D5) with a session automation on its own chat (`save_session_automation`, interval `minutes`, `every_minutes` 5). Use the prompt "Wake: run `python -m phalanx shift prompt captain --config <shift config>` and follow its Every wake steps." Idle notifications from its worker sessions wake it sooner.
 3. To launch a worker, the Captain runs `shift launch`, then creates one session with `create_session`:
    - `project_id` set to the returned `session_workspace`: the shift config's folder project for its `worktrees` folder. One project covers every item worktree, so the owner trusts it once. Registering each worktree as its own project would hold every launch on a trust prompt, and autopilot denies tools until it is answered;

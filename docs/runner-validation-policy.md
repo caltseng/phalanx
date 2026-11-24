@@ -1,5 +1,14 @@
 # Trusted runner-local validation policy
 
+**Current direct-path use:** the reconciler loads this policy's ready checks and runs trusted
+local checks serially in scratch worktrees. Local failures are flags, not a Phalanx gate;
+missing ready policy waits visibly but cannot invalidate a verified merge. Writer checks
+instead use the shift config's prepared
+[`checks_environment`](direct-path.md#shared-non-python-checks-environment-churchtree).
+The runner-stage wiring, promotion gates, leases and local outbox described below remain
+only until PH-DS5 part 2; their scheduler was deleted in part 1. They are not steps a direct
+Captain runs.
+
 `phalanx.validation_policy.load_validation_policy(config_path, repository_id)`
 is the callable policy interface for stage wiring. Supply an explicit absolute
 path to a separate operator-owned UTF-8 JSON file and the exact registered
@@ -215,8 +224,10 @@ commands, environment selection and other preview adapter settings are not
 supported by this file and are rejected as unknown keys. Do not silently drop
 the requirement.
 
-Draft-only fallback configuration is also unsupported and rejected. Phalanx
-never converts a PR back to draft once it is marked ready; only a human may.
+Draft-only fallback configuration is also unsupported and rejected. The retained runner
+promotion path never converts a ready PR back to draft; only a human may do that in this
+path. Direct `publication_mode: "draft"` is a different contract: its writer must convert
+a reused ready PR to draft and disable auto-merge.
 Draft-only checks gate only the first promotion, so when an already-ready PR
 lacks evidence for a draft-only check, `pr_promotion` records that check as
 skipped in the gate result (`skipped` and `skip_reason`), comments on the PR

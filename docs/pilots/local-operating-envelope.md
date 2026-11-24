@@ -6,12 +6,15 @@ Use **CPython 3.14** as the deployment and pilot baseline, with **FastAPI**, **p
 
 Start with rollback journaling (`journal_mode=DELETE`), `synchronous=EXTRA`, a two-second busy timeout, and foreign-key enforcement on every connection. Configure connection-local settings when opening each connection. Keep connections thread-owned, keep writes short, and serialize write transactions within the service process from the start. Use `BEGIN IMMEDIATE` for read-modify-write transactions. Keep HTTP and provider calls outside transactions. For backup, use the SQLite online backup API and verify restore into a separate path. Use local persistent disk with one service instance owning the database. The Windows runtime tested here bundled SQLite 3.50.4. Before switching to WAL, verify the loaded library includes SQLite's WAL-reset fix and rerun contention and recovery tests. [Python sqlite3 reference](https://docs.python.org/3.14/library/sqlite3.html) · [SQLite durability settings](https://sqlite.org/pragma.html#pragma_synchronous) · [SQLite WAL-reset fix](https://sqlite.org/wal.html#the_wal_reset_bug)
 
-Suggested PH-04 entry points, once the service exists. Use a full Python install with venv and pip. Install FastAPI and Uvicorn from the project's locked dependencies. The sample lock filename and install command are provisional until PH-04 establishes the bootstrap workflow. The pilot used a portable runtime to work around an inaccessible Store Python alias.
+Current service entry points are below; see [installation](../install.md) for credentials
+and database configuration. The measurements in this report remain historical, not a new
+direct-path performance claim. The original pilot used a portable runtime to work around
+an inaccessible Store Python alias.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.lock
-.\.venv\Scripts\python.exe -m uvicorn phalanx.server:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m pip install -r requirements.lock -e .
+.\.venv\Scripts\python.exe -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
 # In a separate terminal
 Invoke-RestMethod http://127.0.0.1:8000/health
 .\.venv\Scripts\python.exe -m unittest discover -s tests
@@ -90,6 +93,11 @@ Captain registration, writer attempt/progress/result and owner/reconciler APIs. 
 use a fixed seed; wall timings vary. Invariant/fault violations exit nonzero; timing targets
 must be compared with the JSON measurements separately. The small CI configuration covers
 the same fault cases.
+
+[#209](https://github.com/caltseng/phalanx/pull/209) records the first part-1 direct default-scale
+comparison and decision 87's authenticated timing exception: invariant/fault checks passed,
+but PH-19a latency, free-writer delay and due-event-drain timing targets remain missed and
+tracked under PH-26. Its exit 0 must not be described as passing those timing targets.
 
 The direct workload retains 100,000 seed executions, 10,000 due waits, 2,000 dependents, four
 Captains with a combined budget of 24 writers, one extra polling actor per Captain, and the

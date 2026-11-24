@@ -2,7 +2,8 @@
 
 **Status: live.** Caleb accepted the principle and defaults in decisions 68-71.
 Captains, writers, shifts and GitHub reconciliation are the running path. PH-DS5 part 1
-removes the previous session transport and admission machinery. Part 2 removes the remaining
+has removed the previous session transport and admission machinery in
+[#209](https://github.com/caltseng/phalanx/pull/209). Part 2 will remove the remaining
 runner-only stages and local SQLite stores. See [the operating guide](direct-path.md) and
 [pilot evidence](pilots/direct-sessions.md).
 
@@ -272,7 +273,7 @@ PH-DS5 part 1 has deleted the previous session transport, CLI scheduler, numbere
 reservations and expired-attempt recovery. Server schema change 19 drops only their two
 tables. Existing local files are left untouched and no longer read.
 
-### Local SQLite stores removed
+### Local SQLite stores awaiting part 2
 
 PH-DS5 part 2 will remove `draft-publication.sqlite3`, `draft-observations.sqlite3`,
 `published-validation.sqlite3` and `publication/pr-notes.sqlite3` with their runner-only
