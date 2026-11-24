@@ -161,7 +161,11 @@ def resolve_dependencies(
                 ))
                 continue
             if state.status == Status.COMPLETED:
-                reason = "Prerequisite completed without check-in. Rerun it with check-in or replace it."
+                if (state.stage == Stage.DELIVERY and state.ready_revision
+                        and isinstance(output, PullRequest) and not output.draft):
+                    reason = "Waiting for prerequisite's primary PR to merge at its verified head or a descendant"
+                else:
+                    reason = "Prerequisite completed without check-in. Rerun it with check-in or replace it."
         elif state.status == Status.COMPLETED and isinstance(output, PullRequest) and not output.draft:
             resolved.append(ResolvedDependency(
                 upstream_id, milestone, execution_id, output.url, output.revision.head, output.revision,

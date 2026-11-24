@@ -185,6 +185,9 @@ class Reconciler:
 
     def executions(self):
         yield from self.execution_pages("open")
+        for execution in self.execution_pages("closed", outcome="ready_for_check_in"):
+            if execution.get("stage") == "delivery" and execution.get("primary_pr_url"):
+                yield execution
         if any(mapping.get("post_merge_check") for mapping in self.config.get("repositories", {}).values()):
             cutoff = datetime.now(UTC) - DEPLOYMENT_WINDOW
             for execution in self.execution_pages("closed"):
@@ -198,10 +201,10 @@ class Reconciler:
                                  and deployment.get("check_name") == mapping["post_merge_check"])):
                     yield execution
 
-    def execution_pages(self, kind):
+    def execution_pages(self, kind, **filters):
         cursor = None
         while True:
-            query = {"kind": kind, "limit": 100, **({"cursor": cursor} if cursor else {})}
+            query = {"kind": kind, "limit": 100, **filters, **({"cursor": cursor} if cursor else {})}
             page = self.api.call("/operator/executions?" + urlencode(query))
             yield from page["items"]
             cursor = page["next_cursor"]
@@ -231,6 +234,8 @@ class Reconciler:
         body = {"observed_at": datetime.now(UTC).isoformat()}
         checks = ()
         if pull is None:
+            if execution.get("outcome") == "ready_for_check_in":
+                raise ReconcilerError("Completed ready execution's primary PR was not found")
             checkout = self.checkout(repo, remote, fetched)
             # With no remote branch there is nothing to flag, but posting keeps the observation fresh.
             if not git(checkout, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}",
@@ -253,12 +258,16 @@ class Reconciler:
                 if execution.get("outcome") != "checked_in":
                     body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
                 body["pr"]["merged_at"] = pull.merged_at
+                if execution.get("outcome") == "ready_for_check_in":
+                    verified_head = execution["output"]["revision"]["head"]
+                    if pull.head_sha != verified_head and github.is_on_branch(verified_head, pull.head_sha):
+                        body["pr"]["merged_head_ancestor"] = verified_head
                 check = self.config["repositories"][repo].get("post_merge_check")
                 # Deployment outages must not delay recording the merge itself.
                 if check and execution.get("outcome") == "checked_in":
                     body["deployment"] = self.deployment(github, pull.merge_commit_sha, check)
             draft_only = item.get("execution", {}).get("state", {}).get("publication_mode") == "draft"
-            if pull.state == "open" and not draft_only:
+            if pull.state == "open" and not draft_only and execution.get("outcome") != "ready_for_check_in":
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)
                 # None means the policy doesn't establish this phase's checks, so there is nothing to report.

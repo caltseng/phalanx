@@ -206,7 +206,10 @@ class FakeAPI:
         if path == "/repositories":
             return [{"id": repo, "remote": remote} for repo, remote in self.remotes.items()]
         if path.startswith("/operator/executions?"):
-            return {"items": self.closed if "kind=closed" in path else self.executions, "next_cursor": None}
+            rows = self.closed if "kind=closed" in path else self.executions
+            if "outcome=ready_for_check_in" in path:
+                rows = [row for row in rows if row.get("outcome") == "ready_for_check_in"]
+            return {"items": rows, "next_cursor": None}
         if path.endswith("/heartbeat"):
             self.heartbeats.append(body)
             return {}
@@ -401,7 +404,7 @@ class ReconcilerPassTest(unittest.TestCase):
         self.github["repo"] = FakeGitHub([merged], parents=(BASE, HEAD))
         reconciler = self.reconciler(api)
         self.assertEqual(reconciler.run_pass()["observed"], 0)
-        self.assertFalse(any("kind=closed" in path for path in api.calls))
+        self.assertTrue(any("outcome=ready_for_check_in" in path for path in api.calls))
         self.config["repositories"]["repo"]["post_merge_check"] = "deploy"
         with patch.object(self.github["repo"], "get_commit_checks", create=True,
                           return_value=CommitChecks(OTHER, (), ())) as read:
@@ -471,6 +474,8 @@ class ReconcilerPassTest(unittest.TestCase):
         def call(path, body=None):
             page = original_call(path, body)
             if "kind=closed" in path:
+                if "outcome=ready_for_check_in" in path:
+                    return page
                 # Reading this cursor would walk history beyond the bounded window.
                 self.assertNotIn("cursor=", path)
                 page["next_cursor"] = "older"
@@ -483,6 +488,57 @@ class ReconcilerPassTest(unittest.TestCase):
         self.config["repositories"]["repo"].pop("post_merge_check")
         self.reconciler(api).run_pass()
         self.assertEqual(api.heartbeats[-1]["deployment_checks"], {"repo": None})
+
+    def test_completed_ready_prs_are_observed_without_deployment_or_local_checks(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        primary = "https://github.com/example/repo/pull/7"
+        ready = dict(execution("ready", primary=primary), stage="delivery", outcome="ready_for_check_in",
+                     output={"revision": {"head": HEAD}},
+                     closed_at=(datetime.now(UTC) - timedelta(days=30)).isoformat())
+        api = FakeAPI([], {"repo": "https://github.com/example/repo"}, closed=[ready])
+        merged = replace(pull_request(OTHER, item_branch("ready"), state="closed"), merged=True,
+                         merge_commit_sha=BASE, merged_at="2026-11-24T06:33:57Z")
+        github = FakeGitHub([merged], parents=(BASE, OTHER))
+        self.github["repo"] = github
+        reconciler = self.reconciler(api)
+        for descendant in (True, False):
+            with self.subTest(descendant=descendant), patch.object(
+                    github, "is_on_branch", return_value=descendant) as compare:
+                api.posts.clear()
+                self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
+                compare.assert_called_once_with(HEAD, OTHER)
+                observed = api.posts[0][1]["pr"]
+                self.assertEqual(observed.get("merged_head_ancestor"), HEAD if descendant else None)
+        api.posts.clear()
+        with patch.object(github, "is_on_branch",
+                          side_effect=GitHubError("compare", "unavailable", 503, retry_after_seconds=1)):
+            self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
+            self.assertEqual(api.posts, [])
+        self.now += 120
+        github.pulls = [replace(merged, head_sha=HEAD)]
+        with patch.object(github, "is_on_branch", side_effect=AssertionError("No comparison needed")):
+            self.assertEqual(reconciler.run_pass()["errors"], [])
+        github.pulls = [pull_request(HEAD, item_branch("ready"))]
+        with patch.object(reconciler, "policy", side_effect=AssertionError("No local checks after completion")):
+            self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
+
+    def test_completed_ready_discovery_keeps_its_filter_across_pages(self):
+        primary = "https://github.com/example/repo/pull/7"
+        ready = dict(execution("ready", primary=primary), stage="delivery", outcome="ready_for_check_in")
+        api = FakeAPI([], {})
+        original_call = api.call
+
+        def call(path, body=None):
+            if "outcome=ready_for_check_in" in path:
+                api.calls.append(path)
+                if "cursor=next" in path:
+                    return {"items": [ready], "next_cursor": None}
+                return {"items": [dict(ready, stage="pr_reconciliation")], "next_cursor": "next"}
+            return original_call(path, body)
+
+        api.call = call
+        self.assertEqual(list(self.reconciler(api).executions()), [ready])
+        self.assertTrue(any("outcome=ready_for_check_in&cursor=next" in path for path in api.calls))
 
     def test_a_second_reconciler_cannot_share_the_state_directory(self):
         state = self.root / "state"

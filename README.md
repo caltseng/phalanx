@@ -38,7 +38,8 @@ Open `http://127.0.0.1:8000/operator/` to watch it. To run the work, set up a ru
 enables GitHub auto-merge only for that target; required reviews, checks and rulesets still gate
 the merge. Use `--target ready_for_check_in` to stop at a ready PR or `--target report` for a
 Markdown report. Owners and Captains can steer an open PR item between the two PR targets,
-including during direct delivery; a completed ready item still needs a rerun to merge.
+including during direct delivery. After ready completion, an owner's merge of the primary PR at
+the verified head or a descendant is recorded automatically and releases check-in dependencies.
 
 **One-time repository trust:** the owner must grant trust in the worker runtime before work can run.
 In the GitHub Copilot app, also approve the per-project repository trust card in the project's session;
