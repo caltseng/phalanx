@@ -7,7 +7,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
-from .auth import authenticate, require_coordinator, require_owner, require_runner, require_worker
+from .auth import (
+    authenticate, require_coordinator, require_owner, require_runner, require_same_origin, require_worker,
+)
 from .store import read_transaction, write_transaction
 from .transitions import PublicationMode, Stage
 from .intake_models import (
@@ -48,7 +50,8 @@ def repositories(request: Request):
     return run(request, intake.repositories)
 
 
-@router.post("/items", status_code=201, dependencies=[Depends(require_owner)])
+@router.post("/items", status_code=201,
+             dependencies=[Depends(require_owner), Depends(require_same_origin)])
 def create(request: Request, body: Intake, key: Key = None):
     omitted = set()
     if body.runner_affinity is None:

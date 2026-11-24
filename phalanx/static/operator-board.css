@@ -252,6 +252,31 @@ body { margin: 0; }
 #operator-report::backdrop { background: #0008; }
 #operator-report-content { white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 var(--mono); }
 
+#operator-create {
+  box-sizing: border-box; width: min(42rem, calc(100vw - 1rem)); max-height: 90dvh; overflow-y: auto;
+  margin: auto; padding: 1rem; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: 10px;
+}
+#operator-create::backdrop { background: #0008; }
+.create-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.create-heading h2 { margin: 0; font-size: 16px; }
+#operator-create fieldset { border: 0; padding: 0; margin: .75rem 0; min-width: 0; }
+#operator-create label { display: block; margin-top: .5rem; }
+#operator-create input, #operator-create select, #operator-create textarea {
+  box-sizing: border-box; width: 100%; font: inherit; color: var(--ink); background: var(--raised);
+  border: 1px solid var(--line-strong); border-radius: 6px; padding: .4rem .5rem;
+}
+#operator-create textarea { resize: vertical; }
+#operator-create .create-options { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; }
+#operator-create-errors { color: var(--attn); white-space: pre-wrap; overflow-wrap: anywhere; }
+#operator-create [aria-invalid="true"] { border-color: var(--attn); }
+#operator-create button, #operator-create input, #operator-create select, .actions .new-item { min-height: 44px; }
+.actions .new-item { min-width: 44px; font-size: 20px; }
+#operator-create :disabled { opacity: .65; cursor: default; }
+@media (max-width: 480px) {
+  #operator-create .create-options { grid-template-columns: 1fr; }
+}
+
 /*
  * Motion. Everything here is skipped under prefers-reduced-motion.
  * Rows are rebuilt on every read, so looping animations start at --clock (set by the script to minus

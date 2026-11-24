@@ -179,6 +179,7 @@
    * question is {prompt, options, proposedDefault?}. Dependencies are {title, milestone, status, reason?}.
    * Events are newest first: {at, event?, fromStage?, stage, status, reason?}. Dates are ISO strings.
    * source.openReport?(output) opens a stored report in the host. Reject failed reads.
+   * source.openNewItem?(trigger, created) opens host intake; call created(item) on acknowledgment.
    */
   function mount(root, source) {
     const slot = () => ({ rows: [], cursors: [null], next: null, updated: 0, failed: false, request: null });
@@ -194,10 +195,14 @@
     const counts = h("ul", { class: "counts", "aria-label": "Summary" });
     const theme = h("button", { type: "button", class: "ghost", "data-action": "theme" });
     const refresh = h("button", { type: "button", class: "ghost", "data-action": "refresh", text: "Refresh" });
+    const create = source.openNewItem && h("button", {
+      type: "button", class: "new-item", "aria-label": "New work item", title: "New work item", text: "+"
+    });
+    if (create) create.addEventListener("click", () => source.openNewItem(create, created));
     const header = h("header", { class: "bar" },
       h("div", { class: "brand" }, h("span", { class: "mark", "aria-hidden": "true" }),
         h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" })),
-      health, counts, h("div", { class: "actions" }, theme, refresh));
+      health, counts, h("div", { class: "actions" }, create, theme, refresh));
     const body = h("div", { class: "sections" });
     root.replaceChildren(header, announce, body);
 
@@ -311,6 +316,20 @@
         if (previous !== undefined && previous !== signature) state.changed.set(item.id, Date.now());
         state.seen.set(item.id, signature);
       }
+    }
+
+    function created(item) {
+      // Include the acknowledged intake immediately, even on a later queue page.
+      // Normal polling subsequently reconciles it with server-owned state.
+      if (disposed || state.open.rows.some(row => row.id === item.id)) return;
+      state.open.request?.abort();
+      state.open.request = null;
+      state.open.rows.push(item);
+      state.changed.set(item.id, Date.now());
+      const { scrollX: x, scrollY: y } = window;
+      render();
+      window.scrollTo(x, y);
+      announce.textContent = "Work item queued: " + item.title;
     }
 
     function delivery(item, now) {
@@ -846,5 +865,5 @@
     };
   }
 
-  window.PhalanxOperatorBoard = { mount };
+  window.PhalanxOperatorBoard = { mount, label };
 })();

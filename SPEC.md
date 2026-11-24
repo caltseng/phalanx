@@ -203,6 +203,15 @@ Phalanx will be used by people other than Caleb, alone or in teams, on a shared 
 
 Provide a read-only work board for the current state of Phalanx. Put work in progress first, with an explicit distinction between running, queued, waiting for input, and waiting for external checks. Show recently closed work below it, newest first, including failures and cancellations with their reports. Keep the full backlog and older history available through paginated views.
 
+- Scribe's header `+` (**New work item**) adds owner-authorized intake to the otherwise
+  read-only local board through the existing `POST /v1/items` contract. The form reads registered
+  repositories with an owner token, defaults to `checked_in` (displayed as **Merged**), and
+  supports goal, acceptance criteria, target, priority, label, publication mode and dependencies.
+  Tokens stay in memory; the anonymous loopback read path never authorizes intake. Browser
+  creation requires a matching Origin and rejects non-same-origin Fetch Metadata. Bearer API
+  clients without browser headers are unchanged. Retain one key and exact payload across an
+  uncertain submission until an idempotent retry settles it. Inline validation and queued-row
+  insertion preserve the current board view. See [the form contract](DASHBOARD.md#new-work-item-local-board).
 - In progress shows the item and repo, current stage, status, when it last advanced, and the specific wait reason or blocker. Put items needing the user’s judgment where they are easy to find. Include links to the visible worker chat and draft PR when available.
 - A selected item shows its recorded transition history, current attempt, next action or resume trigger, and prerequisites when relevant. Result events keep an existing persisted reason (including a wait reason); otherwise they derive one (at most 400 characters) from persisted outcome, issue, failed local check names/reasons, failure reason and applied candidate/head SHA. Redact recognizable credentials before truncating; do not copy task bodies or arbitrary evidence. Events correlate the recorded attempt and worker reference, stage from/to, PR URL and full applied SHA, without substituting newer execution evidence. Reuse transition history; no new cause/event store or capacity/rank wait inference. Keep stage and execution status separate. Show the recorded lifecycle rather than percent complete, since an item may loop back after a review or revision change.
 - Recently closed shows the outcome, close time, and one link to the verified PR or stored field report. If a merge was authorized and completed, distinguish checked in from ready for check-in.

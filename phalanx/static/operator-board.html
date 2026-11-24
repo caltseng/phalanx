@@ -27,5 +27,48 @@
     <p id="operator-report-status" role="status"></p>
     <pre id="operator-report-content"></pre>
   </dialog>
+  <dialog id="operator-create" class="phalanx-board" aria-labelledby="operator-create-heading">
+    <div class="create-heading">
+      <h2 id="operator-create-heading">New work item</h2>
+      <button id="operator-create-close" type="button" aria-label="Close new work item">Close</button>
+    </div>
+    <form id="operator-create-auth">
+      <p>Creating work requires owner access. The local board remains read-only.</p>
+      <label for="operator-create-token">Owner token</label>
+      <input id="operator-create-token" type="password" autocomplete="off" required>
+      <button type="submit">Unlock creation</button>
+    </form>
+    <form id="operator-create-form" hidden>
+      <fieldset id="operator-create-fields">
+        <label for="new-repository">Repository</label>
+        <select id="new-repository" name="repository_id" required></select>
+        <label for="new-goal">Goal (Markdown)</label>
+        <textarea id="new-goal" name="goal" rows="3" maxlength="16000" required></textarea>
+        <label for="new-criteria">Acceptance criteria (one per line)</label>
+        <textarea id="new-criteria" name="acceptance_criteria" rows="2"></textarea>
+        <div class="create-options">
+          <div><label for="new-target">Target</label><select id="new-target" name="target"></select></div>
+          <div><label for="new-priority">Priority</label>
+            <select id="new-priority" name="priority">
+              <option value="low">Low</option><option value="normal" selected>Normal</option><option value="urgent">Urgent</option>
+            </select>
+          </div>
+          <div><label for="new-label">Label (optional)</label><input id="new-label" name="label" maxlength="64"></div>
+          <div><label for="new-publication">Publication mode</label>
+            <select id="new-publication" name="publication_mode">
+              <option value="ready">Ready</option><option value="draft">Draft only</option>
+            </select>
+          </div>
+        </div>
+        <label for="new-dependencies">Dependencies (optional)</label>
+        <textarea id="new-dependencies" name="dependencies" rows="2" aria-describedby="new-dependencies-help"></textarea>
+        <p id="new-dependencies-help" class="faint">One item ID per line, optionally followed by a milestone:
+          checked_in (Merged), ready_for_check_in or report. Defaults to Merged.</p>
+      </fieldset>
+      <button id="operator-create-submit" type="submit">Queue work item</button>
+    </form>
+    <p id="operator-create-status" role="status"></p>
+    <div id="operator-create-errors" role="alert" tabindex="-1"></div>
+  </dialog>
 </body>
 </html>
