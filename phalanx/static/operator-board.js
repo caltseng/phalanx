@@ -13,7 +13,8 @@
   const STAGES = ["development", "pr_creation", "self_review", "pre_pr_validation", "pr_promotion",
     "pr_validation", "adversarial_review", "pr_reconciliation", "pr_revision", "check_in",
     "report_drafting", "report_review", "report_storage"];
-  const GLYPH = { attn: "!", run: "▶", wait: "◷", idle: "○", ok: "✓", fail: "✕", muted: "–" };
+  const GLYPH = { attn: "!", ok: "✓", fail: "✕", muted: "–" };
+  const DISPLAY_LABEL = { checked_in: "Merged" };
   const absolute = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
 
   function h(tag, props = {}, ...children) {
@@ -31,7 +32,7 @@
   }
 
   function label(value) {
-    return value ? String(value).replaceAll("_", " ") : "unknown";
+    return DISPLAY_LABEL[value] || (value ? String(value).replaceAll("_", " ") : "unknown");
   }
 
   function short(value) {
@@ -69,7 +70,10 @@
   function ago(value, now, attrs = {}) {
     const time = epoch(value);
     if (time == null) return h("span", { class: "faint", text: "—", ...attrs });
-    return h("time", { datetime: new Date(time).toISOString(), title: stamp(time), text: span(now - time), ...attrs });
+    const text = span(now - time) + " ago";
+    const { "aria-label": context, ...rest } = attrs;
+    return h("time", { datetime: new Date(time).toISOString(), title: stamp(time), ...rest,
+      "aria-label": [context, text, stamp(time)].filter(Boolean).join(" · "), text });
   }
 
   function safeUrl(value) {
@@ -89,7 +93,44 @@
   }
 
   function outcomeKey(item) {
+    if (item.outcome === "ready_for_check_in" && item.prState === "merged") return "checked_in";
     return String(item.outcome || "").toLowerCase().replaceAll(" ", "_");
+  }
+
+  function shortfall(item) {
+    const outcome = outcomeKey(item);
+    if (!item.target || !outcome || outcome === item.target ||
+        (item.target === "report" && outcome === "report_stored")) return "";
+    const rank = { draft_published: 1, ready_for_check_in: 2, checked_in: 3 };
+    if (rank[outcome] && rank[item.target] && rank[outcome] >= rank[item.target]) return "";
+    return "wanted: " + label(item.target).toLowerCase();
+  }
+
+  function mark(kind) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    for (const [key, value] of Object.entries({
+      viewBox: "0 0 16 16", width: "1em", height: "1em", "aria-hidden": "true",
+      focusable: "false", class: "status-mark mark-" + kind
+    })) svg.setAttribute(key, value);
+    const path = (d, attrs = {}) => {
+      const node = document.createElementNS(svg.namespaceURI, "path");
+      for (const [key, value] of Object.entries({ d, ...attrs })) node.setAttribute(key, value);
+      svg.append(node);
+    };
+    if (kind === "run") {
+      path("M8 .5 11.5 8 8 10.5 4.5 8Z", { fill: "currentColor" });
+      path("M8 10V15", { stroke: "currentColor", "stroke-width": "1.5" });
+    } else if (kind === "flag" || kind === "notify") {
+      path("M3 15V1", { stroke: "currentColor", "stroke-width": "1.5" });
+      path("M4 2Q7 0 10 2T15 2L12 6 15 9Q12 11 9 9T4 9Z",
+        { class: "pennant", fill: kind === "notify" ? "var(--flag)" : "none",
+          stroke: "var(--flag)", "stroke-width": "1.5" });
+    } else {
+      path("M8 1 14 3V7Q14 12 8 15 2 12 2 7V3Z",
+        { fill: "none", stroke: "currentColor", "stroke-width": "1.5" });
+      if (kind === "wait") path("M5 6H11M5 9H11", { stroke: "currentColor", "stroke-width": "1.5" });
+    }
+    return svg;
   }
 
   function tone(item) {
@@ -143,7 +184,7 @@
     const slot = () => ({ rows: [], cursors: [null], next: null, updated: 0, failed: false, request: null });
     const state = {
       open: slot(), closed: slot(), flags: slot(), captains: slot(),
-      expanded: null, expandedAt: 0, details: new Map(), flagGroups: new Set(), seen: new Map(), changed: new Map()
+      expanded: null, expandedAt: 0, endedOpen: false, details: new Map(), flagGroups: new Set(), seen: new Map(), changed: new Map()
     };
     const enabled = { open: true, closed: true, flags: Boolean(source.flags), captains: Boolean(source.captains) };
     let disposed = false;
@@ -367,12 +408,28 @@
     function chips(flags) {
       return flags.map(flag => h("span", { class: "chip " +
         (flag.kind === "deployed" ? "c-good" : flag.notifyOwner ? "c-attn" : "c-warn"),
-        title: flag.reason + " · " + flag.recovery, text: label(flag.kind) }));
+        title: flag.reason + " · " + flag.recovery }, flagGlyph(flag.notifyOwner), " ",
+        h("span", { text: label(flag.kind) })));
     }
 
     function glyph(kind, text) {
       return h("span", { class: "glyph t-" + kind, title: text },
-        h("span", { "aria-hidden": "true", text: GLYPH[kind] }), h("span", { class: "sr-only", text }));
+        ["run", "wait", "idle"].includes(kind) ? mark(kind) : h("span", { "aria-hidden": "true", text: GLYPH[kind] }),
+        h("span", { class: "sr-only", text }));
+    }
+
+    function flagGlyph(notify) {
+      const text = notify ? "notifies owner" : "flag";
+      return h("span", { class: "glyph flag-mark", title: text },
+        mark(notify ? "notify" : "flag"), h("span", { class: "sr-only", text }));
+    }
+
+    function captainReference(id) {
+      const captain = state.captains.rows.find(row => row.id === id);
+      const word = captain?.live ? "live" : captain?.stale ? "stale" : captain?.state === "ended" ? "ended" : "status unavailable";
+      return h("span", { class: "captain-ref" + (word === "ended" ? " captain-ended" : "") },
+        glyph(captain?.live ? "run" : captain?.stale ? "attn" : "muted", word),
+        " Captain " + short(id) + " · " + word);
     }
 
     function itemRow(item, kind, index, now) {
@@ -382,14 +439,15 @@
       const expanded = state.expanded === item.id;
       const title = h("button", { type: "button", class: "title", "data-item": item.id, "data-focus": "item:" + item.id,
         "aria-expanded": String(expanded), "aria-controls": "detail-" + item.id, title: item.title, text: item.title });
-      const stateText = closed ? label(item.outcome) : label(item.status);
+      const stateText = closed ? label(outcomeKey(item)) : label(item.status);
       const cells = closed ? [
-        h("span", { class: "stage", text: label(item.outcome) }),
-        ago(item.closedAt, now, { class: "age" }),
+        h("span", { class: "stage", text: stateText }),
+        h("span", { class: "age" }, "closed ", ago(item.closedAt, now)),
         prCell(item),
-        h("span", { class: "dur", title: "Total time from intake to close",
-          text: epoch(item.createdAt) && epoch(item.closedAt) ? span(epoch(item.closedAt) - epoch(item.createdAt)) : "—" }),
-        h("span", { class: "reason faint", text: item.target ? "target " + label(item.target) : "" })
+        h("span", { class: "dur", title: "Intake " + stamp(item.createdAt) + " · Closed " + stamp(item.closedAt) },
+          epoch(item.createdAt) && epoch(item.closedAt) ? "took " + span(epoch(item.closedAt) - epoch(item.createdAt)) : "—",
+          h("span", { class: "sr-only", text: " · Intake " + stamp(item.createdAt) + " · Closed " + stamp(item.closedAt) })),
+        h("span", { class: "reason faint", text: shortfall(item) })
       ] : [
         h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status),
           text: label(item.stage) + (item.publicationMode === "draft" ? " · draft only" : "") }),
@@ -462,7 +520,7 @@
       const pr = safeUrl(item.primaryPrUrl || (item.output?.kind === "pr" ? item.output.url : null));
       box.append(h("div", { class: "goal", text: item.goal || item.title }));
       box.append(facts([
-        ["Status", item.outcome ? label(item.outcome) : label(item.status)],
+        ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],
         ["Stage", h("span", {}, label(item.stage), " · ", ago(item.lastAdvancedAt, now))],
         ["Target", item.target && label(item.target)],
         ["Publication", item.publicationMode === "draft" ? "Draft only; no promotion or merge" : "Ready"],
@@ -477,7 +535,7 @@
         ["Recheck", item.recheckAt && stamp(item.recheckAt)],
         ["Attempt", data.attempt && h("code", { text: short(data.attempt), title: data.attempt })],
         ["Writer", writer && h("span", {}, label(writer.state), " · ", writer.runtime || "runtime unknown",
-          writer.captainId ? " · Captain " + short(writer.captainId) : "",
+          writer.captainId ? h("span", {}, " · ", captainReference(writer.captainId)) : "",
           writer.sessionId ? h("code", { text: " " + short(writer.sessionId), title: writer.sessionId }) : "",
           sessionUrl ? h("span", {}, " · ", h("a", { href: sessionUrl, text: "session" })) : "")],
         ["Writer note", writer?.progressNote],
@@ -491,7 +549,7 @@
       if (flags.length) {
         const list = h("ul", { class: "plain" });
         for (const flag of flags) {
-          list.append(h("li", {}, h("span", { class: "chip " + (flag.notifyOwner ? "c-attn" : "c-warn"), text: label(flag.kind) }),
+          list.append(h("li", {}, ...chips([flag]),
             " " + flag.reason + " ", h("span", { class: "faint", text: "→ " + flag.recovery + " · " }), ago(flag.firstSeen, now)));
         }
         box.append(h("div", { class: "block" }, h("h4", { text: "Flags" }), list));
@@ -586,7 +644,7 @@
         });
         const reasons = [...new Set(members.map(flag => flag.reason))];
         group.append(h("summary", { class: "line", "data-focus": "flag:" + kind },
-          glyph(notify ? "attn" : "wait", notify ? "notifies owner" : "flag"),
+          flagGlyph(notify),
           h("span", { class: "name" }, h("strong", { text: label(kind) }), h("span", { class: "faint", text: " ×" + members.length })),
           h("span", { class: "reason", title: reasons.join("\n"), text: reasons.length === 1 ? reasons[0] : reasons.length + " distinct reasons" }),
           h("span", { class: "age" }, ago(oldest, now, { title: "Oldest first seen " + stamp(oldest) }))));
@@ -594,7 +652,7 @@
           const subject = titles.get(flag.executionId) || titles.get(flag.itemId) ||
             (flag.itemId ? "item " + short(flag.itemId) : flag.captainId ? "Captain " + short(flag.captainId) : "system");
           return h("li", { class: "line" }, h("span", {}),
-            h("span", { class: "name", title: subject, text: subject }),
+            h("span", { class: "name", title: subject }, flag.captainId ? captainReference(flag.captainId) : subject),
             h("span", { class: "reason", title: flag.reason + "\nRecovery: " + flag.recovery,
               text: flag.reason + " → " + flag.recovery }),
             ago(flag.firstSeen, now, { class: "age" }));
@@ -607,11 +665,12 @@
       const health = captain.live ? "run" : captain.stale ? "attn" : "muted";
       const word = captain.live ? "live" : captain.stale ? "stale" : label(captain.state);
       const focus = (captain.focus || []).map(id => titles.get(id) || short(id));
-      return h("li", { class: "row t-" + health }, h("div", { class: "line" },
+      return h("li", { class: "row t-" + health + (captain.state === "ended" ? " captain-ended" : "") }, h("div", { class: "line" },
         glyph(health, word),
         h("span", { class: "name" }, h("strong", { text: "Captain " + short(captain.id) }),
           h("span", { class: "faint", text: " " + word })),
-        h("span", { class: "stat", title: "Heartbeat " + stamp(captain.heartbeatAt) }, h("span", { class: "beat", text: "♥" }), " ", ago(captain.heartbeatAt, now)),
+        h("span", { class: "stat" }, h("span", { class: captain.live ? "beat" : "", "aria-hidden": "true", text: "♥" }),
+          " heartbeat ", ago(captain.heartbeatAt, now)),
         h("span", { class: "stat", text: "wakes " + (captain.wakeCount ?? 0) }),
         h("span", { class: "stat", title: captain.charterRevision || "", text: captain.charterRevision ? "charter " + captain.charterRevision.slice(0, 7) : "no charter" }),
         h("span", { class: "reason", title: [focus.join(", "), captain.handoffNote].filter(Boolean).join("\n"),
@@ -652,6 +711,8 @@
 
     function render() {
       if (disposed) return;
+      const endedGroup = body.querySelector(".ended-captains");
+      if (endedGroup) state.endedOpen = endedGroup.open;
       const now = Date.now();
       for (const [id, at] of state.changed) if (now - at >= CHANGED_MS) state.changed.delete(id);
       const focused = root.contains(document.activeElement) ? document.activeElement.dataset?.focus : null;
@@ -692,9 +753,20 @@
       }
       if (enabled.captains) {
         const live = state.captains.rows.filter(captain => captain.live).length;
+        const current = state.captains.rows.filter(captain => captain.state !== "ended")
+          .sort((a, b) => Number(b.live) - Number(a.live));
+        const ended = state.captains.rows.filter(captain => captain.state === "ended");
+        const content = h("div", {}, list(current.map(captain => captainRow(captain, titles, now)),
+          state.captains.failed ? "Captains unavailable." : "No live Captain.", "captains"));
+        if (ended.length) {
+          const group = h("details", { class: "ended-captains", open: state.endedOpen });
+          group.append(h("summary", { "data-focus": "ended-captains", text: "Ended (" + ended.length + ")" }),
+            list(ended.map(captain => captainRow(captain, titles, now)), "", "captains"));
+          group.addEventListener("toggle", () => { if (group.isConnected) state.endedOpen = group.open; });
+          content.append(group);
+        }
         sections.push(section("captains", "Captains", live + "/" + state.captains.rows.length, live ? "" : "attn",
-          list(state.captains.rows.map(captain => captainRow(captain, titles, now)),
-            state.captains.failed ? "Captains unavailable." : "No Captain has registered.", "captains")));
+          content));
       }
       sections.push(section("active", "Active", active.length + (active.length ? more : ""), "",
         list(active.map(item => itemRow(item, "open", index, now)), "Nothing running.", "items")));

@@ -1,12 +1,42 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from urllib.request import urlopen
 
+from phalanx import captains
+from phalanx.store import write_transaction
+
 from test_bootstrap import OWNER, REQUEST_TIMEOUT, RUNNER, ServerFixture
 
 
 class OperatorWebTest(ServerFixture, unittest.TestCase):
+    def test_board_captain_read_uses_server_liveness(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "captains.sqlite3"
+            server = self.start_server(path, PHALANX_LOCAL_BOARD="1")
+            try:
+                now = datetime.now(UTC)
+                ids = {}
+                with write_transaction(path) as db:
+                    for kind in ("live", "stale", "ended"):
+                        row = captains.register(db, captains.CaptainRegistration(
+                            session_ref=kind, charter_revision="test"))
+                        ids[kind] = row["id"]
+                    db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                               ((now - captains.STALE - timedelta(seconds=1)).isoformat(), ids["stale"]))
+                    db.execute("UPDATE captains SET state='ended' WHERE id=?", (ids["ended"],))
+                    expected = {row["id"]: captains.is_live(row, now)
+                                for row in db.execute("SELECT * FROM captains")}
+                status, page = self.get("/v1/captains?limit=25")
+                self.assertEqual(status, 200)
+                rows = {row["id"]: row for row in page["captains"]}
+                self.assertEqual({key: row["live"] for key, row in rows.items()}, expected)
+                self.assertEqual([rows[ids[kind]]["stale"] for kind in ids], [False, True, False])
+                self.assertEqual([rows[ids[kind]]["live"] for kind in ids], [True, False, False])
+            finally:
+                self.stop_server(server)
+
     def test_shell_and_assets_preserve_api_authentication(self):
         with TemporaryDirectory() as directory:
             server = self.start_server(Path(directory) / "operator.sqlite3")

@@ -45,6 +45,8 @@ class ObservedPull(Payload):
     # (None when it couldn't), and GitHub's merged_at.
     merge_method: Literal["merge", "squash_or_rebase"] | None = None
     merged_at: AwareDatetime | None = None
+    additions: Annotated[int, Field(strict=True, ge=0)] | None = None
+    deletions: Annotated[int, Field(strict=True, ge=0)] | None = None
 
     @model_validator(mode="after")
     def merge_details(self):
@@ -84,6 +86,7 @@ class Observation(Payload):
     # from the reconciler's mapping. The server prefers the item's own target_branch.
     target_base: Ref | None = None
     deployment: Deployment | None = None
+    duplicate_count: Annotated[int, Field(strict=True, ge=0)] | None = None
 
     @model_validator(mode="after")
     def consistent(self):

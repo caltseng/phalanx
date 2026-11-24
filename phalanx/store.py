@@ -6,11 +6,11 @@ from tempfile import TemporaryDirectory
 from threading import Condition
 
 from .dependency_schema import DEPENDENCY_SCHEMA
-from .direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, DIRECT_SCHEMA
+from .direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, DIRECT_SCHEMA, SESSION_ARCHIVE_SCHEMA
 from .dispatch_schema import ADOPTION_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
-from .operator_schema import BLOCKER_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
+from .operator_schema import BLOCKER_SCHEMA, DASHBOARD_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
 from .reconciliation_schema import RECONCILIATION_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
@@ -100,6 +100,8 @@ MIGRATIONS = (
     RECONCILIATION_SCHEMA,
     CAPTAIN_SHIFT_SCHEMA,
     CLOSED_WRITER_MIGRATION,
+    DASHBOARD_SCHEMA,
+    SESSION_ARCHIVE_SCHEMA,
 )
 
 

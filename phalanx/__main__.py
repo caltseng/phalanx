@@ -13,6 +13,7 @@ from .captain_loop import add_captain_command, run_captain
 from .captain_relay import add_relay_command, run_relay
 from .github import GitHubError
 from .issue_intake import ingest_issue
+from .muster import add_muster_command, run_muster
 from .reconciler import ReconcilerError, add_reconcile_command, run_reconcile
 from .shift import add_shift_command, run_shift
 from .workspaces import WorkspaceError
@@ -76,6 +77,7 @@ def main() -> None:
     intake.add_argument("--publication-mode", choices=["ready", "draft"], default="ready",
                         help="direct sessions: stop at a verified draft instead of promoting or merging")
     intake.add_argument("--key", help="reuse this key when retrying the same request")
+    intake.add_argument("--label", help="group related items under this label on the work board")
     intake.add_argument("--after", type=prerequisite, action="append", default=[],
                         metavar="ITEM[:MILESTONE]",
                         help="wait for ITEM to reach MILESTONE (default checked_in); repeatable")
@@ -126,6 +128,7 @@ def main() -> None:
     add_work_command(commands)
     add_reconcile_command(commands)
     add_shift_command(commands)
+    add_muster_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "server":
@@ -160,6 +163,8 @@ def main() -> None:
                 parser.exit(1)
         elif args.command == "shift":
             run_shift(args)
+        elif args.command == "muster":
+            run_muster(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
@@ -170,6 +175,8 @@ def main() -> None:
                     "priority": args.priority, "publication_mode": args.publication_mode}
             if args.after:
                 body["dependencies"] = args.after
+            if args.label is not None:
+                body["label"] = args.label
             result = api_request(args.api_url, "/v1/items", key=args.key, body=body)
             print(json.dumps(result, indent=2))
         elif args.command == "ingest-issue":

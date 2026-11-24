@@ -115,6 +115,8 @@ class PullRequest:
     merge_commit_sha: str | None
     mergeable: bool | None
     merged_at: str | None = None
+    additions: int | None = None
+    deletions: int | None = None
 
 
 def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
@@ -137,6 +139,8 @@ def _pull_request(data: dict, *, exact: bool = False) -> PullRequest:
         merge_commit_sha=data["merge_commit_sha"],
         mergeable=data["mergeable"] if exact else data.get("mergeable"),
         merged_at=data.get("merged_at"),
+        additions=data.get("additions"),
+        deletions=data.get("deletions"),
     )
     if (
         type(result.number) is not int or result.number < 1

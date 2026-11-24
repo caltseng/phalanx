@@ -108,6 +108,27 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             self.assertEqual(cli.returncode, 0, cli.stderr)
             self.assertEqual(json.loads(cli.stdout), item)
 
+    def test_label_cli_intake_steering_and_clear(self):
+        self.create()
+        command = [sys.executable, "-m", "phalanx", "--api-url", self.url, "intake",
+                   "example", "Grouped report", "--target", "report", "--label", "PH-29a"]
+        cli = subprocess.run(command, env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER),
+                             capture_output=True, text=True, timeout=10)
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        item = json.loads(cli.stdout)
+        self.assertEqual(item["label"], "PH-29a")
+        route = f"/v1/items/{item['id']}/executions/{item['execution']['id']}"
+        for label in ("wave.2", None):
+            status, item = self.request(route, OWNER, {
+                "expected_version": item["execution"]["version"], "label": label,
+            }, method="PATCH")
+            self.assertEqual(status, 200, item)
+            self.assertEqual(item.get("label"), label)
+        status, _ = self.request(route, OWNER, {
+            "expected_version": item["execution"]["version"], "label": "bad label",
+        }, method="PATCH")
+        self.assertEqual(status, 422)
+
     def test_pr_intake_defaults_to_checked_in_and_keeps_explicit_targets(self):
         self.assertEqual(self.submit("/v1/repositories", {"id": "example", "remote": REMOTE})[0], 200)
         status, item = self.submit("/v1/items", {"repository_id": "example", "goal": "Fix the bug"})

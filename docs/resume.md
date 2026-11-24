@@ -4,7 +4,7 @@ Use this guide after a restart, a reboot or a crashed process, when the database
 
 ## Before you start
 
-Open your private local muster runbook (see [Install Phalanx](install.md#choose-and-record-your-muster-directory)). Phalanx has no install locator or resume command: nothing finds your install for you. You need from the runbook:
+Open your private local muster runbook (see [Install Phalanx](install.md#choose-and-record-your-muster-directory)). The optional [direct muster locator](../README.md#direct-muster-discovery-and-status) finds an existing direct configuration and supports read-only `muster status`; it does not start services or replace the restart procedure. Without that locator/layout, use the explicit paths from your runbook. You need:
 
 - the muster directory, Phalanx checkout and virtual environment;
 - the absolute `PHALANX_DB` path;

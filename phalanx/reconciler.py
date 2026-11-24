@@ -227,7 +227,7 @@ class Reconciler:
         primary = execution.get("primary_pr_url")
         if execution.get("outcome") == "checked_in":
             primary = primary or execution["output"]["url"]
-        pull = self.find_pull(github, owner, branch, primary)
+        pull, duplicate_count = self.find_pull(github, owner, branch, primary)
         body = {"observed_at": datetime.now(UTC).isoformat()}
         checks = ()
         if pull is None:
@@ -241,10 +241,12 @@ class Reconciler:
                 ).returncode == 0
         else:
             body["target_base"] = base
+            body["duplicate_count"] = duplicate_count
             body["pr"] = {
                 "number": pull.number, "state": pull.state, "merged": bool(pull.merged), "draft": pull.draft,
                 "head_ref": pull.head_ref, "head_sha": pull.head_sha, "base_ref": pull.base_ref,
                 "base_sha": pull.base_sha, "merge_commit": pull.merge_commit_sha, "mergeable": pull.mergeable,
+                "additions": pull.additions, "deletions": pull.deletions,
             }
             if pull.merged and pull.merge_commit_sha and pull.base_ref == base:
                 # The server records how and when the PR merged with the delivery.
@@ -316,13 +318,16 @@ class Reconciler:
 
     @staticmethod
     def find_pull(github, owner, branch, primary):
-        if primary:
-            return github.get_pull_request(int(primary.rstrip("/").rsplit("/", 1)[1]))
         pulls = github.list_matching_pull_requests(head_owner=owner, head=branch)
-        # The open PR, else the newest closed one.
-        listed = max(pulls, key=lambda pull: (pull.state == "open", pull.number), default=None)
+        if primary:
+            number = int(primary.rstrip("/").rsplit("/", 1)[1])
+        else:
+            # The open PR, else the newest closed one.
+            listed = max(pulls, key=lambda pull: (pull.state == "open", pull.number), default=None)
+            number = None if listed is None else listed.number
         # The list endpoint omits merged and mergeable, so re-read the PR for exact values.
-        return None if listed is None else github.get_pull_request(listed.number)
+        pull = None if number is None else github.get_pull_request(number)
+        return pull, sum(other.state == "open" and other.number != pull.number for other in pulls) if pull else 0
 
     def checkout(self, repo, remote, fetched):
         """Verify the mapped checkout's origin is the registered remote, and fetch it once a pass."""
@@ -429,13 +434,21 @@ def command_notifier(argv):
 def add_reconcile_command(commands):
     parser = commands.add_parser(
         "reconcile", help="observe GitHub and git for open items, run pre-PR checks, and notify on flags")
-    parser.add_argument("--config", required=True, type=Path, help="runner configuration JSON")
-    parser.add_argument("--state", required=True, type=Path, help="scratch directory outside every checkout")
+    parser.add_argument("--config", type=Path, help="runner configuration JSON (otherwise discover muster)")
+    parser.add_argument("--state", type=Path, help="scratch directory outside every checkout")
+    parser.add_argument("--home", help="existing muster directory (otherwise PHALANX_HOME or user locator)")
     parser.add_argument("--interval-seconds", type=float, default=PASS_SECONDS)
     parser.add_argument("--once", action="store_true", help="run one pass and exit")
 
 
 def run_reconcile(args):
+    if args.config is None or getattr(args, "home", None) is not None:
+        from .muster import direct_config
+        home, args.config = direct_config("runner", getattr(args, "home", None))
+        if args.state is None:
+            args.state = home / "reconciler"
+    if args.state is None:
+        raise ReconcilerError("Pass --state with an explicit --config")
     config = json.loads(args.config.read_text(encoding="utf-8-sig"))
     github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
     if not github_token:

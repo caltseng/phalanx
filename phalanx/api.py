@@ -12,6 +12,7 @@ from .captains import router as captains_router
 from .dispatch_api import router as dispatch_router
 from .flags import router as flags_router
 from .intake_api import router as intake_router
+from .muster_api import configured_home, router as muster_router
 from .operator_api import router as operator_router
 from .operator_web import assets as operator_assets, router as operator_web_router
 from .store import connect, migrate, write_transaction
@@ -23,6 +24,7 @@ async def lifespan(app: FastAPI):
     app.state.credentials = Credentials.from_env()
     app.state.local_board = local_board()
     app.state.database_path = database_path()
+    app.state.muster_home = configured_home()
     dispatch.LEASE_SECONDS = lease_seconds()
     migrate(app.state.database_path)
     with write_transaction(app.state.database_path) as db:
@@ -87,3 +89,4 @@ app.include_router(operator_router)
 app.include_router(captains_router)
 app.include_router(flags_router)
 app.include_router(writers_router)
+app.include_router(muster_router)

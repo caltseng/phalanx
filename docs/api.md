@@ -2,6 +2,38 @@
 
 The HTTP API is the only path to queue state. Owner routes use the owner bearer token and runner routes the runner token. In the local deployment, the runner token identifies a trusted runner role; use one stable runner ID per runner across restarts, which scopes capacity and recovery within that role. All routes below are under `/v1` unless shown in full.
 
+## Direct muster status
+
+`GET /v1/muster/status` requires an owner or runner bearer token, even with the local board
+enabled. It returns `status`, `identity.home` (the API's resolved `PHALANX_HOME`, or null when
+not configured), live `captains`, registered open `writers`, `reconcilers` with `last_seen`,
+`age_seconds` and `stale`, `dispatch_paused`, and `observed_at`. It is a read-only snapshot,
+contains no credentials and performs no local client database reads. See
+[muster discovery and status](../README.md#direct-muster-discovery-and-status).
+
+## Session archival records
+
+The runtime session tools perform archival. The API only records and exposes evidence:
+
+| Route | Access | Purpose |
+| --- | --- | --- |
+| `GET /session-archives?session_id=ID` | Owner or runner | Returns `record` (or null), registered `writers`, and `active`: whether a writer, Captain handoff or creator cleanup is still unfinished |
+| `PUT /session-archives` | Owner or runner | Records `session_id`, `outcome` (`archived`, `blocked`, `refused`), `reason` and `reported_by` (the reporting native session ID) |
+
+An `archived` write is refused while the registered writer is active, or while its Captain has
+not ended, still owns intents/writer cleanup, or has neither a registered successor nor a charter
+stop note. The caller verifies creator authority, runtime termination and local-work preservation
+immediately before archival with `shift archive-check`; the API does not access local Git or call
+any runtime. An existing `archived` record is immutable. A `refused` record cannot be overwritten
+by another block/refusal, only by a separately verified `archived` confirmation. Blocks and refusals
+derive a persistent `orphan_session` flag with the reason, even without a current session inventory.
+
+Captain reads (`GET /captains` and `GET /captains/{id}`) include `cleanup_pending` and up to 100
+`ended_writers` needing cleanup, untried then least recently checked first, with their item, execution and session IDs and any
+local-work block. Archived/refused writers leave this actionable list; refusals remain visible
+through their flags and individual archival record. These records do not advance work or clear
+other execution flags. See [creator-owned cleanup](direct-path.md#creator-owned-session-cleanup).
+
 ## Work items and executions
 
 | Route | Access | Purpose |
@@ -71,11 +103,69 @@ Both owner and runner tokens can call these routes. With `PHALANX_LOCAL_BOARD=1`
 | --- | --- |
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
-| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
+| `GET /v1/operator/overview` | Section counts, 24-hour outcomes, dispatch paused/on, oldest eligible queued age and `generated_at` for data age. |
+| `GET /v1/operator/groups/{label}` | Current executions with the label, a paginated item list and an outcome/size/time rollup. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`, and a `recover_claim` event records an adoption. |
 
 Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the returned `next_cursor` as `cursor` on the same route and list kind until it is null. Pages read live state: an open execution entering or leaving the input-wait group can cross the cursor between requests, so refresh from the first page to see the current order. New timeline events and closures normally precede the current cursor. The timestamp and version fields describe the persisted state.
 
+Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. Outcome and closure-time filters apply only to closed lists. Filtered pages inspect at most 2,000 indexed candidates and may return an empty page with a continuation cursor. Lists, overview and groups support weak `ETag`/`If-None-Match` conditional reads (`private, no-cache`); unchanged state returns 304. Display ages alone do not invalidate the token: calculate elapsed time from the retained snapshot's timestamps. State changes and retry, lease and 24-hour closure boundaries invalidate it.
+
+Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
+
 `last_advanced_at` records entry into the current stage, and `last_progress_at` the latest execution transition. Wait details include the stored reason, resume trigger and age of the current wait. A scheduled retry appears as `retry_at_ms` and a due external gate recheck as `recheck_at_ms`, both in Unix milliseconds. `primary_pr_url` is the recorded primary PR. `worker_reference` is the latest attempt's opaque worker ID, which the runner republishes on each renewal, and `worker_url` is the bridge's optional HTTPS chat link. When the runner is blocked on an item it would otherwise show as plainly running, such as an unreachable runtime or an ambiguous worker, it sends the reason as `blocker` with each renewal, and the item's `wait_reason` shows it until a renewal omits it. `version` is the execution version a reply must name. The timeline lists blocking `prerequisites` and, while the item waits for input, the current `question`. The draft state has no current read mapping. Report output URLs use the authenticated report route.
+
+### Read one item's correlated timeline
+
+Use the authenticated API, not direct database queries. Inspect the item to find its
+current `execution.id` (`GET /v1/items/ITEM_ID`); use
+`GET /v1/items/ITEM_ID/executions` to find earlier executions after a rerun.
+Then page that execution's existing operator timeline:
+
+```powershell
+$base = "http://127.0.0.1:8000"
+$headers = @{ Authorization = "Bearer $env:PHALANX_OWNER_TOKEN" }
+$item = Invoke-RestMethod "$base/v1/items/ITEM_ID" -Headers $headers
+$route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100"
+do {
+    $page = Invoke-RestMethod $route -Headers $headers
+    $page.events | Select-Object version, attempt_id, worker_reference, from_stage, stage, reason, pr_url, candidate
+    $route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100&cursor=$($page.next_cursor)"
+} while ($page.next_cursor)
+```
+
+The response's `item.item_id` and `item.id` correlate the work item and execution.
+Events are newest first; `attempt_id` and that attempt's `worker_reference` identify
+the worker when recorded (otherwise null). `from_stage` and `stage` show a stage change.
+`pr_url` is the PR recorded on that event, and `candidate` is its full applied
+candidate/head SHA, not the execution's possibly newer revision.
+
+For example, the paginated backward-transition fixture in
+`tests/test_operator.py::test_backward_result_reasons_correlate_the_recorded_attempt_and_revision`
+includes this event (other response fields omitted):
+
+```json
+{
+  "version": 4,
+  "attempt_id": "result-attempt-1",
+  "worker_reference": "worker-1",
+  "from_stage": "pr_promotion",
+  "stage": "development",
+  "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",
+  "pr_url": "https://github.com/a/b/pull/42",
+  "candidate": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}
+```
+
+An existing `details.reason` or state `wait.reason` takes precedence, including
+on forward results that enter an external wait. Otherwise result reasons derive
+only from persisted outcome, issue, failed local check names and reasons, failure
+reason, and applied SHA. Derived reasons are at most 400 characters, with bounded
+check/failure excerpts and a reserved short-SHA suffix. Recognizable GitHub tokens,
+bearer credentials and named secret assignments are redacted before truncation.
+Task bodies, reports, review notes and other arbitrary evidence are not copied
+into these reasons. Existing pause/retry waits are unchanged; no slot, capacity or
+rank-position wait reasons are inferred on the direct path.
 
 ## Runner PR observations
 
