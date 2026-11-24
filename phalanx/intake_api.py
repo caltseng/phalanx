@@ -53,6 +53,8 @@ def create(request: Request, body: Intake, key: Key = None):
     omitted = set()
     if body.runner_affinity is None:
         omitted.add("runner_affinity")
+    if body.label is None:
+        omitted.add("label")
     if not body.dependencies:
         omitted.add("dependencies")
     if body.publication_mode is PublicationMode.READY:

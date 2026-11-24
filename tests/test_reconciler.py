@@ -109,6 +109,9 @@ class ObservationRouteTest(PullObservationFixture, unittest.TestCase):
         self.assertEqual(set(self.flags()), {"pr_closed"})
         self.request(self.post, RUNNER, self.body(4, pr=self.pull(state="closed", merged=True)))
         self.assertEqual(self.flags(), {})
+        execution_id = self.execution.rsplit("/", 1)[1]
+        status, timeline = self.request(f"/v1/operator/executions/{execution_id}/timeline", OWNER)
+        self.assertEqual((status, timeline["item"]["pr"]["state"]), (200, "merged"))
         self.request(self.post, RUNNER, self.body(5, merged_branch=True))
         self.assertEqual(set(self.flags()), {"unpublished_branch_merged"})
 
@@ -280,7 +283,8 @@ class ReconcilerPassTest(unittest.TestCase):
 
     def test_a_rate_limited_repository_waits_while_others_are_observed(self):
         self.config["repositories"] = {"repo": {"base_branch": "main"}, "other": {"base_branch": "main"}}
-        self.github["repo"] = FakeGitHub([pull_request(HEAD, item_branch("one"))])
+        first = replace(pull_request(HEAD, item_branch("one")), additions=17, deletions=3)
+        self.github["repo"] = FakeGitHub([first, replace(first, number=8)])
         self.github["other"] = FakeGitHub(error=GitHubError("get pull request", "rate limited", 403,
                                                             retry_after_seconds=30))
         api = FakeAPI([execution("one", primary="https://github.com/example/repo/pull/7"),
@@ -292,6 +296,8 @@ class ReconcilerPassTest(unittest.TestCase):
         (item, body), = api.posts
         self.assertEqual(item, "one")
         self.assertEqual(body["pr"]["head_sha"], HEAD)
+        self.assertEqual((body["pr"]["additions"], body["pr"]["deletions"], body["duplicate_count"]),
+                         (17, 3, 1))
         self.assertEqual(body["feedback"], ["alice on app.py: rename this"])
         self.assertNotIn("checks", body)
 

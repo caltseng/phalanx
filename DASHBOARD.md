@@ -124,7 +124,6 @@ Every page reads state through the API. Filters live in the URL: repository, lab
 | `/operator/queue` | The full open backlog, paginated and filterable. |
 | `/operator/history` | Closed executions, paginated and filterable, with counts for the filter. |
 | `/operator/groups/{label}` | Every item with that label, with a rollup. |
-| `/operator/runners` | Old runner path: runners, heartbeats and active attempts. Drop it with direct sessions step 5. |
 
 ### Home
 
@@ -151,7 +150,7 @@ Open rows, from left to right, in aligned columns:
 - the writer: busy, idle, `unconfirmed` while its launch is unconfirmed, stopped, error, or `no writer`;
 - the reason: the wait reason, the highest-priority flag, a scheduled retry or recheck, or the status.
 
-Closed rows show the outcome (`checked in`, `ready for check-in`, `report stored`, `failed` or `cancelled`) instead of the stage, the time since close, the PR or report, the total duration from intake to close, and the completion target.
+Closed rows show the outcome (`checked in`, `ready for check-in`, `draft published`, `report stored`, `failed` or `cancelled`) instead of the stage, the time since close, the PR or report, the total duration from intake to close, and the completion target.
 
 Later: the label, the revision round if more than 1, the PR state (draft, ready or merged) with a CI dot, and the size of the change.
 
@@ -203,7 +202,7 @@ Computed on the server from work history and shown on History and group pages:
 - **Local board:** until PH-27, a local server started with `PHALANX_LOCAL_BOARD=1` serves the read-only board routes without a token to loopback clients with a loopback `Host` ([decision 57](docs/decisions.md)). A hosted server leaves the flag unset.
 - **Workspace scope:** every dashboard request is scoped to the signed-in user's selected workspace and checked against their role on the server. The browser only hides controls for convenience; it never enforces access.
 - **Write actions (D2):** the cookie authorizes owner write routes only with CSRF protection, using an Origin check plus a required custom header. Destructive actions ask for confirmation. Each action records the signed-in email in the item timeline, the same way reply authors are recorded today. Runner routes never accept the cookie.
-- **Caching:** static assets have hashed names and cache for a long time. API responses are `no-store`.
+- **Caching:** static assets have hashed names and cache for a long time. Conditional board reads use `private, no-cache`; other API responses are `no-store`.
 - **Rate limits:** sign-in and write routes are rate-limited.
 
 ## Performance and data
@@ -212,30 +211,33 @@ Computed on the server from work history and shown on History and group pages:
 - A small overview endpoint returns the section counts and the top-bar health. That way the home page doesn't need to count rows on the client.
 - Polling runs every 15 seconds with a change token, so an unchanged board returns `304`. It pauses while the tab is hidden. Server-sent events can come later if polling proves too slow.
 - Filters and search use bounded, indexed queries on the server.
-- The server learns PR and CI facts only from runner observations ([AGENTS.md](AGENTS.md): GitHub access stays on the runner). If the runner hasn't observed a fact, the dashboard shows it as unknown and doesn't guess.
+- The server learns PR and CI facts only from reconciler GitHub observations ([AGENTS.md](AGENTS.md): GitHub access stays local). If the reconciler hasn't observed a fact, the dashboard shows it as unknown and doesn't guess.
 
-## API additions (sketch)
+## API additions
 
-Each phase row specifies these in detail. All are read-only except the D2 actions, which reuse existing routes.
+All are read-only except the D2 actions, which reuse existing routes. The D1 server reads (PH-29a) target the local board at `/operator/` only, with existing authentication unchanged: no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data) lists the routes. Direct-path capacity is advisory (D6); these reads add no slot/capacity fields or runners endpoint.
 
-- An optional `label` on work items, set at intake and by steering.
+- An optional `label` on work items, set at intake (`phalanx intake --label`) and by steering. Steering `label: null` clears it. Labels match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`.
 - New summary fields:
   - `label`;
-  - a `pr` object with number, title, state, draft, head CI, additions and deletions;
-  - `revision_round`;
-  - `duplicate_count`.
+  - `revision_round`: 1, plus one each time the execution re-enters development, PR revision or report drafting;
+  - `duplicate_count`: other open PRs on the item branch in the latest reconciler observation, or `null` when not observed;
+  - `pr`: the PR in the latest reconciler GitHub observation, with `url`, `number`, `state` (`open`, `closed` or `merged`), `draft`, `head_sha`, `head_ci`, `additions` and `deletions`. `head_ci` is the gate result observed on that head. Each field is `null` when not observed; `pr` is `null` before an observation or when the latest observation found no PR. Writer-supplied PR URLs and lifecycle evidence never populate these facts.
+  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. Queued rows without another reason show, in order: dispatch paused, a scheduled retry, or next to run through a Captain dispatching a writer. Runner presence and capacity never infer a direct-path wait.
 
-  Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
-- `GET /v1/operator/overview`: counts for each section, dispatch and runner health, and data age.
-- Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`.
-- `GET /v1/operator/runners` and `GET /v1/operator/groups/{label}`.
-- Reports rendered as sanitized Markdown, with raw HTML stripped.
+    Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
+- `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch `paused` (false means on); the oldest eligible queued timestamp and age; and `generated_at` for data age.
+- Draft-completed executions use `draft_published` consistently in summary rows, the outcome filter, overview and label-group rollups. They count as delivered in the overview, not as ready for check-in.
+- Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. `outcome` and `closed_after` apply to `kind=closed`, and `status` must match the kind; otherwise the server returns 400. `q` matches goal text, an item or execution ID, or an observed PR URL or number. Filtered cursors are bound to their filters. A filtered page inspects at most 2,000 indexed candidate executions, so it can return fewer rows than requested (even zero) with a cursor to continue.
+- `GET /v1/operator/groups/{label}`: a rollup of the current executions with that label (items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed) and an item page. Returns 404 when no item has the label.
+- Execution lists, overview and groups return a weak `ETag` and accept `If-None-Match`. An unchanged poll returns `304` before reading rows or rollups. A durable change token and indexed retry/lease/24-hour-closure boundaries invalidate the tag. Ticking display ages alone do not: retain the last snapshot and calculate elapsed age from its timestamps and `generated_at`. Authentication is checked before conditional reads.
+- Reports rendered as sanitized Markdown, with raw HTML stripped (later in D1).
 
 ## Phases
 
 | Phase | Scope | Depends on |
 | --- | --- | --- |
-| **D1 Hosted-ready board** | Routes and deep links; the home layout; row anatomy; item detail with the lifecycle rail; labels and groups; filters and search; rendered reports; the overview and runners endpoints; freshness and stale states; mobile layout; accessibility. | PH-20, PH-27 |
+| **D1 Local board** | Routes and deep links; the home layout; row anatomy; item detail with the lifecycle rail; labels and groups; filters and search; rendered reports; the overview endpoint; freshness and stale states; mobile layout; accessibility. Hosting and sign-in are separate. | |
 | **D2 Act from the dashboard** | Reply, cancel, retry, rerun, pause dispatch and change capacity, with CSRF protection and recorded actors. | D1 |
 | **D3 Insight** | Metrics; repository health; a review feed of Captain decisions; notification links into the dashboard. | D1 |
 

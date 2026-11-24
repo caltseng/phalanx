@@ -77,6 +77,7 @@ def main() -> None:
     intake.add_argument("--publication-mode", choices=["ready", "draft"], default="ready",
                         help="direct sessions: stop at a verified draft instead of promoting or merging")
     intake.add_argument("--key", help="reuse this key when retrying the same request")
+    intake.add_argument("--label", help="group related items under this label on the work board")
     intake.add_argument("--after", type=prerequisite, action="append", default=[],
                         metavar="ITEM[:MILESTONE]",
                         help="wait for ITEM to reach MILESTONE (default checked_in); repeatable")
@@ -174,6 +175,8 @@ def main() -> None:
                     "priority": args.priority, "publication_mode": args.publication_mode}
             if args.after:
                 body["dependencies"] = args.after
+            if args.label is not None:
+                body["label"] = args.label
             result = api_request(args.api_url, "/v1/items", key=args.key, body=body)
             print(json.dumps(result, indent=2))
         elif args.command == "ingest-issue":

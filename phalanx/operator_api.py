@@ -1,35 +1,46 @@
 """Read-only, execution-scoped views for the operator board."""
 
 from base64 import b64decode, urlsafe_b64encode
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 import json
 import re
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from fastapi.responses import PlainTextResponse, Response
 
 from .auth import authenticate_board_read
-from .dispatch import DEFAULT_CAPACITY
 from .intake import report as stored_report
 from .intake_api import run
-from .intake_models import Identifier
+from .intake_models import LABEL_PATTERN, Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
 from .store import read_transaction
-from .transitions import RUNNER_ONLY_SLOTS, RUNNER_ONLY_STAGES
+from .transitions import Stage, Status
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate_board_read)])
 Limit = Annotated[int, Query(ge=1, le=100)]
 Cursor = Annotated[str | None, Query(max_length=512)]
 STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00")
 ID = re.compile(r"[0-9a-f]{32}")
+PR_NUMBER = re.compile(r"#?([0-9]{1,18})")
+CLOSED_STATUSES = {Status.COMPLETED, Status.FAILED, Status.CANCELLED}
+DELIVERED = ("report_stored", "draft_published", "ready_for_check_in", "checked_in")
+Outcome = Literal["report_stored", "draft_published", "ready_for_check_in", "checked_in", "failed", "cancelled"]
+# Filtered pages inspect at most this many indexed candidates before returning a continuation.
+SCAN_LIMIT = 2000
 
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at,
+           execution.ready_since, item.created_at AS item_created_at, item.label,
            item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
            json_extract(item.request_json, '$.target') AS target,
-           progress.last_advanced_at, progress.wait_since,
+           progress.last_advanced_at, progress.wait_since, progress.revision_round,
+           pr.url AS pr_url, pr.number AS pr_number, pr.state AS pr_state, pr.draft AS pr_draft,
+           pr.merged AS pr_merged, pr.head_sha AS pr_head_sha, pr.additions AS pr_additions,
+           pr.deletions AS pr_deletions, pr.ci AS pr_ci, pr.ci_head_sha AS pr_ci_head_sha,
+           pr.duplicate_count,
            coalesce(json_array_length(execution.dependency_wait_json), 0) AS blocked_count,
            recheck.due_at_ms AS recheck_at_ms, worker.reference AS worker_reference, worker.url AS worker_url,
            writer.id AS writer_id, writer.state AS writer_state, writer.runtime AS writer_runtime,
@@ -53,14 +64,11 @@ SUMMARY = """
             FROM transition_history AS history
             WHERE history.execution_id = execution.id AND history.attempt_id IS NOT NULL
               AND history.event != 'claim'
-            ORDER BY history.version DESC LIMIT 1) AS capacity_release,
-           (SELECT coalesce(min(load.open >= coalesce(cap.capacity, {default}) + {lane}), 0)
-            FROM (SELECT runner_id, count(*) AS open FROM attempts WHERE ended_at IS NULL
-                  GROUP BY runner_id) AS load
-            LEFT JOIN runner_limits AS cap ON cap.runner_id = load.runner_id) AS lanes_full
+            ORDER BY history.version DESC LIMIT 1) AS capacity_release
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
+    LEFT JOIN operator_pr AS pr ON pr.execution_id = execution.id
     LEFT JOIN external_rechecks AS recheck
         ON recheck.execution_id = execution.id AND recheck.version = execution.version
     LEFT JOIN attempt_workers AS worker ON worker.attempt_id = (
@@ -68,7 +76,7 @@ SUMMARY = """
         ORDER BY attempt.started_at DESC, attempt.id DESC LIMIT 1
     )
     LEFT JOIN writers AS writer ON writer.execution_id = execution.id AND writer.ended_at IS NULL
-""".format(default=DEFAULT_CAPACITY, lane=RUNNER_ONLY_SLOTS)
+"""
 
 
 def encode_cursor(scope, key):
@@ -115,6 +123,61 @@ def page_cursor(rows, limit, scope, key):
     return encode_cursor(scope, key(rows[limit - 1])) if len(rows) > limit else None
 
 
+def stamp(moment):
+    return moment.isoformat(timespec="microseconds")
+
+
+def dispatch_context(db, now):
+    return {"paused": bool(db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"])}
+
+
+def conditional_read(request, response, db, now):
+    # Weak validators ignore ticking display ages, but not deadlines that change row meaning.
+    token = db.execute("SELECT token FROM operator_change").fetchone()[0]
+    deadlines = tuple(db.execute(
+        f"""SELECT
+            (SELECT max(retry_at) FROM executions WHERE {OPEN} AND retry_at <= ?),
+            (SELECT max(lease_expires_at) FROM attempts WHERE ended_at IS NULL AND lease_expires_at <= ?),
+            (SELECT max(updated_at) FROM executions WHERE {CLOSED} AND updated_at < ?)""",
+        (int(now.timestamp() * 1000), now.timestamp(), stamp(now - timedelta(days=1))),
+    ).fetchone())
+    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}"
+    etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "private, no-cache"
+    supplied = request.headers.get("if-none-match", "")
+    tags = {tag.strip().removeprefix("W/") for tag in supplied.split(",")}
+    if "*" in tags or etag.removeprefix("W/") in tags:
+        return Response(status_code=304, headers=dict(response.headers))
+    return None
+
+
+def queued_wait(row, now_ms, context):
+    retry_at = row["retry_at"]
+    if context["paused"]:
+        return {"reason": "Dispatch is paused", "trigger": "The owner resumes dispatch"}
+    if retry_at is not None and retry_at > now_ms:
+        at = datetime.fromtimestamp(retry_at / 1000, UTC).isoformat()
+        return {"reason": f"Retry scheduled for {at}", "trigger": "The retry delay elapses"}
+    return {}
+
+
+def pull_request(row):
+    if row["pr_url"] is None:
+        return None
+    head = row["pr_head_sha"]
+    return {
+        "url": row["pr_url"],
+        "number": row["pr_number"],
+        "state": "merged" if row["pr_merged"] else row["pr_state"],
+        "draft": None if row["pr_draft"] is None else bool(row["pr_draft"]),
+        "head_sha": head,
+        "head_ci": row["pr_ci"] if row["pr_ci_head_sha"] == head else None,
+        "additions": row["pr_additions"],
+        "deletions": row["pr_deletions"],
+    }
+
+
 def short_title(goal, limit=80):
     """One board line from the goal: its first sentence, cut at a word boundary."""
     line = next((line for line in goal.splitlines() if line.strip()), "").strip().lstrip("#*-> ").strip()
@@ -125,7 +188,7 @@ def short_title(goal, limit=80):
     return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:-") + "…"
 
 
-def summary(row, now):
+def summary(row, now, context):
     state = json.loads(row["state_json"])
     wait = state.get("wait") or {}
     output = state["final_output"]
@@ -165,29 +228,38 @@ def summary(row, now):
                     "trigger": "The runner recovers the expired attempt on its next pass"}
     if row["runner_blocker"] and not wait:
         wait = {"reason": row["runner_blocker"], "trigger": "Resolve the blocker; the runner clears it on its next successful pass"}
-    retrying = row["retry_at"] is not None and row["retry_at"] > now.timestamp() * 1000
-    if (row["lanes_full"] and not wait and not retrying and row["status"] == "queued"
-            and row["stage"] in RUNNER_ONLY_STAGES):
-        # Every active runner holds its agent capacity and its runner-only lane.
-        wait = {"reason": "Waiting for runner-only lane capacity",
-                "trigger": "A runner finishes a stage and frees a slot"}
+    status = row["status"]
+    if status == Status.QUEUED and not wait:
+        wait = queued_wait(row, int(now.timestamp() * 1000), context)
+    next_action = None
+    if output is None and not wait:
+        if status == Status.QUEUED:
+            next_action = "Next to run: a Captain dispatches a writer"
+        elif status == Status.RUNNING:
+            next_action = ("Stopping the worker" if state.get("stopping")
+                           else f"A worker is running the {row['stage']} stage")
+        else:
+            next_action = f"{status.replace('_', ' ').capitalize()}; the {row['stage']} stage resumes when it clears"
     return {
         "id": row["id"],
         "item_id": row["item_id"],
         "version": row["version"],
         "title": short_title(row["goal"]),
         "goal": row["goal"],
+        "label": row["label"],
         "target": row["target"],
         "publication_mode": state.get("publication_mode", "ready"),
         "repository_id": row["repository_id"],
         "created_at": row["created_at"],
         "stage": row["stage"],
-        "status": row["status"],
+        "status": status,
+        "revision_round": row["revision_round"],
         "last_advanced_at": row["last_advanced_at"],
         "last_progress_at": row["updated_at"],
         "wait_reason": wait.get("reason"),
         "blocked_prerequisite_count": blocked_count,
         "resume_trigger": wait.get("trigger"),
+        "next_action": next_action,
         "retry_at_ms": row["retry_at"],
         "recheck_at_ms": row["recheck_at_ms"],
         "worker_reference": row["worker_reference"],
@@ -203,6 +275,8 @@ def summary(row, now):
             if wait_since else None
         ),
         "primary_pr_url": state.get("primary_pr"),
+        "pr": pull_request(row),
+        "duplicate_count": row["duplicate_count"],
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
@@ -222,23 +296,69 @@ def open_key(row):
     return [int(row["status"] != "waiting_for_input"), row["created_at"], row["id"]]
 
 
-def open_page(db, after, size):
+def closed_key(row):
+    return [row["updated_at"], row["id"]]
+
+
+def filter_clause(filters):
+    clauses, params = [], []
+    for name, column in (("repository", "item.repository_id"), ("label", "item.label"),
+                         ("status", "execution.status"), ("stage", "execution.stage"),
+                         ("outcome", "execution.outcome")):
+        if name in filters:
+            clauses.append(f"{column} = ?")
+            params.append(filters[name])
+    if "closed_after" in filters:
+        clauses.append("execution.updated_at > ?")
+        params.append(filters["closed_after"])
+    if "q" in filters:
+        query = filters["q"]
+        number = PR_NUMBER.fullmatch(query)
+        clauses.append(
+            """(instr(lower(json_extract(item.request_json, '$.goal')), lower(?)) > 0
+                OR execution.item_id = ? OR execution.id = ? OR pr.url = ? OR pr.number = ?)"""
+        )
+        params.extend((query, query, query, query, int(number[1]) if number else None))
+    return "".join(f" AND {clause}" for clause in clauses), params
+
+
+def open_page(db, after, size, where="", params=(), *, select=SUMMARY, through=None):
     # Separate rank buckets let SQLite seek directly to the timestamp and ID.
+    # Filtered callers also provide an indexed ceiling for their candidate window.
     first_rank = after[0] if after else 0
     rows = []
     for rank in range(first_rank, 2):
-        boundary, params = "", ()
+        if through and rank > through[0]:
+            break
+        boundary, bounds = "", ()
         if after and rank == first_rank:
             boundary = "AND (execution.created_at, execution.id) > (?, ?)"
-            params = after[1:]
+            bounds = after[1:]
+        ceiling, ceiling_bounds = "", ()
+        if through and rank == through[0]:
+            ceiling = "AND (execution.created_at, execution.id) <= (?, ?)"
+            ceiling_bounds = through[1:]
         rows.extend(db.execute(
-            f"""{SUMMARY} WHERE {OPEN} AND ({INPUT_RANK}) = ? {boundary}
+            f"""{select} WHERE {OPEN} AND ({INPUT_RANK}) = ? {boundary} {ceiling} {where}
                 ORDER BY execution.created_at, execution.id LIMIT ?""",
-            (rank, *params, size - len(rows)),
+            (rank, *bounds, *ceiling_bounds, *params, size - len(rows)),
         ))
         if len(rows) == size:
             break
     return rows
+
+
+def filtered_open_page(db, after, size, where, params):
+    keys = open_page(db, after, SCAN_LIMIT, select=(
+        "SELECT id, created_at, status FROM executions AS execution"
+    ))
+    if not keys:
+        return [], None
+    last = open_key(keys[-1])
+    rows = open_page(db, after, size + 1, where, params, through=last)
+    if len(rows) > size:
+        return rows[:size], open_key(rows[size - 1])
+    return rows, last if len(keys) == SCAN_LIMIT else None
 
 
 def closed_page(db, after, size):
@@ -250,22 +370,186 @@ def closed_page(db, after, size):
     ).fetchall()
 
 
+def filtered_closed_page(db, after, size, where, params, closed_after):
+    """Match filters within the next SCAN_LIMIT closures; return rows and the next cursor key."""
+    boundary = "AND (execution.updated_at, execution.id) < (?, ?)" if after else ""
+    floor = "AND execution.updated_at > ?" if closed_after else ""
+    bounds = (*(after or ()), *((closed_after,) if closed_after else ()))
+    keys = db.execute(
+        f"""SELECT execution.updated_at, execution.id FROM executions AS execution
+            WHERE {CLOSED} {boundary} {floor}
+            ORDER BY execution.updated_at DESC, execution.id DESC LIMIT ?""",
+        (*bounds, SCAN_LIMIT),
+    ).fetchall()
+    if not keys:
+        return [], None
+    last = [keys[-1]["updated_at"], keys[-1]["id"]]
+    rows = db.execute(
+        f"""{SUMMARY} WHERE {CLOSED} {boundary} AND (execution.updated_at, execution.id) >= (?, ?) {where}
+            ORDER BY execution.updated_at DESC, execution.id DESC LIMIT ?""",
+        (*(after or ()), *last, *params, size + 1),
+    ).fetchall()
+    if len(rows) > size:
+        return rows[:size], closed_key(rows[size - 1])
+    return rows, last if len(keys) == SCAN_LIMIT else None
+
+
 @router.get("/operator/executions")
-def list_executions(request: Request, kind: Literal["open", "closed"] = "open",
-                    limit: Limit = 25, cursor: Cursor = None):
-    with read_transaction(request.app.state.database_path) as db:
-        if kind == "open":
-            after = decode_cursor(cursor, kind, (is_rank, is_stamp, is_id))
-            rows = open_page(db, after, limit + 1)
-            key = open_key
-        else:
-            after = decode_cursor(cursor, kind, (is_stamp, is_id))
-            rows = closed_page(db, after, limit + 1)
-            key = lambda row: [row["updated_at"], row["id"]]
+def list_executions(
+    request: Request, response: Response, kind: Literal["open", "closed"] = "open", limit: Limit = 25, cursor: Cursor = None,
+    repository: Annotated[str | None, Query(pattern=r"^[A-Za-z0-9_-]{1,100}$")] = None,
+    label: Annotated[str | None, Query(pattern=LABEL_PATTERN)] = None,
+    status: Status | None = None,
+    stage: Stage | None = None,
+    outcome: Outcome | None = None,
+    q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
+    closed_after: datetime | None = None,
+):
+    if kind == "open" and (outcome or closed_after):
+        raise HTTPException(400, "outcome and closed_after apply only to closed executions")
+    if status is not None and (status in CLOSED_STATUSES) != (kind == "closed"):
+        raise HTTPException(400, f"Status {status} is not a {kind} status")
+    if closed_after is not None:
+        moment = closed_after if closed_after.tzinfo else closed_after.replace(tzinfo=UTC)
+        closed_after = stamp(moment.astimezone(UTC))
+    filters = {name: str(value) for name, value in (
+        ("repository", repository), ("label", label), ("status", status), ("stage", stage),
+        ("outcome", outcome), ("q", q), ("closed_after", closed_after),
+    ) if value is not None}
+    # Unfiltered cursors keep their original scope; filtered cursors are bound to their filters.
+    scope = kind
+    if filters:
+        digest = sha256(json.dumps(filters, sort_keys=True).encode()).hexdigest()[:16]
+        scope = f"{kind}:{digest}"
+    patterns = (is_rank, is_stamp, is_id) if kind == "open" else (is_stamp, is_id)
+    after = decode_cursor(cursor, scope, patterns)
+    where, params = filter_clause(filters)
     now = datetime.now(UTC)
+    with read_transaction(request.app.state.database_path) as db:
+        unchanged = conditional_read(request, response, db, now)
+        if unchanged is not None:
+            return unchanged
+        if kind == "open":
+            if filters:
+                rows, next_key = filtered_open_page(db, after, limit, where, params)
+            else:
+                rows = open_page(db, after, limit + 1)
+                next_key = open_key(rows[limit - 1]) if len(rows) > limit else None
+                rows = rows[:limit]
+        else:
+            if filters:
+                rows, next_key = filtered_closed_page(db, after, limit, where, params, closed_after)
+            else:
+                rows = closed_page(db, after, limit + 1)
+                next_key = closed_key(rows[limit - 1]) if len(rows) > limit else None
+                rows = rows[:limit]
+        context = dispatch_context(db, now)
     return {
-        "items": [summary(row, now) for row in rows[:limit]],
-        "next_cursor": page_cursor(rows, limit, kind, key),
+        "items": [summary(row, now, context) for row in rows],
+        "next_cursor": encode_cursor(scope, next_key) if next_key else None,
+    }
+
+
+@router.get("/operator/overview")
+def overview(request: Request, response: Response):
+    now = datetime.now(UTC)
+    now_ms = int(now.timestamp() * 1000)
+    with read_transaction(request.app.state.database_path) as db:
+        unchanged = conditional_read(request, response, db, now)
+        if unchanged is not None:
+            return unchanged
+        context = dispatch_context(db, now)
+        open_counts = db.execute(
+            f"""SELECT status, dependency_wait_json IS NOT NULL AS blocked, count(*) AS count
+                FROM executions WHERE {OPEN} GROUP BY status, blocked"""
+        ).fetchall()
+        closed_counts = db.execute(
+            f"""SELECT outcome, count(*) AS count FROM executions
+                WHERE {CLOSED} AND updated_at >= ? GROUP BY outcome""",
+            (stamp(now - timedelta(days=1)),),
+        ).fetchall()
+        oldest = db.execute(
+            """SELECT min(ready_since) FROM executions
+               WHERE status = 'queued' AND dependency_wait_json IS NULL AND ready_since <= ?""",
+            (now_ms,),
+        ).fetchone()[0]
+    sections = {"needs_you": 0, "running": 0, "waiting_on_checks": 0, "queued": 0, "blocked": 0}
+    for row in open_counts:
+        if row["status"] == Status.QUEUED:
+            sections["blocked" if row["blocked"] else "queued"] += row["count"]
+        else:
+            section = {Status.WAITING_FOR_INPUT: "needs_you", Status.RUNNING: "running",
+                       Status.WAITING_FOR_EXTERNAL: "waiting_on_checks"}[row["status"]]
+            sections[section] += row["count"]
+    closed = {name: 0 for name in Outcome.__args__}
+    closed.update({row["outcome"]: row["count"] for row in closed_counts})
+    sections["delivered_24h"] = sum(closed[name] for name in DELIVERED)
+    return {
+        "generated_at": stamp(now),
+        "sections": sections,
+        "closed_24h": closed,
+        "dispatch": {"paused": context["paused"]},
+        "oldest_queued_since": (
+            stamp(datetime.fromtimestamp(oldest / 1000, UTC)) if oldest is not None else None
+        ),
+        "oldest_queued_age_seconds": max(0, (now_ms - oldest) // 1000) if oldest is not None else None,
+    }
+
+
+CURRENT = "NOT EXISTS (SELECT 1 FROM executions AS later WHERE later.previous_id = execution.id)"
+
+
+@router.get("/operator/groups/{label}")
+def group(request: Request, response: Response, label: Annotated[str, Path(pattern=LABEL_PATTERN)],
+          limit: Limit = 25, cursor: Cursor = None):
+    scope = f"group:{label}"
+    after = decode_cursor(cursor, scope, (is_stamp, is_id))
+    now = datetime.now(UTC)
+    with read_transaction(request.app.state.database_path) as db:
+        if db.execute("SELECT 1 FROM work_items WHERE label=? LIMIT 1", (label,)).fetchone() is None:
+            raise HTTPException(404, "No work items have this label")
+        unchanged = conditional_read(request, response, db, now)
+        if unchanged is not None:
+            return unchanged
+        rollup = db.execute(
+            f"""SELECT count(*) AS items,
+                       coalesce(sum(NOT ({CLOSED})), 0) AS open,
+                       sum(pr.additions) AS additions, sum(pr.deletions) AS deletions,
+                       coalesce(sum(pr.execution_id IS NOT NULL
+                                    AND (pr.additions IS NULL OR pr.deletions IS NULL)), 0)
+                           AS size_unknown_count,
+                       min(item.created_at) AS first_created_at,
+                       max(CASE WHEN {CLOSED} THEN execution.updated_at END) AS last_closed_at,
+                       min(CASE WHEN NOT ({CLOSED}) THEN execution.created_at END) AS oldest_open_since
+                FROM work_items AS item JOIN executions AS execution ON execution.item_id = item.id
+                LEFT JOIN operator_pr AS pr ON pr.execution_id = execution.id
+                WHERE item.label = ? AND {CURRENT}""",
+            (label,),
+        ).fetchone()
+        if not rollup["items"]:
+            raise HTTPException(404, "No work items have this label")
+        outcomes = db.execute(
+            f"""SELECT execution.outcome, count(*) AS count
+                FROM work_items AS item JOIN executions AS execution ON execution.item_id = item.id
+                WHERE item.label = ? AND {CURRENT} AND execution.outcome IS NOT NULL
+                GROUP BY execution.outcome""",
+            (label,),
+        ).fetchall()
+        boundary = "AND (item.created_at, item.id) > (?, ?)" if after else ""
+        rows = db.execute(
+            f"""{SUMMARY} WHERE item.label = ? AND {CURRENT} {boundary}
+                ORDER BY item.created_at, item.id LIMIT ?""",
+            (label, *(after or ()), limit + 1),
+        ).fetchall()
+        context = dispatch_context(db, now)
+    closed = {name: 0 for name in Outcome.__args__}
+    closed.update({row["outcome"]: row["count"] for row in outcomes})
+    return {
+        "label": label,
+        "rollup": {**dict(rollup), "outcomes": closed},
+        "items": [summary(row, now, context) for row in rows[:limit]],
+        "next_cursor": page_cursor(rows, limit, scope,
+                                   lambda row: [row["item_created_at"], row["item_id"]]),
     }
 
 
@@ -377,8 +661,10 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             ORDER BY version DESC, created_at DESC LIMIT ?""",
             (execution_id, execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
+        now = datetime.now(UTC)
+        context = dispatch_context(db, now)
     return {
-        "item": summary(execution, datetime.now(UTC)),
+        "item": summary(execution, now, context),
         "attempt": attempt["id"] if attempt else None,
         "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
         "question": question,
