@@ -45,6 +45,35 @@ again, and continue from step 1.
 
 If something technical keeps you from finishing a stage, post `{"outcome": "failed", "failure_reason": "<why>"}`.
 
+## PR title convention
+
+Keep the item's open PR title in sync during publication and on every delivery/status pass, including
+after an owner reply or a change to the PR's draft state or execution flags. Read the current GitHub
+title and `isDraft`, and the latest `$work status`; do not infer draft state from publication mode.
+Choose exactly one prefix, in this order:
+
+- `[Blocked] ` when `state.status` is `waiting_for_input` or an execution flag describes a blocker
+  (for example failed required checks, a merge conflict or actionable changes requested).
+  Informational flags and ordinary pending checks or reviews alone are not blockers.
+- `[WIP] ` otherwise while the PR is a draft.
+- No prefix otherwise: the unblocked PR is ready for review.
+
+Before adding the chosen prefix, repeatedly strip only leading `[WIP]` or `[Blocked]` tags,
+case-insensitively, and the whitespace immediately following each tag. Preserve the remaining
+substantive title exactly, including other tags. This normalizes mixed, repeated or stale lifecycle
+prefixes without accumulating them. Set the correct title when creating a PR; for an existing PR,
+edit only if the computed title differs from its current title.
+
+Before `$work question`, best-effort set an existing open PR's title to `[Blocked] ` using the same
+normalization, then submit the question even if the title edit fails. Recompute the prefix after the
+reply; do not blindly remove it while another blocker remains.
+
+Title updates are cosmetic and best-effort. If a title read or edit fails, report the error in
+`$work progress --note`, continue the stage and its normal result submission, and retry from fresh
+state on the next pass. A title failure must never fail or block a stage. Change only the title:
+this convention never changes draft/ready state, validation, review requirements, publication
+ceilings, merge authorization or delivery gates.
+
 ## Stage results
 
 - `report_drafting`: write the report in Markdown and keep a copy in
@@ -62,11 +91,13 @@ If something technical keeps you from finishing a stage, post `{"outcome": "fail
   changes, post `{"outcome": "changes_required", "candidate": "<SHA>", "review_notes": "<findings>"}`.
 - `publication`: push the worktree's branch to `origin` and $publication
   A merged PR from an earlier execution can't be reused, so open a new one. Never open a second open PR.
+  Apply the PR title convention to the new or reused PR.
   Follow the repository's rules for
   PRs, and end the description with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Post
   `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<number>"}`.
 - `delivery`: the execution waits for GitHub. While it waits, run `$work status` at least every
-  30 minutes and act on its `flags`. If the execution is queued again, continue from step 1.
+  30 minutes, act on its `flags`, and apply the PR title convention. If the execution is queued
+  again, continue from step 1.
   - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
     actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
     result. The reconciler verifies delivery: a ready PR with required checks green for a ready-only
