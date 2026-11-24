@@ -334,7 +334,10 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
 
 
 def prompt(name):
-    return resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
+    text = resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
+    if name in {"captain", "keeper"}:
+        text += "\n" + prompt("forwarding")
+    return text
 
 
 def archive_result(api, session_id, outcome, reason, reported_by):
@@ -412,7 +415,10 @@ def handoff(api, charter, captain_id, note, command):
         "open_intents": captain["open_intents"],
         "successors": successors,
         "session_name": captain["successor_name"],
-        "kickoff": (f"You succeed Phalanx Captain {captain_id}. In this chat, `phx shift` means `{command}`. "
+        "session_name_identity": "Launch nonce derived from the predecessor, not the new Captain's ID",
+        "off_shift_instructions": prompt("forwarding"),
+        "kickoff": (f"You succeed predecessor Phalanx Captain {captain_id}; that is not your Captain ID. "
+                    f"In this chat, `phx shift` means `{command}`. "
                     f"On your first wake, run "
                     f"`phx shift start --session-ref <your native session ID> --parent {captain_id}`.\n\n"
                     + prompt("captain")),
@@ -434,8 +440,8 @@ def add_shift_command(commands):
     shift.add_argument("--home", help="existing muster directory (otherwise PHALANX_HOME or user locator)")
     actions = shift.add_subparsers(dest="shift_command", required=True)
     show = actions.add_parser("prompt", parents=[shared],
-                              help="print the Captain or keeper prompt, or the worker prompt template")
-    show.add_argument("name", choices=["captain", "keeper", "worker"])
+                              help="print Captain, keeper, worker or retained-chat forwarding instructions")
+    show.add_argument("name", choices=["captain", "keeper", "worker", "forwarding"])
     actions.add_parser("charter", parents=[shared], help="validate the charter and show its revision")
     begin = actions.add_parser("start", parents=[shared], help="register this chat as a Captain")
     begin.add_argument("--session-ref", required=True, help="this chat's native session ID or link")
@@ -455,6 +461,8 @@ def add_shift_command(commands):
     beat.add_argument("--handoff-note")
     show_status = actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
     show_status.add_argument("--captain", help="also read this Captain, including ended-writer cleanup")
+    actions.add_parser("current", parents=[shared],
+                       help="resolve the unique live active Captain and native session binding")
     act = actions.add_parser("action", parents=[shared], help="record an action on the item's timeline")
     act.add_argument("--captain", required=True)
     act.add_argument("--item", required=True)
@@ -531,7 +539,10 @@ def run_shift(args):
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
                            compaction_count=args.compaction_count)
     elif args.shift_command == "status":
-        result = status(API(config), charter, args.captain)
+        result = {**status(API(config), charter, args.captain),
+                  "dashboard_url": config["base_url"].rstrip("/") + "/operator/"}
+    elif args.shift_command == "current":
+        result = API(config)("/v1/captains/current")
     elif args.shift_command == "action":
         result = API(config)(f"/v1/items/{_q(args.item)}/captain-actions", body={
             "captain_id": args.captain, "action": args.action, "reason": args.reason})

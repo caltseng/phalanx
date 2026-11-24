@@ -236,6 +236,19 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
 
   As built in step 4:
   - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
+  - Off-shift chats disclose their role and route each new owner/forwarded interaction through
+    `shift current` (`GET /v1/captains/current`), not a remembered immediate successor. That
+    read examines all registrations and requires one live `active` Captain. Native tools verify
+    its exact `session_ref` and supply the clickable conversation link; a second read before
+    forwarding detects intervening succession. Missing, stale, ambiguous or unavailable evidence
+    is reported explicitly, never repaired by guessed links, duplicate dispatch or fabricated
+    owner provenance. Original-message forwarding preserves permission boundaries.
+    A registered Captain's name uses its own ID where native renaming is supported; off-shift
+    names/replies say so. The predecessor-derived launch nonce remains recovery context, not
+    current identity. No runtime nesting or archive ownership changes.
+    The tracked forwarding section is composed into Captain/keeper prompts and generated
+    handoffs; retained chats require an explicit verbatim relay after normal deployment.
+    See [forwarding and rollout](direct-path.md#retained-chats-and-owner-message-forwarding).
   - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
   - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
     The reserved action `held` requires a reason describing the charter lane order, writer cap or

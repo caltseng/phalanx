@@ -175,6 +175,16 @@ without a Captain. Stale Captain/reconciler, no progress, unconfirmed launches, 
 writers and orphan sessions are visible flags with recovery actions. Archival requires
 preserved local work and runtime creator authority; server records do not perform archival.
 
+Retained off-shift chats disclose their role rather than resume coordination. On every new
+owner/forwarded interaction, `shift current` resolves a unique live active registration across
+all history; native tools verify its binding and supply the clickable conversation link.
+Re-resolve before forwarding via supported original-message provenance. No unique destination,
+link or provenance is an explicit routing condition, not permission to guess or duplicate work.
+Use the registered Captain's own ID, not its predecessor-derived launch nonce, for role wording
+and supported display-name changes. Preserve runtime nesting, succession history and cleanup
+authority. Tracked prompts deploy normally; retained chats need the changed forwarding section
+relayed explicitly, not an untracked muster patch.
+
 Captain heartbeats may report the native session's cumulative successful compaction count.
 Persist the greatest reported count; duplicate, older or omitted telemetry cannot inflate or
 erase it. Historical and unsupported runtime counts stay unknown, never inferred from wakes,
