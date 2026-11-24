@@ -11,13 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
 from .auth import authenticate_board_read
-from .captains import active_holds
+from .captains import active_holds, availability_reports
 from .display_text import reason_text, short_title
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
 from .operator_schema import CLOSED, INPUT_RANK, OPEN
-from .session_links import availability_reports, session_key
+from .session_links import session_key
 from .store import read_transaction
 from .transitions import Stage, Status
 

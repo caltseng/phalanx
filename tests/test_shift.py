@@ -190,10 +190,15 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 self.assertTrue(archived["active"])
         preserved = shift.start(self.api, self.charter, "legacy-opaque")["captain"]
         self.assertEqual(preserved["session_ref"], "legacy-opaque")
-        legacy_id = "abcdefab-1234-1234-1234-123456789abc"
-        legacy = shift.start(self.api, self.charter, legacy_id)["captain"]
-        replay = shift.start(self.api, self.charter, legacy_id, runtime="copilot-app")["captain"]
-        self.assertEqual((replay["id"], replay["session_ref"]), (legacy["id"], legacy_id))
+
+    def test_new_host_reference_does_not_reuse_an_ended_legacy_captain(self):
+        native = "abcdefab-1234-1234-1234-123456789abc"
+        ended = shift.start(self.api, self.charter, native)["captain"]
+        shift.heartbeat(self.api, self.charter, ended["id"], state="ended")
+        fresh = shift.start(self.api, self.charter, native, runtime="copilot-app")["captain"]
+        self.assertNotEqual(fresh["id"], ended["id"])
+        self.assertEqual(fresh["state"], "active")
+        self.assertEqual(shift.heartbeat(self.api, self.charter, fresh["id"], wake=True)["captain"]["wake_count"], 1)
 
     def test_captain_launches_a_replayable_writer_and_counts_wakes(self):
         started = shift.start(self.api, self.charter, "chat-1")

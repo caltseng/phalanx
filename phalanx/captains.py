@@ -12,7 +12,7 @@ from . import intake
 from .auth import authenticate_board_read, require_coordinator
 from .intake_api import Key, run
 from .intake_models import Identifier, Payload, Text
-from .session_links import availability_reports, session_id as native_session_id, session_key
+from .session_links import session_id as native_session_id, session_key
 
 
 # A Captain whose last heartbeat is older than this is stale (D5).
@@ -164,6 +164,21 @@ def open_intents(db, captain_id):
            ORDER BY created_at, id""", (captain_id,))]
 
 
+def availability_reports(db):
+    """Latest provider-scoped native observations, including other Captains' sessions."""
+    return {
+        session_key(row["session_id"], row["runtime"] or session_key(row["session_ref"])[0]):
+            row["availability"]
+        for row in db.execute(
+            """SELECT json_extract(session.value, '$.id') AS session_id,
+                      json_extract(session.value, '$.availability') AS availability,
+                      json_extract(session.value, '$.runtime') AS runtime, captains.session_ref
+               FROM captains, json_each(captains.sessions_json) AS session
+               WHERE json_extract(session.value, '$.availability') IN ('present', 'missing', 'deleted')
+               ORDER BY captains.heartbeat_at, captains.rowid""")
+    }
+
+
 def view(db, row, now=None, session_reports=None):
     now = now or datetime.now(UTC)
     return {
@@ -199,14 +214,6 @@ def successor_name(captain_id):
 def register(db, payload):
     if payload.parent_id is not None:
         captain_row(db, payload.parent_id)
-    native = native_session_id(payload.session_ref)
-    if native != payload.session_ref:
-        previous = db.execute(
-            "SELECT * FROM captains WHERE session_ref=? AND parent_id IS ? ORDER BY created_at, id LIMIT 1",
-            (native, payload.parent_id),
-        ).fetchone()
-        if previous is not None:
-            return view(db, previous)
     captain_id = uuid4().hex
     now = intake.timestamp()
     db.execute(

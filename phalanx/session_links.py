@@ -26,18 +26,3 @@ def session_key(reference, runtime=None):
         runtime = next((name for name, prefix in PREFIX.items()
                         if (reference or "").startswith(prefix)), None)
     return runtime, session_id(reference)
-
-
-def availability_reports(db):
-    """Latest explicit observations, including reports about another Captain's sessions."""
-    return {
-        session_key(row["session_id"], row["runtime"] or session_key(row["session_ref"])[0]):
-            row["availability"]
-        for row in db.execute(
-            """SELECT json_extract(session.value, '$.id') AS session_id,
-                      json_extract(session.value, '$.availability') AS availability,
-                      json_extract(session.value, '$.runtime') AS runtime, captains.session_ref
-               FROM captains, json_each(captains.sessions_json) AS session
-               WHERE json_extract(session.value, '$.availability') IN ('present', 'missing', 'deleted')
-               ORDER BY captains.heartbeat_at, captains.rowid""")
-    }
