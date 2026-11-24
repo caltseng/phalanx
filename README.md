@@ -1,5 +1,7 @@
 # Phalanx
 
+<img src="docs/phalanx-logo.svg" alt="Phalanx logo: an ivory spear-shaped mark on a crimson shield with a gold rim" width="96" height="96">
+
 Phalanx is an agentic orchestrator for work across repositories. Work items live in an API-backed queue. Captain chats launch registered writer sessions in parallel to deliver a Markdown report or a pull request.
 
 1. File a work item for a registered repository with a goal, enough context to execute it, and the expected output.
