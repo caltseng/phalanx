@@ -8,6 +8,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store
 from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA
@@ -643,6 +644,25 @@ class WriterTest(ServerFixture, unittest.TestCase):
         with connect(self.path) as db:
             self.assertNotIn("reconciler_stale", {entry["kind"] for entry in flags.all_flags(db, later)["flags"]})
 
+    def test_held_action_requires_reason_and_appears_as_board_and_item_wait(self):
+        item_id, execution_id = self.item()
+        action = {"captain_id": self.captain["id"], "action": "held"}
+        route = f"/v1/items/{item_id}/captain-actions"
+        self.ok(route, RUNNER, action, 422)
+        self.ok(route, RUNNER, dict(action, reason="  "), 422)
+        self.ok(route, None, dict(action, reason="Charter lane order"), 401)
+        held = self.ok(route, RUNNER, dict(action, reason="Charter lane order"), 201)
+        self.assertEqual(held["version"], self.version(item_id))
+        board = "/v1/operator/executions"
+        timeline = f"{board}/{execution_id}/timeline"
+        for row in (self.ok(board, OWNER)["items"][0], self.ok(timeline, OWNER)["item"]):
+            self.assertEqual(row["wait_reason"], "Charter lane order")
+            self.assertIsNone(row["next_action"])
+        self.ok(route, RUNNER, dict(action, reason="Charter max_writers=1"), 201)
+        self.assertEqual(self.ok(timeline, OWNER)["item"]["wait_reason"], "Charter max_writers=1")
+        self.ok(route, RUNNER, dict(action, action="released", reason="Capacity available"), 201)
+        self.assertIsNone(self.ok(timeline, OWNER)["item"]["wait_reason"])
+
 
 class CaptainFlagTest(ServerFixture, unittest.TestCase):
     def setUp(self):
@@ -698,6 +718,70 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             (stale,) = flags.all_flags(db, now)["flags"]
         self.assertEqual(stale["kind"], "captain_stale")
         self.assertIn("without finishing its handoff", stale["reason"])
+
+    def test_deliberate_hold_suppresses_idle_only_while_current_fresh_and_live(self):
+        from phalanx.operator_api import SUMMARY, dispatch_context, summary
+
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/e/r.git")
+            # A second live Captain keeps idle detection enabled when the holder goes stale/ends.
+            captains.register(db, captains.CaptainRegistration(session_ref="other", charter_revision="c1"))
+        for lapse in ("none", "expired", "stale", "ended", "version", "superseded", "ending_overdue"):
+            with self.subTest(lapse=lapse), write_transaction(self.path) as db:
+                item = intake.create(db, Intake(repository_id="repo", goal="Work", target="report"))
+                execution_id = item["execution"]["id"]
+                captain = captains.register(db, captains.CaptainRegistration(
+                    session_ref=f"holder-{lapse}", charter_revision="c1"))
+                now = datetime.now(UTC)
+                db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (execution_id,))
+                self.assertIn(execution_id, {entry["execution_id"] for entry in flags.captain_idle_with_work(db, now)})
+                with patch("phalanx.intake.timestamp", return_value=now.isoformat(timespec="microseconds")):
+                    captains.record_action(db, item["id"], captains.Action(
+                        captain_id=captain["id"], action="held", reason="Charter mutual exclusion"))
+                if lapse == "expired":
+                    db.execute("UPDATE captain_actions SET created_at=? WHERE execution_id=?",
+                               ((now - flags.IDLE_WITH_WORK).isoformat(timespec="microseconds"), execution_id))
+                elif lapse == "stale":
+                    db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                               ((now - captains.STALE).isoformat(timespec="microseconds"), captain["id"]))
+                elif lapse == "ended":
+                    captains.heartbeat(db, captain["id"], captains.Heartbeat(
+                        charter_revision="c1", wake_count=1, state="ended"))
+                elif lapse == "version":
+                    db.execute("UPDATE executions SET version=version+1 WHERE id=?", (execution_id,))
+                elif lapse == "superseded":
+                    # Equal timestamps still honor recording order, not random action IDs.
+                    with patch("phalanx.intake.timestamp", return_value=now.isoformat(timespec="microseconds")):
+                        captains.record_action(db, item["id"], captains.Action(
+                            captain_id=captain["id"], action="released", reason="Lane open"))
+                elif lapse == "ending_overdue":
+                    db.execute("UPDATE captains SET state='ending', ending_at=? WHERE id=?",
+                               ((now - captains.ENDING_LIMIT).isoformat(timespec="microseconds"), captain["id"]))
+                idle = {entry["execution_id"] for entry in flags.captain_idle_with_work(db, now)}
+                self.assertEqual(execution_id in idle, lapse != "none")
+                row = db.execute(SUMMARY + " WHERE execution.id=?", (execution_id,)).fetchone()
+                wait = summary(row, now, dispatch_context(db, now))["wait_reason"]
+                self.assertEqual(wait, "Charter mutual exclusion" if lapse == "none" else None)
+
+    def test_expired_hold_invalidates_board_cache_without_a_write(self):
+        from fastapi import Response
+        from starlette.requests import Request
+        from phalanx.operator_api import conditional_read
+
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/e/r.git")
+            item = intake.create(db, Intake(repository_id="repo", goal="Work", target="report"))
+            captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+            now = datetime.now(UTC)
+            held_at = now - flags.IDLE_WITH_WORK + timedelta(seconds=1)
+            with patch("phalanx.intake.timestamp", return_value=held_at.isoformat(timespec="microseconds")):
+                captains.record_action(db, item["id"], captains.Action(
+                    captain_id=captain["id"], action="held", reason="Charter writer cap"))
+            request = Request({"type": "http", "path": "/v1/operator/executions", "query_string": b"", "headers": []})
+            first, second = Response(), Response()
+            conditional_read(request, first, db, now)
+            conditional_read(request, second, db, now + timedelta(seconds=1))
+            self.assertNotEqual(first.headers["ETag"], second.headers["ETag"])
 
     def previous_store(self, migration):
         """A store upgraded up to, but not including, the given migration."""

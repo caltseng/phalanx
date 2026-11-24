@@ -18,6 +18,7 @@ from .intake_models import Identifier, Payload, Text
 STALE = timedelta(minutes=15)
 # A Captain still ending this long after it started its handoff is treated as dead.
 ENDING_LIMIT = timedelta(minutes=30)
+IDLE_WITH_WORK = timedelta(minutes=30)
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 CaptainState = Literal["active", "ending", "ended"]
 # A Captain moves only forward: active, then ending, then ended.
@@ -125,6 +126,27 @@ def gone_at(row):
 
 def is_live(row, now):
     return row["state"] != "ended" and now < gone_at(row)
+
+
+def active_holds(db, now):
+    """Current-version holds remain advisory and expire with their Captain or after 30 minutes."""
+    live = {row["id"] for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")
+            if is_live(row, now)}
+    if not live:
+        return {}
+    return {
+        row["execution_id"]: row["reason"]
+        for row in db.execute(
+            """SELECT action.* FROM executions AS execution
+               JOIN captain_actions AS action ON action.rowid = (
+                   SELECT latest.rowid FROM captain_actions AS latest
+                   WHERE latest.execution_id = execution.id AND latest.version = execution.version
+                   ORDER BY latest.created_at DESC, latest.rowid DESC LIMIT 1)
+               WHERE execution.status = 'queued' AND action.action = 'held'
+                 AND action.created_at > ?""",
+            ((now - IDLE_WITH_WORK).isoformat(timespec="microseconds"),))
+        if row["captain_id"] in live
+    }
 
 
 def open_intents(db, captain_id):
