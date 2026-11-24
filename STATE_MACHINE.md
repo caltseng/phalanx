@@ -137,6 +137,13 @@ stateDiagram-v2
 | Finalize report | Persist terminal intent, then store/reuse exact artifact and close atomically. Retry independently of pause. |
 | Rerun | New linked execution with explicit target; preserve old history and reconcile existing outputs before repeating effects. |
 
+Delivery retains a live writer even without an open attempt. Cancellation and forced failure
+therefore wait for its Captain to reconcile effects, stop the exact session and withdraw it
+with `stopped=true`; withdrawal confirms the stop even when no attempt is open. An explicitly
+scheduled external wait with no active attempt can still finalize immediately. A verified
+primary-PR merge into the target observed before stop confirmation completes delivery instead
+of producing a cancellation/failure report; open, unmerged and wrong-base observations do not.
+
 Capture worktree, candidate/checkpoint, evidence and remaining work before yielding. A required
 checkpoint that exists only locally pins recovery to that host until safely preserved.
 

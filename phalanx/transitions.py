@@ -341,6 +341,9 @@ def decide(
                      "Finalization requires the reviewed report revision")
         return _disposition(state, state.pending_output, evidence.stored_report)
     if state.stopping is not None:
+        if (event is Event.PR_OBSERVED and evidence.pr and evidence.pr.merge_commit
+                and not evidence.off_base):
+            return _pr_observed(state, evidence)
         _require(event is Event.STOP_CONFIRMED, "Reconcile outstanding effects before closing")
         return _disposition(state, state.stopping, evidence.stored_report)
     if event is Event.PR_OBSERVED:

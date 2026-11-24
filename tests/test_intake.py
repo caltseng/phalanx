@@ -298,11 +298,11 @@ class IntakeTest(ServerFixture, unittest.TestCase):
     def test_cancel_scheduled_external_wait_without_an_open_attempt(self):
         item, _, _, route = self.create("ready_for_check_in")
         claim = self.claim(item, item["execution"])
-        with write_transaction(self.path) as db:
-            row, state = check_current(db, item["id"], item["execution"]["id"],
-                                       claim["expected_version"])
-            waiting = apply(db, row, state, Event.EXTERNAL_WAIT, details={},
-                            attempt_id=claim["attempt_id"], wait=Wait("Waiting for CI", "recheck"))
+        status, waiting = self.submit(route + "/external-wait", {
+            key: claim[key] for key in ("expected_version", "attempt_id", "stage")
+        } | {"reason": "Waiting for CI", "gate": "ci", "revision": {"head": "head", "base": "base"},
+             "retry_after_seconds": 60}, token=LEASE, key="wait")
+        self.assertEqual(status, 200, waiting)
         status, closed = self.submit(
             route + "/cancel", {"expected_version": waiting["version"], "reason": "Withdrawn"},
         )

@@ -130,12 +130,11 @@ def release(db, writer, reason):
     attempt = db.execute("SELECT id FROM attempts WHERE execution_id=? AND ended_at IS NULL",
                          (row["id"],)).fetchone()
     details = {"reason": f"Writer released: {reason}", "writer_id": writer["id"]}
-    if attempt is not None and attempt["id"] == writer["attempt_id"]:
-        if state.stopping is not None:
-            intake.confirm_stop(db, row, state, attempt["id"], details=details)
-        else:
-            intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
-                         details=details)
+    if state.stopping is not None and (attempt is None or attempt["id"] == writer["attempt_id"]):
+        intake.confirm_stop(db, row, state, attempt and attempt["id"], details=details)
+    elif attempt is not None and attempt["id"] == writer["attempt_id"]:
+        intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
+                     details=details)
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
 

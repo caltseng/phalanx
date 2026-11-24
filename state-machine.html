@@ -110,7 +110,10 @@
       Replacement must name the current writer and attest its exact native session stopped
       after preserving local work and accounting for effects. Revoke the old token atomically.</p>
     <p>Cancellation stops new work and reconciles in-flight effects before finalization.
-      A verified merge wins over an attempted cancellation. Storage failure leaves a visible,
+      Delivery's registered writer still needs stopped-session withdrawal even without an
+      open attempt; an explicitly scheduled effect-free wait can finalize immediately.
+      A verified primary-PR merge into the target observed before stop confirmation wins
+      over cancellation or forced failure. Storage failure leaves a visible,
       retryable finalization, not a terminal execution without output.</p>
   </details>
   <details>

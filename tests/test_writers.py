@@ -505,6 +505,62 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertTrue(output["merged_at"].startswith("2026-11-24T06:33:57"))
         self.ok("/v1/writer", token, code=401)
 
+    def test_delivery_stop_waits_for_the_registered_writer_without_an_attempt(self):
+        for action, disposition in (("cancel", "cancelled"), ("close-failure", "failed")):
+            with self.subTest(action=action):
+                binding, token = self.publish("checked_in")
+                binding = self.submit(token, binding, pr_url=PR_URL)
+                route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+                writer = binding["writer"]
+                self.ok(route + "/writer", RUNNER, {
+                    "captain_id": self.captain["id"], "writer_id": writer["id"],
+                    "session_id": f"delivery-{action}",
+                }, method="PATCH")
+                stopping = self.ok(route + "/" + action, OWNER, {
+                    "expected_version": binding["version"], "reason": "Stop delivery",
+                })
+                self.assertEqual((stopping["state"]["status"], stopping["state"]["stopping"]),
+                                 ("waiting_for_external", disposition))
+                self.assertIsNone(stopping["state"]["final_output"])
+                self.assertIsNone(self.ok("/v1/writer/attempt", token, method="POST")["writer"]["attempt_id"])
+                self.assertEqual(self.observe(binding)["version"], stopping["version"])
+                self.assertEqual(self.observe(binding, state="closed", merged=True, base_ref="other",
+                                              merge_commit=MERGE)["version"], stopping["version"])
+                self.register(binding["item_id"], binding["id"], replaces=writer["id"],
+                              replaced_stopped=True, code=409)
+                withdrawal = {"captain_id": self.captain["id"], "writer_id": writer["id"],
+                              "reason": "Session stopped; PR effects reconciled"}
+                self.ok(route + "/writer/withdraw", RUNNER, withdrawal, 409)
+                ended = self.ok(route + "/writer/withdraw", RUNNER, dict(withdrawal, stopped=True))
+                self.assertEqual((ended["state"]["stopping"], ended["state"]["pending_output"],
+                                  ended["writer"]["state"]), (None, disposition, "ended"))
+                closed = finalization.attempt(self.path, binding["id"])
+                self.assertEqual(closed["state"]["status"], disposition)
+                with store.read_transaction(self.path) as db:
+                    markdown = intake.report(db, binding["item_id"], binding["id"])
+                self.assertIn("Stop delivery", markdown)
+                self.assertIn(PR_URL, markdown)
+                self.ok("/v1/writer", token, code=401)
+
+    def test_a_verified_delivery_merge_wins_over_a_pending_stop(self):
+        for action in ("cancel", "close-failure"):
+            with self.subTest(action=action):
+                binding, token = self.publish("checked_in")
+                binding = self.submit(token, binding, pr_url=PR_URL)
+                route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+                self.ok(route + "/" + action, OWNER, {
+                    "expected_version": binding["version"], "reason": "Stop raced with merge",
+                })
+                merged = self.observe(binding, state="closed", merged=True, merge_commit=MERGE,
+                                      merge_method="merge", merged_at="2026-11-24T21:00:00Z")
+                self.assertEqual((merged["state"]["status"], merged["state"]["stopping"],
+                                  merged["state"]["pending_output"]), ("completed", None, None))
+                self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+                self.assertEqual(merged["state"]["final_output"]["url"], PR_URL)
+                self.assertEqual(self.observe(binding, state="closed", merged=True,
+                                              merge_commit=MERGE, code=409)["version"], merged["version"])
+                self.ok("/v1/writer", token, code=401)
+
     def test_a_rerun_is_delivered_only_by_the_pr_its_writer_published(self):
         binding, token = self.publish("checked_in")
         self.submit(token, binding, pr_url=PR_URL)
