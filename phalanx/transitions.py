@@ -34,6 +34,8 @@ class Stage(StrEnum):
 WRITER_PR_STAGES = frozenset({Stage.PUBLICATION, Stage.DELIVERY})
 
 
+# PR gates that may observe the repository's own merge of the validated candidate.
+EXTERNAL_MERGE_STAGES = frozenset({Stage.PR_PROMOTION, Stage.PR_VALIDATION, Stage.PR_RECONCILIATION})
 # Stages the runner completes itself, without an agent worker session.
 RUNNER_ONLY_STAGES = frozenset({
     Stage.PR_CREATION, Stage.REPORT_STORAGE, Stage.PRE_PR_VALIDATION, Stage.PR_PROMOTION,
@@ -97,6 +99,9 @@ class PullRequest:
     draft: bool = False
     merge_commit: str | None = None
     closed: bool = False
+    # "merge" or "squash_or_rebase", and GitHub's merged_at, for a verified merge.
+    merge_method: str | None = None
+    merged_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -238,11 +243,18 @@ def _primary(state: Execution, evidence: Evidence) -> PullRequest:
 
 def _merge_verified(state: Execution, evidence: Evidence) -> Execution:
     pr = _primary(state, evidence)
-    _require(state.target is Target.MERGED and state.ready_revision == pr.revision
-             and state.candidate == pr.revision.head
-             and not pr.draft and pr.merge_commit,
+    _require(state.candidate == pr.revision.head and not pr.draft and pr.merge_commit,
              "Verified merge must match the primary PR and expected candidate")
-    return _close(state, Status.COMPLETED, pr)
+    if state.stage is Stage.CHECK_IN:
+        _require(state.target is Target.MERGED and state.ready_revision == pr.revision,
+                 "Verified merge must match the authorized ready revision")
+        return _close(state, Status.COMPLETED, pr)
+    if state.stage is Stage.DELIVERY:
+        # The writer's PR merged into its target; _pr_observed took GitHub's head as the candidate.
+        return _close(replace(state, ready_revision=pr.revision), Status.COMPLETED, pr)
+    # The repository merged the validated candidate itself, so the item is delivered.
+    _require(state.stage in EXTERNAL_MERGE_STAGES, "Merge verification requires a PR gate or check-in")
+    return _close(replace(state, stage=Stage.CHECK_IN, ready_revision=pr.revision), Status.COMPLETED, pr)
 
 
 def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
@@ -261,8 +273,8 @@ def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
                           "owner reply"), ready_revision=None)
     if pr.merge_commit:
         # A merge by any method, by anyone, delivers either PR target. GitHub's head is the
-        # candidate. Interim: routes through _merge_verified once #168 lands.
-        return _close(replace(state, candidate=pr.revision.head), Status.COMPLETED, pr)
+        # candidate, since a writer's push can race auto-merge (decision 81).
+        return _merge_verified(replace(state, candidate=pr.revision.head), evidence)
     if state.status is not Status.WAITING_FOR_EXTERNAL:
         return state
     state = replace(state, candidate=pr.revision.head)
@@ -437,7 +449,6 @@ def decide(
                      "Finalization requires the reviewed report revision")
         return _disposition(state, state.pending_output, evidence.stored_report)
     if event is Event.MERGE_VERIFIED:
-        _require(state.stage is Stage.CHECK_IN, "Merge verification requires check-in")
         return _merge_verified(state, evidence)
     if state.stopping is not None:
         _require(event is Event.STOP_CONFIRMED, "Reconcile outstanding effects before closing")

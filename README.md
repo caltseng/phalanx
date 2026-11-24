@@ -599,14 +599,17 @@ Each heartbeat re-reads the charter and records that revision.
 
 | Command | Does |
 | --- | --- |
-| `shift prompt captain` | Prints the Captain prompt, the fixed wake loop. Needs no config |
+| `shift prompt captain\|keeper` | Prints the Captain prompt (the fixed wake loop) or the keeper prompt. Needs no config |
 | `shift charter` | Validates the charter and prints it with its revision |
 | `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
-| `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session] [--handoff-note]` | Re-reads the charter and heartbeats. Omitted fields keep their last value. Prints `shift.handoff_due` once a shift bound is reached |
+| `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session ID NAME]... [--no-sessions] [--handoff-note]` | Re-reads the charter and heartbeats. `--session` reports each of the runtime's `phx ` sessions, and the server flags any that no writer or Captain owns. Omitted fields keep their last value. Prints `shift.handoff_due` once a shift bound is reached |
 | `shift status` | Flags, Captains and the charter's open items with their writers |
 | `shift launch --captain ID --item ITEM [--replaces WRITER]` | Prepares the item worktree, saves the writer credential in its Git directory and registers the writer intent. Prints `session_name`, which holds the nonce, and the worker's `kickoff` prompt. A rerun reuses the saved nonce, so a lost reply never launches twice |
 | `shift writer --captain --item --execution --writer [--session-id] [--session-url] [--state] [--abandon]` | Confirms a launched session or reports its state |
 | `shift withdraw --captain --item --execution --writer --reason [--stopped]` | Ends a writer whose session is stopped or never launched |
+| `shift action --captain --item --action --reason` | Puts a Captain action on the item's timeline |
+| `shift handoff --captain ID --note NOTE` | Starts ending the shift. Prints the open intents still owned, the successor's `session_name` and `kickoff`, and any registered successors |
+| `shift retire-reconciler RUNNER_ID` | Deletes a decommissioned reconciler's heartbeat, which clears its `reconciler_stale` flag |
 
 #### In the GitHub Copilot app
 
@@ -632,6 +635,23 @@ Each heartbeat re-reads the charter and records that revision.
    It confirms the session with `shift writer --session-id <session ID>
    --session-url ghapp://sessions/<session ID>`. `list_sessions_and_chats`
    finds a lost launch by its name, which holds the nonce.
+4. Run the keeper (D8) as an app automation that starts a new session every
+   30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode
+   `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper
+   --config <shift config>` and follow it." The keeper exits when a live
+   Captain exists. Otherwise it becomes the Captain and gives itself the 5-minute
+   wake automation. The app keeps each exited keeper session, so archive them
+   now and then.
+
+A Captain's shift ends when the charter's `[shift]` bounds are reached, at its
+first compaction or when it degrades. It runs `shift handoff`, which marks it
+`ending` (at most 30 minutes) and returns a successor name, `phx captain
+<id prefix>`, and its kickoff. The Captain starts that chat, finishes or
+abandons its unconfirmed launches, and heartbeats `--state ended` without
+waiting for the successor. Captain states only move forward:
+`active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes,
+or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper
+takes over its unconfirmed launches.
 
 Watch the run on the [operator board](#operator-work-board), which shows each
 item's writer, the live Captains and the flags. `GET /v1/captains` and `GET

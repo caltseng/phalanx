@@ -81,8 +81,14 @@
         const url = httpsUrl(row.output.url);
         if (url) output = { kind: "pr", url };
       }
+      const merge = row.delivery?.merged ? row.delivery : null;
+      const delivery = merge && typeof merge.merge_commit === "string" ? {
+        mergeCommit: merge.merge_commit,
+        method: typeof merge.merge_method === "string" ? merge.merge_method : null,
+        mergedAt: typeof merge.merged_at === "string" ? merge.merged_at : null
+      } : undefined;
       return {
-        id, itemId, output,
+        id, itemId, output, delivery,
         version: row.version,
         title: row.title,
         goal: row.goal,

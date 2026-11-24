@@ -127,6 +127,7 @@ def summary(row, now):
     wait = state.get("wait") or {}
     output = state["final_output"]
     outcome = None
+    delivery = None
     if output is not None:
         if row["status"] != "completed":
             outcome = row["status"]
@@ -134,6 +135,10 @@ def summary(row, now):
             outcome = "report_stored"
         else:
             outcome = "checked_in" if output.get("merge_commit") else "ready_for_check_in"
+        if output.get("merge_commit"):
+            # What GitHub delivered, distinct from the Phalanx stage that recorded it.
+            delivery = {"merged": True, "merge_commit": output["merge_commit"],
+                        "merge_method": output.get("merge_method"), "merged_at": output.get("merged_at")}
         output = (
             {"kind": "report", "url": output["reference"]} if "reference" in output
             else {"kind": "pr", "url": output["url"]}
@@ -196,6 +201,7 @@ def summary(row, now):
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
+        "delivery": delivery,
         # The registered native worker session that holds this item, if any.
         "writer": None if row["writer_id"] is None or output is not None else {
             "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],
@@ -350,10 +356,20 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 JOIN transition_history AS checked
                     ON checked.execution_id = result.execution_id AND checked.version = result.version
                 WHERE result.execution_id = ?
+                UNION ALL
+                SELECT action.version, 'captain_action', action.created_at, NULL,
+                       json_extract(acted.state_json, '$.stage'),
+                       json_extract(acted.state_json, '$.status'),
+                       NULL, 'Captain ' || substr(action.captain_id, 1, 8) || ' ' || action.action
+                           || ': ' || action.reason, NULL
+                FROM captain_actions AS action
+                JOIN transition_history AS acted
+                    ON acted.execution_id = action.execution_id AND acted.version = action.version
+                WHERE action.execution_id = ?
             )
             SELECT * FROM events {boundary}
             ORDER BY version DESC, created_at DESC LIMIT ?""",
-            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),

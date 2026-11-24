@@ -187,6 +187,14 @@ def timeline(db, item_id, execution_id):
     } for row in db.execute(
         "SELECT * FROM local_check_results WHERE execution_id=?", (execution_id,),
     )]
+    events += [{
+        "version": row["version"], "event": "captain_action", "attempt_id": None,
+        "created_at": row["created_at"],
+        "details": {"captain_id": row["captain_id"], "action": row["action"], "reason": row["reason"]},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM captain_actions WHERE execution_id=?", (execution_id,),
+    )]
     return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 

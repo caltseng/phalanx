@@ -9,7 +9,7 @@ from phalanx.validation import CheckKind, RequiredCheck
 from phalanx.validation_policy import PublishedValidationPolicy
 from phalanx.workspaces import _item_branch
 
-from test_github import BASE, HEAD, pull, response
+from test_github import BASE, HEAD, MERGE, pull, response
 
 
 class PublishedValidationRunnerTest(unittest.TestCase):
@@ -144,3 +144,51 @@ class PublishedValidationRunnerTest(unittest.TestCase):
         route, body, _ = self.calls[-1]
         self.assertEqual((route, body["outcome"]), ("result", "needs_input"))
         self.assertIn("recorded branch and candidate", body["question"]["prompt"])
+
+    def merged_snapshot(self, head=HEAD):
+        self.snapshot.update(state="closed", merged=True, merge_commit_sha=MERGE,
+                             merged_at="2026-11-24T06:33:57Z")
+        self.snapshot["head"]["sha"] = head
+        snapshot = response(self.snapshot)
+        self.responses.extend((snapshot, snapshot))
+
+    def test_repository_squash_merge_of_the_candidate_is_delivered_without_asking(self):
+        # Churchtree #55: squash commit whose only parent is the prior base, on the base branch.
+        self.merged_snapshot()
+        self.responses.extend((response({"sha": MERGE, "parents": [{"sha": BASE}]}),
+                               response({"status": "ahead"})))
+        self.runner.run(self.assignment, PublishedValidationPolicy(()))
+        self.assertFalse(self.responses)
+        route, body, _ = self.calls[-1]
+        self.assertEqual(route, "pr-merged")
+        self.assertEqual((body["merge_method"], body["merge_parent_shas"], body["pull"]["merge_commit"]),
+                         ("squash_or_rebase", [BASE], MERGE))
+        self.assertEqual((body["pull"]["head_sha"], body["expected"]["head_ref"]), (HEAD, _item_branch("item")))
+
+    def test_merge_commit_of_the_candidate_is_delivered(self):
+        self.merged_snapshot()
+        self.responses.append(response({"sha": MERGE, "parents": [{"sha": BASE}, {"sha": HEAD}]}))
+        self.runner.run(self.assignment, PublishedValidationPolicy(()))
+        route, body, _ = self.calls[-1]
+        self.assertEqual((route, body["merge_method"]), ("pr-merged", "merge"))
+
+    def test_repository_merge_that_cannot_be_verified_blocks_visibly(self):
+        cases = {
+            "head": lambda: self.merged_snapshot(head="d" * 40),
+            "repository": lambda: (self.snapshot["head"]["repo"].update(full_name="Other/Repo"),
+                                   self.merged_snapshot()),
+            "base branch": lambda: (self.snapshot["base"].update(ref="outside"), self.merged_snapshot()),
+            "off base": lambda: (self.merged_snapshot(), self.responses.extend((
+                response({"sha": MERGE, "parents": [{"sha": BASE}]}), response({"status": "diverged"})))),
+        }
+        for version, (name, arrange) in enumerate(cases.items(), start=20):
+            with self.subTest(name):
+                self.setUp()
+                arrange()
+                assignment = PublishedValidationAssignment("item", "execution", "runner", "attempt", version,
+                                                           self.assignment.lease)
+                self.runner.run(assignment, PublishedValidationPolicy(()))
+                self.assertFalse(self.responses)
+                route, body, _ = self.calls[-1]
+                self.assertEqual((route, body["outcome"]), ("result", "needs_input"))
+                self.assertIn("merged outside Phalanx", body["question"]["prompt"])
