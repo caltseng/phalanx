@@ -6,6 +6,12 @@
   const CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
   const EXECUTIONS = "/v1/operator/executions";
 
+  const filters = new URLSearchParams(location.search);
+  const FILTERS = ["repository", "label", "status", "stage", "outcome", "q", "closed_after"];
+  const route = /^\/operator\/(items|executions)\/([0-9a-f]{32})$/.exec(location.pathname);
+  const page = route ? "detail" : location.pathname === "/operator/queue" ? "queue"
+    : location.pathname === "/operator/history" ? "history" : "home";
+
   function client(token) {
     async function read(path, signal, accept = "application/json") {
       const headers = { Accept: accept };
@@ -145,6 +151,7 @@
 
     return {
       owner: signal => read("/v1/owner/status", signal),
+      boardAccess: signal => read(EXECUTIONS + "?limit=1", signal),
       repositories: signal => read("/v1/repositories", signal),
       async create(payload, key) {
         const response = await fetch("/v1/items", {
@@ -178,14 +185,26 @@
         if (kind !== "open" && kind !== "closed") throw new Error("Invalid work list.");
         const params = query(limit, cursor);
         params.set("kind", kind);
-        const page = await read(EXECUTIONS + "?" + params, signal);
-        return { items: pageRows(page.items, limit).map(item), nextCursor: nextCursor(page.next_cursor) };
+        for (const name of FILTERS) {
+          const value = filters.get(name);
+          if (!value) continue;
+          params.set(name, value);
+        }
+        const result = await read(EXECUTIONS + "?" + params, signal);
+        return { items: pageRows(result.items, limit).map(item), nextCursor: nextCursor(result.next_cursor) };
+      },
+      async currentItem(id, signal) {
+        const result = await read("/v1/operator/items/" + identifier(id), signal);
+        return item(result.item);
       },
       async detail({ id, cursor, limit, signal }) {
         const params = query(limit, cursor);
         const page = await read(EXECUTIONS + "/" + identifier(id) + "/timeline?" + params, signal);
         return {
           item: item(page.item),
+          nextAction: page.item.next_action,
+          previousExecutionId: page.previous_execution_id ? identifier(page.previous_execution_id) : null,
+          nextExecutionId: page.next_execution_id ? identifier(page.next_execution_id) : null,
           attempt: page.attempt,
           question: page.question ? {
             prompt: page.question.prompt,
@@ -449,7 +468,7 @@
       const markdown = await source.report(output, signal);
       if (reportRead === request && dialog.open) {
         reportStatus.textContent = "";
-        reportContent.textContent = markdown;
+        reportContent.replaceChildren(window.PhalanxMarkdown.render(markdown));
       }
     } catch {
       if (reportRead === request && dialog.open) {
@@ -461,7 +480,21 @@
   function show(source, authenticated = false) {
     source.openReport = output => openReport(source, output);
     clearCreate = newItem(source, authenticated);
-    unmount = window.PhalanxOperatorBoard.mount(board, source);
+    const cursorName = kind => page === "home" ? kind + "_cursor" : "cursor";
+    unmount = window.PhalanxOperatorBoard.mount(board, source, {
+      page,
+      itemId: route?.[1] === "items" ? route[2] : null,
+      executionId: route?.[1] === "executions" ? route[2] : null,
+      filters: Object.fromEntries(filters),
+      cursors: Object.fromEntries(["open", "closed"].map(kind => [kind,
+        page === "home" || (page === "queue" ? kind === "open" : kind === "closed") ? filters.get(cursorName(kind)) : null])),
+      pageChanged(kind, cursor) {
+        const url = new URL(location.href);
+        if (cursor) url.searchParams.set(cursorName(kind), cursor);
+        else url.searchParams.delete(cursorName(kind));
+        history.replaceState(null, "", url);
+      }
+    });
     form.hidden = true;
     board.hidden = false;
     status.textContent = "";
@@ -502,7 +535,7 @@
     // A local board opens without a token; otherwise the server returns 401 and the form appears.
     const source = client(null);
     try {
-      await source.list({ kind: "open", cursor: null, limit: 1, signal: AbortSignal.timeout(12000) });
+      await source.boardAccess(AbortSignal.timeout(12000));
       show(source);
     } catch (error) {
       form.hidden = false;

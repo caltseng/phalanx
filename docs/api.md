@@ -115,11 +115,12 @@ Both owner and runner tokens can call these routes. With `PHALANX_LOCAL_BOARD=1`
 | --- | --- |
 | `GET /v1/operator/executions?kind=open` | `items` and `next_cursor`. Input waits appear first. Each group is ordered by execution creation time, oldest first. |
 | `GET /v1/operator/executions?kind=closed` | `items` and `next_cursor`. Closures appear newest first, including outputs from earlier executions of rerun items. |
+| `GET /v1/operator/items/{item_id}` | The current execution summary in `item`, or 404. Uses the same conditional-read contract as execution lists. |
 | `GET /v1/operator/overview` | Section counts, 24-hour outcomes, dispatch paused/on, oldest eligible queued age and `generated_at` for data age. |
 | `GET /v1/operator/groups/{label}` | Current executions with the label, a paginated item list and an outcome/size/time rollup. |
 | `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`. |
 
-Each route defaults to 25 entries and accepts `limit` from 1 through 100. Pass the returned `next_cursor` as `cursor` on the same route and list kind until it is null. Pages read live state: an open execution entering or leaving the input-wait group can cross the cursor between requests, so refresh from the first page to see the current order. New timeline events and closures normally precede the current cursor. The timestamp and version fields describe the persisted state.
+Paginated routes default to 25 entries and accept `limit` from 1 through 100. Pass the returned `next_cursor` as `cursor` on the same route and list kind until it is null. Pages read live state: an open execution entering or leaving the input-wait group can cross the cursor between requests, so refresh from the first page to see the current order. New timeline events and closures normally precede the current cursor. The timestamp and version fields describe the persisted state.
 
 Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. Outcome and closure-time filters apply only to closed lists. Filtered pages inspect at most 2,000 indexed candidates and may return an empty page with a continuation cursor. Lists, overview and groups support weak `ETag`/`If-None-Match` conditional reads (`private, no-cache`); unchanged state returns 304. Display ages alone do not invalidate the token: calculate elapsed time from the retained snapshot's timestamps. State changes and retry, lease and 24-hour closure boundaries invalidate it.
 
@@ -132,6 +133,10 @@ identifies the primary PR. Writer fields expose its native session and progress,
 `worker_reference` and `worker_url` retain remaining runner-stage attempt evidence.
 `version` is the version a reply must name. Timelines list blocking `prerequisites` and the
 current `question`. Report output URLs use the authenticated report route.
+Timelines also include nullable `previous_execution_id` and `next_execution_id` for rerun
+navigation. Local `/operator/items/{item_id}` and `/operator/executions/{execution_id}`
+pages reuse that timeline; `/operator/queue` and `/operator/history` use the existing
+filtered lists, preserving filters and keyset cursors in the browser URL.
 
 ### Read one item's correlated timeline
 

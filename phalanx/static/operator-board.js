@@ -159,6 +159,19 @@
     ].filter(Boolean);
   }
 
+  function queryForm(action, props = {}, ...children) {
+    const form = h("form", { action, method: "get", ...props }, ...children);
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      const url = new URL(action, location.origin);
+      for (const [name, value] of new FormData(form)) {
+        if (value.trim()) url.searchParams.set(name, value.trim());
+      }
+      location.assign(url);
+    });
+    return form;
+  }
+
   /**
    * mount(root, source) returns an unmount function. Call once per root with class "phalanx-board".
    * The host supplies the authenticated adapter and translates API fields here.
@@ -179,14 +192,28 @@
    * Events are newest first: {at, event?, fromStage?, stage, status, reason?}. Dates are ISO strings.
    * source.openReport?(output) opens a stored report in the host. Reject failed reads.
    * source.openNewItem?(trigger, created) opens host intake; call created(item) on acknowledgment.
+   * options selects home/queue/history/detail, URL filters/cursors and an itemId or executionId.
    */
-  function mount(root, source) {
+  function mount(root, source, options = {}) {
+    const page = options.page || "home";
+    const routed = page === "detail";
     const slot = () => ({ rows: [], cursors: [null], next: null, updated: 0, failed: false, request: null });
     const state = {
       open: slot(), closed: slot(), flags: slot(), captains: slot(),
+      route: { ...slot(), data: null },
       expanded: null, expandedAt: 0, endedOpen: false, details: new Map(), flagGroups: new Set(), seen: new Map(), changed: new Map()
     };
-    const enabled = { open: true, closed: true, flags: Boolean(source.flags), captains: Boolean(source.captains) };
+    const filterStatus = options.filters?.status;
+    const closedStatus = ["completed", "failed", "cancelled"].includes(filterStatus);
+    const enabled = {
+      open: !routed && (page === "queue" || (page === "home" &&
+        !options.filters?.outcome && !options.filters?.closed_after && !closedStatus)),
+      closed: !routed && (page === "history" || (page === "home" &&
+        (options.filters?.outcome || options.filters?.closed_after || !filterStatus || closedStatus))),
+      route: routed, flags: Boolean(source.flags), captains: Boolean(source.captains) };
+    for (const kind of ["open", "closed"]) {
+      if (options.cursors?.[kind]) state[kind].cursors = [options.cursors[kind]];
+    }
     let disposed = false;
 
     const announce = h("p", { class: "sr-only", role: "status" });
@@ -203,7 +230,32 @@
         h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" })),
       health, counts, h("div", { class: "actions" }, create, theme, refresh));
     const body = h("div", { class: "sections" });
-    root.replaceChildren(header, announce, body);
+    const navigation = h("nav", { class: "board-navigation", "aria-label": "Scribe pages" },
+      [["/operator/", "Home"], ["/operator/queue", "Queue"], ["/operator/history", "History"]].map(([href, text]) =>
+        h("a", { href, text })));
+    const search = queryForm("/operator/", { role: "search", class: "board-search" },
+      h("label", {}, "Search all work ", h("input", { name: "q", type: "search", maxlength: "200",
+        value: options.filters?.q || "", placeholder: "Item, execution, PR or title" })),
+      h("button", { type: "submit", text: "Search" }));
+    navigation.append(search);
+    root.replaceChildren(header, navigation, announce);
+    if (!routed) {
+      const filters = queryForm(page === "home" ? "/operator/" : "/operator/" + page,
+        { class: "board-filters", "aria-label": "Work filters" });
+      const fields = ["repository", "label", "status", "stage"];
+      if (page !== "queue") fields.push("outcome", "closed_after");
+      for (const name of fields) {
+        filters.append(h("label", {}, label(name) + " ", h("input", {
+          name, value: options.filters?.[name] || "", maxlength: name === "closed_after" ? "40" : "100",
+          placeholder: name === "closed_after" ? "ISO date/time" : "Any"
+        })));
+      }
+      if (options.filters?.q) filters.append(h("input", { type: "hidden", name: "q", value: options.filters.q }));
+      filters.append(h("button", { type: "submit", text: "Apply filters" }),
+        h("a", { href: page === "home" ? "/operator/" : "/operator/" + page, text: "Clear" }));
+      root.append(filters);
+    }
+    root.append(body);
 
     function applyTheme() {
       let choice = "auto";
@@ -308,6 +360,20 @@
       if (state.expanded === id) render();
     }
 
+    async function loadRoute() {
+      const target = state.route;
+      const data = await guarded(target, async signal => {
+        const id = options.itemId ? (await source.currentItem(options.itemId, signal)).id : options.executionId;
+        if (target.data && target.data.item.id !== id) target.cursors = [null];
+        return source.detail({ id, cursor: target.cursors.at(-1), limit: DETAIL_PAGE, signal });
+      });
+      if (data) {
+        target.data = data;
+        target.next = data.nextCursor ?? null;
+      }
+      render();
+    }
+
     function noteChanges(items) {
       for (const item of items) {
         const signature = [item.version, item.stage, item.status, item.outcome].join("|");
@@ -354,16 +420,20 @@
     }
 
     function changePage(kind, advance) {
-      const target = kind === "detail" ? detailState(state.expanded) : state[kind];
+      const target = kind === "detail" ? (routed ? state.route : detailState(state.expanded)) : state[kind];
       target.request?.abort();
       target.request = null;
       if (advance) target.cursors.push(target.next);
       else target.cursors.pop();
       target.next = null;
       if (kind === "detail") {
-        target.data = null;
-        loadDetail(state.expanded);
+        if (routed) loadRoute();
+        else {
+          target.data = null;
+          loadDetail(state.expanded);
+        }
       } else {
+        options.pageChanged?.(kind, target.cursors.at(-1));
         target.rows = [];
         target.updated = 0;
         loadList(kind);
@@ -523,8 +593,7 @@
       return h("div", { class: "block" }, h("h4", { text: "Stage path" + (returns ? " · " + returns + " returns" : "") }), rail);
     }
 
-    function renderDetail(row, flags, now) {
-      const detail = state.details.get(row.id);
+    function renderDetail(row, flags, now, detail = state.details.get(row.id)) {
       const box = h("div", { class: "detail", id: "detail-" + row.id, role: "region", "aria-label": "Details: " + row.title });
       box.style.setProperty("--since", state.expandedAt - now + "ms");
       const data = detail?.data;
@@ -536,6 +605,13 @@
       const writer = item.writer;
       const sessionUrl = safeUrl(writer?.sessionUrl);
       const pr = safeUrl(item.primaryPrUrl || (item.output?.kind === "pr" ? item.output.url : null));
+      const links = h("nav", { class: "detail-links", "aria-label": "Detail links" },
+        item.itemId && h("a", { href: "/operator/items/" + encodeURIComponent(item.itemId), text: "Current item" }),
+        h("a", { href: "/operator/executions/" + encodeURIComponent(item.id), text: "Execution permalink" }));
+      for (const [id, text] of [[data.previousExecutionId, "Previous execution"], [data.nextExecutionId, "Next execution"]]) {
+        if (id) links.append(h("a", { href: "/operator/executions/" + encodeURIComponent(id), text }));
+      }
+      box.append(links);
       box.append(h("div", { class: "goal", text: item.goal || item.title }));
       box.append(facts([
         ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],
@@ -616,6 +692,15 @@
 
     function pager(kind, target, name) {
       const nav = h("nav", { class: "pager", "aria-label": name + " pages" });
+      if (target.cursors[0] !== null) {
+        const first = h("button", { type: "button", class: "ghost", text: "First page",
+          "data-focus": "first:" + kind });
+        first.addEventListener("click", () => {
+          target.cursors = [null, target.cursors.at(-1)];
+          changePage(kind, false);
+        });
+        nav.append(first);
+      }
       if (target.cursors.length > 1) {
         const newer = h("button", { type: "button", class: "ghost", "data-focus": "newer:" + kind,
           "aria-label": "Previous " + name + " page", text: "‹ Newer" });
@@ -697,7 +782,7 @@
     }
 
     function freshness() {
-      const visible = ["open", "closed", "flags", "captains"].filter(kind => enabled[kind]).map(kind => state[kind]);
+      const visible = ["open", "closed", "route", "flags", "captains"].filter(kind => enabled[kind]).map(kind => state[kind]);
       const dated = visible.map(target => target.updated).filter(Boolean);
       const failed = visible.filter(target => target.failed).length;
       const oldest = dated.length ? Math.min(...dated) : 0;
@@ -757,6 +842,16 @@
       const more = state.open.next ? "+" : "";
 
       const sections = [];
+      if (routed) {
+        const data = state.route.data;
+        const content = data ? renderDetail(data.item, flagsFor(index, data.item), now, state.route)
+          : h("p", { class: state.route.failed ? "warn" : "empty",
+            text: state.route.failed ? "Could not load this detail. It may not exist. Refresh to retry." : "Loading details..." });
+        sections.push(section("detail", data?.item.title || "Work detail", "", "", content));
+        if (data && state.route.failed) content.append(h("p", {
+          class: "warn", text: "Detail update failed. Showing the previous contents."
+        }));
+      }
       const needRows = needs.map(item => itemRow(item, "open", index, now));
       const needContent = h("div", {});
       if (looseNotify.length) needContent.append(h("div", { class: "rows flags" }, flagGroups(looseNotify, titles, now)));
@@ -788,22 +883,35 @@
       }
       sections.push(section("active", "Active", active.length + (active.length ? more : ""), "",
         list(active.map(item => itemRow(item, "open", index, now)), "Nothing running.", "items")));
-      const queuedSection = section("queued", "Queued and waiting", queued.length + (queued.length ? more : ""), "",
-        list(queued.map(item => itemRow(item, "open", index, now)), "Nothing queued.", "items"));
+      const queueRows = page === "queue" ? state.open.rows : queued;
+      const queuedSection = section("queued", page === "queue" ? "Queue" : "Queued and waiting",
+        queueRows.length + (queueRows.length ? more : ""), "",
+        list(queueRows.map(item => itemRow(item, "open", index, now)),
+          page === "queue" ? (state.open.updated ? "No open work on this page." : "Loading...") : "Nothing queued.", "items"));
       const openPager = pager("open", state.open, "open work");
       if (openPager) queuedSection.append(openPager);
-      if (state.open.failed) queuedSection.append(h("p", { class: "warn", text: "Open work update failed. Showing the previous contents." }));
+      if (state.open.failed) queuedSection.append(h("p", { class: "warn", text: state.open.updated
+        ? "Open work update failed. Showing the previous contents." : "Could not load open work. Check URL filters and Refresh to retry." }));
       sections.push(queuedSection);
-      const closedSection = section("closed", "Recently closed", state.closed.rows.length + (state.closed.next ? "+" : ""), "",
+      const closedSection = section("closed", page === "history" ? "History" : "Recently closed",
+        state.closed.rows.length + (state.closed.next ? "+" : ""), "",
         list(state.closed.rows.map(item => itemRow(item, "closed", index, now)),
           state.closed.updated ? "No closed work on this page." : "Loading…", "items closed"));
       const closedPager = pager("closed", state.closed, "recent outcomes");
       if (closedPager) closedSection.append(closedPager);
-      if (state.closed.failed) closedSection.append(h("p", { class: "warn", text: "Closed work update failed. Showing the previous contents." }));
+      if (state.closed.failed) closedSection.append(h("p", { class: "warn", text: state.closed.updated
+        ? "Closed work update failed. Showing the previous contents." : "Could not load closed work. Check URL filters and Refresh to retry." }));
       sections.push(closedSection);
 
       syncClock(body);
-      body.replaceChildren(...sections);
+      body.replaceChildren(...sections.filter(section => {
+        if (routed) return section.classList.contains("sec-detail");
+        if (page === "queue") return section.classList.contains("sec-queued");
+        if (page === "history") return section.classList.contains("sec-closed");
+        if (["sec-needs", "sec-active", "sec-queued"].some(name => section.classList.contains(name))) return enabled.open;
+        if (section.classList.contains("sec-closed")) return enabled.closed;
+        return true;
+      }));
       counts.replaceChildren(
         h("li", { class: needs.length + looseNotify.length ? "t-attn" : "" }, h("strong", { text: String(needs.length + looseNotify.length) }), " needs you"),
         h("li", {}, h("strong", { text: active.length + (active.length ? more : "") }), " active"),
@@ -811,6 +919,7 @@
         enabled.flags ? h("li", { class: state.flags.rows.length ? "t-wait" : "" }, h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
         enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
       renderHealth();
+      if (page !== "home") counts.replaceChildren();
       if (focused) {
         const target = root.querySelector('[data-focus="' + CSS.escape(focused) + '"]');
         if (target && document.activeElement !== target) target.focus({ preventScroll: true });
@@ -819,8 +928,9 @@
 
     function refreshAll() {
       if (document.hidden) return;
-      loadList("open");
-      loadList("closed");
+      if (enabled.open) loadList("open");
+      if (enabled.closed) loadList("closed");
+      if (routed) loadRoute();
       if (enabled.flags) loadFlags();
       if (enabled.captains) loadCaptains();
       if (state.expanded) loadDetail(state.expanded);
@@ -828,7 +938,7 @@
 
     function onKey(event) {
       const current = event.target.closest?.("button.title");
-      if (event.key === "Escape" && state.expanded) {
+      if (event.key === "Escape" && state.expanded && !routed) {
         const id = state.expanded;
         toggle(id);
         root.querySelector('button.title[data-item="' + CSS.escape(id) + '"]')?.focus();
@@ -859,7 +969,7 @@
       clearInterval(ticker);
       document.removeEventListener("visibilitychange", refreshAll);
       root.removeEventListener("keydown", onKey);
-      for (const target of [state.open, state.closed, state.flags, state.captains, ...state.details.values()]) target.request?.abort();
+      for (const target of [state.open, state.closed, state.route, state.flags, state.captains, ...state.details.values()]) target.request?.abort();
       root.replaceChildren();
     };
   }

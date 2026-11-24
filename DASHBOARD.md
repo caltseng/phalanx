@@ -2,7 +2,7 @@
 
 Status: **accepted by Caleb** (#112). Implementation rows go into [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The [Operator view](SPEC.md#operator-view) in SPEC.md remains the v1 contract. This document sets the goals, the UI principles and the target experience for the hosted dashboard.
 
-The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API routes (`/v1/operator/*`) and its code keep the `operator` name. The local board at `/operator/` implements the home page, row anatomy and inline detail described below. It follows the direct-sessions model ([docs/direct-sessions.md](docs/direct-sessions.md)): items and executions, writers, Captains and flags.
+The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API routes (`/v1/operator/*`) and its code keep the `operator` name. The local board implements the home page, row anatomy, inline detail, item/execution deep links, queue/history pages, URL filters and global search described below. It follows the direct-sessions model ([docs/direct-sessions.md](docs/direct-sessions.md)): items and executions, writers, Captains and flags. Hosting and sign-in remain separate work.
 
 **Shipped versus planned:** PH-29a's server reads shipped in
 [#144](https://github.com/caltseng/phalanx/pull/144). The local home/inline board, server-owned
@@ -132,6 +132,31 @@ Every page reads state through the API. Filters live in the URL: repository, lab
 | `/operator/queue` | The full open backlog, paginated and filterable. |
 | `/operator/history` | Closed executions, paginated and filterable, with counts for the filter. |
 | `/operator/groups/{label}` | Every item with that label, with a rollup. |
+
+The first five routes are available on the **local** board. The groups page remains a
+proposal. Item links resolve the current execution on each refresh; execution links keep
+the exact execution, including a closed execution before a rerun. Both reuse the inline
+detail renderer, with links to the current item, the execution permalink and the previous/
+next execution when present. Missing records show an explicit error with a refresh action.
+
+Queue and history use the existing bounded keyset list API (100 open / 25 closed per page).
+Their URL query parameters are `repository`, `label`, `status`, `stage`, `outcome`,
+`closed_after`, `q` and `cursor`; outcome/closure time apply only to history. Home also accepts
+these filters and keeps independent `open_cursor` and `closed_cursor` parameters. Changing
+filters starts at the first page; paging updates the URL and preserves filters. A bookmarked
+later page can return to the first page, and a filtered empty page with a continuation still
+shows More. Counts beside headings describe the loaded page, not a server-wide total.
+
+The global search form always searches both open and closed work on Home, using PH-29a's
+`q` matching (item ID, execution ID, observed PR number/URL or goal/title text). The filter
+form preserves that query. Status filters show only the matching open/closed kind; an
+outcome or closure-time filter shows only closed work.
+
+Stored reports render in the existing report dialog as a local, dependency-free Markdown
+subset: headings, paragraphs, emphasis, links, lists, quotes, tables and fenced/inline code.
+Raw HTML tags/comments are stripped, images become alt text, and code stays literal.
+Only generated DOM elements are inserted; links accept credential-free HTTP(S) URLs only.
+No report HTML, scripts or external images are loaded, and the shell's CSP is unchanged.
 
 ### Home
 
@@ -266,11 +291,16 @@ these board reads add no slot/capacity fields or runners endpoint.
 
     Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
 - `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch `paused` (false means on); the oldest eligible queued timestamp and age; and `generated_at` for data age.
+- `GET /v1/operator/items/{item_id}`: the current execution summary in `item`, or 404.
+  Uses the same local-board/owner/runner read authentication and conditional ETags.
+  The existing execution timeline also includes nullable `previous_execution_id` and
+  `next_execution_id` for navigating reruns without reading the full execution list.
 - Draft-completed executions use `draft_published` consistently in summary rows, the outcome filter, overview and label-group rollups. They count as delivered in the overview, not as ready for check-in.
 - Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. `outcome` and `closed_after` apply to `kind=closed`, and `status` must match the kind; otherwise the server returns 400. `q` matches goal text, an item or execution ID, or an observed PR URL or number. Filtered cursors are bound to their filters. A filtered page inspects at most 2,000 indexed candidate executions, so it can return fewer rows than requested (even zero) with a cursor to continue.
 - `GET /v1/operator/groups/{label}`: a rollup of the current executions with that label (items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed) and an item page. Returns 404 when no item has the label.
 - Execution lists, overview and groups return a weak `ETag` and accept `If-None-Match`. An unchanged poll returns `304` before reading rows or rollups. A durable change token and indexed retry/lease/24-hour-closure boundaries invalidate the tag. Ticking display ages alone do not: retain the last snapshot and calculate elapsed age from its timestamps and `generated_at`. Authentication is checked before conditional reads.
-- Reports rendered as sanitized Markdown, with raw HTML stripped (later in D1).
+- Reports render as sanitized Markdown on the local board, with raw HTML stripped and no
+  browser dependency or change to the plain-text report API.
 
 ## Phases
 
