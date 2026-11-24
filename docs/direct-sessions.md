@@ -265,7 +265,7 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | --- | --- | --- |
 | `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
 | `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
-| `captain_idle_with_work` | **Dispatch overdue** (legacy API kind retained): live Captains, dispatch enabled, free writer capacity, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
+| `captain_idle_with_work` | **Dispatch overdue**: live Captains, dispatch enabled, free writer capacity, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
 | `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while assigned writers fill the canonical dispatch limit (counts included), or dispatch is paused. Informational, including when a Captain recorded a hold; never a stopped/failed Captain signal | Wait for writer capacity, or for the owner to resume dispatch. Existing writer-health flags remain independent |
 | `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |

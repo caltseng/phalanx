@@ -90,7 +90,7 @@ def no_live_captain(db, now):
 
 
 def captain_idle_with_work(db, now):
-    """Keep the legacy overdue kind; capacity backlog is informational, not Captain failure."""
+    """Distinguish overdue dispatch from informational capacity backlog, not Captain failure."""
     if not any(is_live(row, now) for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")):
         return []
     cutoff = int((now - IDLE_WITH_WORK).timestamp() * 1000)
