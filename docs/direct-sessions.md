@@ -42,12 +42,19 @@ merging. Config, credentials, worktrees, result artifacts and logs stay on the h
    execution. `shift launch` supplies the charter's `writer_limit` across its repositories.
    Intents and waiting writers count; replacing a writer consumes no extra place. A full
    limit is a normal wait, not an escalation. Dispatch pause refuses new registrations.
-2. The Captain launches one native session with the nonce in its name and kickoff. The
+2. The Captain launches one native session with a concise goal-derived name and the full nonce
+   in its kickoff. Task words come first; a short `[phx]` suffix aids discovery within
+   40 characters. Names redact recognized credentials and URLs before truncation, normalize
+   whitespace/control characters, and fall back to "Phalanx task" for absent text.
+   `shift launch` returns structured item ID, writer ID and full writer nonce separately.
+   Duplicate goals produce identical names, never shared writer identity. The
    kickoff includes the repository's exact prepared `checks_environment`, distinct from the
    Phalanx command. A missing or unusable environment is a visible validation gap; writers
    never borrow another checkout's environment or install packages.
 3. The Captain confirms the native ID and link with `PATCH .../writer`. If the launch reply
-   was lost, search the full native session list by nonce before launching anything. Only
+   was lost, search the full native session list and inspect kickoffs/metadata for the exact full
+   nonce before launching anything. Legacy names containing the nonce remain discoverable.
+   If inspection is unavailable or inconclusive, retain the intent and surface the blocker. Only
    the owning Captain acts on an unconfirmed intent until it ends, goes stale or abandons it.
    After ten minutes an unconfirmed launch is flagged, not automatically repeated.
 4. Replacement names the current writer ID in `replaces` and requires `replaced_stopped`.
@@ -237,7 +244,7 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
     is less than 30 minutes old, and its Captain is live and not ended. The board and item view show
     its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
     suppress idle-with-work flags but do not change dispatch eligibility or reserve capacity.
-  - The record step reports every runtime session named `phx …` with its ID and name. The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` from these reports by matching name words to open writers' item ID prefix or nonce. A pending successor's name is exempt while its parent is `ending`.
+  - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, legacy `phx …` names, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` by registered session ID and full nonce, falling back to legacy item-prefix/nonce name words only when structured identity is absent. Titles never establish ownership for task-first sessions. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
   - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
 - **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`. Its unconfirmed intents become actionable by any live Captain, which resolves them by nonce. If it had already launched a successor, that successor continues. If not, [No live Captain](#no-live-captain) applies.

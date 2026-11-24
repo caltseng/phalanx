@@ -29,7 +29,9 @@ If the worktree is unavailable, retain server handoff context and report the mis
 Never reset, clean or discard work to make replacement easier.
 
 For an unconfirmed intent, only its owning Captain acts until it ends, goes stale or abandons
-the intent. First search native sessions by nonce; confirm the exact matching session.
+the intent. First search the full native inventory and verify the exact full nonce in
+kickoff/metadata; task-first or renamed display titles are not identity. Confirm only
+the exact matching session.
 Withdraw an intent only after proving launch never happened, or its session stopped.
 See [registration and fencing](direct-sessions.md#writer-registration-and-fencing).
 

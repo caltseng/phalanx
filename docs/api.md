@@ -15,6 +15,13 @@ contains no credentials and performs no local client database reads. See
 
 ## Session archival records
 
+Captain heartbeat `sessions` entries contain native `id`, display `name` and optional
+`writer_nonce`, the full launch nonce verified from the session's kickoff/metadata, never its
+credential/token. Registered session IDs and full nonces identify writers independently of
+task-first or renamed titles. Without `writer_nonce`, legacy names still match full nonces or
+item ID prefixes. Unknown structured nonces do not fall back to potentially misleading titles.
+Captain reads preserve these fields and the server's `first_seen`.
+
 The runtime session tools perform archival. The API only records and exposes evidence:
 
 | Route | Access | Purpose |

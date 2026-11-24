@@ -1,6 +1,6 @@
 # Relay-free direct-session architecture
 
-This implementation map was audited against `main` at `219250b` (November 24, 2026).
+This implementation map was audited against `main` at `641dbb7` (November 24, 2026).
 It describes shipped code, not proof that a particular installation has deployed it.
 [SPEC.md](../SPEC.md) defines the product,
 [STATE_MACHINE.md](../STATE_MACHINE.md) owns transitions, and
@@ -53,6 +53,8 @@ Execution clients never open the queue database. `server backup` and `server res
 are explicit **server-host-only administration**, not an alternative client state path.
 Local credential/pending-intent files and OS locks support launch replay and exclusion;
 they are not local execution journals. Unpushed work remains on its host.
+Writer display names are task-first and may collide or change. Verify the full nonce
+in kickoff/metadata and the registered native ID; titles are not writer identity.
 
 ## Intake and supported commands
 
@@ -181,7 +183,8 @@ or restart another owner's services from a writer.
 After an API restart, bindings, attempts, replies and outputs survive in SQLite.
 After a Captain loss, existing writers and the reconciler continue; a keeper/fresh
 Captain reconciles API, GitHub and native inventory. After a lost launch response,
-search the full inventory by nonce before launching. Replace only the exact stopped
+search the full inventory and verify the nonce in kickoff/metadata before launching.
+Replace only the exact stopped
 writer after preserving local work and accounting for external effects. An API HTTP 401
 ends that writer's control access; inspect terminal state through an authorized
 Captain/owner, not by manufacturing a new credential. Stale heartbeat/progress flags
