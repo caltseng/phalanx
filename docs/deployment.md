@@ -66,7 +66,7 @@ Generated files contain no credentials, database or live state:
 ## Two-limit writer activation
 
 Deployment is not activation. Do not raise the old single live limit to 10 first.
-The service owner (Impl for the current muster) coordinates these steps with the live Captain
+The authorized service owner coordinates these steps with the live Captain
 after owner review and merge:
 
 1. Hold new launches and preserve existing workers, sessions, worktrees, attempts and settings.

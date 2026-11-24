@@ -127,7 +127,7 @@ Do these steps in order and keep each wake short:
    Successful self-review releases Building at publication; after delivery rework the writer runs
    `work capacity delivering`. The same writer retains Total throughout. Read Building used/limit,
    Delivering and Total used/limit from `shift status`; spare Total never implies Building headroom.
-   During a two-limit rollout, keep the old Total unchanged until Impl confirms the API, CLI and
+   During a two-limit rollout, keep the old Total unchanged until the service owner confirms the API, CLI and
    changed protocol are deployed to all live Captains/writers; activation is a separate owner step.
 5. **Record holds.** For every runnable queued item you deliberately do not launch, record or refresh
    `phx shift action --captain <id> --item <item> --action held --reason "<charter reason>"`.
