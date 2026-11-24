@@ -1,7 +1,11 @@
+from argparse import Namespace
+from contextlib import closing
+from datetime import UTC, datetime
 import hashlib
 import json
 import os
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -134,6 +138,17 @@ class CharterTest(unittest.TestCase):
                 self.assertTrue(name.startswith("Fix [redacted]"), name)
                 self.assertNotIn(secret, name)
 
+    def test_dashboard_link_preserves_configured_endpoint_instead_of_localhost_default(self):
+        config = {"base_url": "https://muster.example.test:8443/team/"}
+        with (mock.patch.object(shift, "load_config", return_value=config),
+              mock.patch.object(shift, "load_charter", return_value={}),
+              mock.patch.object(shift, "API"),
+              mock.patch.object(shift, "status", return_value={"items": []}),
+              mock.patch("builtins.print") as output):
+            shift.run_shift(Namespace(shift_command="status", config="shift.json", captain=None))
+        self.assertEqual(json.loads(output.call_args.args[0]),
+                         {"items": [], "dashboard_url": "https://muster.example.test:8443/team/operator/"})
+
 
 class ShiftTest(ServerFixture, unittest.TestCase):
     def setUp(self):
@@ -141,6 +156,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         database = root / "queue.sqlite3"
+        self.database = database
         migrate(database)
         self.start_server(database)
         bare, checkout = root / "origin.git", root / "checkout"
@@ -368,12 +384,87 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn(f"--parent {captain}", handoff["kickoff"])
         self.assertIn("`phx shift` means `phx-test shift`", handoff["kickoff"])
         self.assertIn("# Phalanx Captain", handoff["kickoff"])
+        self.assertIn("not your Captain ID", handoff["kickoff"])
+        self.assertIn("predecessor", handoff["session_name_identity"])
+        self.assertEqual(handoff["off_shift_instructions"], shift.prompt("forwarding"))
+        self.assertIn(handoff["off_shift_instructions"], handoff["kickoff"])
+        self.assertIn("browser canvas by default", handoff["kickoff"])
         successor = shift.start(self.api, self.charter, "chat-2", captain)["captain"]["id"]
         again = shift.handoff(self.api, self.charter, captain, "Item X waits on review", "phx-test shift")
         self.assertEqual([entry["id"] for entry in again["successors"]], [successor])
         self.assertEqual(again["captain"]["ending_at"], handoff["captain"]["ending_at"])
         with self.assertRaisesRegex(ValueError, "HTTP 409"):
             shift.heartbeat(self.api, self.charter, captain, state="active")
+
+    def test_current_captain_follows_successor_chain_not_parent_or_latest_registration(self):
+        first = shift.start(self.api, self.charter, "first-chat")["captain"]["id"]
+        shift.heartbeat(self.api, self.charter, first, state="ended")
+        second = shift.start(self.api, self.charter, "second-chat", first)["captain"]["id"]
+        shift.heartbeat(self.api, self.charter, second, state="ended")
+        third = shift.start(self.api, self.charter, "third-chat", second)["captain"]["id"]
+        stale = shift.start(self.api, self.charter, "newer-but-stale-chat", third)["captain"]["id"]
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                       ("2000-01-01T00:00:00+00:00", stale))
+        current = self.api("/v1/captains/current")
+        self.assertEqual(current["captain"], {"id": third, "session_ref": "third-chat"})
+        self.assertEqual(current["candidates"], [current["captain"]])
+        self.assertNotIn("session_url", current["captain"])
+        self.assertEqual(self.api(f"/v1/captains/{first}")["successors"], [second])
+        shift.heartbeat(self.api, self.charter, third, state="ended")
+        fourth = shift.start(self.api, self.charter, "fourth-chat", third)["captain"]["id"]
+        self.assertEqual(self.api("/v1/captains/current")["captain"],
+                         {"id": fourth, "session_ref": "fourth-chat"})
+
+    def test_current_captain_refuses_missing_ambiguous_and_ending_destinations(self):
+        self.assertIsNone(self.api("/v1/captains/current")["captain"])
+        self.assertIn("No live active Captain", self.api("/v1/captains/current")["reason"])
+        first = shift.start(self.api, self.charter, "first-chat")["captain"]["id"]
+        second = shift.start(self.api, self.charter, "second-chat", first)["captain"]["id"]
+        ambiguous = self.api("/v1/captains/current")
+        self.assertIsNone(ambiguous["captain"])
+        self.assertIn("2 live active Captains", ambiguous["reason"])
+        self.assertEqual({entry["id"] for entry in ambiguous["candidates"]}, {first, second})
+        shift.heartbeat(self.api, self.charter, first, state="ending")
+        self.assertEqual(self.api("/v1/captains/current")["captain"]["id"], second)
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("UPDATE captains SET session_ref='' WHERE id=?", (second,))
+        missing = self.api("/v1/captains/current")
+        self.assertIsNone(missing["captain"])
+        self.assertIn("no native session binding", missing["reason"])
+        shift.heartbeat(self.api, self.charter, second, state="ended")
+        self.assertIsNone(self.api("/v1/captains/current")["captain"])
+        self.assertEqual(self.request("/v1/captains/current")[0], 401)
+
+    def test_current_captain_is_not_limited_to_recent_history(self):
+        current = shift.start(self.api, self.charter, "active-chat")["captain"]["id"]
+        now = datetime.now(UTC).isoformat(timespec="microseconds")
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.executemany(
+                """INSERT INTO captains
+                   (id, session_ref, charter_revision, state, created_at, heartbeat_at, ending_at)
+                   VALUES (?, ?, ?, 'ending', ?, ?, ?)""",
+                [(f"{index:032x}", f"ending-chat-{index}", self.charter["revision"], now, now, now)
+                 for index in range(100)])
+        self.assertNotIn(current, {entry["id"] for entry in self.api("/v1/captains?limit=100")["captains"]})
+        self.assertEqual(self.api("/v1/captains/current")["captain"],
+                         {"id": current, "session_ref": "active-chat"})
+
+    def test_generated_prompts_preserve_off_shift_routing_and_provenance(self):
+        forwarding = shift.prompt("forwarding")
+        for name in ("captain", "keeper"):
+            self.assertIn(forwarding, shift.prompt(name))
+        self.assertIn("browser canvas", shift.prompt("captain"))
+        self.assertIn("dashboard_url", shift.prompt("captain"))
+        for instruction in (
+                "I am no longer on shift", "phx shift current", "session_ref",
+                "Immediately before forwarding", "current source reference",
+                "Do not reconstruct provenance", "not execution", "uncertain send",
+                "exact runtime-returned conversation URL", "Do not change runtime nesting",
+                "creator-owned archive authority"):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, " ".join(forwarding.split()))
+        self.assertNotIn(forwarding, shift.prompt("worker"))
 
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
@@ -385,6 +476,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
 
         self.assertIn("# Phalanx Captain", phx("prompt", "captain"))
         self.assertIn("# Phalanx keeper", phx("prompt", "keeper"))
+        self.assertEqual(phx("prompt", "forwarding").strip(), shift.prompt("forwarding").strip())
         self.assertIn("# Phalanx work item $item_id", phx("prompt", "worker"))
         config = Path(self.config["charter"]).parent / "shift.json"
         config.write_text(json.dumps(self.config), encoding="utf-8")
@@ -393,6 +485,8 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             with self.subTest(arguments=arguments):
                 self.assertEqual(json.loads(phx(*arguments))["revision"], self.charter["revision"])
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        self.assertEqual(json.loads(phx("--config", str(config), "current"))["captain"],
+                         {"id": captain, "session_ref": "chat-1"})
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
                               "--session", "s-1", "phx 1234abcd nonce", "--session", "s-2", "phx captain",
                               "--compaction-count", "1"))
@@ -430,6 +524,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertFalse(checked["can_archive"])
         exact = json.loads(phx("--config", str(config), "status", "--captain", captain))
         self.assertEqual(exact["captain"]["id"], captain)
+        self.assertEqual(exact["dashboard_url"], self.url + "/operator/")
 
     def test_captain_prompt_recovers_task_first_and_renamed_sessions_by_full_nonce(self):
         prompt = shift.prompt("captain")

@@ -21,11 +21,18 @@ missing or invalid, stop and tell the owner.
    this chat, so the server can tell your chat from orphaned ones. If you succeed an earlier Captain,
    add `--parent <its Captain ID>` and read its `handoff_note` and `open_intents` in `phx shift status`.
 2. Remember the returned `captain.id`. If you lose it, find your session ref in the `captains` list
-   from `phx shift status`.
+   from `phx shift status`. This is your identity; `parent_id` is your predecessor, not you.
+   Use the naming and routing instructions in *Owner input after handoff*.
 3. Do not try to archive a predecessor you did not create. Its creator (a Captain or keeper session)
    owns that cleanup; a successor is not necessarily its creator.
 4. If you have a predecessor, message each of its writers' sessions once with your session ID, so their
    reports reach you instead of its chat.
+5. Open the Phalanx dashboard in the runtime's available browser canvas by default, including on
+   a successor's first wake. Read `dashboard_url` from `phx shift status`; it uses the configured
+   API base URL, not a hardcoded host or port. Reuse/focus an existing dashboard canvas if available
+   instead of opening duplicates on subsequent wakes. If no browser canvas is available or opening
+   fails, state that condition and provide the configured dashboard link; do not claim it opened.
+   Never put runner/owner credentials in a browser URL or page.
 
 ## Every wake
 
@@ -181,6 +188,12 @@ When `handoff_due` is non-empty, at your first compaction, or at any sign of deg
    described above if needed; otherwise stop your wake schedule. Your creator archives this chat
    once handoff and creator cleanup are complete. If the successor never comes up, the keeper starts
    a new Captain.
+
+Tell the owner explicitly that you are off shift. Resolve the current registration and native
+conversation as in *Owner input after handoff*, then provide its verified clickable link (or the
+precise reason it cannot yet be verified). Do not present the immediate successor as current without
+checking. Keep following that section for new input even after your wake schedule stops.
+The handoff's `off_shift_instructions` is the durable forwarding section, not another dispatch task.
 
 Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
 or the keeper, takes over your unconfirmed launches.

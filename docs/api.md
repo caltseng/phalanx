@@ -13,6 +13,17 @@ not configured), live `captains`, registered open `writers`, `reconcilers` with 
 contains no credentials and performs no local client database reads. See
 [muster discovery and status](../README.md#direct-muster-discovery-and-status).
 
+## Current Captain routing
+
+`GET /captains/current` uses the same board-read authentication as Captain detail/list reads.
+It resolves across all registrations, independent of the recent-history page limit, and returns
+`observed_at`, `candidates` (live `active` registrations as `{id, session_ref}`), `captain` (the
+unique candidate, or null), and an explicit `reason`. Ending, ended and stale registrations
+are excluded; multiple active candidates or an absent native binding cannot yield a destination.
+This is a routing snapshot, not an exclusive Captain lease or a native link verifier. The caller
+must freshly inspect the exact `session_ref` in its native provider, obtain its conversation URL
+there, and re-read this snapshot before forwarding. No URL is synthesized by the API.
+
 ## Captain compaction telemetry
 
 `PUT /captains/{id}` accepts optional `compaction_count`: the native session's cumulative

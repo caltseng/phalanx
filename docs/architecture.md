@@ -72,7 +72,11 @@ local shorthand, not a separately installed executable.
   The operator still prepares checks environments, copies reconciler mappings and
   grants runtime trust. It does not start sessions.
 - `shift` is a client used **inside a native Captain chat**, not a background Captain
-  loop. Runtime schedules wake Captains and the keeper.
+  loop. Runtime schedules wake Captains and the keeper. `shift current` reads the server's
+  unique live active registration across all history; native tools verify its binding/link
+  before off-shift chats forward owner input. The tracked
+  [forwarding section](../phalanx/prompts/forwarding.md) is composed into Captain/keeper prompts
+  and handoffs; retained chats require an explicit relay after deployment.
 - `work` runs from the item's worktree and reads its scoped credential from the Git
   directory. Do not copy it, expose it or substitute the Captain's runner token.
 - `muster status` discovers existing configuration and reads authenticated API status.

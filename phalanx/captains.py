@@ -235,6 +235,28 @@ def captains(db, limit):
     return {"captains": [view(db, row, now) for row in rows]}
 
 
+def current_captain(db):
+    """Resolve routing from all active registrations, never the recent-history page."""
+    now = datetime.now(UTC)
+    candidates = [
+        {"id": row["id"], "session_ref": row["session_ref"]}
+        for row in db.execute("SELECT * FROM captains WHERE state='active' ORDER BY created_at, id")
+        if is_live(row, now)
+    ]
+    captain = None
+    if not candidates:
+        reason = "No live active Captain; ending, ended and stale registrations are not routing destinations"
+    elif len(candidates) != 1:
+        reason = f"{len(candidates)} live active Captains; no unique routing destination"
+    elif not candidates[0]["session_ref"].strip():
+        reason = "The live active Captain has no native session binding"
+    else:
+        captain = candidates[0]
+        reason = "Unique live active registration; verify its session_ref and conversation link in the runtime"
+    return {"captain": captain, "candidates": candidates, "reason": reason,
+            "observed_at": now.isoformat(timespec="microseconds")}
+
+
 def record_action(db, item_id, payload):
     """Put a Captain's action and its reason on the item's current execution timeline."""
     if captain_row(db, payload.captain_id)["state"] == "ended":
@@ -268,6 +290,11 @@ def post_action(request: Request, item_id: Identifier, body: Action, key: Key = 
 @router.get("/captains", dependencies=[Depends(authenticate_board_read)])
 def list_captains(request: Request, limit: Annotated[int, Query(ge=1, le=100)] = 25):
     return run(request, captains, limit)
+
+
+@router.get("/captains/current", dependencies=[Depends(authenticate_board_read)])
+def get_current_captain(request: Request):
+    return run(request, current_captain)
 
 
 @router.get("/captains/{captain_id}", dependencies=[Depends(authenticate_board_read)])
