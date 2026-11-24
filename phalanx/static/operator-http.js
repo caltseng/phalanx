@@ -543,12 +543,8 @@
 
   function show(source) {
     source.openReport = output => openReport(source, output);
-<<<<<<< HEAD
-    clearCreate = newItem(source, authenticated);
-    clearSettings = concurrency(source);
-=======
     clearCreate = newItem(source);
->>>>>>> e716a06 (Allow trusted local dashboard creation without token entry)
+    clearSettings = concurrency(source);
     const cursorName = kind => page === "home" ? kind + "_cursor" : "cursor";
     unmount = window.PhalanxOperatorBoard.mount(board, source, {
       page,

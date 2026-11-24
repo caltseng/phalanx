@@ -55,13 +55,16 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                     with self.subTest(overrides=overrides):
                         self.assertIn(self.request("/operator/api/items", body=body,
                                                    headers=headers | overrides)[0], (401, 403))
+                for read_headers in ({"Origin": "null"}, {"Sec-Fetch-Site": "cross-site"},
+                                     {"Host": "evil.example"}, {"X-Forwarded-For": "127.0.0.1"}):
+                    self.assertIn(self.request("/operator/api/repositories", headers=read_headers)[0], (401, 403))
                 self.assertEqual(self.request("/operator/api/items", body=body)[0], 403)
-                self.assertEqual(self.request("/v1/items", body=body, headers=headers)[0], 401)
+                self.assertEqual(self.request("/v1/items", body=body)[0], 401)
                 for path in ("/v1/repositories", "/v1/owner/status", "/v1/runner/status"):
                     self.assertEqual(self.get(path)[0], 401)
                 self.assertEqual(self.request("/v1/repositories", body={
                     "id": "unauthorized", "remote": "https://github.com/example/unauthorized.git",
-                }, headers=headers)[0], 401)
+                })[0], 401)
                 self.assertEqual(len(self.get("/v1/operator/executions")[1]["items"]), 1)
             finally:
                 self.stop_server(server)
@@ -78,6 +81,9 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                     self.assertEqual(self.get("/operator/api/repositories", token)[0], status)
                 for token, status in ((None, 401), (RUNNER, 403), (OWNER, 201)):
                     self.assertEqual(self.request("/operator/api/items", token, body)[0], status)
+                self.assertEqual(self.request("/operator/api/items", OWNER, body, {
+                    "Host": "hosted.example", "X-Forwarded-For": "203.0.113.8",
+                })[0], 201)
                 self.assertEqual(self.request("/operator/api/items", OWNER, body, {
                     "Origin": "null", "Sec-Fetch-Site": "cross-site",
                 })[0], 403)
