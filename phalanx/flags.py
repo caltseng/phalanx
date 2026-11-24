@@ -128,7 +128,7 @@ def writer_flags(db, now):
         if row["confirmed_at"] is None and now - at(row["created_at"]) >= LAUNCH_UNCONFIRMED:
             flags.append(flag(
                 "launch_unconfirmed", f"Writer intent {row['nonce']} unconfirmed since {row['created_at']}",
-                "Search native sessions for the nonce, then confirm or withdraw",
+                "Inspect native session kickoffs/metadata for the full nonce, then confirm or withdraw",
                 at(row["created_at"]) + LAUNCH_UNCONFIRMED, **subject))
         if row["state"] == "busy":
             moved = max(at(value) for value in (row["last_progress_at"], row["last_advanced_at"],
@@ -148,19 +148,21 @@ def writer_flags(db, now):
 def session_flags(db, now):
     """Check the native sessions live Captains report against registered writers and Captains.
 
-    A session counts as an item's when its name carries the first 8 characters of the item's ID or
-    its writer's nonce as a word, as `shift launch` names it within the runtime's 40-character name
-    limit. A session carrying an unconfirmed intent's nonce is that launch, which launch_unconfirmed
-    covers.
+    Task-first names are labels, not identities. Captains inspect the kickoff and report the full
+    writer nonce separately. Legacy names still match an item's ID prefix or the full nonce.
+    An unconfirmed intent's nonce is that launch, which launch_unconfirmed covers.
     """
     reported = {}
-    for captain in db.execute("SELECT * FROM captains WHERE state != 'ended'").fetchall():
+    for captain in db.execute(
+            "SELECT * FROM captains WHERE state != 'ended' ORDER BY heartbeat_at, id").fetchall():
         if not is_live(captain, now):
             continue
         for session in json.loads(captain["sessions_json"]):
             known = reported.get(session["id"])
-            if known is None or session["first_seen"] < known["first_seen"]:
-                reported[session["id"]] = {**session, "captain_id": captain["id"]}
+            reported[session["id"]] = {
+                **(known or {}), **session, "captain_id": captain["id"],
+                "first_seen": min(session["first_seen"], known["first_seen"]) if known else session["first_seen"],
+            }
     if not reported:
         return []
     registered = {row[0] for row in db.execute(
@@ -169,6 +171,7 @@ def session_flags(db, now):
     successors = {successor_name(row[0]) for row in db.execute(
         "SELECT id FROM captains WHERE state = 'ending'")}
     writers = db.execute(OPEN_WRITERS).fetchall()
+    by_nonce = {writer["nonce"]: writer for writer in writers}
     by_word = {word: writer for writer in writers for word in (writer["item_id"][:8], writer["nonce"])}
     flags = []
     for session in sorted(reported.values(), key=lambda entry: (entry["first_seen"], entry["id"])):
@@ -178,13 +181,18 @@ def session_flags(db, now):
         if session["id"] in registered or session["name"] in successors:
             continue
         label = f"Session {session['id']} ({session['name']})"
-        writer = next((by_word[word] for word in session["name"].split() if word in by_word), None)
+        nonce = session.get("writer_nonce")
+        writer = by_nonce.get(nonce)
+        if (nonce is None and session["name"].startswith("phx ")
+                and not session["name"].endswith(" [phx]")):
+            writer = next((by_word[word] for word in session["name"].split() if word in by_word), None)
         if writer is None:
             flags.append(flag("orphan_session", f"{label} has no registered writer or Captain",
                               "A Captain archives it if its work is done or abandoned, or stops it and "
                               "reports it to the owner", at(session["first_seen"]),
                               captain_id=session["captain_id"]))
-        elif writer["session_id"] is not None or writer["nonce"] not in session["name"].split():
+        elif writer["session_id"] is not None or (
+                nonce != writer["nonce"] and writer["nonce"] not in session["name"].split()):
             flags.append(flag(
                 "duplicate_writer",
                 f"{label} carries item {writer['item_id']}, whose writer is {writer['session_id'] or writer['nonce']}",

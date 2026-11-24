@@ -12,6 +12,7 @@ from fastapi.responses import PlainTextResponse, Response
 
 from .auth import authenticate_board_read
 from .captains import active_holds
+from .display_text import reason_text, short_title
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
@@ -32,12 +33,6 @@ Outcome = Literal["report_stored", "draft_published", "ready_for_check_in", "che
 SCAN_LIMIT = 2000
 REASON_LIMIT = 400
 SHA = re.compile(r"[0-9a-f]{7,64}")
-SECRET = re.compile(
-    r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+"
-    r"|(?i:\b(?:bearer|basic)\s+)\S+"
-    r"""|(?i:\b(?:[a-z][a-z0-9]*[_-])*(?:token|secret|password|lease|(?:api|secret)[_-]?key)\b"""
-    r"""["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|\S+)"""
-)
 
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
@@ -121,11 +116,6 @@ def is_version(value):
 
 def page_cursor(rows, limit, scope, key):
     return encode_cursor(scope, key(rows[limit - 1])) if len(rows) > limit else None
-
-
-def reason_text(text, limit):
-    text = SECRET.sub("[redacted]", " ".join(text.split()))
-    return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
 def applied_sha(details):
@@ -225,16 +215,6 @@ def pull_request(row):
         "additions": row["pr_additions"],
         "deletions": row["pr_deletions"],
     }
-
-
-def short_title(goal, limit=80):
-    """One board line from the goal: its first sentence, cut at a word boundary."""
-    line = next((line for line in goal.splitlines() if line.strip()), "").strip().lstrip("#*-> ").strip()
-    sentence = re.split(r"(?<=[.!?])\s", line, maxsplit=1)[0].strip() or line or "Untitled"
-    if len(sentence) <= limit:
-        return sentence
-    cut = sentence[:limit - 1]
-    return (cut.rsplit(None, 1)[0] if " " in cut.strip() else cut).rstrip(" ,;:-") + "…"
 
 
 def summary(row, now, context):
