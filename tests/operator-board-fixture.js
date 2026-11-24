@@ -4,6 +4,9 @@
   const result = document.querySelector("#result");
   const now = new Date().toISOString();
   const hourAgo = new Date(Date.now() - 3600000).toISOString();
+  const nativeId = "12345678-1234-1234-1234-123456789abc";
+  const copilotUrl = "ghapp://sessions/" + nativeId;
+  const codexUrl = "codex://threads/" + nativeId;
   const waiting = {
     id: "wait", itemId: "item-wait", title: "<img src=x> Choose deployment target",
     goal: "<img src=x> Choose deployment target.\nTwo targets match.", repo: "example/service",
@@ -14,7 +17,7 @@
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
     primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
-    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1" },
+    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId },
     historicalWorker: { workerRef: "opaque-worker-7" }
   };
   const queued = {
@@ -22,6 +25,8 @@
     stage: "development", status: "queued", lastAdvancedAt: hourAgo, publicationMode: "draft"
   };
   const external = { ...queued, id: "external", title: "Await CI", status: "waiting_for_external" };
+  const resumed = { ...queued, id: "resumed", title: "Resumed work",
+    writer: { state: "ended", runtime: "codex", sessionId: nativeId } };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report_drafting",
     status: "failed", outcome: "failed", target: "checked_in", closedAt: now, createdAt: hourAgo,
@@ -30,6 +35,7 @@
   const success = {
     ...failure, id: "done", title: "Verify rollout", status: "completed", outcome: "checked_in",
     output: { kind: "pr", url: "https://example.com/pull/1" },
+    writer: { state: "ended", runtime: "codex", sessionId: nativeId },
     delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
   const draft = {
@@ -51,8 +57,8 @@
   ];
   const captains = [
     { id: "cap-ended", state: "ended", live: false, stale: false, heartbeatAt: hourAgo, compactionCount: 2 },
-    { id: "cap-stale", state: "active", live: false, stale: true, heartbeatAt: hourAgo },
-    { id: "cap-1", sessionRef: "s", state: "active", live: true, stale: false, heartbeatAt: now,
+    { id: "cap-stale", sessionRef: codexUrl, state: "active", live: false, stale: true, heartbeatAt: hourAgo },
+    { id: "cap-1", sessionRef: copilotUrl, state: "active", live: true, stale: false, heartbeatAt: now,
       wakeCount: 3, compactionCount: 0, charterRevision: "abcdef1234", focus: ["item-run"] }
   ];
   let offline = false;
@@ -76,7 +82,7 @@
       calls.push([kind, cursor, limit]);
       if (offline) throw new Error("API offline");
       if (kind === "open") {
-        return { items: cursor ? [queued] : [waiting, running, queued, external], nextCursor: cursor ? null : "more-open" };
+        return { items: cursor ? [queued] : [waiting, running, queued, external, resumed], nextCursor: cursor ? null : "more-open" };
       }
       return { items: cursor ? [] : [success, observed, ready, short, failure, draft, cancelled, report], nextCursor: cursor ? null : "older-closed" };
     },
@@ -110,6 +116,41 @@
 
   try {
     await tick();
+    const target = window.PhalanxOperatorBoard.sessionTarget;
+    assert(target({ runtime: "copilot-app", sessionId: nativeId }).url === copilotUrl &&
+      target({ runtime: "codex", sessionId: nativeId }).url === codexUrl, "Known native IDs route only to their host");
+    for (const reference of ["javascript:alert(1)", "file:///tmp/chat", "unknown://sessions/" + nativeId,
+      "ghapp://sessions/" + nativeId + "?run=1", "ghapp://sessions/" + nativeId + "#x",
+      "ghapp://sessions/../" + nativeId, "ghapp://user@sessions/" + nativeId,
+      "ghapp://sessions/" + nativeId + "/", "ghapp://sessions/%31" + nativeId,
+      " ghapp://sessions/" + nativeId, "https://user:pass@example.com/chat", "https://[bad",
+      "https://example.com/\\chat", "/operator/new", "codex://threads/not-a-thread"]) {
+      assert(!target({ runtime: "copilot-app", sessionId: nativeId, sessionUrl: reference }).url,
+        "Unsafe or malformed recorded link is not replaced: " + reference);
+    }
+    assert(!target({ sessionId: nativeId }).url && !target({ sessionRef: nativeId }).url &&
+      !target({ runtime: "copilot-cli", sessionId: nativeId }).url, "Legacy identity never guesses its provider");
+    assert(!target({ runtime: "copilot-app", sessionUrl: codexUrl }).url &&
+      !target({ sessionUrl: copilotUrl, sessionId: "other" }).url, "Provider and identity conflicts never translate sessions");
+    for (const availability of ["missing", "deleted"]) {
+      assert(!target({ sessionUrl: copilotUrl, sessionAvailability: availability }).url &&
+        target({ sessionUrl: copilotUrl, sessionAvailability: availability }).reason.includes(availability),
+      "Known " + availability + " session is explicitly unavailable");
+    }
+    assert(target({ sessionUrl: copilotUrl }).reason.includes("unverified"), "Recorded URL does not claim verified existence");
+    const captainLinks = root.querySelectorAll('a[href="' + copilotUrl + '"]');
+    assert(captainLinks.length >= 3 && [...captainLinks].every(link => link.tabIndex === 0),
+      "Helmet, Captain name and writer are native keyboard-accessible links");
+    const helmetLink = [...captainLinks].find(link => link.querySelector(".mark-captain"));
+    helmetLink.focus();
+    const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    helmetLink.dispatchEvent(enter);
+    assert(document.activeElement === helmetLink && !enter.defaultPrevented,
+      "Keyboard activation retains native browser external-app confirmation");
+    assert(item("run").closest("li").querySelector('a.writer[href="' + copilotUrl + '"]') &&
+      item("resumed").closest(".sec-queued").querySelector('a.writer[href="' + codexUrl + '"]') &&
+      item("done").closest("li").querySelector('a.writer[href="' + codexUrl + '"]') &&
+      !item("queue").closest("li").querySelector("a.writer"), "Active, resumed and closed sessions link; unlaunched queue stays unlinked");
     const concurrency = source.concurrencyControl;
     const settingsSummary = concurrency.querySelector("summary");
     const settingsInput = concurrency.querySelector("input");
@@ -176,10 +217,10 @@
     assert(root.querySelector(".fgroup .mark-notify") && root.querySelector(".fgroup .mark-flag") &&
       item("run").closest("li").querySelector(".chip .mark-flag"), "Red flags on both group kinds and chips");
     for (const id of ["done", "observed", "ready", "report"]) {
-      assert(!item(id).closest("li").querySelector(".line > .reason").textContent, "Met target has no shortfall: " + id);
+      assert(!item(id).closest("li").querySelector(".line > .reason").textContent.includes("wanted:"), "Met target has no shortfall: " + id);
     }
     assert(item("observed").closest("li").querySelector(".stage").textContent === "Merged", "Observed merged PR overrides ready outcome");
-    assert(item("short").closest("li").querySelector(".reason").textContent === "wanted: merged", "Ready shortfall visible");
+    assert(item("short").closest("li").querySelector(".reason").textContent.endsWith("wanted: merged"), "Ready shortfall visible");
     assert(item("fail").closest("li").querySelector(".reason").textContent === "wanted: merged", "Failed shortfall visible");
     assert(item("cancelled").closest("li").querySelector(".reason").textContent === "wanted: merged", "Cancelled shortfall visible");
     assert(root.querySelector(".fgroup .captain-ref.captain-ended .t-muted .mark-captain") &&

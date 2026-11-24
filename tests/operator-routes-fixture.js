@@ -14,9 +14,14 @@
   };
   const id = "a".repeat(32), execution = "b".repeat(32), previous = "c".repeat(32);
   const now = new Date().toISOString();
+  const nativeId = "12345678-1234-1234-1234-123456789abc";
+  const writerUrl = "ghapp://sessions/" + nativeId;
+  const captainUrl = "codex://threads/" + nativeId;
   const row = { id: execution, item_id: id, title: "Searchable report", goal: "Keep the existing details",
     repository_id: "example", stage: "report_storage", status: "completed", created_at: now,
-    last_advanced_at: now, closed_at: now, outcome: "report_stored", output: { kind: "report" } };
+    last_advanced_at: now, closed_at: now, outcome: "report_stored", output: { kind: "report" },
+    writer: { state: "ended", runtime: "copilot-app", session_id: nativeId, session_url: writerUrl,
+      session_availability: "unverified" } };
   const report = [
     "# Field report", "", "**Bold** and *emphasis* with `code <img src=x>`.", "",
     "- First", "- Second", "", "1. Ordered", "2. List", "", "> Quoted", "",
@@ -60,7 +65,7 @@
       });
       if (path === "/v1/flags") return json({ flags: [] });
       if (path.startsWith("/v1/captains?")) return json({ captains: [
-        { id: "cap-live", state: "active", live: true, stale: false, heartbeat_at: now,
+        { id: "cap-live", session_ref: captainUrl, state: "active", live: true, stale: false, heartbeat_at: now,
           wake_count: 7, compaction_count: 4, charter_revision: "opaque-hash", focus: [id] },
         { id: "cap-stale", state: "active", live: false, stale: true, heartbeat_at: now, compaction_count: null },
         { id: "cap-ended", state: "ended", live: false, stale: false, heartbeat_at: now, compaction_count: 0 }
@@ -103,6 +108,8 @@
     await until(() => app.doc.querySelector(".detail-links"));
     assert(calls.includes("/v1/operator/items/" + id), "Item route resolves the current execution");
     assert(app.doc.querySelector(".goal").textContent === row.goal, "Item route reuses full existing detail");
+    assert(app.doc.querySelector('.facts a[href="' + writerUrl + '"]')?.title.includes("unverified"),
+      "Real HTTP adapter preserves a native session and honest availability on item details");
     assert(app.doc.querySelector('a[href="/operator/executions/' + previous + '"]'), "Previous execution is one click away");
     assert(!app.doc.querySelector(".sec-queued"), "Detail route does not fetch or display backlog");
     assert(!calls.some(path => path.includes("limit=100")), "Detail reads are bounded independently of list pages");
@@ -111,6 +118,7 @@
 
     app = await load("/operator/executions/" + execution);
     await until(() => app.doc.querySelector(".detail-links"));
+    assert(app.doc.querySelector('.facts a[href="' + writerUrl + '"]'), "Closed execution permalink retains writer link");
     assert(!calls.some(path => path.startsWith("/v1/operator/items/")), "Execution route preserves exact execution");
     app.doc.querySelector("[data-report]").focus();
     app.doc.querySelector("[data-report]").click();
@@ -303,6 +311,7 @@
       path.includes("closed_after=2026-01-01") && path.includes("q=%237") && path.includes("cursor=saved_cursor")),
     "History restores filters and cursor from URL");
     assert(!app.doc.querySelector(".sec-queued"), "History is a dedicated closed page");
+    assert(app.doc.querySelector('.closed a.writer[href="' + writerUrl + '"]'), "History rows retain ended writer sessions");
     app.doc.querySelector('[data-action="refresh"]').click();
     await until(() => calls.filter(path => path.includes("cursor=saved_cursor")).length >= 2);
 
@@ -310,6 +319,9 @@
     await until(() => app.doc.querySelector("[data-item]"));
     await until(() => app.doc.querySelector(".sec-captains")?.textContent.includes("compactions 4"));
     const captainRows = app.doc.querySelector(".sec-captains");
+    const captainLinks = captainRows.querySelectorAll('a[href="' + captainUrl + '"]');
+    assert(captainLinks.length === 2 && [...captainLinks].every(link => link.tabIndex === 0) &&
+      captainLinks[0].querySelector(".mark-captain"), "HTTP adapter links both Captain helmet and name to the recorded app");
     assert(captainRows.textContent.includes("compactions unavailable") && captainRows.textContent.includes("compactions 0") &&
       !captainRows.textContent.includes("opaque-hash"), "HTTP adapter preserves known, zero and unknown native counters");
     const heights = [];

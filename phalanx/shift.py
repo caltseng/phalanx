@@ -23,6 +23,7 @@ from urllib.parse import quote, urlencode
 from .work_cli import CREDENTIAL, request
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 from .display_text import reason_text, short_title
+from .session_links import session_reference
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
 # Shift bounds (D7). A Captain also ends its shift at its first compaction or a degradation signal.
@@ -136,7 +137,8 @@ def shift_bounds(captain, charter, now=None):
             "handoff_due": due}
 
 
-def start(api, charter, session_ref, parent_id=None):
+def start(api, charter, session_ref, parent_id=None, *, runtime=None):
+    session_ref = session_reference(session_ref, runtime)
     body = {"session_ref": session_ref, "charter_revision": charter["revision"]}
     if parent_id:
         body["parent_id"] = parent_id
@@ -169,6 +171,8 @@ def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, s
 
 def _summary(item):
     writer = item["writer"]
+    if writer and writer["state"] == "ended":
+        writer = None
     return {
         "item_id": item["item_id"], "execution_id": item["id"], "version": item["version"],
         "repository_id": item["repository_id"], "title": item["title"], "stage": item["stage"],
@@ -451,6 +455,8 @@ def add_shift_command(commands):
                       help="a visible Phalanx session (task-first or legacy name); repeat for each")
     beat.add_argument("--session-writer", nargs=2, action="append", metavar=("ID", "NONCE"),
                       help="a reported session's full writer nonce, verified from its kickoff; repeat for each")
+    beat.add_argument("--session-availability", nargs=2, action="append", metavar=("ID", "STATE"),
+                      help="explicit native lookup result: present, missing or deleted; requires --session")
     beat.add_argument("--no-sessions", action="store_true", help="report that no such session is visible")
     beat.add_argument("--handoff-note")
     show_status = actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
@@ -516,17 +522,21 @@ def run_shift(args):
     if args.shift_command == "charter":
         result = charter
     elif args.shift_command == "start":
-        result = start(API(config), charter, args.session_ref, args.parent)
+        result = start(API(config), charter, args.session_ref, args.parent, runtime=config["runtime"])
     elif args.shift_command == "heartbeat":
-        if args.no_sessions and (args.sessions or args.session_writer):
+        if args.no_sessions and (args.sessions or args.session_writer or args.session_availability):
             raise ShiftError("Pass --session or --no-sessions, not both")
         sessions = [] if args.no_sessions else args.sessions and [
-            {"id": session_id, "name": name} for session_id, name in args.sessions]
+            {"id": session_id, "name": name, "runtime": config["runtime"]} for session_id, name in args.sessions]
         by_id = {session["id"]: session for session in sessions or []}
         for session_id, nonce in args.session_writer or []:
             if session_id not in by_id:
                 raise ShiftError("--session-writer requires a matching --session")
             by_id[session_id]["writer_nonce"] = nonce
+        for session_id, availability in args.session_availability or []:
+            if session_id not in by_id or availability not in ("present", "missing", "deleted"):
+                raise ShiftError("--session-availability requires a matching --session and present, missing or deleted")
+            by_id[session_id]["availability"] = availability
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
                            compaction_count=args.compaction_count)

@@ -95,6 +95,21 @@ Example explicit shift config:
 - `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.
 - `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
 
+For `copilot-app` and `codex`, `shift start` records a UUID native session reference
+as `ghapp://sessions/<UUID>` or `codex://threads/<UUID>` respectively, so Scribe can
+link to the correct app without guessing. Other runtimes and legacy opaque references
+are preserved. Canonical references still match the native ID for ownership and cleanup.
+The server never opens an app or starts a conversation for a link.
+
+After an explicit native session lookup, a heartbeat may report
+`--session-availability ID present|missing|deleted` alongside its matching `--session ID NAME`.
+The API stores this optional evidence in the existing session inventory. Scribe labels
+present as last reported, disables known missing/deleted links, and labels other recorded
+links unverified. Do not infer missing/deleted from an incomplete session listing or from
+writer termination. Keep an explicit unavailable entry in subsequent inventories until
+native inspection supersedes it. The CLI includes the configured runtime on inventory
+entries so observations never cross host apps that happen to use the same native ID.
+
 `shift launch` includes that repository's exact `checks_environment` in the writer kickoff.
 It takes the target from the **current execution's** `state.target`, not the original intake
 request, so reruns and target steering are reflected. When the environment is omitted, the

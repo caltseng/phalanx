@@ -124,6 +124,11 @@ Do these steps in order and keep each wake short:
    `session_identity`/the binding for diagnostics. Use `--no-sessions` only if none are visible.
    The server matches registered IDs and full nonces, retains legacy-name matching, and flags
    unknown or duplicate sessions. Titles alone never establish ownership.
+   When a native lookup explicitly confirms a session present, missing or deleted, include
+   `--session-availability <ID> present|missing|deleted` with its matching `--session`.
+   Preserve known missing/deleted entries until a later lookup supersedes them. A partial list,
+   an ended writer or an archived session alone does not prove deletion. Scribe otherwise labels
+   recorded links unverified; reporting availability never launches a replacement conversation.
 
 ## Creator-owned cleanup
 

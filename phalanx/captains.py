@@ -12,6 +12,7 @@ from . import intake
 from .auth import authenticate_board_read, require_coordinator
 from .intake_api import Key, run
 from .intake_models import Identifier, Payload, Text
+from .session_links import availability_reports, session_id as native_session_id, session_key
 
 
 # A Captain whose last heartbeat is older than this is stale (D5).
@@ -38,6 +39,8 @@ class Session(Payload):
     id: Short
     name: Short
     writer_nonce: Short | None = None
+    availability: Literal["present", "missing", "deleted"] | None = None
+    runtime: Short | None = None
 
 
 class Heartbeat(Payload):
@@ -67,7 +70,8 @@ def archive_status(db, session_id):
     row = db.execute("SELECT * FROM session_archives WHERE session_id=?", (session_id,)).fetchone()
     writers = [dict(writer) for writer in db.execute(
         "SELECT id, item_id, execution_id, ended_at FROM writers WHERE session_id=?", (session_id,))]
-    captains = db.execute("SELECT * FROM captains WHERE session_ref=?", (session_id,)).fetchall()
+    captains = [row for row in db.execute("SELECT * FROM captains")
+                if native_session_id(row["session_ref"]) == session_id]
     return {
         "record": dict(row) if row else None,
         "writers": writers,
@@ -160,10 +164,12 @@ def open_intents(db, captain_id):
            ORDER BY created_at, id""", (captain_id,))]
 
 
-def view(db, row, now=None):
+def view(db, row, now=None, session_reports=None):
     now = now or datetime.now(UTC)
     return {
         "id": row["id"], "session_ref": row["session_ref"], "charter_revision": row["charter_revision"],
+        "session_availability": (availability_reports(db) if session_reports is None else session_reports).get(
+            session_key(row["session_ref"]), "unverified"),
         "parent_id": row["parent_id"], "state": row["state"], "wake_count": row["wake_count"],
         "compaction_count": row["compaction_count"],
         "focus": json.loads(row["focus_json"]), "sessions": json.loads(row["sessions_json"]),
@@ -193,6 +199,14 @@ def successor_name(captain_id):
 def register(db, payload):
     if payload.parent_id is not None:
         captain_row(db, payload.parent_id)
+    native = native_session_id(payload.session_ref)
+    if native != payload.session_ref:
+        previous = db.execute(
+            "SELECT * FROM captains WHERE session_ref=? AND parent_id IS ? ORDER BY created_at, id LIMIT 1",
+            (native, payload.parent_id),
+        ).fetchone()
+        if previous is not None:
+            return view(db, previous)
     captain_id = uuid4().hex
     now = intake.timestamp()
     db.execute(
@@ -232,7 +246,8 @@ def captains(db, limit):
     rows = db.execute(
         "SELECT * FROM captains ORDER BY state = 'ended', heartbeat_at DESC, id LIMIT ?", (limit,),
     ).fetchall()
-    return {"captains": [view(db, row, now) for row in rows]}
+    reports = availability_reports(db)
+    return {"captains": [view(db, row, now, reports) for row in rows]}
 
 
 def record_action(db, item_id, payload):

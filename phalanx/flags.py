@@ -17,6 +17,7 @@ from .captains import IDLE_WITH_WORK, STALE, active_holds, gone_at, is_live, suc
 from .intake_api import run
 from .intake_models import Payload, Text
 from .operator_schema import OPEN
+from .session_links import session_id
 
 
 Kind = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
@@ -165,7 +166,7 @@ def session_flags(db, now):
             }
     if not reported:
         return []
-    registered = {row[0] for row in db.execute(
+    registered = {session_id(row[0]) for row in db.execute(
         "SELECT session_id FROM writers WHERE ended_at IS NULL AND session_id IS NOT NULL "
         "UNION SELECT session_ref FROM captains WHERE state != 'ended'")}
     successors = {successor_name(row[0]) for row in db.execute(
@@ -175,6 +176,8 @@ def session_flags(db, now):
     by_word = {word: writer for writer in writers for word in (writer["item_id"][:8], writer["nonce"])}
     flags = []
     for session in sorted(reported.values(), key=lambda entry: (entry["first_seen"], entry["id"])):
+        if session.get("availability") in ("missing", "deleted"):
+            continue
         if db.execute("SELECT 1 FROM session_archives WHERE session_id=?", (session["id"],)).fetchone():
             # archive_flags retains blocked/refused sessions with their recorded reason.
             continue
