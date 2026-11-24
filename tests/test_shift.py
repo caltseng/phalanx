@@ -57,16 +57,12 @@ class CharterTest(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(shift.ShiftError):
                 self.charter(text)
 
-    def test_max_writers_is_a_positive_integer(self):
-        for field in ("max_writers", "max_slots"):
-            charter = self.charter(CHARTER + f"[shift]\n{field} = 5\n")
-            self.assertNotIn(field, charter["shift"])
-            self.assertEqual(charter["compatibility"]["ignored_concurrency"], {field: 5})
-            for value in ("0", "-1", "true", "1.5", '"4"'):
-                with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "positive integers.*max_writers"):
-                    self.charter(CHARTER + f"[shift]\n{field} = {value}\n")
-        with self.assertRaisesRegex(shift.ShiftError, "not both"):
-            self.charter(CHARTER + "[shift]\nmax_slots = 2\nmax_writers = 3\n")
+    def test_charter_rejects_max_writers_with_dispatch_settings_guidance(self):
+        for value in ("5", "0", "true", '"4"'):
+            with self.subTest(value=value), self.assertRaisesRegex(
+                    shift.ShiftError,
+                    "concurrency moved to dispatch settings; remove it from the charter"):
+                self.charter(CHARTER + f"[shift]\nmax_writers = {value}\n")
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
         for path in (self.checkout / "c.toml", self.root / "worktrees" / "c.toml"):
@@ -314,10 +310,8 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(shift.status(self.api, self.charter)["active_writers"], 0)
         shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
 
-    def test_old_charter_and_heartbeats_do_not_restore_a_stale_limit(self):
-        # The operational charter's approved five is the new store's initial capacity.
-        Path(self.config["charter"]).write_text(CHARTER + "[shift]\nmax_writers = 5\n", encoding="utf-8")
-        charter = shift.load_charter(self.config)
+    def test_charter_and_heartbeats_do_not_restore_a_stale_limit(self):
+        charter = self.charter
         captain = shift.start(self.api, charter, "chat")["captain"]["id"]
         self.assertEqual(shift.status(self.api, charter)["max_writers"], 5)
         self.request("/v1/dispatch/settings", OWNER, {"max_writers": 2}, method="PUT")

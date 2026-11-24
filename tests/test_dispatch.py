@@ -24,16 +24,16 @@ class DispatchTest(ServerFixture, unittest.TestCase):
                                        "max_writers": 5, "active_writers": 0}))
         for token, code in ((None, 401), (RUNNER, 403), ("x" * 32, 401)):
             self.assertEqual(self.request(route, token, {"max_writers": 9}, method="PUT")[0], code)
-        for field in ("max_writers", "max_slots"):
-            for value in (0, -1, True, 1.5, "5", None, 2**64):
-                with self.subTest(field=field, value=value):
-                    self.assertEqual(self.request(route, OWNER, {field: value}, method="PUT")[0], 422)
-        self.assertEqual(self.request(route, OWNER, {"max_slots": 2, "max_writers": 3},
-                                      method="PUT")[0], 422)
+        for value in (0, -1, True, 1.5, "5", None, 2**64):
+            with self.subTest(value=value):
+                self.assertEqual(self.request(route, OWNER, {"max_writers": value}, method="PUT")[0], 422)
+        for field in ("paused", "aging_seconds"):
+            with self.subTest(field=field):
+                self.assertEqual(self.request(route, OWNER, {field: None}, method="PUT")[0], 422)
         self.assertEqual(self.request(route, OWNER, {"max_writers": 9},
                                       {"Origin": "https://evil.example"}, method="PUT")[0], 403)
         self.assertEqual(self.request(route, OWNER, {"paused": True, "aging_seconds": 42,
-                                                    "max_slots": 7}, method="PUT")[0], 200)
+                                                    "max_writers": 7}, method="PUT")[0], 200)
         status, saved = self.request(route, OWNER, {"max_writers": 6}, method="PUT")
         self.assertEqual((status, saved), (200, {"paused": True, "aging_seconds": 42,
                                                "max_writers": 6, "active_writers": 0}))

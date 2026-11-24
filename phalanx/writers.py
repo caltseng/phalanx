@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import Field, StringConstraints
+from pydantic import StringConstraints
 
 from . import captains, dispatch, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
@@ -32,11 +32,6 @@ Url = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9+.-]{0,31}://\S{1,
 router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 
 
-class WriterLimit(Payload):
-    max_writers: Annotated[int, Field(strict=True, gt=0)]
-    repositories: Annotated[list[Identifier], Field(min_length=1)]
-
-
 class Registration(Versioned):
     captain_id: Identifier
     runtime: Short
@@ -45,9 +40,6 @@ class Registration(Versioned):
     # The open writer this registration replaces. Its Captain attests the old session is stopped.
     replaces: Identifier | None = None
     replaced_stopped: bool = False
-    writer_limit: WriterLimit | None = Field(
-        default=None, deprecated=True,
-        description="Accepted for old Captains only; owner-controlled dispatch max_writers is authoritative")
 
 
 class Update(Payload):
@@ -296,11 +288,7 @@ EXECUTION = "/items/{item_id}/executions/{execution_id}/writer"
 
 @router.post(EXECUTION, dependencies=[Depends(require_coordinator)])
 def post_writer(request: Request, item_id: Identifier, execution_id: Identifier, body: Registration):
-    result = intake_api.run(request, register, item_id, execution_id, body, write=True)
-    if body.model_dump()["writer_limit"] is not None:
-        result["warnings"] = ["writer_limit is deprecated and ignored; "
-                              "use the owner-controlled /v1/dispatch/settings max_writers"]
-    return result
+    return intake_api.run(request, register, item_id, execution_id, body, write=True)
 
 
 @router.patch(EXECUTION, dependencies=[Depends(require_coordinator)])

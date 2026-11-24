@@ -128,6 +128,10 @@ class WriterTest(ServerFixture, unittest.TestCase):
         refused = next(response for code, response in responses if code == 409)
         self.assertIn("max_writers=1", refused["detail"])
         self.assertIn(winner["writer"]["id"], refused["detail"])
+        winner_index = next(index for index, (code, _) in enumerate(responses) if code == 200)
+        replay_code, replay = register(winner_index)
+        self.assertEqual(replay_code, 200, replay)
+        self.assertEqual(replay["writer"]["id"], winner["writer"]["id"])
 
     def test_initial_five_counts_sessions_not_unassigned_queued_items(self):
         queued = [self.item() for _ in range(10)]
@@ -141,13 +145,12 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual((status["max_writers"], status["active_writers"]), (5, 5))
         self.register(*queued[5], code=409)
 
-    def test_failed_and_cancelled_writers_release_charter_capacity(self):
+    def test_failed_and_cancelled_writers_release_capacity(self):
         self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
-        limit = {"max_writers": 1, "repositories": ["repo"]}
         for ending in ("failed", "cancelled"):
             with self.subTest(ending=ending):
                 item_id, execution_id = self.item()
-                binding, _, _ = self.register(item_id, execution_id, writer_limit=limit)
+                binding, _, _ = self.register(item_id, execution_id)
                 action = "close-failure" if ending == "failed" else "cancel"
                 self.ok(f"/v1/items/{item_id}/executions/{execution_id}/{action}", OWNER,
                         {"expected_version": binding["version"], "reason": "Cannot continue"})
@@ -157,12 +160,12 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 closed = finalization.attempt(self.path, execution_id)
                 self.assertEqual(closed["state"]["status"], ending)
                 following, following_execution = self.item()
-                launched, _, _ = self.register(following, following_execution, writer_limit=limit)
+                launched, _, _ = self.register(following, following_execution)
                 self.ok(f"/v1/items/{following}/executions/{following_execution}/writer/withdraw", RUNNER,
                         {"captain_id": self.captain["id"], "writer_id": launched["writer"]["id"],
                          "reason": "never launched"})
 
-    def test_charter_limit_does_not_scan_unrelated_executions(self):
+    def test_capacity_limit_does_not_scan_unrelated_executions(self):
         from phalanx import writers
 
         self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
@@ -173,8 +176,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 item = intake.create(db, Intake(repository_id="repo", goal=f"Work {index}", target="report"))
             payload = writers.Registration(
                 expected_version=item["execution"]["version"], captain_id=self.captain["id"],
-                runtime="any-runtime", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32)),
-                writer_limit={"max_writers": 1, "repositories": ["repo", "other"]})
+                runtime="any-runtime", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32)))
             steps = 0
 
             def budget():
@@ -190,8 +192,8 @@ class WriterTest(ServerFixture, unittest.TestCase):
             finally:
                 db.set_progress_handler(None, 0)
 
-    def test_raising_lowering_and_stale_charters_share_one_workspace_budget(self):
-        self.ok("/v1/dispatch/settings", OWNER, {"max_slots": 1}, method="PUT")
+    def test_raising_and_lowering_share_one_workspace_budget(self):
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         first_item, first_execution = self.item()
         first, token, _ = self.register(first_item, first_execution)
         self.ok("/v1/dispatch/settings", token, {"max_writers": 9}, 403, method="PUT")
@@ -199,14 +201,11 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok("/v1/repositories", OWNER, {"id": "other", "remote": "https://github.com/e/other.git"})
         other = self.ok("/v1/items", OWNER, {"repository_id": "other", "goal": "Other repo",
                                            "target": "report"}, 201)
-        # A different Captain, repository, or supplied legacy cap cannot bypass the saved budget.
+        # A different Captain or repository cannot bypass the saved budget.
         captain = self.ok("/v1/captains", RUNNER, {"session_ref": "second", "charter_revision": "old"}, 201)
-        self.register(other["id"], other["execution"]["id"], captain=captain["id"],
-                      writer_limit={"max_writers": 99, "repositories": ["other"]}, code=409)
+        self.register(other["id"], other["execution"]["id"], captain=captain["id"], code=409)
         self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 2}, method="PUT")
-        second, _, _ = self.register(other["id"], other["execution"]["id"], captain=captain["id"],
-                                    writer_limit={"max_writers": 1, "repositories": ["other"]})
-        self.assertIn("deprecated and ignored", second["warnings"][0])
+        second, _, _ = self.register(other["id"], other["execution"]["id"], captain=captain["id"])
         saved = self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
         self.assertEqual((saved["active_writers"], saved["max_writers"]), (2, 1))
         queued, execution = self.item()

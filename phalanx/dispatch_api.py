@@ -21,14 +21,9 @@ class DispatchSettings(Payload):
 
     @model_validator(mode="before")
     @classmethod
-    def legacy_slots(cls, values):
+    def reject_null(cls, values):
         if not isinstance(values, dict):
             return values
-        values = dict(values)
-        if "max_slots" in values:
-            if "max_writers" in values:
-                raise ValueError("Use max_writers or its legacy alias max_slots, not both")
-            values["max_writers"] = values.pop("max_slots")
         if any(value is None for value in values.values()):
             raise ValueError("Dispatch settings cannot be null; omit unchanged fields")
         return values

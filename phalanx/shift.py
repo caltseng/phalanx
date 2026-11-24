@@ -97,16 +97,12 @@ def load_charter(config):
     if unmapped:
         raise ShiftError(f"Charter repositories without a checkout mapping: {', '.join(unmapped)}")
     shift = charter.get("shift", {})
-    if not isinstance(shift, dict) or set(shift) - {*SHIFT_DEFAULTS, "max_writers", "max_slots"} or not all(
+    if isinstance(shift, dict) and "max_writers" in shift:
+        raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
+    if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
-        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes, max_writers and max_slots")
-    if "max_slots" in shift and "max_writers" in shift:
-        raise ShiftError("Use legacy max_slots or max_writers, not both; concurrency now lives in dispatch settings")
-    legacy = {key: value for key, value in shift.items() if key in ("max_slots", "max_writers")}
-    bounds = {key: value for key, value in shift.items() if key in SHIFT_DEFAULTS}
-    return {**charter, "shift": {**SHIFT_DEFAULTS, **bounds},
-            "compatibility": {"ignored_concurrency": legacy,
-                              "message": "Concurrency is owner-controlled in /v1/dispatch/settings"},
+        raise ShiftError("Charter [shift] takes positive integers max_hours and max_wakes")
+    return {**charter, "shift": {**SHIFT_DEFAULTS, **shift},
             "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
 
