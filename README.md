@@ -2,6 +2,12 @@
 
 <img src="docs/phalanx-logo.svg" alt="Phalanx logo: an ivory spear-shaped mark on a crimson shield with a gold rim" width="96" height="96">
 
+**Use Phalanx to delegate outcomes, not keep prompting agents.** A coding agent handles a task; Phalanx is meant to keep a queue of tasks moving across repositories—from clear acceptance criteria through implementation, review, checks and merge.
+
+Its value is durable ownership: work shouldn’t disappear when a chat ends, a Captain changes, CI fails or a decision blocks progress. You should see what’s moving, what’s genuinely blocked and what needs you.
+
+**For one small change, a normal coding chat is simpler.** Phalanx earns its place when coordinating several workstreams costs more than writing the code. If you still have to chase dispatches, decipher Captain identities or repeatedly unblock internal machinery, it isn’t delivering that value reliably yet. The goal is less supervision—not more agents to supervise.
+
 Phalanx orchestrates agent work across repositories, from a queued goal to a merged pull
 request or a Markdown report. A local HTTP API keeps durable work state, **Captain chats**
 coordinate visible writer sessions, and **Scribe** provides the work board.
