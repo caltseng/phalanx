@@ -355,7 +355,11 @@ def _observed(row, observation):
             "The writer disables auto-merge and converts the PR to draft; never promote or merge it", seen,
             notify_owner=True,
         ))
-    if candidate and pull["head_sha"] != candidate:
+    # Conflict and check results describe the observed head. When it isn't the recorded candidate
+    # (typically a writer pushed and recorded a fix the reconciler hasn't seen yet), they would be stale
+    # blockers, so only head_drift reports the mismatch until GitHub is observed at the candidate.
+    current = not candidate or pull["head_sha"] == candidate
+    if not current:
         recovery = (
             "Informational: delivery returns the writer to self-review at the new head"
             if state.get("publication_mode") == "draft"
@@ -369,14 +373,14 @@ def _observed(row, observation):
     if pull["state"] == "closed" and not pull["merged"]:
         flags.append(_flag("pr_closed", row, f"{url} was closed without merging",
                            "A Captain asks the owner whether to reopen it; never open a replacement", seen))
-    if pull["state"] == "open" and pull["mergeable"] is False:
+    if current and pull["state"] == "open" and pull["mergeable"] is False:
         flags.append(_flag("merge_conflict", row, f"{url} conflicts with {pull['base_ref']}",
                            WRITER_RECOVERY, seen))
     target = observation.get("target_base")
     if pull["state"] == "open" and pull["base_ref"] != target:
         flags.append(_flag("wrong_base", row, f"{url} merges into {pull['base_ref']}, not the item's target {target}",
                            "The writer retargets the PR; delivery waits until it does", seen))
-    if observation["checks"] == GateState.FAILED:
+    if current and observation["checks"] == GateState.FAILED:
         reasons = "; ".join(observation["check_reasons"]) or "required checks failed"
         flags.append(_flag("checks_failed", row, f"{url}: {reasons}", WRITER_RECOVERY, seen))
     if observation["feedback"]:
@@ -385,7 +389,7 @@ def _observed(row, observation):
                            f"{url} has {count} unresolved review item{'s' if count != 1 else ''}",
                            WRITER_RECOVERY, seen))
     failures = json.loads(row["failures_json"] or "[]")
-    if failures:
+    if current and failures:
         flags.append(_flag("pre_pr_checks_failed", row,
                            f"Local checks failed on {pull['head_sha']}: " + "; ".join(
                                failure.splitlines()[0] for failure in failures),
