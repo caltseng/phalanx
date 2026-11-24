@@ -33,10 +33,23 @@ class ShiftError(ValueError):
     pass
 
 
-def load_config(path):
+def load_config(path, *, home=None):
     if path is None:
         raise ShiftError("Pass --config or set PHALANX_SHIFT_CONFIG")
     config = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(config, dict):
+        raise ShiftError(f"Shift config {path} must be a JSON object")
+    if home is not None:
+        expected = home / "charter.toml"
+        charter = config.get("charter", "charter.toml")
+        if not isinstance(charter, str) or not charter.strip():
+            raise ShiftError(f"Discovered shift config must use muster charter {expected}")
+        configured = Path(charter)
+        if not configured.is_absolute():
+            configured = home / configured
+        if configured.resolve() != expected.resolve():
+            raise ShiftError(f"Discovered shift config must use muster charter {expected}")
+        config["charter"] = str(expected)
     missing = [key for key in ("base_url", "repositories", "charter", "worktrees", "runtime")
                if not config.get(key)]
     if missing:
@@ -328,9 +341,11 @@ def add_shift_command(commands):
     # --config is accepted before or after the action. The action's copy only overrides when given.
     shared = ArgumentParser(add_help=False)
     shared.add_argument("--config", type=Path, default=SUPPRESS, help="shift config JSON")
+    shared.add_argument("--home", default=SUPPRESS, help="existing muster directory")
     shift = commands.add_parser("shift", help="a Captain's commands on the direct path (runner token)")
     shift.add_argument("--config", type=Path, default=os.environ.get("PHALANX_SHIFT_CONFIG"),
                        help="shift config JSON (default: PHALANX_SHIFT_CONFIG)")
+    shift.add_argument("--home", help="existing muster directory (otherwise PHALANX_HOME or user locator)")
     actions = shift.add_subparsers(dest="shift_command", required=True)
     show = actions.add_parser("prompt", parents=[shared],
                               help="print the Captain or keeper prompt, or the worker prompt template")
@@ -387,7 +402,11 @@ def run_shift(args):
     if args.shift_command == "prompt":
         print(prompt(args.name))
         return
-    config = load_config(args.config)
+    home = None
+    if args.config is None or getattr(args, "home", None) is not None:
+        from .muster import direct_config
+        home, args.config = direct_config("shift", getattr(args, "home", None))
+    config = load_config(args.config, home=home)
     charter = load_charter(config)
     if args.shift_command == "charter":
         result = charter

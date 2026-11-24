@@ -2,6 +2,15 @@
 
 The HTTP API is the only path to queue state. Owner routes use the owner bearer token and runner routes the runner token. In the local deployment, the runner token identifies a trusted runner role; use one stable runner ID per runner across restarts, which scopes capacity and recovery within that role. All routes below are under `/v1` unless shown in full.
 
+## Direct muster status
+
+`GET /v1/muster/status` requires an owner or runner bearer token, even with the local board
+enabled. It returns `status`, `identity.home` (the API's resolved `PHALANX_HOME`, or null when
+not configured), live `captains`, registered open `writers`, `reconcilers` with `last_seen`,
+`age_seconds` and `stale`, `dispatch_paused`, and `observed_at`. It is a read-only snapshot,
+contains no credentials and performs no local client database reads. See
+[muster discovery and status](../README.md#direct-muster-discovery-and-status).
+
 ## Work items and executions
 
 | Route | Access | Purpose |

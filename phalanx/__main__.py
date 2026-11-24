@@ -13,6 +13,7 @@ from .captain_loop import add_captain_command, run_captain
 from .captain_relay import add_relay_command, run_relay
 from .github import GitHubError
 from .issue_intake import ingest_issue
+from .muster import add_muster_command, run_muster
 from .reconciler import ReconcilerError, add_reconcile_command, run_reconcile
 from .shift import add_shift_command, run_shift
 from .workspaces import WorkspaceError
@@ -126,6 +127,7 @@ def main() -> None:
     add_work_command(commands)
     add_reconcile_command(commands)
     add_shift_command(commands)
+    add_muster_command(commands)
     args = parser.parse_args()
     try:
         if args.command == "server":
@@ -160,6 +162,8 @@ def main() -> None:
                 parser.exit(1)
         elif args.command == "shift":
             run_shift(args)
+        elif args.command == "muster":
+            run_muster(args)
         elif args.command == "register":
             result = api_request(args.api_url, "/v1/repositories",
                                  body={"id": args.repository, "remote": args.remote})
