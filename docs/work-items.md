@@ -99,6 +99,12 @@ confirm local creation succeeds while unauthenticated `/v1` writes still return 
 The server never sends its owner credential to the browser. See the
 [form contract](../DASHBOARD.md#new-work-item-local-board).
 
+The existing toolbar **Writer concurrency** control uses that same authorization model
+through `/operator/api/dispatch/settings`, without a separate local token gate. It updates
+the canonical persisted limit, preserves omitted pause/aging settings and reports failures
+explicitly. Hosted/nonlocal boards still use the owner connection; `/v1` settings writes
+remain owner-bearer-only.
+
 Other board actions still use the CLI/API. Item/execution deep links, queue/history pages,
 URL-backed search/filters and rendered Markdown reports have shipped locally. Group pages,
 hosted sign-in and the broader dashboard action set remain planned. The

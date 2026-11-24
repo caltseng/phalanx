@@ -175,7 +175,7 @@ and filters remain visible as text and counted button badges even with both pane
 unapplied edits survive closing/reopening without being presented as applied state.
 When the host supplies writer-concurrency settings, the toolbar reparents that same native
 disclosure/form behind one settings icon. It does not duplicate settings, create a second
-write path or change the host's owner-token lifecycle.
+write path or change the host's dashboard authorization lifecycle.
 
 Filters use compact, initially closed dropdowns. Each trigger shows its label and current
 value (or **Any**), including edits before Apply filters; opening a dropdown exposes the
@@ -314,7 +314,7 @@ and owner-authenticated intake are described explicitly here and in [work items]
 
 - **Origin:** the hosted API origin serves the dashboard ([PH-20](IMPLEMENTATION_PLAN.md)), so it needs no CORS and no separate API base URL.
 - **Sign-in:** Google sign-in from PH-27. The session cookie is HttpOnly, Secure and SameSite=Lax. Sessions expire, and sign-out deletes the session on the server.
-- **Local board:** until PH-27, a local server started with `PHALANX_LOCAL_BOARD=1` serves the board read routes without a token to loopback clients with a loopback `Host` ([decision 59](docs/decisions.md)). This does not authorize `+` intake: it always needs an owner bearer token and same-origin browser checks. A hosted server leaves the flag unset.
+- **Local board:** a directly accessed server started with `PHALANX_LOCAL_BOARD=1` serves board reads and narrow `/operator/api/` actions without a token to verified loopback peers with local Host. Creation and canonical settings writes additionally require exact same-origin browser checks; forwarding headers cannot grant local authority. `/v1` writes keep their existing bearer roles. A hosted server, proxy or tunnel leaves the flag unset. See the [local-dashboard amendment](docs/decisions.md).
 - **Workspace scope:** every dashboard request is scoped to the signed-in user's selected workspace and checked against their role on the server. The browser only hides controls for convenience; it never enforces access.
 - **Write actions (D2):** the cookie authorizes owner write routes only with CSRF protection, using an Origin check plus a required custom header. Destructive actions ask for confirmation. Each action records the signed-in email in the item timeline, the same way reply authors are recorded today. Runner routes never accept the cookie.
 - **Caching:** static assets have hashed names and cache for a long time. Conditional board reads use `private, no-cache`; other API responses are `no-store`.
@@ -337,8 +337,10 @@ The D1 server reads
 no hosting, sign-in or new authentication. [API reference](docs/api.md#operator-board-data)
 lists the routes. Persisted dispatch `max_writers` is enforced atomically at writer registration.
 The **Writer concurrency** disclosure shows active sessions and the effective maximum
-(initially 5); owners can save a new positive integer. Local read-only viewers must supply
-an owner token to save. Saves preserve pause/aging settings and survive reload/restart.
+(initially 5); trusted local boards save through `/operator/api/dispatch/settings` without
+another token gate. Nonlocal boards reuse the owner connection. This adapter uses the same
+canonical settings implementation and trusted-local helper as creation, not another setting
+or authentication mechanism. Saves preserve pause/aging settings and survive reload/restart.
 Lowering below usage preserves existing sessions and blocks new admissions. Refresh capacity
 reads current server values; charter settings cannot undo dashboard edits.
 

@@ -262,7 +262,7 @@ static owner/runner credentials; ship multi-user features in separate slices.
 
 ## Operator view
 
-Paginated local board with read views and explicit owner-authenticated intake: open work
+Paginated local board with read views and explicit dashboard-authorized intake: open work
 first (running/queued/input/external distinct), recently
 closed newest first, full history available. Show stage/status, repo, age, progress, wait
 reason/action, writer/session, PR and flags. Highlight actionable input. Every unbound queued
@@ -292,6 +292,11 @@ item shows its Captain wait; do not infer capacity or rank-position blockers.
   clients without browser headers are unchanged. Retain one key and exact payload across an
   uncertain submission until an idempotent retry settles it. Inline validation and queued-row
   insertion preserve the current board view. See [the form contract](DASHBOARD.md#new-work-item-local-board).
+- The existing writer-concurrency disclosure uses `/operator/api/dispatch/settings` and the
+  same trusted-local dashboard authorization as creation. It reuses canonical dispatch
+  validation/storage and the toolbar's existing control node, with no second token prompt.
+  Nonlocal boards retain the owner connection; `/v1/dispatch/settings` write permissions
+  remain unchanged.
 
 Timeline events correlate their recorded attempt/worker, stage from/to, PR URL and full SHA,
 never newer evidence. Prefer persisted reasons; otherwise derive bounded (400-character)

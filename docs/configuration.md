@@ -54,7 +54,8 @@ Keep the reconciler scratch directory outside mapped checkouts and private to it
 The [shift config and charter](direct-path.md#run-a-captain-on-the-direct-path) define native
 session launching. The persisted dispatch `max_writers` setting is the only concurrency
 limit, initially 5; there is no per-runner or per-charter admission limit. Change it with
-Scribe's **Writer concurrency** control (owner token required to save), or owner-authenticated
+Scribe's **Writer concurrency** control (no token prompt on a trusted local-only board),
+or owner-authenticated
 `PUT /v1/dispatch/settings` with `{"max_writers": 5}`. Omitted settings remain unchanged.
 `GET /v1/dispatch/settings` shows the effective limit and active registered sessions.
 Charter `[shift]` accepts only `max_hours` and `max_wakes`; a `max_writers` entry is

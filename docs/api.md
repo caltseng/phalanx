@@ -147,6 +147,8 @@ for `/v1`:
 | --- | --- |
 | `GET /operator/api/repositories` | Existing registered-repository list for the creation form. |
 | `POST /operator/api/items` | Same body, validation, target/publication rules, response and `Idempotency-Key` receipt as `POST /v1/items`. |
+| `GET /operator/api/dispatch/settings` | Canonical dispatch settings and current active-writer usage. |
+| `PUT /operator/api/dispatch/settings` | Same validated partial update and response as owner-authenticated `PUT /v1/dispatch/settings`; omitted fields are preserved. |
 
 These adapters require an owner bearer token unless the server explicitly enables local-board
 mode and verifies a direct loopback peer and local Host. Tokenless writes additionally require

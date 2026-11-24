@@ -11,8 +11,9 @@ including owner connections (`?owner`) and tokenless local mode. For the real-AP
 an isolated temporary database/server bound to loopback with `PHALANX_LOCAL_BOARD=1` and
 one test repository registered. In that test app only, mount the repository root at
 `/fixtures` using `StaticFiles`, then open `/fixtures/tests/operator-create-fixture.html?live`.
-It creates a report work item and checks server validation, persistence, tokenless requests,
-focus restoration and unchanged `/v1` authorization. Never expose this fixture mount or run
+It creates a report work item, changes the isolated canonical capacity, and checks server
+validation, persistence, tokenless requests, focus restoration and unchanged `/v1`
+authorization. Never expose this fixture mount or run
 its writes on a production muster. No browser package installation is required.
 
 ## Route permissions and transactions

@@ -88,7 +88,7 @@ def require_same_origin(request: Request):
     site = request.headers.get("sec-fetch-site")
     if ((origin is not None and origin != f"{request.url.scheme}://{request.url.netloc}")
             or (site is not None and (site != "same-origin" or origin is None))):
-        raise HTTPException(403, "Work-item creation requires a same-origin request")
+        raise HTTPException(403, "Browser writes require a same-origin request")
 
 
 def require_board_owner(

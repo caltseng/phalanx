@@ -16,6 +16,45 @@ from test_bootstrap import OWNER, REQUEST_TIMEOUT, RUNNER, ServerFixture
 
 
 class OperatorWebTest(ServerFixture, unittest.TestCase):
+    def test_local_dashboard_settings_share_authority_and_canonical_validation(self):
+        with TemporaryDirectory() as directory:
+            server = self.start_server(Path(directory) / "local-settings.sqlite3", PHALANX_LOCAL_BOARD="1")
+            try:
+                api = "/v1/dispatch/settings"
+                board = "/operator/api/dispatch/settings"
+                self.assertEqual(self.request(api, OWNER, {"paused": True, "aging_seconds": 99},
+                                              method="PUT")[0], 200)
+                self.assertEqual(self.get(board)[1]["max_writers"], 5)
+                headers = {"Origin": self.url, "Sec-Fetch-Site": "same-origin"}
+                status, saved = self.request(board, body={"max_writers": 2}, headers=headers, method="PUT")
+                self.assertEqual((status, saved["max_writers"], saved["paused"], saved["aging_seconds"]),
+                                 (200, 2, True, 99))
+                for value in (0, -1, None, True, 2.5, "2"):
+                    self.assertEqual(self.request(board, body={"max_writers": value},
+                                                  headers=headers, method="PUT")[0], 422)
+                self.assertEqual(self.request(board, body={"max_slots": 2},
+                                              headers=headers, method="PUT")[0], 422)
+                for override in (
+                    {"Origin": "null"}, {"Origin": "https://evil.example"},
+                    {"Sec-Fetch-Site": "cross-site"}, {"Sec-Fetch-Site": "same-site"},
+                    {"Host": "localhost.evil.example"}, {"Forwarded": "for=127.0.0.1"},
+                    {"X-Forwarded-For": "127.0.0.1"}, {"X-Forwarded-Host": "localhost"},
+                ):
+                    with self.subTest(override=override):
+                        self.assertIn(self.request(board, body={"max_writers": 9},
+                                                   headers=headers | override, method="PUT")[0], (401, 403))
+                self.assertEqual(self.request(board, body={"max_writers": 9}, method="PUT")[0], 403)
+                self.assertEqual(self.request(api, body={"max_writers": 9},
+                                              headers=headers, method="PUT")[0], 401)
+                for token, status in ((RUNNER, 403), ("x" * 32, 401)):
+                    self.assertEqual(self.request(board, token, {"max_writers": 9},
+                                                  headers=headers, method="PUT")[0], status)
+                self.assertEqual(self.request(board, OWNER, {"max_writers": 9},
+                                              headers={"Origin": "null"}, method="PUT")[0], 403)
+                self.assertEqual(self.get(api)[1], saved)
+            finally:
+                self.stop_server(server)
+
     def test_local_dashboard_create_reuses_validated_idempotent_intake(self):
         with TemporaryDirectory() as directory:
             server = self.start_server(Path(directory) / "local-create.sqlite3", PHALANX_LOCAL_BOARD="1")
@@ -81,6 +120,10 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                     self.assertEqual(self.get("/operator/api/repositories", token)[0], status)
                 for token, status in ((None, 401), (RUNNER, 403), (OWNER, 201)):
                     self.assertEqual(self.request("/operator/api/items", token, body)[0], status)
+                for token, status in ((None, 401), (RUNNER, 403), (OWNER, 200)):
+                    self.assertEqual(self.get("/operator/api/dispatch/settings", token)[0], status)
+                    self.assertEqual(self.request("/operator/api/dispatch/settings", token,
+                                                  {"max_writers": 3}, method="PUT")[0], status)
                 self.assertEqual(self.request("/operator/api/items", OWNER, body, {
                     "Host": "hosted.example", "X-Forwarded-For": "203.0.113.8",
                 })[0], 201)

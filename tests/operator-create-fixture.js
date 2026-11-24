@@ -56,10 +56,27 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ repository_id: saved.repository_id, goal: "Must not create" })
       })).status === 401, "Tokenless /v1 intake stays closed");
+      const settings = doc.querySelector("#operator-settings");
+      assert(!doc.querySelector("#operator-settings-token"), "No local settings token input");
+      settings.open = true;
+      const maximum = doc.querySelector("#operator-max-writers");
+      await until(() => maximum.value !== "");
+      const before = await (await realFetch("/v1/dispatch/settings")).json();
+      maximum.value = String(before.max_writers + 1);
+      doc.querySelector("#operator-settings-form").requestSubmit();
+      await until(() => doc.querySelector("#operator-settings-status").textContent === "Concurrency saved.");
+      const after = await (await realFetch("/v1/dispatch/settings")).json();
+      assert(after.max_writers === before.max_writers + 1 &&
+        after.paused === before.paused && after.aging_seconds === before.aging_seconds,
+      "Settings save uses canonical state without overwriting pause/aging");
+      assert((await realFetch("/v1/dispatch/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_writers: 1 })
+      })).status === 401, "Tokenless /v1 settings writes stay closed");
       assert(requests.some(row => row.path === "/operator/api/repositories") &&
         requests.filter(row => row.path === "/operator/api/items").length === 2 &&
         requests.every(row => !row.authorized), "Real option loading and writes sent no bearer token");
-      result.textContent = "PASS: real tokenless localhost options, validation, creation, persisted target, focus and /v1 boundary";
+      result.textContent = "PASS: real tokenless localhost options, validation, creation, persisted target, focus, canonical settings and /v1 boundaries";
       document.documentElement.dataset.result = "passed";
       return;
     }
@@ -69,6 +86,7 @@
     const doc = win.document;
     const posts = [];
     const settingsWrites = [];
+    let rejectSettingsSave = true;
     let maximum = 5;
     let lostResponse;
     let saved;
@@ -92,6 +110,10 @@
         if (options.method === "PUT") {
           settingsWrites.push(options);
           if (ownerMode && options.headers.Authorization !== "Bearer " + "o".repeat(32)) return json({}, 403);
+          if (rejectSettingsSave) {
+            rejectSettingsSave = false;
+            return json({}, 503);
+          }
           maximum = JSON.parse(options.body).max_writers;
         }
         return json({ paused: true, aging_seconds: 99, max_writers: maximum, active_writers: 3 });
@@ -198,6 +220,13 @@
     assert(doc.querySelector('label[for="operator-max-writers"]'), "Concurrency input is labelled");
     capacityInput.value = "2";
     assert(!doc.querySelector("#operator-settings-token"), "Settings has no separate token gate");
+    capacityForm.requestSubmit();
+    await until(() => capacityStatus.textContent.includes("HTTP 503"));
+    assert(maximum === 5 && capacityStatus.textContent.includes("Refresh capacity"),
+      "Settings save failure is explicit and preserves server state");
+    doc.querySelector("#operator-settings-refresh").click();
+    await until(() => capacityInput.value === "5");
+    capacityInput.value = "2";
     capacityForm.requestSubmit();
     await until(() => capacityStatus.textContent === "Concurrency saved.");
     assert(maximum === 2 && capacity.textContent.includes("3 active / 2 maximum"),
