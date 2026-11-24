@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
 import os
@@ -72,6 +72,33 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
     def item_count(self):
         with read_transaction(self.path) as db:
             return db.execute("SELECT count(*) FROM work_items").fetchone()[0]
+
+    def file(self, *args):
+        output = io.StringIO()
+        with patch.object(sys, "argv", ["phalanx", "--api-url", self.url, "intake", *args]):
+            with redirect_stdout(output):
+                main()
+        return json.loads(output.getvalue())
+
+    def test_cli_intake_sends_dependencies_priority_context_and_criteria(self):
+        upstream = self.file("example", "First", "--target", "report")
+        merged = self.file("example", "Merge", "--target", "checked_in")
+        item = self.file("example", "Second", "--target", "checked_in", "--key", "second",
+                         "--after", merged["id"], "--after", f"{upstream['id']}:report",
+                         "--priority", "urgent", "--context", "https://example.test/a",
+                         "--context", "note", "--accept", "tests pass", "--accept", "docs")
+        self.assertEqual(item["priority"], "urgent")
+        self.assertEqual(item["context_links"], ["https://example.test/a", "note"])
+        self.assertEqual(item["acceptance_criteria"], ["tests pass", "docs"])
+        self.assertEqual(
+            sorted((d["upstream_id"], d["milestone"]) for d in item["dependencies"]),
+            sorted([(merged["id"], "checked_in"), (upstream["id"], "report")]))
+        self.assertEqual(upstream["priority"], "normal")
+        self.assertEqual(upstream["dependencies"], [])
+        with patch.object(sys, "argv", ["phalanx", "intake", "example", "x", "--target",
+                                        "report", "--after", "abc:merged"]):
+            with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main()
 
     def test_cli_import_replay_restart_and_real_dispatch(self):
         output = io.StringIO()

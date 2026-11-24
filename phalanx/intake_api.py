@@ -251,8 +251,8 @@ def local_checks(request: Request, item_id: Identifier, execution_id: Identifier
 
 
 @router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
-def reconciler_heartbeat(request: Request, runner_id: Identifier):
-    return run(request, reconciliation.heartbeat, runner_id, write=True)
+def reconciler_heartbeat(request: Request, runner_id: Identifier, body: reconciliation.Heartbeat | None = None):
+    return run(request, reconciliation.heartbeat, runner_id, body, write=True)
 
 
 @router.delete("/reconcilers/{runner_id}", dependencies=[Depends(require_coordinator)])

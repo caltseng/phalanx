@@ -36,6 +36,9 @@ SUMMARY = """
            writer.captain_id AS writer_captain_id, writer.session_id AS writer_session_id,
            writer.session_url AS writer_session_url, writer.last_progress_at AS writer_progress_at,
            writer.progress_note AS writer_progress_note,
+           (SELECT json_extract(observation.observation_json, '$.deployment')
+            FROM github_observations AS observation WHERE observation.execution_id = execution.id
+            ORDER BY observation.last_observed_at DESC, observation.observed_at DESC LIMIT 1) AS deployment_json,
            (SELECT attempt.blocker FROM attempts AS attempt
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS runner_blocker,
            (SELECT attempt.lease_expires_at FROM attempts AS attempt
@@ -202,6 +205,7 @@ def summary(row, now):
         "outcome": outcome,
         "output": output,
         "delivery": delivery,
+        "deployment": json.loads(row["deployment_json"]) if row["deployment_json"] else None,
         # The registered native worker session that holds this item, if any.
         "writer": None if row["writer_id"] is None or output is not None else {
             "id": row["writer_id"], "state": row["writer_state"], "runtime": row["writer_runtime"],
