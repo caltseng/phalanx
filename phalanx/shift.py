@@ -125,12 +125,14 @@ def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, s
               handoff_note=None):
     """Post a heartbeat with the charter's current revision. Omitted fields keep their last value."""
     current = api(f"/v1/captains/{_q(captain_id)}")
+    if sessions is None:
+        sessions = [{"id": session["id"], "name": session["name"]} for session in current["sessions"]]
     body = {
         "charter_revision": charter["revision"],
         "wake_count": current["wake_count"] + int(wake),
         "state": state or current["state"],
         "focus": current["focus"] if focus is None else focus,
-        "sessions": current["sessions"] if sessions is None else sessions,
+        "sessions": sessions,
         "handoff_note": current["handoff_note"] if handoff_note is None else handoff_note,
     }
     captain = api(f"/v1/captains/{_q(captain_id)}", body=body, method="PUT")
@@ -268,6 +270,32 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     }
 
 
+def prompt(name):
+    return resources.files("phalanx").joinpath("prompts", f"{name}.md").read_text(encoding="utf-8")
+
+
+def handoff(api, charter, captain_id, note, command):
+    """Start ending this shift and say how to launch, or find, the successor Captain.
+
+    The server names the successor after this Captain, so a rerun after a lost reply finds the chat
+    it already launched instead of starting a second one. The kickoff names `command`, the concrete
+    `phx shift` command, because a new chat can't know which command printed it.
+    """
+    ending = heartbeat(api, charter, captain_id, state="ending", handoff_note=note)
+    captain = ending["captain"]
+    successors = [api(f"/v1/captains/{_q(successor)}") for successor in captain["successors"]]
+    return {
+        **ending,
+        "open_intents": captain["open_intents"],
+        "successors": successors,
+        "session_name": captain["successor_name"],
+        "kickoff": (f"You succeed Phalanx Captain {captain_id}. In this chat, `phx shift` means `{command}`. "
+                    f"On your first wake, run "
+                    f"`phx shift start --session-ref <your native session ID> --parent {captain_id}`.\n\n"
+                    + prompt("captain")),
+    }
+
+
 def _writer_route(args, suffix=""):
     return f"/v1/items/{_q(args.item)}/executions/{_q(args.execution)}/writer{suffix}"
 
@@ -280,8 +308,9 @@ def add_shift_command(commands):
     shift.add_argument("--config", type=Path, default=os.environ.get("PHALANX_SHIFT_CONFIG"),
                        help="shift config JSON (default: PHALANX_SHIFT_CONFIG)")
     actions = shift.add_subparsers(dest="shift_command", required=True)
-    prompt = actions.add_parser("prompt", parents=[shared], help="print the Captain prompt")
-    prompt.add_argument("name", choices=["captain"])
+    show = actions.add_parser("prompt", parents=[shared],
+                              help="print the Captain or keeper prompt, or the worker prompt template")
+    show.add_argument("name", choices=["captain", "keeper", "worker"])
     actions.add_parser("charter", parents=[shared], help="validate the charter and show its revision")
     begin = actions.add_parser("start", parents=[shared], help="register this chat as a Captain")
     begin.add_argument("--session-ref", required=True, help="this chat's native session ID or link")
@@ -291,9 +320,23 @@ def add_shift_command(commands):
     beat.add_argument("--wake", action="store_true", help="count this heartbeat as a wake")
     beat.add_argument("--state", choices=["active", "ending", "ended"])
     beat.add_argument("--focus", nargs="*", help="item IDs this wake acts on")
-    beat.add_argument("--session", nargs="*", dest="sessions", help="native sessions visible to you")
+    beat.add_argument("--session", nargs=2, action="append", dest="sessions", metavar=("ID", "NAME"),
+                      help="a visible native session named `phx ...`; repeat for each")
+    beat.add_argument("--no-sessions", action="store_true", help="report that no such session is visible")
     beat.add_argument("--handoff-note")
     actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
+    act = actions.add_parser("action", parents=[shared], help="record an action on the item's timeline")
+    act.add_argument("--captain", required=True)
+    act.add_argument("--item", required=True)
+    act.add_argument("--action", required=True, help="what you did, for example `launched` or `replaced`")
+    act.add_argument("--reason", required=True)
+    end = actions.add_parser("handoff", parents=[shared],
+                             help="start ending this shift and get the successor's name and kickoff")
+    end.add_argument("--captain", required=True)
+    end.add_argument("--note", required=True, help="what your successor needs to know")
+    retire = actions.add_parser("retire-reconciler", parents=[shared],
+                                help="forget a decommissioned reconciler's heartbeat")
+    retire.add_argument("runner_id")
     start_writer = actions.add_parser("launch", parents=[shared],
                                       help="prepare an item's worktree and register its writer intent")
     start_writer.add_argument("--captain", required=True)
@@ -318,7 +361,7 @@ def add_shift_command(commands):
 
 def run_shift(args):
     if args.shift_command == "prompt":
-        print(resources.files("phalanx").joinpath("prompts", f"{args.name}.md").read_text(encoding="utf-8"))
+        print(prompt(args.name))
         return
     config = load_config(args.config)
     charter = load_charter(config)
@@ -327,10 +370,22 @@ def run_shift(args):
     elif args.shift_command == "start":
         result = start(API(config), charter, args.session_ref, args.parent)
     elif args.shift_command == "heartbeat":
+        if args.no_sessions and args.sessions:
+            raise ShiftError("Pass --session or --no-sessions, not both")
+        sessions = [] if args.no_sessions else args.sessions and [
+            {"id": session_id, "name": name} for session_id, name in args.sessions]
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
-                           focus=args.focus, sessions=args.sessions, handoff_note=args.handoff_note)
+                           focus=args.focus, sessions=sessions, handoff_note=args.handoff_note)
     elif args.shift_command == "status":
         result = status(API(config), charter)
+    elif args.shift_command == "action":
+        result = API(config)(f"/v1/items/{_q(args.item)}/captain-actions", body={
+            "captain_id": args.captain, "action": args.action, "reason": args.reason})
+    elif args.shift_command == "handoff":
+        command = config.get("shift_command") or f"python -m phalanx shift --config {Path(args.config).resolve()}"
+        result = handoff(API(config), charter, args.captain, args.note, command)
+    elif args.shift_command == "retire-reconciler":
+        result = API(config)(f"/v1/reconcilers/{_q(args.runner_id)}", method="DELETE")
     elif args.shift_command == "launch":
         result = launch(API(config), config, charter, args.captain, args.item, replaces=args.replaces)
     elif args.shift_command == "writer":

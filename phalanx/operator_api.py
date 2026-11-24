@@ -356,10 +356,20 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 JOIN transition_history AS checked
                     ON checked.execution_id = result.execution_id AND checked.version = result.version
                 WHERE result.execution_id = ?
+                UNION ALL
+                SELECT action.version, 'captain_action', action.created_at, NULL,
+                       json_extract(acted.state_json, '$.stage'),
+                       json_extract(acted.state_json, '$.status'),
+                       NULL, 'Captain ' || substr(action.captain_id, 1, 8) || ' ' || action.action
+                           || ': ' || action.reason, NULL
+                FROM captain_actions AS action
+                JOIN transition_history AS acted
+                    ON acted.execution_id = action.execution_id AND acted.version = action.version
+                WHERE action.execution_id = ?
             )
             SELECT * FROM events {boundary}
             ORDER BY version DESC, created_at DESC LIMIT ?""",
-            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
+            (execution_id, execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
     return {
         "item": summary(execution, datetime.now(UTC)),

@@ -187,6 +187,14 @@ def timeline(db, item_id, execution_id):
     } for row in db.execute(
         "SELECT * FROM local_check_results WHERE execution_id=?", (execution_id,),
     )]
+    events += [{
+        "version": row["version"], "event": "captain_action", "attempt_id": None,
+        "created_at": row["created_at"],
+        "details": {"captain_id": row["captain_id"], "action": row["action"], "reason": row["reason"]},
+        "state": states[row["version"]],
+    } for row in db.execute(
+        "SELECT * FROM captain_actions WHERE execution_id=?", (execution_id,),
+    )]
     return sorted(events, key=lambda event: (event["version"], event["created_at"]))
 
 
@@ -361,6 +369,13 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
     if dependencies.milestone_evidence(state) != dependencies.milestone_evidence(next_state):
         dependencies.refresh_dependents(db, row["item_id"], now_ms)
     return execution_view(execution_row(db, row["item_id"], row["id"]))
+
+
+def end_writers(db, execution_id, status):
+    """End every open writer of an execution that closed as the terminal status."""
+    db.execute("""UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL
+                  WHERE execution_id=? AND ended_at IS NULL""",
+               (timestamp(), f"closed as {status}", execution_id))
 
 
 def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None,

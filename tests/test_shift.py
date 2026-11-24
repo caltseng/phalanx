@@ -137,11 +137,13 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status["items"][0]["writer"]["session_id"], "s-1")
         self.assertEqual(status["out_of_scope_open_items"], 1)
 
-        beat = shift.heartbeat(self.api, self.charter, captain, wake=True, focus=[item["id"]], sessions=["s-1"])
+        beat = shift.heartbeat(self.api, self.charter, captain, wake=True, focus=[item["id"]],
+                               sessions=[{"id": "s-1", "name": launched["session_name"]}])
         self.assertEqual((beat["captain"]["wake_count"], beat["shift"]["handoff_due"]), (1, []))
+        first_seen = beat["captain"]["sessions"][0]["first_seen"]
         beat = shift.heartbeat(self.api, self.charter, captain, wake=True, handoff_note="Pilot running")
         self.assertEqual((beat["captain"]["wake_count"], beat["captain"]["focus"], beat["captain"]["sessions"]),
-                         (2, [item["id"]], ["s-1"]))
+                         (2, [item["id"]], [{"id": "s-1", "name": launched["session_name"], "first_seen": first_seen}]))
         self.assertEqual(beat["shift"]["handoff_due"], ["wake count reached 2"])
         ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
         self.assertEqual((ended["state"], ended["handoff_note"], ended["wake_count"]), ("ended", "Pilot running", 2))
@@ -169,6 +171,24 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(replay["writer"]["id"], launched["writer"]["id"])
         self.assertEqual(live.read_bytes(), before)
 
+    def test_handoff_marks_ending_and_names_a_findable_successor(self):
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        launched = shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
+        handoff = shift.handoff(self.api, self.charter, captain, "Item X waits on review", "phx-test shift")
+        self.assertEqual((handoff["captain"]["state"], handoff["captain"]["handoff_note"]),
+                         ("ending", "Item X waits on review"))
+        self.assertEqual([intent["writer_id"] for intent in handoff["open_intents"]], [launched["writer"]["id"]])
+        self.assertEqual((handoff["session_name"], handoff["successors"]), (f"phx captain {captain[:8]}", []))
+        self.assertIn(f"--parent {captain}", handoff["kickoff"])
+        self.assertIn("`phx shift` means `phx-test shift`", handoff["kickoff"])
+        self.assertIn("# Phalanx Captain", handoff["kickoff"])
+        successor = shift.start(self.api, self.charter, "chat-2", captain)["captain"]["id"]
+        again = shift.handoff(self.api, self.charter, captain, "Item X waits on review", "phx-test shift")
+        self.assertEqual([entry["id"] for entry in again["successors"]], [successor])
+        self.assertEqual(again["captain"]["ending_at"], handoff["captain"]["ending_at"])
+        with self.assertRaisesRegex(ValueError, "HTTP 409"):
+            shift.heartbeat(self.api, self.charter, captain, state="active")
+
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
             result = subprocess.run([sys.executable, "-m", "phalanx", "shift", *arguments],
@@ -178,12 +198,23 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             return result.stdout
 
         self.assertIn("# Phalanx Captain", phx("prompt", "captain"))
+        self.assertIn("# Phalanx keeper", phx("prompt", "keeper"))
+        self.assertIn("# Phalanx work item $item_id", phx("prompt", "worker"))
         config = Path(self.config["charter"]).parent / "shift.json"
         config.write_text(json.dumps(self.config), encoding="utf-8")
         self.assertIn("# Phalanx Captain", phx("prompt", "captain", "--config", str(config)))
         for arguments in (("charter", "--config", str(config)), ("--config", str(config), "charter")):
             with self.subTest(arguments=arguments):
                 self.assertEqual(json.loads(phx(*arguments))["revision"], self.charter["revision"])
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain,
+                              "--session", "s-1", "phx 1234abcd nonce", "--session", "s-2", "phx captain"))
+        self.assertEqual([(entry["id"], entry["name"]) for entry in beat["captain"]["sessions"]],
+                         [("s-1", "phx 1234abcd nonce"), ("s-2", "phx captain")])
+        beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain, "--no-sessions"))
+        self.assertEqual(beat["captain"]["sessions"], [])
+        ending = json.loads(phx("--config", str(config), "handoff", "--captain", captain, "--note", "Bye"))
+        self.assertIn(f"`phx shift` means `python -m phalanx shift --config {config.resolve()}`", ending["kickoff"])
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from phalanx.github import GitHubClient, GitHubError, PullRequest, UncertainGitHubWrite
+from phalanx.github import GitHubClient, GitHubError, PullRequest, UncertainGitHubWrite, merge_method
 from phalanx.pr_models import ExpectedRefs, GitHubPull, MergedPull
 from phalanx.transitions import Revision
 
@@ -105,15 +105,14 @@ def observe_merge(github: GitHubClient, target: MergeTarget) -> CheckInOutcome:
         return CheckInOutcome("unresolved", f"GitHub merged the PR at head {pull.head_sha}, not the "
                               f"validated candidate {target.revision.head}", pull)
     try:
-        parents = github.get_commit_parents(pull.merge_commit_sha)
         # The base may have advanced before the merge; the ready head must be the merged head parent.
-        if len(parents) == 2 and parents[1] == target.revision.head:
-            return CheckInOutcome("merged", "GitHub confirmed the merge of the ready head", pull, parents,
-                                  method="merge")
-        on_base = len(parents) == 1 and github.is_on_branch(pull.merge_commit_sha, target.base_ref)
+        method, parents = merge_method(github, pull.merge_commit_sha, target.revision.head, target.base_ref)
     except GitHubError as error:
         return CheckInOutcome("pending", str(error), pull, retry_after_seconds=error.retry_after_seconds)
-    if on_base:
+    if method == "merge":
+        return CheckInOutcome("merged", "GitHub confirmed the merge of the ready head", pull, parents,
+                              method="merge")
+    if method == "squash_or_rebase":
         return CheckInOutcome("merged", f"GitHub squashed or rebased the ready head onto {target.base_ref}",
                               pull, parents, method="squash_or_rebase")
     return CheckInOutcome("unresolved", "GitHub's merge commit neither has the ready head as its head "

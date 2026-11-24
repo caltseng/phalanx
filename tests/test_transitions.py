@@ -182,12 +182,13 @@ class TransitionTests(unittest.TestCase):
             decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=replace(READY, url="https://example.com/pull/2")))
         retargeted = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True, off_base=True))
         self.assertIsNone(retargeted.ready_revision)
-        merged = replace(READY, revision=Revision("squashed-head", "base"), merge_commit="merge", closed=True)
+        merged = replace(READY, revision=Revision("squashed-head", "base"), merge_commit="merge", closed=True,
+                         merge_method="squash_or_rebase", merged_at="2026-11-24T06:33:57+00:00")
         elsewhere = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=merged, off_base=True))
         self.assertEqual((elsewhere.status, elsewhere.final_output), (Status.WAITING_FOR_INPUT, None))
         done = decide(observed, Event.PR_OBSERVED, evidence=Evidence(pr=merged))
-        self.assertEqual((done.status, done.final_output, done.candidate),
-                         (Status.COMPLETED, merged, "squashed-head"))
+        self.assertEqual((done.status, done.stage, done.final_output, done.candidate),
+                         (Status.COMPLETED, Stage.DELIVERY, merged, "squashed-head"))
         with self.assertRaises(ValueError):
             decide(ready(), Event.PR_OBSERVED, evidence=Evidence(pr=merged))
 

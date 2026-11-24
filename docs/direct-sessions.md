@@ -79,7 +79,7 @@ The reconciler runs periodically for each open PR item and for due external wait
 
 | GitHub shows | Server records |
 | --- | --- |
-| The item's primary PR **merged by any method** (merge commit, squash or rebase), by Phalanx or a person | Delivered: it completes a `checked_in` target and records the merge commit and final head. It needs no Phalanx merge intent or second parent. A final head that differs from the last recorded one raises an informational `head_drift` flag. A `ready_for_check_in` target also completes when merged, so dependents unblock (fixes decision 58's gap). |
+| The item's primary PR **merged by any method** (merge commit, squash or rebase), by Phalanx or a person | Delivered: it completes a `checked_in` target and records the merge commit, final head, GitHub's `merged_at` and the method the reconciler verified (`merge` when the merge commit's second parent is the head, `squash_or_rebase` for a single-parent commit on the base branch, else none), the same rule check-in uses. It needs no Phalanx merge intent or second parent. A final head that differs from the last recorded one raises an informational `head_drift` flag. A `ready_for_check_in` target also completes when merged, so dependents unblock (fixes decision 58's gap). |
 | PR closed without merge | `waiting_for_input` with the question; never a replacement PR. |
 | New head, failing checks, new review feedback, conflict | Evidence on the timeline plus a flag. The writer, or the Captain if no writer is active, acts on it. |
 | Ready head with required checks and reviews satisfied | `ready_for_check_in`. Merging is GitHub's job (D2). |
@@ -135,6 +135,14 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   3. It doesn't wait for the successor to take over. It finishes or explicitly abandons each of its own intents, which the server records, so they become actionable by any Captain.
   4. It sets `ended` and stops acting.
 - **Cleanup.** The successor confirms the predecessor is `ended` with no owned intents, then archives the predecessor's chat. A predecessor still `ending` after 30 min is treated as dead (below).
+
+  As built in step 4:
+  - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
+  - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
+  - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
+  - The record step reports every runtime session named `phx …` with its ID and name. The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` from these reports by matching name words to open writers' item ID prefix or nonce. A pending successor's name is exempt while its parent is `ending`.
+  - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
+  - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
 - **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`. Its unconfirmed intents become actionable by any live Captain, which resolves them by nonce. If it had already launched a successor, that successor continues. If not, [No live Captain](#no-live-captain) applies.
 
 ### No live Captain
@@ -142,7 +150,7 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
 The reconciler is a long-running process, so it, not a chat, notices when no Captain is live.
 
 - **Detect.** No Captain is `active` or `ending` with a heartbeat under 15 min while open work exists. The server raises `no_live_captain`, the board shows a banner with the last Captain and its handoff note, and the reconciler runs the runner's `notify_command`.
-- **Restart.** A runtime scheduler that **starts a new session** on a fixed cadence, such as a scheduled automation that opens a fresh chat, runs a short "Captain keeper" prompt every 30 min. The keeper checks `GET /v1/captains`. If a live Captain exists, it ends without acting. Otherwise it registers and works as a Captain from the charter. Each runtime adapter documents its scheduler (D8).
+- **Restart.** A runtime scheduler that **starts a new session** on a fixed cadence, such as a scheduled automation that opens a fresh chat, runs a short "Captain keeper" prompt every 30 min. The keeper checks `GET /v1/captains`. If a live Captain exists, it ends without acting. Otherwise it registers and works as a Captain from the charter, or, if its session can't schedule its own wakes, starts a Captain in a new scheduled session and ends. Each runtime adapter documents its scheduler (D8).
 - **Owner fallback.** If no runtime scheduler is configured, or the keeper itself fails, the owner sees the banner and notification and starts a Captain from the charter by hand. Nothing else blocks: workers keep running and posting evidence, and the reconciler keeps recording GitHub state. The keeper doesn't depend on the reconciler. If both are down, the keeper still finds no live Captain through the API and starts one, and that Captain restarts the reconciler.
 
 ### Deviation flags
@@ -225,6 +233,7 @@ Caleb wants no runner-local database, because it duplicates the backend as a sou
 | Relay coalescing (44cdf154) | Unnecessary. Recommend stopping it now. |
 | Relay SQLite contention (108f6009) | Unnecessary once the relay is retired (step 5). Until then, run one relay server, as the runbook already says. |
 | Dirty-stop recovery (a4bcb34f) | Unnecessary once attended slots go. Keep its invariant: writer replacement never discards unpushed changes. |
+| Merge before a PR gate (4a3d20b7) | Not fixed. The old path recognizes a merged primary PR only at its PR gates, so an execution still in `development` or `self_review` when its PR merges is cancelled with a report. Removed with the old path (step 5). |
 
 ## Migration order
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
 from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
-from .auth import authenticate, require_owner, require_runner, require_worker
+from .auth import authenticate, require_coordinator, require_owner, require_runner, require_worker
 from .store import read_transaction, write_transaction
 from .transitions import Stage
 from .intake_models import (
@@ -253,6 +253,11 @@ def local_checks(request: Request, item_id: Identifier, execution_id: Identifier
 @router.post("/reconcilers/{runner_id}/heartbeat", dependencies=[Depends(require_runner)])
 def reconciler_heartbeat(request: Request, runner_id: Identifier):
     return run(request, reconciliation.heartbeat, runner_id, write=True)
+
+
+@router.delete("/reconcilers/{runner_id}", dependencies=[Depends(require_coordinator)])
+def retire_reconciler(request: Request, runner_id: Identifier):
+    return run(request, reconciliation.retire, runner_id, write=True)
 
 
 @router.post("/items/{item_id}/executions/{execution_id}/pr-publication-claim",
