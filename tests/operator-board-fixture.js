@@ -155,7 +155,17 @@
     assert(/heartbeat \d+s ago/.test(section("captains").textContent), "Heartbeat age has context and ago");
     assert(section("captains").querySelector("time").getAttribute("aria-label").includes("T"), "Absolute time accessible");
     assert(item("run").closest("li").querySelector(".mark-run") &&
-      section("captains").querySelector(".mark-run"), "Work and live Captains share spearhead");
+      !section("captains").querySelector(".mark-run"), "Running work retains its spearhead, distinct from Captains");
+    for (const [health, word] of [["run", "live"], ["attn", "stale"], ["muted", "ended"]]) {
+      const row = section("captains").querySelector(".row.t-" + health);
+      const glyph = row.querySelector(".glyph");
+      const helmet = glyph.querySelector("svg.mark-captain");
+      assert(helmet && helmet.getAttribute("aria-hidden") === "true" &&
+        helmet.getAttribute("focusable") === "false" &&
+        glyph.classList.contains("t-" + health) && glyph.title === word &&
+        glyph.querySelector(".sr-only").textContent === word,
+      "Captain helmet preserves " + word + " tone and accessible state text");
+    }
     assert(item("queue").closest("li").querySelector(".mark-idle") &&
       item("external").closest("li").querySelector(".mark-wait"), "Queued and waiting have distinct shields");
     assert(root.querySelector(".fgroup .mark-notify") && root.querySelector(".fgroup .mark-flag") &&
@@ -167,7 +177,9 @@
     assert(item("short").closest("li").querySelector(".reason").textContent === "wanted: merged", "Ready shortfall visible");
     assert(item("fail").closest("li").querySelector(".reason").textContent === "wanted: merged", "Failed shortfall visible");
     assert(item("cancelled").closest("li").querySelector(".reason").textContent === "wanted: merged", "Cancelled shortfall visible");
-    assert(root.querySelector(".fgroup .captain-ref.captain-ended").textContent.includes("ended"), "Flag Captain reference distinguishes ended");
+    assert(root.querySelector(".fgroup .captain-ref.captain-ended .t-muted .mark-captain") &&
+      root.querySelector(".fgroup .captain-ref.captain-ended").textContent.includes("ended"),
+    "Flag Captain reference uses a muted helmet and distinguishes ended");
     assert(/closed \d+s ago/.test(item("done").closest("li").querySelector(".age").textContent) &&
       item("done").closest("li").querySelector(".dur").textContent.startsWith("took 1h"), "Closed times explain age and duration");
     ended().open = true;
@@ -192,7 +204,21 @@
     assert(history.includes("self review") && history.includes("development") &&
       detail().textContent.includes("Prerequisites"), "Stage history and dependencies");
     assert(detail().textContent.includes("att2") && detail().textContent.includes("opaque-worker-7"), "Attempt and legacy worker");
-    assert(detail().querySelector(".captain-ref .mark-run") && ended().open, "Captain reference live and Ended state retained in details");
+    assert(detail().querySelector(".captain-ref .t-run .mark-captain") && ended().open,
+      "Captain reference uses a live helmet and Ended state is retained in details");
+    running.writer.captainId = "cap-stale";
+    refresh();
+    await tick();
+    assert(detail().querySelector(".captain-ref .t-attn .mark-captain") &&
+      detail().querySelector(".captain-ref").textContent.includes("stale"),
+    "Stale Captain reference keeps its helmet and explicit state");
+    running.writer.captainId = "cap-unlisted";
+    refresh();
+    await tick();
+    assert(detail().querySelector(".captain-ref .t-muted .mark-captain") &&
+      detail().querySelector(".captain-ref").textContent.includes("status unavailable"),
+    "Unlisted Captain reference keeps its helmet and unavailable state");
+    running.writer.captainId = "cap-1";
     assert(detail().textContent.includes("Merged") && detail().querySelector(".chip .mark-flag"), "Mapped target and flag in details");
     assert(!detail().textContent.includes("Which target?"), "Late detail ignored");
     button("Next history page").click();
