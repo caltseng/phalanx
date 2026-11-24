@@ -11,6 +11,29 @@ not configured), live `captains`, registered open `writers`, `reconcilers` with 
 contains no credentials and performs no local client database reads. See
 [muster discovery and status](../README.md#direct-muster-discovery-and-status).
 
+## Session archival records
+
+The runtime session tools perform archival. The API only records and exposes evidence:
+
+| Route | Access | Purpose |
+| --- | --- | --- |
+| `GET /session-archives?session_id=ID` | Owner or runner | Returns `record` (or null), registered `writers`, and `active`: whether a writer, Captain handoff or creator cleanup is still unfinished |
+| `PUT /session-archives` | Owner or runner | Records `session_id`, `outcome` (`archived`, `blocked`, `refused`), `reason` and `reported_by` (the reporting native session ID) |
+
+An `archived` write is refused while the registered writer is active, or while its Captain has
+not ended, still owns intents/writer cleanup, or has neither a registered successor nor a charter
+stop note. The caller verifies creator authority, runtime termination and local-work preservation
+immediately before archival with `shift archive-check`; the API does not access local Git or call
+any runtime. An existing `archived` record is immutable. A `refused` record cannot be overwritten
+by another block/refusal, only by a separately verified `archived` confirmation. Blocks and refusals
+derive a persistent `orphan_session` flag with the reason, even without a current session inventory.
+
+Captain reads (`GET /captains` and `GET /captains/{id}`) include `cleanup_pending` and up to 100
+`ended_writers` needing cleanup, untried then least recently checked first, with their item, execution and session IDs and any
+local-work block. Archived/refused writers leave this actionable list; refusals remain visible
+through their flags and individual archival record. These records do not advance work or clear
+other execution flags. See [creator-owned cleanup](direct-path.md#creator-owned-session-cleanup).
+
 ## Work items and executions
 
 | Route | Access | Purpose |

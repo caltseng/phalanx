@@ -22,8 +22,8 @@ missing or invalid, stop and tell the owner.
    add `--parent <its Captain ID>` and read its `handoff_note` and `open_intents` in `phx shift status`.
 2. Remember the returned `captain.id`. If you lose it, find your session ref in the `captains` list
    from `phx shift status`.
-3. If you have a predecessor, archive its chat once its `state` is `ended`, or once it is stale. If your
-   runtime refuses because only a session's creator may archive it, ask the owner once to archive it.
+3. Do not try to archive a predecessor you did not create. Its creator (a Captain or keeper session)
+   owns that cleanup; a successor is not necessarily its creator.
 4. If you have a predecessor, message each of its writers' sessions once with your session ID, so their
    reports reach you instead of its chat.
 
@@ -33,7 +33,8 @@ Do these steps in order and keep each wake short:
 
 1. **Heartbeat.** Run `phx shift heartbeat --captain <id> --wake`. If `shift.handoff_due` is non-empty,
    or you notice that you were compacted or are degrading, go to *Ending a shift* after this wake.
-2. **Reconcile.** Run `phx shift status`. Read the `flags`, the `captains` and the charter's open `items`.
+2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
+   `captain` cleanup record and the charter's open `items`.
 3. **Check the worker sessions.** Use your session tools to look at the session of every writer on the
    charter's open items, including writers an earlier Captain launched: any live Captain looks after a
    confirmed writer. Inspect runtime-reported repository trust before interpreting activity or errors.
@@ -79,12 +80,12 @@ Do these steps in order and keep each wake short:
      run `phx shift launch --captain <id> --item <item> --replaces <writer>` and launch its new session as
      above. The old session must never write again.
    - **Flags:** treat each flag on your items as a reason to look. Fix what your allowed actions permit,
-     and otherwise escalate per the charter. For `orphan_session` and `duplicate_writer`, archive the
-     session if its item is finished or its writer was replaced; otherwise stop it and report it.
+     and otherwise escalate per the charter. For `orphan_session` and `duplicate_writer`, follow
+     *Creator-owned cleanup* below if you created it; otherwise notify its creator or owner once.
+     Stop a duplicate that could still write before cleanup.
      For `captain_stale`, its unconfirmed launches are now yours to confirm or withdraw.
-   - **Finished item:** archive its worker session once its writer has ended. Your runtime may let only
-     a session's creator archive it. If it refuses, ask the owner once to archive that session, and
-     leave its `orphan_session` flag until they do.
+   - **Finished writer:** follow *Creator-owned cleanup* below, including for closed items that no
+     longer appear in `items`. Your Captain record's `ended_writers` lists them.
 
    After each launch, replacement, withdrawal, answer or escalation, put it on the item's timeline with
    `phx shift action --captain <id> --item <item> --action <what you did> --reason "<why>"`.
@@ -94,6 +95,38 @@ Do these steps in order and keep each wake short:
 5. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
    `--session <native session ID> "<name>"` for every unarchived session whose name starts with `phx `,
    or `--no-sessions` if there are none. The server flags sessions that no writer or Captain owns.
+
+## Creator-owned cleanup
+
+Archive each writer session **you created** once its execution is `completed`, `failed` or
+`cancelled`, or after its abandoned/replaced writer has ended and you confirmed its runtime session
+is stopped. Never archive a writer merely because it is idle, waiting, stale or awaiting trust.
+Check your Captain record's `ended_writers` on every wake, not only the charter's open items.
+Use `phx shift status --captain <id>` even after ending, so a busy muster cannot age your record out
+of the recent Captains list.
+
+1. Use your runtime's session tools to confirm creator ownership, that the session has ended/stopped,
+   and what workspace it would remove. Do not stop a still-running terminal writer just to archive it.
+2. Immediately before archiving run
+   `phx shift archive-check --session <ID> --by <your native session ID> --item <item>`.
+   It checks the existing item worktree, fetches its origin branch and requires a clean worktree
+   with no unpushed commits. Never reset, delete or discard local work to pass this check.
+   For a helper or Captain use `--worktree <its actual Git worktree>` instead, or `--no-worktree`
+   only after runtime inspection confirms it has no Git worktree or persistent work to lose.
+   If `can_archive` is false, leave the session alone. A local-work failure records its reason and
+   keeps `orphan_session`; preserve/push the work through its writer before checking again.
+3. Only when `can_archive` is true, call your runtime's archive-session tool once. On success record
+   `phx shift archive-result --session <ID> --by <your native session ID> --outcome archived --reason "<runtime confirmation>"`.
+   If refused or uncertain, leave the session as is and record `--outcome refused` with the exact
+   runtime reason (including any missing authority). Notify the owner once. The durable refusal
+   keeps `orphan_session` even after your shift ends. **Never retry a refused archive in a loop**;
+   future archive checks suppress it. Only record `archived` later if runtime inspection verifies
+   that the owner or creator actually archived it.
+
+Ending a shift does not transfer runtime creator authority. If your writers are still active, retain
+a cleanup-only wake after `--state ended`: do not dispatch or coordinate, only inspect your own ended
+writers and perform this cleanup. Once `cleanup_pending` is zero, stop that wake. A refusal is already
+escalated and does not keep this wake alive. Include any unresolved cleanup in your handoff note.
 
 ## Escalation
 
@@ -110,9 +143,15 @@ When `handoff_due` is non-empty, at your first compaction, or at any sign of deg
 3. If `successors` is empty, search your sessions for the returned `session_name`. If none exists,
    create one new chat with your session tools, named `session_name`, with `kickoff` as its first
    prompt. Give it the same wake schedule as yours: every 5 minutes.
-4. Don't wait for it to take over. Once you own no open intents, run
-   `phx shift heartbeat --captain <id> --state ended`, stop your wake schedule and stop acting. The
-   successor archives this chat. If the successor never comes up, the keeper starts a new Captain.
+4. Finish or stop any remaining helper sessions you created, accounting for their work first.
+   Archive any ended writer sessions and all ended/stopped helper sessions you created, following
+   *Creator-owned cleanup*. Never stop/archive the live successor or a live writer as a helper.
+   Record every refusal.
+5. Don't wait for it to take over. Once you own no open intents, run
+   `phx shift heartbeat --captain <id> --state ended` and stop coordinating. Keep only the cleanup wake
+   described above if needed; otherwise stop your wake schedule. Your creator archives this chat
+   once handoff and creator cleanup are complete. If the successor never comes up, the keeper starts
+   a new Captain.
 
 Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
 or the keeper, takes over your unconfirmed launches.

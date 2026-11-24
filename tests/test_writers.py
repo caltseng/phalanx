@@ -8,8 +8,8 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx import captains, dispatch, flags, intake, store
-from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION
+from phalanx import captains, dispatch, flags, intake, shift, store
+from phalanx.direct_schema import CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA
 from phalanx.dispatch_api import Claim, DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.pr_models import DEPLOYMENT_WINDOW
@@ -685,12 +685,14 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         path = self.previous_store(CLOSED_WRITER_MIGRATION)
         with write_transaction(path) as db:
             intake.register(db, "repo", "https://github.com/e/r.git")
-            captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, created_at, heartbeat_at)
+                          VALUES ('c', 'chat', 'c1', 'active', ?, ?)""",
+                       (intake.timestamp(), intake.timestamp()))
             for name in ("closed", "open"):
                 item = intake.create(db, Intake(repository_id="repo", goal=name, target="report"))
                 db.execute("""INSERT INTO writers (id, execution_id, item_id, captain_id, runtime, nonce,
                                   token_digest, state, created_at) VALUES (?, ?, ?, ?, 'r', ?, ?, 'busy', ?)""",
-                           (name, item["execution"]["id"], item["id"], captain["id"], name, intake.digest(name),
+                           (name, item["execution"]["id"], item["id"], "c", name, intake.digest(name),
                             intake.timestamp()))
             db.execute("""UPDATE executions SET state_json = json_set(state_json, '$.status', 'cancelled',
                               '$.final_output', json('{}'))
@@ -701,6 +703,32 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertIsNotNone(writers["closed"]["ended_at"])
         self.assertEqual(writers["closed"]["end_reason"], "closed as cancelled")
         self.assertEqual((writers["open"]["ended_at"], writers["open"]["end_reason"]), (None, None))
+
+    def test_upgrade_from_version_17_supports_archive_flags_and_shift_status(self):
+        path = self.previous_store(SESSION_ARCHIVE_SCHEMA)
+        with write_transaction(path) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
+            self.assertIsNone(db.execute(
+                "SELECT 1 FROM sqlite_schema WHERE name='session_archives'").fetchone())
+            now = intake.timestamp()
+            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, created_at, heartbeat_at)
+                          VALUES ('c', 'chat', 'c1', 'active', ?, ?)""", (now, now))
+        migrate(path)
+        with connect(path) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 18)
+            self.assertEqual(db.execute("SELECT count(*) FROM session_archives").fetchone()[0], 0)
+        self.start_server(path)
+
+        def api(route):
+            status, response = self.request(route, RUNNER)
+            self.assertEqual(status, 200, response)
+            return response
+
+        self.assertEqual(api("/v1/flags")["flags"], [])
+        status = shift.status(api, {"repositories": ["repo"]}, "c")
+        self.assertEqual(status["flags"], [])
+        self.assertEqual(status["captain"]["cleanup_pending"], 0)
+        self.assertEqual(status["captain"]["ended_writers"], [])
 
     def test_stored_flags_are_idempotent_and_cleared_by_their_raiser(self):
         self.start_server(self.path)

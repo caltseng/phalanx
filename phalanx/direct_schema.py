@@ -77,3 +77,17 @@ CLOSED_WRITER_MIGRATION = (
        WHERE ended_at IS NULL AND execution_id IN (
            SELECT id FROM executions WHERE status IN ('completed', 'failed', 'cancelled'))""",
 )
+
+SESSION_ARCHIVE_SCHEMA = (
+    "CREATE INDEX writers_by_captain ON writers(captain_id, ended_at)",
+    "CREATE INDEX writers_by_session ON writers(session_id)",
+    """CREATE TABLE session_archives (
+        session_id TEXT PRIMARY KEY NOT NULL,
+        outcome TEXT NOT NULL CHECK (outcome IN ('archived', 'blocked', 'refused')),
+        reason TEXT NOT NULL,
+        reported_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""",
+    """CREATE INDEX unresolved_session_archives ON session_archives(updated_at)
+       WHERE outcome != 'archived'""",
+)

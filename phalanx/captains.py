@@ -53,6 +53,59 @@ class Action(Payload):
     reason: Text
 
 
+class SessionArchive(Payload):
+    session_id: Short
+    outcome: Literal["archived", "blocked", "refused"]
+    reason: Text
+    reported_by: Short
+
+
+def archive_status(db, session_id):
+    row = db.execute("SELECT * FROM session_archives WHERE session_id=?", (session_id,)).fetchone()
+    writers = [dict(writer) for writer in db.execute(
+        "SELECT id, item_id, execution_id, ended_at FROM writers WHERE session_id=?", (session_id,))]
+    captains = db.execute("SELECT * FROM captains WHERE session_ref=?", (session_id,)).fetchall()
+    return {
+        "record": dict(row) if row else None,
+        "writers": writers,
+        "active": any(db.execute(
+                      "SELECT 1 FROM writers WHERE item_id=? AND ended_at IS NULL LIMIT 1",
+                      (writer["item_id"],)).fetchone() for writer in writers)
+                  or any(captain["state"] != "ended" or open_intents(db, captain["id"])
+                         or cleanup_pending(db, captain["id"])
+                         or not ((captain["handoff_note"] or "").startswith("Stop condition met:")
+                                 or db.execute("SELECT 1 FROM captains WHERE parent_id=? LIMIT 1",
+                                               (captain["id"],)).fetchone())
+                         for captain in captains),
+    }
+
+
+def cleanup_pending(db, captain_id):
+    return db.execute(
+        """SELECT count(*) FROM writers w LEFT JOIN session_archives a ON a.session_id=w.session_id
+           WHERE w.captain_id=? AND w.session_id IS NOT NULL
+             AND (w.ended_at IS NULL OR a.outcome IS NULL OR a.outcome='blocked')""",
+        (captain_id,)).fetchone()[0]
+
+
+def record_archive(db, payload):
+    current = archive_status(db, payload.session_id)
+    if current["active"] and payload.outcome == "archived":
+        raise intake.Conflict("The session still owns a writer or an unfinished Captain handoff")
+    previous = current["record"]
+    if previous and previous["outcome"] == "archived":
+        return previous
+    if previous and previous["outcome"] == "refused" and payload.outcome != "archived":
+        return previous
+    db.execute(
+        """INSERT INTO session_archives VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (session_id) DO UPDATE SET outcome=excluded.outcome, reason=excluded.reason,
+               reported_by=excluded.reported_by, updated_at=excluded.updated_at""",
+        (payload.session_id, payload.outcome, payload.reason, payload.reported_by, intake.timestamp()),
+    )
+    return archive_status(db, payload.session_id)["record"]
+
+
 def captain_row(db, captain_id):
     row = db.execute("SELECT * FROM captains WHERE id=?", (captain_id,)).fetchone()
     if row is None:
@@ -95,6 +148,14 @@ def view(db, row, now=None):
         "successors": [successor["id"] for successor in db.execute(
             "SELECT id FROM captains WHERE parent_id=? ORDER BY created_at, id", (row["id"],))],
         "successor_name": successor_name(row["id"]),
+        "cleanup_pending": cleanup_pending(db, row["id"]),
+        "ended_writers": [dict(writer) for writer in db.execute(
+            """SELECT w.id, w.item_id, w.execution_id, w.session_id, w.ended_at, w.end_reason,
+                      a.outcome AS archive_outcome, a.reason AS archive_reason
+               FROM writers w LEFT JOIN session_archives a ON a.session_id=w.session_id
+               WHERE w.captain_id=? AND w.ended_at IS NOT NULL AND w.session_id IS NOT NULL
+                 AND (a.outcome IS NULL OR a.outcome='blocked')
+               ORDER BY a.updated_at, w.ended_at, w.id LIMIT 100""", (row["id"],))],
     }
 
 
@@ -182,3 +243,13 @@ def list_captains(request: Request, limit: Annotated[int, Query(ge=1, le=100)] =
 @router.get("/captains/{captain_id}", dependencies=[Depends(authenticate_board_read)])
 def get_captain(request: Request, captain_id: Identifier):
     return run(request, lambda db: view(db, captain_row(db, captain_id)))
+
+
+@router.get("/session-archives", dependencies=[Depends(require_coordinator)])
+def get_archive(request: Request, session_id: Short):
+    return run(request, archive_status, session_id)
+
+
+@router.put("/session-archives", dependencies=[Depends(require_coordinator)])
+def put_archive(request: Request, body: SessionArchive):
+    return run(request, record_archive, body, write=True)

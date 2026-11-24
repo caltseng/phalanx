@@ -265,6 +265,173 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(beat["captain"]["sessions"], [])
         ending = json.loads(phx("--config", str(config), "handoff", "--captain", captain, "--note", "Bye"))
         self.assertIn(f"`phx shift` means `python -m phalanx shift --config {config.resolve()}`", ending["kickoff"])
+        checked = json.loads(phx("--config", str(config), "archive-check", "--session", "helper",
+                                 "--by", "chat-1", "--no-worktree"))
+        self.assertTrue(checked["can_archive"])
+        refused = json.loads(phx("--config", str(config), "archive-result", "--session", "helper",
+                                 "--by", "chat-1", "--outcome", "refused", "--reason", "Creator only"))
+        self.assertEqual(refused["reason"], "Creator only")
+        checked = json.loads(phx("--config", str(config), "archive-check", "--session", "helper",
+                                 "--by", "chat-1", "--no-worktree"))
+        self.assertFalse(checked["can_archive"])
+        exact = json.loads(phx("--config", str(config), "status", "--captain", captain))
+        self.assertEqual(exact["captain"]["id"], captain)
+
+    def ended_writer(self):
+        captain = shift.start(self.api, self.charter, "creator")["captain"]["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
+        self.api(route, method="PATCH", body={
+            "captain_id": captain, "writer_id": launched["writer"]["id"], "session_id": "worker"})
+        worktree = Path(launched["worktree"])
+        git(worktree, "push", "-q", "origin", "HEAD")
+        base_url, token = credential(worktree)
+        binding = request(base_url, token, "/v1/writer")
+        report = "# Finished\n"
+        while binding["state"]["status"] not in ("completed", "failed", "cancelled"):
+            body = {"attempt_id": binding["writer"]["attempt_id"], "stage": binding["state"]["stage"],
+                    "expected_version": binding["version"], "outcome": "succeeded"}
+            body.update({"report_markdown": report} if body["stage"] == "report_drafting"
+                        else {"report_revision": hashlib.sha256(report.encode()).hexdigest()})
+            binding = request(base_url, token, f"/v1/items/{item['id']}/executions/{binding['id']}/result",
+                              body=body)
+        return captain, item["id"], worktree
+
+    def check_archive(self, item):
+        return shift.archive_check(self.api, self.config, self.charter, "worker", "creator", item_id=item)
+
+    def test_ended_writer_is_discovered_after_item_closes_and_archived_by_creator(self):
+        captain, item, _ = self.ended_writer()
+        status = shift.status(self.api, self.charter)
+        self.assertEqual(status["items"], [])
+        owned = next(entry for entry in status["captains"] if entry["id"] == captain)
+        self.assertEqual([writer["session_id"] for writer in owned["ended_writers"]], ["worker"])
+        self.assertEqual(owned["cleanup_pending"], 1)
+        archive_session = mock.Mock(return_value="Archived worker")
+        checked = self.check_archive(item)
+        self.assertTrue(checked["can_archive"], checked)
+        confirmation = archive_session(checked["session_id"])
+        shift.archive_result(self.api, "worker", "archived", confirmation, "creator")
+        archive_session.assert_called_once_with("worker")
+        owned = self.api(f"/v1/captains/{captain}")
+        self.assertEqual((owned["ended_writers"], owned["cleanup_pending"]), ([], 0))
+        self.assertFalse(self.check_archive(item)["can_archive"])
+
+    def test_ignored_build_output_does_not_block_archiving(self):
+        _, item, worktree = self.ended_writer()
+        (worktree / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+        git(worktree, "add", ".gitignore")
+        git(worktree, "commit", "-q", "-m", "Ignore build output")
+        git(worktree, "push", "-q", "origin", "HEAD")
+        cache = worktree / "__pycache__"
+        cache.mkdir()
+        (cache / "module.pyc").write_bytes(b"build output")
+        self.assertTrue(self.check_archive(item)["can_archive"])
+        self.assertTrue((cache / "module.pyc").exists())
+
+    def test_local_changes_and_unpushed_commits_block_archiving(self):
+        _, item, worktree = self.ended_writer()
+        readme = worktree / "README.md"
+        readme.write_text("changed\n", encoding="utf-8")
+        checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("local changes", checked["reason"])
+        git(worktree, "add", "README.md")
+        git(worktree, "commit", "-q", "-m", "Unpushed work")
+        checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("not pushed", checked["reason"])
+        flags = self.api("/v1/flags")["flags"]
+        self.assertTrue(any(flag["kind"] == "orphan_session" and "not pushed" in flag["reason"]
+                            for flag in flags))
+        git(worktree, "push", "-q", "origin", "HEAD")
+        self.assertTrue(self.check_archive(item)["can_archive"])
+        (worktree / "notes.txt").write_text("preserve me\n", encoding="utf-8")
+        self.assertFalse(self.check_archive(item)["can_archive"])
+        self.assertEqual((worktree / "notes.txt").read_text(encoding="utf-8"), "preserve me\n")
+
+    def test_missing_remote_branch_cannot_use_stale_tracking_ref(self):
+        _, item, worktree = self.ended_writer()
+        branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=worktree, text=True).strip()
+        git(Path(self.config["repositories"]["repo"]["checkout"]), "push", "-q", "origin", "--delete", branch)
+        checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("fetch", checked["reason"])
+
+    def test_refused_archive_persists_reason_and_flag_without_retry(self):
+        captain, item, _ = self.ended_writer()
+        self.assertTrue(self.check_archive(item)["can_archive"])
+        shift.archive_result(self.api, "worker", "refused", "Only the creator may archive", "creator")
+        shift.heartbeat(self.api, self.charter, captain, state="ended", sessions=[])
+        with mock.patch.object(shift, "_git", side_effect=AssertionError("Must not retry")):
+            checked = self.check_archive(item)
+        self.assertFalse(checked["can_archive"])
+        self.assertEqual((checked["outcome"], checked["reason"]),
+                         ("refused", "Only the creator may archive"))
+        flags = self.api("/v1/flags")["flags"]
+        self.assertTrue(any(flag["kind"] == "orphan_session"
+                            and "Only the creator may archive" in flag["reason"] for flag in flags))
+        recorded = shift.archive_result(self.api, "worker", "blocked", "Do not replace refusal", "other")
+        self.assertEqual(recorded["outcome"], "refused")
+        shift.archive_result(self.api, "worker", "archived", "Owner confirmed archived", "owner")
+        self.assertFalse(any(flag["kind"] == "orphan_session" for flag in self.api("/v1/flags")["flags"]))
+
+    def test_keeper_archives_its_previous_captain_only_after_clean_handoff(self):
+        captain = shift.start(self.api, self.charter, "previous-captain")["captain"]["id"]
+
+        def check():
+            return shift.archive_check(self.api, self.config, self.charter,
+                                       "previous-captain", "keeper", no_worktree=True)
+
+        self.assertFalse(check()["can_archive"])
+        with self.assertRaisesRegex(ValueError, "HTTP 409"):
+            shift.archive_result(self.api, "previous-captain", "archived", "Too early", "keeper")
+        shift.handoff(self.api, self.charter, captain, "Clean handoff", "phx shift")
+        shift.heartbeat(self.api, self.charter, captain, state="ended")
+        self.assertFalse(check()["can_archive"])
+        shift.start(self.api, self.charter, "successor", captain)
+        self.assertTrue(check()["can_archive"])
+        archive_session = mock.Mock(return_value="Archived previous Captain")
+        shift.archive_result(self.api, "previous-captain", "archived",
+                             archive_session("previous-captain"), "keeper")
+        archive_session.assert_called_once_with("previous-captain")
+        self.assertFalse(check()["can_archive"])
+        keeper = shift.prompt("keeper")
+        self.assertLess(keeper.index("Before any early exit"), keeper.index('If any Captain has'))
+        self.assertIn("A fresh keeper run is not this child's creator", keeper)
+
+    def test_archive_check_cannot_bypass_writer_worktree_or_end_state(self):
+        captain = shift.start(self.api, self.charter, "creator")["captain"]["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
+        self.api(route, method="PATCH", body={
+            "captain_id": captain, "writer_id": launched["writer"]["id"], "session_id": "worker"})
+        self.assertFalse(self.check_archive(item["id"])["can_archive"])
+        with self.assertRaisesRegex(ValueError, "HTTP 409"):
+            shift.archive_result(self.api, "worker", "archived", "Still active", "creator")
+        self.api(route + "/withdraw", body={
+            "captain_id": captain, "writer_id": launched["writer"]["id"],
+            "reason": "Abandoned and stopped", "stopped": True})
+        checked = shift.archive_check(self.api, self.config, self.charter,
+                                      "worker", "creator", no_worktree=True)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("registered writer", checked["reason"])
+        shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        self.assertFalse(self.check_archive(item["id"])["can_archive"])
+
+    def test_prompts_assign_creator_cleanup_and_preservation_before_archival(self):
+        captain = shift.prompt("captain")
+        keeper = shift.prompt("keeper")
+        self.assertIn("ended_writers", captain)
+        self.assertIn("completed`, `failed` or", captain)
+        self.assertIn("all ended/stopped helper sessions you created", captain)
+        for prompt in (captain, keeper):
+            self.assertLess(prompt.index("archive-check"), prompt.index("archive-session tool"))
+            self.assertIn("--outcome refused", prompt)
+            self.assertIn("orphan_session", prompt)
+            self.assertIn("Never retry a refused archive in a loop", " ".join(prompt.split()))
 
 
 if __name__ == "__main__":
