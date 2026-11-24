@@ -171,6 +171,29 @@
     return form;
   }
 
+  function toolbarIcon(kind) {
+    const paths = {
+      search: "M10.5 10.5 15 15M12 7A5 5 0 1 1 2 7a5 5 0 0 1 10 0",
+      filters: "M2 3h12L9 8v5l-2 1V8Z",
+      theme: "M8 1v2m0 10v2M1 8h2m10 0h2M3 3l1.5 1.5m7 7L13 13M3 13l1.5-1.5m7-7L13 3M11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0",
+      moon: "M13.5 10A6 6 0 0 1 6 2.5a6 6 0 1 0 7.5 7.5Z",
+      auto: "M8 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12Zm0 0v12M8 5h4M8 8h6M8 11h4",
+      settings: "M6 2h4l.5 2 2 .5 1.5 3.5-1.5 1.5.5 2-3 2-2-1-2 1-3-2 .5-2L2 8l1.5-3.5 2-.5ZM10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0",
+      refresh: "M13 6a5.5 5.5 0 1 0 .4 4M13 2v4H9",
+      create: "M8 2v12M2 8h12"
+    };
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    for (const [key, value] of Object.entries({
+      viewBox: "0 0 16 16", width: "18", height: "18", "aria-hidden": "true", focusable: "false",
+      fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round",
+      "stroke-linejoin": "round"
+    })) svg.setAttribute(key, value);
+    const path = document.createElementNS(svg.namespaceURI, "path");
+    path.setAttribute("d", paths[kind]);
+    svg.append(path);
+    return svg;
+  }
+
   /**
    * mount(root, source) returns an unmount function. Call once per root with class "phalanx-board".
    * The host supplies the authenticated adapter and translates API fields here.
@@ -191,6 +214,7 @@
    * Events are newest first: {at, event?, fromStage?, stage, status, reason?}. Dates are ISO strings.
    * source.openReport?(output) opens a stored report in the host. Reject failed reads.
    * source.openNewItem?(trigger, created) opens host intake; call created(item) on acknowledgment.
+   * source.concurrencyControl? is the host's authoritative settings disclosure; the host restores it on cleanup.
    * options selects home/queue/history/detail, URL filters/cursors and an itemId or executionId.
    */
   function mount(root, source, options = {}) {
@@ -214,30 +238,94 @@
       if (options.cursors?.[kind]) state[kind].cursors = [options.cursors[kind]];
     }
     let disposed = false;
+    let clearConcurrency;
 
     const announce = h("p", { class: "sr-only", role: "status" });
     const health = h("div", { class: "health" });
     const counts = h("ul", { class: "counts", "aria-label": "Summary" });
-    const theme = h("button", { type: "button", class: "ghost", "data-action": "theme" });
-    const refresh = h("button", { type: "button", class: "ghost", "data-action": "refresh", text: "Refresh" });
-    const create = source.openNewItem && h("button", {
-      type: "button", class: "new-item", "aria-label": "New work item", title: "New work item", text: "+"
-    });
+    function describeTool(node, name) {
+      node.setAttribute("aria-label", name);
+      node.title = name;
+      node.dataset.tooltip = name;
+      const show = () => node.classList.remove("tooltip-dismissed");
+      const dismiss = event => {
+        if (event.key === "Escape") node.classList.add("tooltip-dismissed");
+      };
+      node.addEventListener("focus", show);
+      node.addEventListener("pointerenter", show);
+      node.addEventListener("keydown", dismiss);
+      return () => {
+        node.removeEventListener("focus", show);
+        node.removeEventListener("pointerenter", show);
+        node.removeEventListener("keydown", dismiss);
+      };
+    }
+    const toolButton = (kind, name) => {
+      const button = h("button", { type: "button", class: "tool-button", "data-action": kind }, toolbarIcon(kind));
+      describeTool(button, name);
+      return button;
+    };
+    const theme = toolButton("theme", "Change theme");
+    const refresh = toolButton("refresh", "Refresh");
+    const create = source.openNewItem && toolButton("create", "New work item");
+    if (create) {
+      create.classList.add("new-item");
+      create.append(h("span", { text: "New" }));
+    }
     if (create) create.addEventListener("click", () => source.openNewItem(create, created));
-    const header = h("header", { class: "bar" },
-      h("div", { class: "brand" }, h("span", { class: "mark", "aria-hidden": "true" }),
-        h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" })),
-      health, counts, h("div", { class: "actions" }, create, theme, refresh));
     const body = h("div", { class: "sections" });
     const navigation = h("nav", { class: "board-navigation", "aria-label": "Scribe pages" },
       [["/operator/", "Home"], ["/operator/queue", "Queue"], ["/operator/history", "History"]].map(([href, text]) =>
-        h("a", { href, text })));
+        h("a", { href, text, "aria-current": text.toLowerCase() === page ? "page" : null })));
     const search = queryForm("/operator/", { role: "search", class: "board-search" },
       h("label", {}, "Search all work ", h("input", { name: "q", type: "search", maxlength: "200",
         value: options.filters?.q || "", placeholder: "Item, execution, PR or title" })),
       h("button", { type: "submit", text: "Search" }));
-    navigation.append(search);
-    root.replaceChildren(header, navigation, announce);
+    const actions = h("div", { class: "actions", role: "group", "aria-label": "Board controls" }, create);
+    const header = h("header", { class: "bar" },
+      h("div", { class: "brand" }, h("span", { class: "mark", "aria-hidden": "true" }),
+        h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" })),
+      health, navigation, actions, counts);
+    const disclosures = [];
+    function disclosure(kind, name, content, activeCount) {
+      const description = name + (activeCount ? " (" + activeCount + " applied)" : "");
+      const trigger = toolButton(kind, description);
+      const panel = h("section", { id: "board-" + kind, class: "toolbar-panel", hidden: true,
+        "aria-label": name }, content);
+      trigger.setAttribute("aria-controls", panel.id);
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.classList.toggle("is-active", Boolean(activeCount));
+      if (activeCount) trigger.append(h("span", { class: "tool-badge", "aria-hidden": "true", text: activeCount }));
+      const close = () => {
+        panel.hidden = true;
+        trigger.setAttribute("aria-expanded", "false");
+        for (const dropdown of panel.querySelectorAll("details")) dropdown.open = false;
+      };
+      trigger.addEventListener("click", () => {
+        const opening = panel.hidden;
+        for (const other of disclosures) other.close();
+        if (opening) {
+          panel.hidden = false;
+          trigger.setAttribute("aria-expanded", "true");
+          content.querySelector("input:not([type=hidden]), summary")?.focus();
+        }
+      });
+      const onEscape = event => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+        trigger.focus();
+        trigger.classList.add("tooltip-dismissed");
+      };
+      panel.addEventListener("keydown", onEscape);
+      trigger.addEventListener("keydown", onEscape);
+      disclosures.push({ close });
+      actions.append(trigger);
+      header.append(panel);
+    }
+    disclosure("search", "Search all work", search, options.filters?.q ? 1 : 0);
+    root.replaceChildren(header, announce);
     if (!routed) {
       const filters = queryForm(page === "home" ? "/operator/" : "/operator/" + page,
         { class: "board-filters", "aria-label": "Work filters" });
@@ -276,7 +364,58 @@
       if (options.filters?.q) filters.append(h("input", { type: "hidden", name: "q", value: options.filters.q }));
       filters.append(h("button", { type: "submit", text: "Apply filters" }),
         h("a", { href: page === "home" ? "/operator/" : "/operator/" + page, text: "Clear" }));
-      root.append(filters);
+      disclosure("filters", "Work filters", filters, fields.filter(name => options.filters?.[name]).length);
+    }
+    const concurrency = source.concurrencyControl;
+    if (concurrency) {
+      concurrency.classList.add("toolbar-settings");
+      const summary = concurrency.querySelector("summary");
+      summary.classList.add("tool-button");
+      const clearDescription = describeTool(summary, "Writer concurrency settings");
+      summary.replaceChildren(toolbarIcon("settings"));
+      const settingsPanel = h("div", { class: "toolbar-settings-panel" });
+      for (const child of [...concurrency.childNodes]) {
+        if (child !== summary) settingsPanel.append(child);
+      }
+      concurrency.append(settingsPanel);
+      const close = () => { concurrency.open = false; };
+      const onClick = event => {
+        event.preventDefault();
+        const opening = !concurrency.open;
+        for (const other of disclosures) other.close();
+        concurrency.open = opening;
+      };
+      const onToggle = () => {
+        if (concurrency.open) concurrency.querySelector("input:not(:disabled)")?.focus();
+        else if (concurrency.contains(document.activeElement)) summary.focus();
+      };
+      const onEscape = event => {
+        if (event.key !== "Escape" || !concurrency.open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+        summary.focus();
+        summary.classList.add("tooltip-dismissed");
+      };
+      summary.addEventListener("click", onClick);
+      concurrency.addEventListener("toggle", onToggle);
+      concurrency.addEventListener("keydown", onEscape);
+      clearConcurrency = () => {
+        clearDescription();
+        summary.removeEventListener("click", onClick);
+        concurrency.removeEventListener("toggle", onToggle);
+        concurrency.removeEventListener("keydown", onEscape);
+        settingsPanel.replaceWith(...settingsPanel.childNodes);
+      };
+      disclosures.push({ close });
+      actions.append(concurrency);
+    }
+    actions.append(theme, refresh);
+    const applied = Object.entries(options.filters || {}).filter(([, value]) => value);
+    if (applied.length) {
+      header.append(h("div", { class: "toolbar-applied", "aria-label": "Applied search and filters" },
+        applied.map(([name, value]) => h("span", { title: label(name) + ": " + value,
+          text: (name === "q" ? "Search" : label(name)) + ": " + value }))));
     }
     root.append(body);
 
@@ -285,8 +424,12 @@
       try { choice = localStorage.getItem(THEME_KEY) || "auto"; } catch { /* Storage may be unavailable. */ }
       if (choice === "auto") delete document.documentElement.dataset.theme;
       else document.documentElement.dataset.theme = choice;
-      theme.textContent = { auto: "◐ Auto", dark: "● Dark", light: "○ Light" }[choice] || "◐ Auto";
-      theme.setAttribute("aria-label", "Theme: " + choice + ". Change theme");
+      const description = "Theme: " + choice + ". Change to " +
+        ({ auto: "dark", dark: "light", light: "auto" }[choice] || "dark");
+      theme.setAttribute("aria-label", description);
+      theme.title = description;
+      theme.dataset.tooltip = description;
+      theme.replaceChildren(toolbarIcon(choice === "dark" ? "moon" : choice === "light" ? "theme" : "auto"));
     }
 
     theme.addEventListener("click", () => {
@@ -991,6 +1134,7 @@
 
     return () => {
       disposed = true;
+      clearConcurrency?.();
       clearInterval(interval);
       clearInterval(ticker);
       document.removeEventListener("visibilitychange", refreshAll);

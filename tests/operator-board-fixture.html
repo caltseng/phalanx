@@ -9,6 +9,11 @@
 </head>
 <body>
   <p id="result">Running browser checks…</p>
+  <details id="operator-settings">
+    <summary>Writer concurrency</summary>
+    <p>Workspace-wide writer budget</p>
+    <form><label>Max writers <input name="max_writers" type="number" value="5"></label><button>Save</button></form>
+  </details>
   <main class="phalanx-board"></main>
   <script src="operator-board-fixture.js"></script>
 </body>
