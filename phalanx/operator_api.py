@@ -540,6 +540,22 @@ def overview(request: Request, response: Response):
 CURRENT = "NOT EXISTS (SELECT 1 FROM executions AS later WHERE later.previous_id = execution.id)"
 
 
+@router.get("/operator/items/{item_id}")
+def current_item(request: Request, response: Response, item_id: Identifier):
+    now = datetime.now(UTC)
+    with read_transaction(request.app.state.database_path) as db:
+        row = db.execute(
+            f"{SUMMARY} WHERE execution.item_id = ? AND {CURRENT}", (item_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(404, "Item not found")
+        unchanged = conditional_read(request, response, db, now)
+        if unchanged is not None:
+            return unchanged
+        context = dispatch_context(db, now)
+    return {"item": summary(row, now, context)}
+
+
 @router.get("/operator/groups/{label}")
 def group(request: Request, response: Response, label: Annotated[str, Path(pattern=LABEL_PATTERN)],
           limit: Limit = 25, cursor: Cursor = None):
@@ -611,6 +627,12 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             raise HTTPException(404, "Execution not found")
         attempt = db.execute(
             "SELECT id FROM attempts WHERE execution_id = ? AND ended_at IS NULL",
+            (execution_id,),
+        ).fetchone()
+        relatives = db.execute(
+            """SELECT previous_id,
+                      (SELECT id FROM executions AS later WHERE later.previous_id = execution.id) AS next_id
+               FROM executions AS execution WHERE id = ?""",
             (execution_id,),
         ).fetchone()
         prerequisites = db.execute(
@@ -701,6 +723,8 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
     return {
         "item": summary(execution, now, context),
         "attempt": attempt["id"] if attempt else None,
+        "previous_execution_id": relatives["previous_id"],
+        "next_execution_id": relatives["next_id"],
         "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
         "question": question,
         "events": [timeline_event(row) for row in rows[:limit]],

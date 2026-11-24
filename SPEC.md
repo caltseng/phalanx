@@ -250,6 +250,17 @@ closed newest first, full history available. Show stage/status, repo, age, progr
 reason/action, writer/session, PR and flags. Highlight actionable input. Every unbound queued
 item shows its Captain wait; do not infer capacity or rank-position blockers.
 
+- Local Scribe serves `/operator/items/{item_id}` (current execution),
+  `/operator/executions/{execution_id}` (exact execution), `/operator/queue` and
+  `/operator/history`, reusing the existing inline detail. Rerun links navigate adjacent
+  executions. Queue/history filters and opaque keyset cursors live in the URL; global search
+  reads both open and closed lists using the existing item/execution ID, observed PR number/
+  URL and goal/title text filter. Lists remain bounded, and missing/failed detail reads are
+  visible. `GET /v1/operator/items/{item_id}` resolves the current summary under existing
+  board-read authentication. No hosting, sign-in, runners or capacity view is introduced.
+  Stored reports render a safe local Markdown subset using generated DOM only: strip raw
+  HTML, render code literally, allow only credential-free HTTP(S) links and omit external
+  images. The plain-text report API and strict CSP are unchanged.
 - Scribe's header `+` (**New work item**) adds owner-authorized intake to the otherwise
   read-only local board through the existing `POST /v1/items` contract. The form reads registered
   repositories with an owner token, defaults to `checked_in` (displayed as **Merged**), and

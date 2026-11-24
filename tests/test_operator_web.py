@@ -85,15 +85,21 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         with TemporaryDirectory() as directory:
             server = self.start_server(Path(directory) / "operator.sqlite3")
             try:
-                with urlopen(self.url + "/operator/", timeout=REQUEST_TIMEOUT) as response:
-                    self.assertEqual(response.headers.get_content_type(), "text/html")
-                    self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
-                    self.assertIn("img-src data:;", response.headers["Content-Security-Policy"])
-                    self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
-                    shell = response.read().decode("utf-8")
+                for route in ("/operator/", "/operator/queue?repository=example", "/operator/history",
+                              f"/operator/items/{'1' * 32}", f"/operator/executions/{'2' * 32}"):
+                    with self.subTest(route=route), urlopen(self.url + route, timeout=REQUEST_TIMEOUT) as response:
+                        self.assertEqual(response.headers.get_content_type(), "text/html")
+                        self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
+                        self.assertIn("img-src data:;", response.headers["Content-Security-Policy"])
+                        self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
+                        shell = response.read().decode("utf-8")
+                self.assertEqual(self.get("/operator/items/invalid")[0], 422)
+                self.assertEqual(self.get("/operator/executions/invalid")[0], 422)
+                self.assertEqual(self.get("/operator/runners")[0], 404)
                 for asset, marker in (
                     ("operator-board.css", ".phalanx-board"),
                     ("operator-board.js", "PhalanxOperatorBoard"),
+                    ("operator-markdown.js", "PhalanxMarkdown"),
                     ("operator-http.js", "/v1/operator/executions"),
                 ):
                     path = f"/operator/assets/{asset}"
@@ -131,6 +137,9 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                         self.assertEqual(self.request(board, headers={"Host": host})[0], 401)
                         self.assertEqual(self.request(report, headers={"Host": host})[0], 401)
                 self.assertEqual(self.get(board, "x" * 32)[0], 401)
+                item_route = f"/v1/operator/items/{'0' * 32}"
+                self.assertEqual(self.get(item_route)[0], 404)
+                self.assertEqual(self.request(item_route, headers={"Host": "evil.example"})[0], 401)
                 for path in ("/v1/owner/status", "/v1/runner/status", "/v1/repositories",
                              f"/v1/items/{'0' * 32}"):
                     with self.subTest(path=path):

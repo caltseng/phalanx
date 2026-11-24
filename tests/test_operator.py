@@ -188,6 +188,36 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])
 
+    def test_item_deep_link_resolves_current_execution_and_preserves_rerun_links(self):
+        item_id, previous_id, current_id = identifier(106000), identifier(6000), identifier(9000)
+        route = f"/v1/operator/items/{item_id}"
+        self.assertEqual(self.get(route)[0], 401)
+        self.assertEqual(self.get("/v1/operator/items/invalid!", OWNER)[0], 422)
+        self.assertEqual(self.get(f"/v1/operator/items/{identifier(0)}", OWNER)[0], 404)
+        self.assertEqual(self.page(route)["item"]["id"], previous_id)
+        with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {OWNER}"})) as response:
+            etag = response.headers["ETag"]
+        self.assertEqual(self.request(route, OWNER, headers={"If-None-Match": etag})[0], 304)
+        self.assertEqual(self.request(route, headers={"If-None-Match": etag})[0], 401)
+        with write_transaction(self.path) as db:
+            data = json.dumps(asdict(QUEUED))
+            db.execute(
+                """INSERT INTO executions
+                   (id, item_id, previous_id, version, state_json, created_at, updated_at)
+                   VALUES (?, ?, ?, 1, ?, ?, ?)""",
+                (current_id, item_id, previous_id, data, LATEST, LATEST),
+            )
+            record(db, current_id, 1, "rerun", {}, data, LATEST)
+        status, current = self.get(route, RUNNER)
+        self.assertEqual((status, current["item"]["id"]), (200, current_id))
+        self.assertEqual(self.request(route, OWNER, headers={"If-None-Match": etag})[0], 200)
+        old = self.page(f"{BOARD}/{previous_id}/timeline")
+        new = self.page(f"{BOARD}/{current_id}/timeline")
+        self.assertEqual((old["previous_execution_id"], old["next_execution_id"]), (None, current_id))
+        self.assertEqual((new["previous_execution_id"], new["next_execution_id"]), (previous_id, None))
+        self.assertEqual(old["item"]["status"], "cancelled")
+        self.assertEqual(new["item"]["status"], "queued")
+
     def test_backward_result_reasons_correlate_the_recorded_attempt_and_revision(self):
         candidate, head = "a" * 40, "b" * 40
         pr_url = "https://github.com/a/b/pull/42"
