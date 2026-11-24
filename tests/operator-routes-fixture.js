@@ -111,6 +111,26 @@
     assert(app.doc.querySelector(".sec-queued [data-item]") && !app.doc.querySelector(".sec-active"),
       "Full queue includes running work, without home sections");
     assert(app.doc.querySelector('input[name="repository"]').value === "example", "URL filters populate controls");
+    const dropdowns = [...app.doc.querySelectorAll(".filter-dropdown")];
+    assert(dropdowns.length === 4 && dropdowns.every(dropdown => !dropdown.open),
+      "Queue filters start collapsed");
+    assert(dropdowns[0].querySelector("summary").textContent === "repository: example",
+      "Collapsed filter keeps its readable label and selected URL value");
+    dropdowns[0].querySelector("summary").click();
+    await until(() => dropdowns[0].open);
+    dropdowns[1].querySelector("summary").click();
+    await until(() => dropdowns[1].open && !dropdowns[0].open);
+    const labelInput = dropdowns[1].querySelector("input");
+    labelInput.value = "draft filter";
+    labelInput.dispatchEvent(new app.win.Event("input", { bubbles: true }));
+    assert(dropdowns[1].querySelector("summary").textContent === "label: draft filter",
+      "Dropdown reflects pending selected state");
+    labelInput.focus();
+    labelInput.dispatchEvent(new app.win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    assert(!dropdowns[1].open && app.doc.activeElement === dropdowns[1].querySelector("summary"),
+      "Escape closes dropdown and returns keyboard focus");
+    assert(app.doc.querySelector(".board-filters > a").getAttribute("href") === "/operator/queue",
+      "Clear resets queue filters and search");
     app.doc.querySelector(".pager button").click();
     await until(() => !app.win.location.search.includes("cursor="));
     const filterForm = app.doc.querySelector(".board-filters");
@@ -136,6 +156,26 @@
     assert(!app.doc.querySelector(".sec-queued"), "History is a dedicated closed page");
     app.doc.querySelector('[data-action="refresh"]').click();
     await until(() => calls.filter(path => path.includes("cursor=saved_cursor")).length >= 2);
+
+    app = await load("/operator/");
+    await until(() => app.doc.querySelector("[data-item]"));
+    for (const [width, maxHeight] of [[1280, 44], [600, 140], [390, 150], [320, 195]]) {
+      frame.style.width = width + "px";
+      await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+      const filters = app.doc.querySelector(".board-filters");
+      assert(filters.getBoundingClientRect().height <= maxHeight,
+        "Six collapsed filters stay compact at " + width + "px");
+      assert([...filters.querySelectorAll("summary, button, a")].every(control =>
+        control.getBoundingClientRect().height >= 44), "Filter touch targets stay at least 44px");
+      assert(app.doc.documentElement.scrollWidth <= width, "Filters do not cause horizontal overflow");
+    }
+    const longLabel = app.doc.querySelector('.board-filters input[name="label"]');
+    longLabel.value = "long-label-".repeat(9);
+    longLabel.dispatchEvent(new app.win.Event("input", { bubbles: true }));
+    assert(app.doc.documentElement.scrollWidth <= 320 &&
+      longLabel.closest("details").querySelector("summary").title.endsWith(longLabel.value),
+    "Long selected values stay available without horizontal overflow");
+    frame.style.width = "100%";
 
     for (const query of [id, execution, "#42", "https://github.com/a/b/pull/42", "title words"]) {
       app = await load("/operator/?q=" + encodeURIComponent(query));
