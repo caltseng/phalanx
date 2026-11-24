@@ -39,28 +39,29 @@ If every one of those had been a Phalanx work item, the dashboard would have nee
 | Interrupted work | PH-V1 gate 4 stopped the server mid-stage and held workers past lease expiry. | A disconnected or stale banner while the server is down. After a restart, recovering items stay visible and show "recovering". History stays complete. |
 | Several repositories | phalanx, phalanx-pilot-py and phalanx-pilot-web. | A repository column and filter, with counts for each repository. |
 
-This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Each line is one row; `!`, `▶`, `◷`, `○`, `✓` and `✕` always come with their status text for screen readers.
+This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Running work and live Captains share an inline SVG pikehead (`[pike]` below). Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); their existing status labels remain distinct for screen readers. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor (the pennant uses the light/dark `--flag` token), and need no external assets. The other status glyphs (`!`, `✓`, `✕`, `–`) and transition/recovery arrows are unchanged.
 
 ```text
 Ⓐ PHALANX Scribe  ● Live updated 4s ago   1 needs you  4 active  6 queued  2 flags  1/1 Captains live   ◐ Auto  Refresh
 NEEDS YOU 1
  ! Confirm decision 32: OAuth client          phalanx  development     41m  —    idle         Which OAuth client should sign-in use?
 FLAGS 2
- ◷ ▸ head drift ×2                            Head moved after validation; revalidate                                         6m
+ [flag] ▸ head drift ×2                       Head moved after validation; revalidate                                         6m ago
 CAPTAINS 1/1
- ▶ Captain 52940744 live        ♥ 30s  wakes 8  charter e04f548  focus: PH-15, PH-12, PH-14
+ [pike] Captain 52940744 live    ♥ heartbeat 30s ago  wakes 8  charter e04f548  focus: PH-15, PH-12, PH-14
+ ▸ Ended (12)
 ACTIVE 4
- ▶ PH-15 Add direct GitHub check-in coordin…  phalanx  development      4m  —    busy         running
- ▶ PH-12 Reconcile reservations after resta…  phalanx  self review      2m  —    busy         running
- ▶ PH-14 Promote the verified primary PR      phalanx  pr promotion     1m  #30  unconfirmed  running
- ▶ PH-08 Persist waits, replies, rechecks     phalanx  pr revision      6m  #24  busy         ↺ CI failed on head 7caa5c2
+ [pike] PH-15 Add direct GitHub check-in co…   phalanx  development   4m ago  —    busy         running
+ [pike] PH-12 Reconcile reservations after…   phalanx  self review   2m ago  —    busy         running
+ [pike] PH-14 Promote the verified primary…   phalanx  pr promotion  1m ago  #30  unconfirmed  running
+ [pike] PH-08 Persist waits, replies, rechecks phalanx  pr revision   6m ago  #24  busy         ↺ CI failed on head 7caa5c2
 QUEUED AND WAITING 6
- ◷ PH-14 Collect GitHub validation checks     phalanx  pr validation    3m  #26  no writer    Waiting for CI; recheck in 1m
- ◷ PH-15 Record PR review and check-in evid…  phalanx  development      9m  —    no writer    Waiting for 1 prerequisite
+ [shield] PH-14 Collect GitHub validation…    phalanx  pr validation 3m ago #26  no writer    Waiting for CI; recheck in 1m
+ [shield] PH-15 Record PR review evidence…    phalanx  development   9m ago —    no writer    Waiting for 1 prerequisite
  …
 RECENTLY CLOSED 25+
- ✓ PH-19 Exercise queue fairness under a st…  phalanx  checked in      27s  #25  52m   target merged
- ✓ PH-17 Add bounded operator queue and tim…  phalanx  checked in       9m  #21  1h 4m target merged
+ ✓ PH-19 Exercise queue fairness under a st…  phalanx  Merged  closed 27s ago  #25  took 52m
+ ✓ PH-17 Add bounded operator queue and tim…  phalanx  Merged  closed 9m ago   #21  took 1h 4m
  …
 ```
 
@@ -109,7 +110,7 @@ RECENTLY CLOSED 25+
 9. **Times are honest.** Show relative times, with the absolute local time and UTC on hover. Always show the age of the data.
 10. **Neutral wording.** Say "worker chat", "runner" and "Captain", never the name of a specific agent runtime or operating system. This follows the runtime and platform neutrality rules in [AGENTS.md](AGENTS.md).
 11. **Accessible.** Full keyboard navigation, visible focus, WCAG 2.2 AA contrast, screen-reader labels, and respect for reduced motion. On the board, ↑/↓ or j/k move between rows, Enter expands a row and Escape collapses it.
-12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running rows march in step, waiting rows tick like a sundial, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
+12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running rows march in step, waiting shields stay steady, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
 13. **Nothing secret or third-party in the browser.** No tokens in storage, and no third-party scripts, fonts or analytics. Keep the strict CSP.
 
 ## Pages
@@ -132,7 +133,7 @@ Every section is a list of one-line rows. A section shows its count in its headi
 1. **Top bar** (sticky): the Scribe mark, data health (Live, Partial, Stale or Disconnected, with the age of the oldest displayed read), counts for each section, the theme toggle and Refresh. A failed or stale read turns the health pill amber or red and keeps the last loaded rows on screen. Later: dispatch on or paused, the age of the oldest queued item, and default-branch CI for each repository.
 2. **Needs you.** Items waiting for input, failed items, and items with a flag that notifies the owner, plus owner-notify flags that name no visible item. Expanding a question row shows the prompt, the options, the proposed default and the exact `reply` command. D2 replaces the command with a reply form. Later, it also takes PRs that need a human merge and duplicate PRs to review.
 3. **Flags.** The remaining derived flags from `GET /v1/flags`, grouped by kind. Each group shows its count, its reason (or the number of distinct reasons) and the age of its oldest flag, and expands to one line per flag with its recovery. Each item row also carries its own flags as chips.
-4. **Captains.** One line per Captain: live or stale, heartbeat age, wake count, charter revision, and its handoff note or focus.
+4. **Captains.** Live Captains always appear expanded first with a pikehead and "live" label, then stale Captains with an attention mark and "stale" label. Muted ended rows live below them in a native, keyboard-accessible `Ended (N)` disclosure, closed by default; its state survives board refreshes and opening/closing item details. Liveness is the server's `captains.is_live`, already exposed as `live` / `stale` by `GET /v1/captains`, never recomputed in the browser. Captain references in flags and item details use the same labels and live mark (or explicit "status unavailable" if outside the bounded read). Rows show `heartbeat 3m ago`, wake count, charter revision and handoff/focus.
 5. **Active.** Items that are running or have a writer.
 6. **Queued and waiting.** Everything else that is open: queued stages, external waits and prerequisite waits, with the open-work pager.
 7. **Recently closed.** Newest first, with the closed-work pager. Each row shows the outcome and links to its PR or report.
@@ -150,7 +151,7 @@ Open rows, from left to right, in aligned columns:
 - the writer: busy, idle, `unconfirmed` while its launch is unconfirmed, stopped, error, or `no writer`;
 - the reason: the wait reason, the highest-priority flag, a scheduled retry or recheck, or the status.
 
-Closed rows show the outcome (`checked in`, `ready for check-in`, `draft published`, `report stored`, `failed` or `cancelled`) instead of the stage, the time since close, the PR or report, the total duration from intake to close, and the completion target.
+Closed rows show the outcome (`Merged`, `ready for check-in`, `draft published`, `report stored`, `failed` or `cancelled`) instead of the stage, `closed 7m ago`, the PR or report and `took 17m` from intake to close (also on mobile). A completion target appears only for a shortfall, e.g. `wanted: merged`; it comes from the execution's actual `state.target`, not the original request. A ready completion whose reconciler-observed `pr.state` is `merged` displays `Merged` and meets a merged target, without changing persisted state. The full target remains in details. One JS display-label mapping renders `checked_in` as `Merged` everywhere, including history stage text; API values, query parameters, identifiers and stored data stay unchanged. All relative ages say `ago`; absolute local and UTC timestamps remain in tooltips and screen-reader labels.
 
 Later: the label, the revision round if more than 1, the PR state (draft, ready or merged) with a CI dot, and the size of the change.
 
@@ -171,7 +172,7 @@ Built now:
 - **History:** a paginated table of events with their from and to stages, status and reason. Backward transitions are highlighted.
 
 The target detail also includes:
-- **Header:** the title, repository, label, status or outcome, the completion target (ready or checked in), the primary PR and any duplicates, and the worker chat.
+- **Header:** the title, repository, label, status or outcome, the completion target (ready or Merged), the primary PR and any duplicates, and the worker chat.
 - **Lifecycle rail:** the stage sequence from [STATE_MACHINE.md](STATE_MACHINE.md) with the current stage highlighted. Loops back to `development` or `pr_revision` appear as counts.
 - **Now:** the next action or resume trigger, the wait reason, retry and recheck times, and the runner and attempt holding the lease.
 - **Evidence by revision:** the local checks, CI, review findings and approvals, each tied to the head SHA it covered.

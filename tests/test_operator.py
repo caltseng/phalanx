@@ -138,12 +138,25 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                        (json.dumps({"goal": goal, "target": "merged"}), identifier(105000)))
         row = self.page(BOARD + "?limit=1")["items"][0]
         self.assertEqual(row["title"], "Redesign the operator board for density.")
-        self.assertEqual((row["goal"], row["target"], row["created_at"]), (goal, "merged", EARLY))
+        self.assertEqual((row["goal"], row["target"], row["created_at"]), (goal, "report", EARLY))
         self.assertEqual(self.page(f"{BOARD}/{identifier(5000)}/timeline")["item"]["title"], row["title"])
-        self.assertIsNone(self.page(f"{BOARD}?limit=2")["items"][1]["target"])
+        self.assertEqual(self.page(f"{BOARD}?limit=2")["items"][1]["target"], "report")
         self.assertEqual(short_title("word " * 40), ("word " * 15).strip() + "…")
         self.assertEqual(short_title("x" * 100), "x" * 79 + "…")
         self.assertEqual(short_title("  \n "), "Untitled")
+
+    def test_closed_rerun_uses_execution_target_not_original_request(self):
+        pr = PullRequest("https://github.com/example/project/pull/144", Revision("head", "base"))
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE work_items SET request_json=? WHERE id=?",
+                       (json.dumps({"goal": "Ready-only rerun", "target": "checked_in"}), identifier(100007)))
+            transition(db, 7, 2, Execution(Target.READY, Stage.PR_RECONCILIATION,
+                                           Status.COMPLETED, final_output=pr), LATEST)
+        row = self.page(BOARD + "?kind=closed&limit=1")["items"][0]
+        self.assertEqual((row["id"], row["target"], row["outcome"]),
+                         (identifier(7), "ready_for_check_in", "ready_for_check_in"))
+        self.assertEqual(self.page(f"{BOARD}/{identifier(7)}/timeline")["item"]["target"],
+                         "ready_for_check_in")
 
     def test_timeline_pages_and_authentication(self):
         route = f"{BOARD}/{identifier(10)}/timeline"

@@ -13,6 +13,7 @@
   --gold: light-dark(#a8822c, #d6b25e);
   --focus: light-dark(#5a2380, #c9a2ff);
   --attn: light-dark(#b42318, #ff7b72);
+  --flag: light-dark(#b42318, #ff7b72);
   --attn-bg: light-dark(#fdecea, #3a1714);
   --run: light-dark(#1d5fbf, #6cb6ff);
   --wait: light-dark(#8a5a00, #e3b341);
@@ -118,7 +119,7 @@ body { margin: 0; }
 .line > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .items .line { cursor: pointer; }
 .items .line:hover, .fgroup > summary:hover { background: var(--hover); }
-.closed .line { grid-template-columns: 1rem minmax(14rem, 2.6fr) minmax(5rem, .7fr) 8.5rem 3.4rem 3.6rem 3.6rem minmax(6rem, 1.4fr); }
+.closed .line { grid-template-columns: 1rem minmax(14rem, 2.6fr) minmax(5rem, .7fr) 8.5rem 7rem 3.6rem 6rem minmax(8rem, 1.4fr); }
 .name { display: flex; align-items: center; gap: .4rem; }
 .name > button.title {
   min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -137,7 +138,7 @@ body { margin: 0; }
 .glyph { font-weight: 700; text-align: center; font-size: 12px; }
 .glyph.t-attn { color: var(--attn); }
 .glyph.t-fail { color: var(--attn); }
-.glyph.t-run { color: var(--run); font-size: 10px; }
+.glyph.t-run { color: var(--run); }
 .glyph.t-wait { color: var(--wait); }
 .glyph.t-idle, .glyph.t-muted { color: var(--idle); }
 .glyph.t-ok { color: var(--ok); }
@@ -151,6 +152,13 @@ body { margin: 0; }
 .c-good { color: var(--ok); background: var(--raised); }
 
 .glyph > [aria-hidden] { display: inline-block; line-height: 1; }
+.status-mark { vertical-align: -.12em; }
+.chip .flag-mark { font-size: 1em; }
+.captain-ref { display: inline-flex; align-items: baseline; gap: .3em; }
+.captain-ended, .captain-ended .stat, .captain-ended .reason { color: var(--muted); }
+.captain-ended strong { font-weight: 400; }
+.ended-captains { margin-top: .35rem; }
+.ended-captains > summary { cursor: pointer; color: var(--muted); padding: .3rem .6rem; }
 
 /* Flag groups. */
 .fgroup > summary { list-style: none; cursor: pointer; grid-template-columns: 1rem minmax(12rem, 1.4fr) minmax(10rem, 4fr) 3.4rem; }
@@ -160,7 +168,7 @@ body { margin: 0; }
 .flist { margin: 0; padding: 0 0 .25rem; list-style: none; background: var(--raised); }
 .flist .line { grid-template-columns: 1rem minmax(12rem, 1.4fr) minmax(10rem, 4fr) 3.4rem; min-height: 1.6rem; color: var(--muted); }
 
-.captains .line { grid-template-columns: 1rem minmax(10rem, 1.2fr) 5rem 4.5rem 7.5rem minmax(10rem, 4fr); }
+.captains .line { grid-template-columns: 1rem minmax(10rem, 1.2fr) 11rem 4.5rem 7.5rem minmax(10rem, 4fr); }
 
 /* Inline detail: keeps the row in place. */
 .detail {
@@ -217,7 +225,7 @@ body { margin: 0; }
   .line > :not(.glyph, .name, .age) { order: 2; font-size: 12px; }
   .line > .repo { margin-left: 1.55rem; }
   .line > .reason { flex: 1 1 100%; padding-left: 1.55rem; }
-  .line > .dur { display: none; }
+  .line > .dur { display: inline; }
   .captains .line > .stat:first-of-type { margin-left: 1.55rem; }
   .detail { padding-left: .9rem; }
   .bar { gap: .3rem .9rem; }
@@ -272,10 +280,6 @@ body { margin: 0; }
     0%, 100% { transform: translateX(-1px); }
     50% { transform: translateX(1.5px); }
   }
-
-  /* Waiting work keeps time on a sundial: a quarter turn every two seconds. */
-  .glyph.t-wait > [aria-hidden] { animation: sundial 8s steps(4) var(--clock, 0s) infinite; }
-  @keyframes sundial { to { transform: rotate(1turn); } }
 
   /* A live Captain's heart beats. */
   .captains .row.t-run .beat { display: inline-block; animation: heartbeat 1.6s ease-in-out var(--clock, 0s) infinite; }
