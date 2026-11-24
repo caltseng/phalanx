@@ -125,10 +125,10 @@ class Reconciler:
         observed = 0
         for execution in self.executions():
             self.heartbeat()
-            repo = execution["repository_id"]
-            if repo not in self.config.get("repositories", {}) or self.backoff.get(repo, 0) > self.clock():
-                continue
             try:
+                repo = execution["repository_id"]
+                if repo not in self.config.get("repositories", {}) or self.backoff.get(repo, 0) > self.clock():
+                    continue
                 posted, job = self.observe(execution, remotes.get(repo, ""), fetched, policies)
             except GitHubError as error:
                 if error.retry_after_seconds is not None:
@@ -138,6 +138,10 @@ class Reconciler:
                 continue
             except (ReconcilerError, ValidationPolicyError, ValueError) as error:
                 errors.append(f"{execution['item_id']}: {error}")
+                continue
+            except Exception as error:
+                # Isolate unexpected item failures too; the pass log must identify them.
+                errors.append(f"{execution['item_id']}: {type(error).__name__}: {error}")
                 continue
             observed += posted
             if job is not None:
@@ -259,7 +263,7 @@ class Reconciler:
                     body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
                 body["pr"]["merged_at"] = pull.merged_at
                 if execution.get("outcome") == "ready_for_check_in":
-                    verified_head = execution["output"]["revision"]["head"]
+                    verified_head = execution["output_revision"]["head"]
                     if pull.head_sha != verified_head and github.is_on_branch(verified_head, pull.head_sha):
                         body["pr"]["merged_head_ancestor"] = verified_head
                 check = self.config["repositories"][repo].get("post_merge_check")

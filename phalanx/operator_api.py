@@ -247,6 +247,7 @@ def summary(row, now, context):
     state = json.loads(row["state_json"])
     wait = state.get("wait") or {}
     output = state["final_output"]
+    output_revision = output.get("revision") if output is not None else None
     outcome = None
     delivery = None
     if output is not None:
@@ -335,6 +336,7 @@ def summary(row, now, context):
         "closed_at": row["updated_at"] if output is not None else None,
         "outcome": outcome,
         "output": output,
+        "output_revision": output_revision,
         "delivery": delivery,
         "deployment": json.loads(row["deployment_json"]) if row["deployment_json"] else None,
         # The registered native worker session that holds this item, if any.
