@@ -150,7 +150,7 @@ Open rows, from left to right, in aligned columns:
 - the writer: busy, idle, `unconfirmed` while its launch is unconfirmed, stopped, error, or `no writer`;
 - the reason: the wait reason, the highest-priority flag, a scheduled retry or recheck, or the status.
 
-Closed rows show the outcome (`checked in`, `ready for check-in`, `report stored`, `failed` or `cancelled`) instead of the stage, the time since close, the PR or report, the total duration from intake to close, and the completion target.
+Closed rows show the outcome (`checked in`, `ready for check-in`, `draft published`, `report stored`, `failed` or `cancelled`) instead of the stage, the time since close, the PR or report, the total duration from intake to close, and the completion target.
 
 Later: the label, the revision round if more than 1, the PR state (draft, ready or merged) with a CI dot, and the size of the change.
 
@@ -227,6 +227,7 @@ All are read-only except the D2 actions, which reuse existing routes. The D1 ser
 
     Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
 - `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch `paused` (false means on); the oldest eligible queued timestamp and age; and `generated_at` for data age.
+- Draft-completed executions use `draft_published` consistently in summary rows, the outcome filter, overview and label-group rollups. They count as delivered in the overview, not as ready for check-in.
 - Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. `outcome` and `closed_after` apply to `kind=closed`, and `status` must match the kind; otherwise the server returns 400. `q` matches goal text, an item or execution ID, or an observed PR URL or number. Filtered cursors are bound to their filters. A filtered page inspects at most 2,000 indexed candidate executions, so it can return fewer rows than requested (even zero) with a cursor to continue.
 - `GET /v1/operator/groups/{label}`: a rollup of the current executions with that label (items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed) and an item page. Returns 404 when no item has the label.
 - Execution lists, overview and groups return a weak `ETag` and accept `If-None-Match`. An unchanged poll returns `304` before reading rows or rollups. A durable change token and indexed retry/lease/24-hour-closure boundaries invalidate the tag. Ticking display ages alone do not: retain the last snapshot and calculate elapsed age from its timestamps and `generated_at`. Authentication is checked before conditional reads.

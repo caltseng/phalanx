@@ -77,6 +77,7 @@ DASHBOARD_SCHEMA = (
            WHEN status <> 'completed' THEN NULL
            WHEN json_type(state_json, '$.final_output.reference') IS NOT NULL THEN 'report_stored'
            WHEN json_type(state_json, '$.final_output.merge_commit') = 'text' THEN 'checked_in'
+           WHEN json_extract(state_json, '$.final_output.draft') = 1 THEN 'draft_published'
            ELSE 'ready_for_check_in' END) VIRTUAL""",
     "ALTER TABLE operator_progress ADD COLUMN revision_round INTEGER NOT NULL DEFAULT 1",
     "DROP TRIGGER operator_progress_insert",

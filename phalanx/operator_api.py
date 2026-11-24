@@ -25,8 +25,8 @@ STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9
 ID = re.compile(r"[0-9a-f]{32}")
 PR_NUMBER = re.compile(r"#?([0-9]{1,18})")
 CLOSED_STATUSES = {Status.COMPLETED, Status.FAILED, Status.CANCELLED}
-DELIVERED = ("report_stored", "ready_for_check_in", "checked_in")
-Outcome = Literal["report_stored", "ready_for_check_in", "checked_in", "failed", "cancelled"]
+DELIVERED = ("report_stored", "draft_published", "ready_for_check_in", "checked_in")
+Outcome = Literal["report_stored", "draft_published", "ready_for_check_in", "checked_in", "failed", "cancelled"]
 # Filtered pages inspect at most this many indexed candidates before returning a continuation.
 SCAN_LIMIT = 2000
 

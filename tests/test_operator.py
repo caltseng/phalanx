@@ -1,5 +1,5 @@
 from dataclasses import asdict, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -306,6 +306,26 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         unknown = self.row(BOARD)
         self.assertIsNone(unknown["pr"])
         self.assertIsNone(unknown["duplicate_count"])
+
+    def test_draft_completion_outcome_is_consistent_across_dashboard_reads(self):
+        draft = PullRequest("https://github.com/a/b/pull/5", Revision("a" * 40, "b" * 40), draft=True)
+        completed = Execution(Target.READY, Stage.DELIVERY, Status.COMPLETED, final_output=draft)
+        with write_transaction(self.path) as db:
+            transition(db, int(self.execution, 16), 3, completed, datetime.now(UTC).isoformat())
+        with connect(self.path, mode="ro") as db:
+            self.assertEqual(db.execute("SELECT outcome FROM executions WHERE id=?",
+                                        (self.execution,)).fetchone()[0], "draft_published")
+        self.assertEqual(self.row(BOARD + "?kind=closed")["outcome"], "draft_published")
+        filtered = self.page(BOARD + "?kind=closed&outcome=draft_published")["items"]
+        self.assertEqual([row["id"] for row in filtered], [self.execution])
+        overview = self.page("/v1/operator/overview")
+        self.assertEqual(overview["closed_24h"]["draft_published"], 1)
+        self.assertEqual(overview["closed_24h"]["ready_for_check_in"], 0)
+        self.assertEqual(overview["sections"]["delivered_24h"], 1)
+        group = self.page("/v1/operator/groups/wave-1")
+        self.assertEqual(group["rollup"]["outcomes"]["draft_published"], 1)
+        self.assertEqual(group["rollup"]["outcomes"]["ready_for_check_in"], 0)
+        self.assertEqual(group["items"][0]["outcome"], "draft_published")
 
     def test_conditional_reads_are_authenticated_scoped_and_invalidated_by_writes(self):
         routes = (BOARD, "/v1/operator/overview", "/v1/operator/groups/wave-1")

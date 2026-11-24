@@ -11,6 +11,8 @@ Phalanx lets its users dispatch work across registered repositories and have loc
   only after the reconciler verifies the open draft at the self-reviewed head and target base.
   Draft delivery does not satisfy ready/check-in dependencies. See
   [direct-session publication](docs/direct-sessions.md#pr-publication-and-delivery).
+- Operator summaries, outcome filters, overview and label rollups distinguish draft completion
+  as `draft_published`, not `ready_for_check_in`; the overview counts it as a delivered outcome.
 - A work item has an ID, repository, goal, output type (`report` or `pull_request`), status, and timestamps. Optional fields include context links, acceptance criteria, a target branch, a label that groups related items on the operator board, and dependencies on other work items. An API caller may provide an idempotency key so resubmitting the same request returns the original item.
 - A registered repository has a stable ID and expected remote. Each runner maps that ID to a local checkout and verifies the remote before starting. Repository instructions apply to each run. An item waits if no eligible runner can access its repo.
 - A repository may opt into post-merge deployment visibility with `post_merge_check` in its reconciler mapping. The reconciler observes the named GitHub check on each delivered merge commit and the server derives pending, failed or deployed board flags. This does not add a stage, delay check-in or change dependencies; GitHub owns deployment. See [direct-session reconciliation](docs/direct-sessions.md#github-reconciliation).
