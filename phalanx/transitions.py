@@ -286,7 +286,10 @@ def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
     if state.status is not Status.WAITING_FOR_EXTERNAL:
         return state
     if state.publication_mode is PublicationMode.DRAFT and not pr.closed:
-        if (pr.draft and pr.revision.head == state.candidate and not evidence.off_base):
+        if pr.revision.head != state.candidate:
+            # A draft delivers only a self-reviewed head, so a push after review is reviewed again.
+            return _queue(state, Stage.SELF_REVIEW, candidate=pr.revision.head, ready_revision=None)
+        if pr.draft and not evidence.off_base:
             return _close(replace(state, ready_revision=None), Status.COMPLETED, pr)
         return replace(state, ready_revision=None)
     if state.publication_mode is not PublicationMode.DRAFT:

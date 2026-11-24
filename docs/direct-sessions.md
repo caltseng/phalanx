@@ -82,7 +82,10 @@ The publication result still only records the primary PR URL. Delivery completes
 trusted reconciler observes that exact PR open, unmerged and draft, on the deterministic item branch,
 at the self-reviewed candidate and target base branch. This verifies publication, not CI or merge
 readiness: draft-only delivery needs no check policy, ready-only CI, review approval or mergeability.
-A wrong base or head keeps waiting, and a ready PR also raises `draft_required`. A closed PR asks
+A wrong base keeps waiting, and a ready PR also raises `draft_required`. A head other than the
+reviewed candidate, such as a push after self-review, queues `self_review` for the observed head:
+the writer reviews it and publishes the same PR again, so only a self-reviewed head is delivered.
+Writers see their execution's flags in `phx work status`. A closed PR asks
 the owner as usual. An actual merge remains a GitHub delivery fact, never reported as a draft.
 Completing a draft ends the writer without setting a ready milestone or releasing ready/check-in
 dependencies. The board labels open work **draft only** and its completed outcome **draft published**,

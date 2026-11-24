@@ -45,7 +45,10 @@ class TransitionTests(unittest.TestCase):
         state = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=closed))
         self.assertEqual((state.status, state.candidate), (Status.WAITING_FOR_INPUT, REV.head))
         state = result(decide(state, Event.REPLY), direct=True)
-        wrong = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=replace(closed, closed=False)))
+        moved = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=replace(closed, closed=False)))
+        self.assertEqual((moved.stage, moved.status, moved.candidate, moved.ready_revision),
+                         (Stage.SELF_REVIEW, Status.QUEUED, "foreign", None))
+        wrong = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=replace(DRAFT, draft=False)))
         self.assertEqual(wrong.status, Status.WAITING_FOR_EXTERNAL)
         self.assertIsNone(wrong.ready_revision)
         done = decide(wrong, Event.PR_OBSERVED, evidence=Evidence(pr=DRAFT))

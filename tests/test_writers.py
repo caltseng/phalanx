@@ -406,8 +406,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 binding = self.submit(token, binding, pr_url=PR_URL)
                 self.assertEqual(binding["state"]["publication_mode"], "draft")
                 self.assertIn("open draft", binding["state"]["wait"]["reason"])
-                for pull, flag in (({}, "draft_required"), ({"draft": True, "head_sha": OTHER}, "head_drift"),
-                                   ({"draft": True, "base_ref": "dev"}, "wrong_base")):
+                for pull, flag in (({}, "draft_required"), ({"draft": True, "base_ref": "dev"}, "wrong_base")):
                     state = self.observe(binding, **pull)["state"]
                     self.assertEqual(state["status"], "waiting_for_external")
                     self.assertEqual(state["candidate"], HEAD)
@@ -429,6 +428,24 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 board = self.ok(f"/v1/operator/executions/{binding['id']}/timeline", OWNER)["item"]
                 self.assertEqual((board["publication_mode"], board["outcome"]), ("draft", "draft_published"))
                 self.assertIsNone(board["delivery"])
+
+    def test_a_draft_push_after_self_review_is_reviewed_before_delivery(self):
+        binding, token = self.publish("ready_for_check_in", publication_mode="draft", target_branch="main")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.observe(binding)
+        # The writer sees its own execution's flags, so a draft_required flag can't stall unseen.
+        self.assertIn("draft_required", {flag["kind"] for flag in self.ok("/v1/writer", token)["flags"]})
+        state = self.observe(binding, draft=True, head_sha=OTHER)["state"]
+        self.assertEqual((state["stage"], state["status"], state["candidate"]), ("self_review", "queued", OTHER))
+        self.assertEqual(self.ok("/v1/writer", token)["flags"], [])
+        # A replacement writer can pick up the re-review of a draft that is already published.
+        binding, token, _ = self.register(binding["item_id"], binding["id"], replaces=binding["writer"]["id"],
+                                          replaced_stopped=True)
+        binding = self.submit(token, binding, reviewed_candidate=OTHER)
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        state = self.observe(binding, draft=True, head_sha=OTHER)["state"]
+        self.assertEqual((state["status"], state["candidate"], state["final_output"]["draft"]),
+                         ("completed", OTHER, True))
 
     def test_draft_intake_cannot_enter_legacy_promotion_and_survives_rerun(self):
         item_id, execution_id = self.pr_item("checked_in", publication_mode="draft")

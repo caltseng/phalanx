@@ -12,7 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from phalanx.finalization import BACKOFF_SECONDS, attempt
-from phalanx.intake import apply, check_current, claim_attempt, digest
+from phalanx.intake import apply, check_current, claim_attempt, digest, encode
 from phalanx.store import connect, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Wait
 
@@ -107,6 +107,20 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             )
             self.assertEqual(cli.returncode, 0, cli.stderr)
             self.assertEqual(json.loads(cli.stdout), item)
+
+    def test_default_publication_mode_keeps_the_pre_upgrade_fingerprint(self):
+        item, body, _, _ = self.create(target="ready_for_check_in")
+        # The request as fingerprinted before publication_mode existed.
+        before = {**body, "context_links": [], "acceptance_criteria": [], "target_branch": None,
+                  "priority": "normal"}
+        with connect(self.path, mode="ro") as db:
+            stored, = db.execute("SELECT request_digest FROM request_receipts WHERE idempotency_key='first'"
+                                 ).fetchone()
+        self.assertEqual(stored, digest(encode(before)))
+        # A retry from before the upgrade, or one naming the default, returns the original item.
+        self.assertEqual(self.submit("/v1/items", body, key="first"), (201, item))
+        self.assertEqual(self.submit("/v1/items", dict(body, publication_mode="ready"), key="first"), (201, item))
+        self.assertEqual(self.submit("/v1/items", dict(body, publication_mode="draft"), key="first")[0], 409)
 
     def test_cli_cancel_uses_current_execution_and_version(self):
         item, _, base, execution = self.create()

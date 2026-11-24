@@ -9,7 +9,7 @@ from fastapi.responses import PlainTextResponse
 from . import dispatch, finalization, intake, pr_models, pr_observations, reconciliation, waits
 from .auth import authenticate, require_coordinator, require_owner, require_runner, require_worker
 from .store import read_transaction, write_transaction
-from .transitions import Stage
+from .transitions import PublicationMode, Stage
 from .intake_models import (
     AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
@@ -55,6 +55,8 @@ def create(request: Request, body: Intake, key: Key = None):
         omitted.add("runner_affinity")
     if not body.dependencies:
         omitted.add("dependencies")
+    if body.publication_mode is PublicationMode.READY:
+        omitted.add("publication_mode")
     payload = body.model_dump(mode="json", exclude=omitted)
     return run(request, intake.create, body, write=True,
                scope="intake", key=key, payload=payload)

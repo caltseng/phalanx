@@ -55,7 +55,8 @@ The Captain's commands are `python -m phalanx shift ...`. They need `PHALANX_RUN
 - `repositories` uses the runner configuration's mapping.
 - `worktrees` is the root for item worktrees, and must be separate from any runner's.
 - `work_command` is how a worker session runs `phx work` from its worktree. The default is `python -m phalanx work`.
-- `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.- `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
+- `shift_command` is the concrete `phx shift` command, including its config and anything that loads the runner token, which `shift handoff` names in the successor's kickoff. The default is `python -m phalanx shift --config <this config's path>`.
+- `session_workspace` is the runtime's workspace for the `worktrees` folder, where every worker session opens. In the GitHub Copilot app it is the ID `add_repository` returns for that folder.
 
 ### Charter
 

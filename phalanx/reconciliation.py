@@ -357,8 +357,7 @@ def _observed(row, observation):
         ))
     if candidate and pull["head_sha"] != candidate:
         recovery = (
-            "Reconcile the branch back to the reviewed candidate without discarding commits, or have "
-            "the owner cancel and rerun to review the changed head"
+            "Informational: delivery returns the writer to self-review at the new head"
             if state.get("publication_mode") == "draft"
             else "Informational: the writer records the new head with its next result"
         )

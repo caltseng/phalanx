@@ -57,10 +57,15 @@ If something technical keeps you from finishing a stage, post `{"outcome": "fail
   Follow the repository's rules for
   PRs, and end the description with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Post
   `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<number>"}`.
-- `delivery`: the execution waits for GitHub. While it waits, watch the PR's checks, reviews and
-  mergeability on GitHub. Fix failing checks, actionable feedback and conflicts by pushing commits to
-  the PR's branch, with no attempt or result. The reconciler verifies delivery: an open draft at the
-  reviewed candidate and target base for draft mode, a ready PR with required checks green for a
-  ready-only target, or a GitHub merge for check-in. Draft mode never waits for ready-only CI or promotion.
+- `delivery`: the execution waits for GitHub. While it waits, run `$work status` at least every
+  30 minutes and act on its `flags`. If the execution is queued again, continue from step 1.
+  - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
+    actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
+    result. The reconciler verifies delivery: a ready PR with required checks green for a ready-only
+    target, or a GitHub merge for check-in.
+  - Draft mode: don't push after self-review. Delivery verifies an open draft at the reviewed
+    candidate and target base, and never waits for ready-only CI or promotion. If you must change
+    the PR, push the change: the reconciler then queues `self_review` for the new head, so review it
+    and post its result and the same PR URL again.
   If an owner reply queues `delivery`, act on the reply, then post `{"outcome": "succeeded"}`.
 - For any other stage, ask a question rather than guessing.
