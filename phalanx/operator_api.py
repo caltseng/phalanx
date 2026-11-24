@@ -137,7 +137,8 @@ def summary(row, now):
         elif "reference" in output:
             outcome = "report_stored"
         else:
-            outcome = "checked_in" if output.get("merge_commit") else "ready_for_check_in"
+            outcome = ("checked_in" if output.get("merge_commit") else
+                       "draft_published" if output.get("draft") else "ready_for_check_in")
         if output.get("merge_commit"):
             # What GitHub delivered, distinct from the Phalanx stage that recorded it.
             delivery = {"merged": True, "merge_commit": output["merge_commit"],
@@ -177,6 +178,7 @@ def summary(row, now):
         "title": short_title(row["goal"]),
         "goal": row["goal"],
         "target": row["target"],
+        "publication_mode": state.get("publication_mode", "ready"),
         "repository_id": row["repository_id"],
         "created_at": row["created_at"],
         "stage": row["stage"],

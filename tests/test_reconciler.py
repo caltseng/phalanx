@@ -301,6 +301,27 @@ class ReconcilerPassTest(unittest.TestCase):
         self.now += 61
         self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
 
+    def test_draft_only_delivery_needs_no_check_policy_or_review_read(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        self.config["validation_policy"] = "missing-policy.json"
+        self.github["repo"] = FakeGitHub([pull_request(HEAD, item_branch("one"), draft=True)],
+                                         feedback_error=GitHubError("graphql", "unavailable"))
+        api = FakeAPI([execution("one", primary="https://github.com/example/repo/pull/7")],
+                      {"repo": "https://github.com/example/repo"})
+        original_call = api.call
+
+        def call(path, body=None):
+            if path == "/items/one":
+                return {"target": "checked_in", "execution": {"state": {"publication_mode": "draft"}}}
+            return original_call(path, body)
+
+        with patch.object(api, "call", side_effect=call):
+            result = self.reconciler(api).run_pass()
+        self.assertEqual(result, {"observed": 1, "checked": 0, "errors": []})
+        self.assertTrue(api.posts[0][1]["pr"]["draft"])
+        self.assertNotIn("checks", api.posts[0][1])
+        self.assertNotIn("feedback", api.posts[0][1])
+
     def test_an_incomplete_github_read_posts_nothing_and_backs_off(self):
         self.config["repositories"] = {"repo": {"base_branch": "main"}}
         self.config["validation_policy"] = "policy.json"

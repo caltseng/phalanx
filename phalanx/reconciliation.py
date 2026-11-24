@@ -347,12 +347,25 @@ def _observed(row, observation):
             ))
         return flags
     url = pull["url"]
-    candidate = json.loads(row["state_json"]).get("candidate")
+    state = json.loads(row["state_json"])
+    candidate = state.get("candidate")
+    if state.get("publication_mode") == "draft" and pull["state"] == "open" and not pull["draft"]:
+        flags.append(_flag(
+            "draft_required", row, f"{url} is ready, but this item requires draft-only publication",
+            "The writer disables auto-merge and converts the PR to draft; never promote or merge it", seen,
+            notify_owner=True,
+        ))
     if candidate and pull["head_sha"] != candidate:
+        recovery = (
+            "Reconcile the branch back to the reviewed candidate without discarding commits, or have "
+            "the owner cancel and rerun to review the changed head"
+            if state.get("publication_mode") == "draft"
+            else "Informational: the writer records the new head with its next result"
+        )
         flags.append(_flag(
             "head_drift", row,
             f"{url} head {pull['head_sha']} differs from the recorded candidate {candidate}",
-            "Informational: the writer records the new head with its next result", seen,
+            recovery, seen,
         ))
     if pull["state"] == "closed" and not pull["merged"]:
         flags.append(_flag("pr_closed", row, f"{url} was closed without merging",

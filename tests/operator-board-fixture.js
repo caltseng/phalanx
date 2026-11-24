@@ -19,7 +19,7 @@
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
-    stage: "development", status: "queued", lastAdvancedAt: hourAgo
+    stage: "development", status: "queued", lastAdvancedAt: hourAgo, publicationMode: "draft"
   };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report_drafting",
@@ -30,6 +30,11 @@
     ...failure, id: "done", title: "Verify rollout", status: "completed", outcome: "checked_in",
     output: { kind: "pr", url: "https://example.com/pull/1" },
     delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
+  };
+  const draft = {
+    ...success, id: "draft", title: "Reviewable draft", outcome: "draft_published",
+    publicationMode: "draft", delivery: undefined,
+    output: { kind: "pr", url: "https://example.com/pull/2" }
   };
   const flags = [
     { kind: "deployed", executionId: "done", reason: "deploy succeeded", recovery: "Informational", firstSeen: now, notifyOwner: false },
@@ -60,7 +65,7 @@
       if (kind === "open") {
         return { items: cursor ? [queued] : [waiting, running, queued], nextCursor: cursor ? null : "more-open" };
       }
-      return { items: cursor ? [] : [success, failure], nextCursor: cursor ? null : "older-closed" };
+      return { items: cursor ? [] : [success, failure, draft], nextCursor: cursor ? null : "older-closed" };
     },
     async flags() {
       if (offline) throw new Error("API offline");
@@ -97,6 +102,8 @@
     assert(section("needs").contains(item("wait")) && section("needs").textContent.includes(waiting.waitReason), "Input wait needs the owner");
     assert(section("needs").textContent.includes("no live captain"), "Owner-notify flag without an item needs the owner");
     assert(section("active").contains(item("run")) && section("queued").contains(item("queue")), "Active and queued split");
+    assert(item("queue").closest("li").textContent.includes("draft only"), "Open draft-only policy is visible");
+    assert(item("draft").closest("li").textContent.includes("draft published"), "Draft delivery is not labeled ready");
     assert(item("run").closest("li").textContent.includes("head drift"), "Row carries its flag chip");
     assert(item("run").closest("li").textContent.includes("unconfirmed"), "Launching writer reads as unconfirmed");
     assert(section("captains").textContent.includes("wakes 3") && section("captains").textContent.includes("abcdef1"), "Captain line");

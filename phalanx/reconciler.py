@@ -255,7 +255,8 @@ class Reconciler:
                 # Deployment outages must not delay recording the merge itself.
                 if check and execution.get("outcome") == "checked_in":
                     body["deployment"] = self.deployment(github, pull.merge_commit_sha, check)
-            if pull.state == "open":
+            draft_only = item.get("execution", {}).get("state", {}).get("publication_mode") == "draft"
+            if pull.state == "open" and not draft_only:
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)
                 # None means the policy doesn't establish this phase's checks, so there is nothing to report.

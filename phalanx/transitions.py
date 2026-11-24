@@ -24,8 +24,8 @@ class Stage(StrEnum):
     REPORT_DRAFTING = "report_drafting"
     REPORT_REVIEW = "report_review"
     REPORT_STORAGE = "report_storage"
-    # A writer's PR lifecycle after self-review: it pushes, opens the ready PR and enables
-    # auto-merge, then the server follows the reconciler's GitHub observations to delivery.
+    # A writer publishes the chosen PR mode after self-review, then the server follows
+    # the reconciler's GitHub observations to delivery.
     PUBLICATION = "publication"
     DELIVERY = "delivery"
 
@@ -60,6 +60,11 @@ class Target(StrEnum):
     REPORT = "report"
     READY = "ready_for_check_in"
     MERGED = "checked_in"
+
+
+class PublicationMode(StrEnum):
+    READY = "ready"
+    DRAFT = "draft"
 
 
 class Outcome(StrEnum):
@@ -125,6 +130,8 @@ class Wait:
 
 TERMINAL = frozenset({Status.COMPLETED, Status.FAILED, Status.CANCELLED})
 DELIVERY_WAIT = Wait("GitHub checks, reviews and merge of the primary PR", "reconciler observation")
+DRAFT_DELIVERY_WAIT = Wait("Verify the primary PR is an open draft at the reviewed candidate and target base",
+                           "reconciler observation")
 
 
 @dataclass(frozen=True)
@@ -143,15 +150,16 @@ class Execution:
     report_review_findings: str | None = None
     # Findings carried into the next development or pr_revision attempt.
     findings: str | None = None
+    publication_mode: PublicationMode = PublicationMode.READY
 
     def __post_init__(self) -> None:
         if (self.status in TERMINAL) != (self.final_output is not None):
             raise ValueError("Exactly one final output is required on terminal executions")
 
 
-def start(target: Target) -> Execution:
+def start(target: Target, publication_mode: PublicationMode = PublicationMode.READY) -> Execution:
     stage = Stage.REPORT_DRAFTING if target is Target.REPORT else Stage.DEVELOPMENT
-    return Execution(target, stage)
+    return Execution(target, stage, publication_mode=publication_mode)
 
 
 def item_branch(item_id: str) -> str:
@@ -277,7 +285,12 @@ def _pr_observed(state: Execution, evidence: Evidence) -> Execution:
         return _merge_verified(replace(state, candidate=pr.revision.head), evidence)
     if state.status is not Status.WAITING_FOR_EXTERNAL:
         return state
-    state = replace(state, candidate=pr.revision.head)
+    if state.publication_mode is PublicationMode.DRAFT and not pr.closed:
+        if (pr.draft and pr.revision.head == state.candidate and not evidence.off_base):
+            return _close(replace(state, ready_revision=None), Status.COMPLETED, pr)
+        return replace(state, ready_revision=None)
+    if state.publication_mode is not PublicationMode.DRAFT:
+        state = replace(state, candidate=pr.revision.head)
     if pr.closed:
         return _wait(state, Status.WAITING_FOR_INPUT,
                      Wait(f"{pr.url} was closed without merging", "owner reply"), ready_revision=None)
@@ -300,11 +313,13 @@ def _success(state: Execution, evidence: Evidence, wait: Wait | None, direct: bo
         # The writer pushed and opened the PR. The reconciler's observations of that exact PR
         # decide what happens next.
         _require(evidence.published_pr, "Publication requires the published PR's URL")
-        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT, stage=Stage.DELIVERY,
+        delivery_wait = DRAFT_DELIVERY_WAIT if state.publication_mode is PublicationMode.DRAFT else DELIVERY_WAIT
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, delivery_wait, stage=Stage.DELIVERY,
                      primary_pr=evidence.published_pr)
     if stage is Stage.DELIVERY:
         # The writer acted on an owner reply.
-        return _wait(state, Status.WAITING_FOR_EXTERNAL, DELIVERY_WAIT)
+        delivery_wait = DRAFT_DELIVERY_WAIT if state.publication_mode is PublicationMode.DRAFT else DELIVERY_WAIT
+        return _wait(state, Status.WAITING_FOR_EXTERNAL, delivery_wait)
     if stage is Stage.PR_CREATION:
         pr = evidence.pr
         _require(pr and pr.url and pr.draft and not pr.closed and not pr.merge_commit

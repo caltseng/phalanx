@@ -93,6 +93,7 @@
         title: row.title,
         goal: row.goal,
         target: row.target,
+        publicationMode: row.publication_mode,
         repo: row.repository_id,
         stage: row.stage,
         status: row.status,

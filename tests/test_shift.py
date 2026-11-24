@@ -63,6 +63,17 @@ class CharterTest(unittest.TestCase):
             with self.subTest(path=path), self.assertRaisesRegex(shift.ShiftError, "outside every checkout"):
                 self.charter(CHARTER, path)
 
+    def test_draft_kickoff_never_instructs_promotion_or_auto_merge(self):
+        item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Review only",
+                "execution": {"id": "execution", "state": {"publication_mode": "draft"}}}
+        prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
+        self.assertIn("gh pr create --draft --base main", prompt)
+        self.assertIn("gh pr ready --undo", prompt)
+        self.assertIn("gh pr merge --disable-auto", prompt)
+        self.assertIn("Never promote, enable auto-merge or merge", prompt)
+        self.assertNotIn("open one ready", prompt)
+        self.assertNotIn("mark it ready", prompt)
+
 
 class ShiftTest(ServerFixture, unittest.TestCase):
     def setUp(self):

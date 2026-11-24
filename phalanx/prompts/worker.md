@@ -6,6 +6,7 @@ You are the Phalanx writer session for one work item. Do the item's work yoursel
 - Repository: $repository
 - Item: $item_id, execution $execution_id
 - Target: $target, merging into `$base`
+- Publication mode: $publication_mode
 - Writer nonce: $nonce
 
 ## Goal
@@ -51,15 +52,15 @@ If something technical keeps you from finishing a stage, post `{"outcome": "fail
 - `self_review`: review the candidate commit. Post
   `{"outcome": "succeeded", "reviewed_candidate": "<SHA>", "review_notes": "<notes>"}`. If it needs
   changes, post `{"outcome": "changes_required", "candidate": "<SHA>", "review_notes": "<findings>"}`.
-- `publication`: push the worktree's branch to `origin` and open one ready (not draft) PR from it with
-  an explicit base, such as `gh pr create --base $base`. Or reuse the branch's open PR: mark it ready
-  if it is a draft (`gh pr ready`) and retarget it to `$base` if it targets another branch. A merged
-  PR from an earlier execution can't be reused, so open a new one. Never open a second open PR. For a `checked_in` target,
-  enable GitHub auto-merge with any method the repository allows. Follow the repository's rules for
+- `publication`: push the worktree's branch to `origin` and $publication
+  A merged PR from an earlier execution can't be reused, so open a new one. Never open a second open PR.
+  Follow the repository's rules for
   PRs, and end the description with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Post
   `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<number>"}`.
 - `delivery`: the execution waits for GitHub. While it waits, watch the PR's checks, reviews and
   mergeability on GitHub. Fix failing checks, actionable feedback and conflicts by pushing commits to
-  the PR's branch, with no attempt or result. GitHub merges the PR, and then the execution completes.
+  the PR's branch, with no attempt or result. The reconciler verifies delivery: an open draft at the
+  reviewed candidate and target base for draft mode, a ready PR with required checks green for a
+  ready-only target, or a GitHub merge for check-in. Draft mode never waits for ready-only CI or promotion.
   If an owner reply queues `delivery`, act on the reply, then post `{"outcome": "succeeded"}`.
 - For any other stage, ask a question rather than guessing.

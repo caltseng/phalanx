@@ -17,6 +17,14 @@ python -m phalanx cancel <item_id> --reason "Superseded by a newer item"
 
 Register the expected remote without credentials. Intake targets are `report` for a stored Markdown field report, `ready_for_check_in` for a reviewed PR, and `checked_in` for a verified merge. Reuse `--key` when retrying the same request. The [API reference](api.md#work-items-and-executions) covers the full intake body, including context, acceptance criteria, priority, dependencies and steering.
 
+### Deliver a PR that stays a draft
+
+Use direct sessions and add `--publication-mode draft` to `intake` or `ingest-issue`
+(API: `"publication_mode": "draft"`). This stops at a GitHub-verified draft even for a
+`checked_in` target, without promotion or auto-merge. The board shows **draft only** while open
+and **draft published** on completion; it does not count as ready for dependent work.
+See the [publication contract](direct-sessions.md#pr-publication-and-delivery).
+
 ## Import a GitHub issue
 
 Register the expected repository remote first, then import an issue by its number and the **Phalanx repository ID** (not `owner/repo`):

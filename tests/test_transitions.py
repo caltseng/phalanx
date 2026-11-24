@@ -2,7 +2,7 @@ import unittest
 from dataclasses import replace
 
 from phalanx.transitions import (
-    Bypass, Event, Evidence, Outcome, PullRequest, Revision, Stage,
+    Bypass, Event, Evidence, Outcome, PublicationMode, PullRequest, Revision, Stage,
     Status, StoredReport, Target, Wait, decide, start,
 )
 
@@ -36,6 +36,27 @@ def ready(target=Target.READY):
 
 
 class TransitionTests(unittest.TestCase):
+    def test_draft_delivery_preserves_the_reviewed_head_across_close_and_reopen(self):
+        state = start(Target.MERGED, PublicationMode.DRAFT)
+        state = result(state, Evidence(candidate=REV.head), direct=True)
+        state = result(state, Evidence(reviewed_candidate=REV.head), direct=True)
+        state = result(state, Evidence(published_pr=DRAFT.url), direct=True)
+        closed = replace(DRAFT, closed=True, revision=Revision("foreign", REV.base))
+        state = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=closed))
+        self.assertEqual((state.status, state.candidate), (Status.WAITING_FOR_INPUT, REV.head))
+        state = result(decide(state, Event.REPLY), direct=True)
+        wrong = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=replace(closed, closed=False)))
+        self.assertEqual(wrong.status, Status.WAITING_FOR_EXTERNAL)
+        self.assertIsNone(wrong.ready_revision)
+        done = decide(wrong, Event.PR_OBSERVED, evidence=Evidence(pr=DRAFT))
+        self.assertEqual((done.status, done.final_output), (Status.COMPLETED, DRAFT))
+        self.assertIsNone(done.ready_revision)
+        # A real merge remains a merge, never mislabeled a successful draft publication.
+        merged = replace(READY, closed=True, merge_commit="merge", revision=Revision("new-head", REV.base))
+        done = decide(state, Event.PR_OBSERVED, evidence=Evidence(pr=merged))
+        self.assertEqual((done.status, done.candidate, done.final_output.merge_commit),
+                         (Status.COMPLETED, "new-head", "merge"))
+
     def test_draft_first_and_ready_only(self):
         state = result(start(Target.READY), Evidence(candidate=REV.head))
         self.assertEqual((state.stage, state.status), (Stage.PR_CREATION, Status.QUEUED))
