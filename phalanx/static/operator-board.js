@@ -244,10 +244,34 @@
       const fields = ["repository", "label", "status", "stage"];
       if (page !== "queue") fields.push("outcome", "closed_after");
       for (const name of fields) {
-        filters.append(h("label", {}, label(name) + " ", h("input", {
+        const input = h("input", {
           name, value: options.filters?.[name] || "", maxlength: name === "closed_after" ? "40" : "100",
           placeholder: name === "closed_after" ? "ISO date/time" : "Any"
-        })));
+        });
+        const selected = h("span", { class: "filter-value" });
+        const summary = h("summary", {}, label(name) + ": ", selected);
+        const dropdown = h("details", { class: "filter-dropdown" }, summary,
+          h("div", { class: "filter-panel" }, h("label", {}, label(name) + " ", input)));
+        const update = () => {
+          selected.textContent = input.value.trim() || "Any";
+          summary.title = label(name) + ": " + selected.textContent;
+          dropdown.classList.toggle("is-selected", Boolean(input.value.trim()));
+        };
+        update();
+        input.addEventListener("input", update);
+        summary.addEventListener("click", () => {
+          for (const other of filters.querySelectorAll("details")) {
+            if (other !== dropdown) other.open = false;
+          }
+        });
+        dropdown.addEventListener("keydown", event => {
+          if (event.key !== "Escape" || !dropdown.open) return;
+          event.preventDefault();
+          event.stopPropagation();
+          dropdown.open = false;
+          summary.focus();
+        });
+        filters.append(dropdown);
       }
       if (options.filters?.q) filters.append(h("input", { type: "hidden", name: "q", value: options.filters.q }));
       filters.append(h("button", { type: "submit", text: "Apply filters" }),

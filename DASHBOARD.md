@@ -152,6 +152,15 @@ The global search form always searches both open and closed work on Home, using 
 form preserves that query. Status filters show only the matching open/closed kind; an
 outcome or closure-time filter shows only closed work.
 
+Filters use compact, initially closed dropdowns. Each trigger shows its label and current
+value (or **Any**), including edits before Apply filters; opening a dropdown exposes the
+existing text field, so repository IDs, labels and ISO closure times retain their exact
+matching behavior. Only one dropdown is open at a time; Escape closes it and returns
+focus to its trigger. Apply filters preserves search and resets pagination, while Clear
+resets the page's filters and search. Triggers, fields, Apply filters and Clear retain
+44px minimum touch targets, wrapping onto short rows on narrow screens. This layout
+does not constitute D1 acceptance or owner visual approval.
+
 Stored reports render in the existing report dialog as a local, dependency-free Markdown
 subset: headings, paragraphs, emphasis, links, lists, quotes, tables and fenced/inline code.
 Raw HTML tags/comments are stripped, images become alt text, and code stays literal.
