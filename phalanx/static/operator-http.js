@@ -269,6 +269,7 @@
 
   function concurrency(source, authenticated) {
     const panel = document.querySelector("#operator-settings");
+    const home = panel.parentElement;
     const form = document.querySelector("#operator-settings-form");
     const maximum = document.querySelector("#operator-max-writers");
     const token = document.querySelector("#operator-settings-token");
@@ -337,6 +338,7 @@
     panel.addEventListener("toggle", toggle);
     refresh.addEventListener("click", load);
     form.addEventListener("submit", save);
+    source.concurrencyControl = panel;
     if (panel.open) load();
     return () => {
       disposed = true;
@@ -347,6 +349,8 @@
       panel.removeEventListener("toggle", toggle);
       refresh.removeEventListener("click", load);
       form.removeEventListener("submit", save);
+      delete source.concurrencyControl;
+      home.append(panel);
     };
   }
 

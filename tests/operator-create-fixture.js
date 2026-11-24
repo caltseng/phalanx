@@ -181,6 +181,17 @@
     doc.querySelector("#operator-settings-refresh").click();
     await until(() => capacityInput.value === "7");
     assert(capacity.textContent.includes("3 active / 7 maximum"), "Refresh reads persisted effective capacity");
+    if (ownerMode) {
+      doc.querySelector("#operator-board").append(settings);
+      doc.querySelector("#operator-disconnect").click();
+      assert(settings.parentElement.id === "operator-session" && settings.hidden,
+        "Unmount returns a toolbar-reparented control to its home");
+      doc.querySelector("#operator-token").value = "o".repeat(32);
+      doc.querySelector("#operator-connect").requestSubmit();
+      await until(() => !settings.hidden && capacityInput.value === "7");
+      assert(doc.querySelector("#operator-settings") === settings,
+        "Reconnect reuses the same authoritative settings form");
+    }
     result.textContent = "PASS: owner authorization, inline validation, double submit, lost-response retry, queued row, focus and scroll";
     document.documentElement.dataset.result = "passed";
   } catch (error) {
