@@ -103,6 +103,8 @@ There is deliberately no `muster start`: discovery/status never launch processes
 startup migrations. Existing installs with another layout can keep their explicit config paths;
 do not move live state to adopt the locator.
 
+To retrieve one item's correlated timeline through the supported API, see the [paginated example and backward-transition fixture](docs/api.md#read-one-items-correlated-timeline).
+
 ## Documentation
 
 - [Install Phalanx](docs/install.md): first-time setup, credentials, runner setup and repository trust.

@@ -29,6 +29,14 @@ DELIVERED = ("report_stored", "draft_published", "ready_for_check_in", "checked_
 Outcome = Literal["report_stored", "draft_published", "ready_for_check_in", "checked_in", "failed", "cancelled"]
 # Filtered pages inspect at most this many indexed candidates before returning a continuation.
 SCAN_LIMIT = 2000
+REASON_LIMIT = 400
+SHA = re.compile(r"[0-9a-f]{7,64}")
+SECRET = re.compile(
+    r"\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+"
+    r"|(?i:\b(?:bearer|basic)\s+)\S+"
+    r"""|(?i:\b(?:[a-z][a-z0-9]*[_-])*(?:token|secret|password|lease|(?:api|secret)[_-]?key)\b"""
+    r"""["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|\S+)"""
+)
 
 SUMMARY = """
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
@@ -121,6 +129,47 @@ def is_version(value):
 
 def page_cursor(rows, limit, scope, key):
     return encode_cursor(scope, key(rows[limit - 1])) if len(rows) > limit else None
+
+
+def reason_text(text, limit):
+    text = SECRET.sub("[redacted]", " ".join(text.split()))
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+def applied_sha(details):
+    for value in (details.get("candidate"), details.get("prevalidated_candidate"),
+                  details.get("reviewed_candidate"), (details.get("pull") or {}).get("head_sha")):
+        if isinstance(value, str) and SHA.fullmatch(value):
+            return value
+    return None
+
+
+def result_reason(details):
+    """Project only persisted cause fields, never task bodies or arbitrary result evidence."""
+    parts = [reason_text(details[field], 40) for field in ("outcome", "issue") if details.get(field)]
+    checks = []
+    for check in details.get("local_checks") or ():
+        if check.get("outcome") == "failed":
+            cause = f": {reason_text(check['reason'], 160)}" if check.get("reason") else ""
+            checks.append(f"local check {reason_text(check['name'], 80)} failed{cause}")
+    if checks:
+        parts.append(reason_text("; ".join(checks), 180))
+    if details.get("failure_reason"):
+        parts.append(reason_text(details["failure_reason"], 140))
+    sha = applied_sha(details)
+    suffix = ("; " if parts else "") + f"at {sha[:12]}" if sha else ""
+    text = reason_text("; ".join(parts), REASON_LIMIT - len(suffix))
+    return text + suffix if text or suffix else None
+
+
+def timeline_event(row):
+    event = dict(row)
+    details = json.loads(event.pop("details") or "{}")
+    event["candidate"] = applied_sha(details)
+    event["pr_url"] = details.get("pr_url")
+    if event["event"] == "result" and event["reason"] is None:
+        event["reason"] = result_reason(details)
+    return event
 
 
 def stamp(moment):
@@ -584,7 +633,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                ORDER BY block.key""",
             (execution_id,),
         ).fetchall()
-        boundary, params = ("WHERE (version, created_at) < (?, ?)", after) if after else ("", ())
+        boundary, params = ("WHERE (events.version, events.created_at) < (?, ?)", after) if after else ("", ())
         question = None
         if execution["status"] == "waiting_for_input":
             asked = db.execute(
@@ -607,7 +656,8 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                                 json_extract(event.state_json, '$.wait.reason')) AS reason,
                        CASE WHEN event.event = 'reply' THEN coalesce(
                            json_extract(event.details_json, '$.answered_by'), 'owner') END
-                           AS answered_by
+                           AS answered_by,
+                       event.details_json AS details
                 FROM transition_history AS event
                 LEFT JOIN transition_history AS prior
                     ON prior.execution_id = event.execution_id AND prior.version = event.version - 1
@@ -616,7 +666,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                 SELECT adoption.version, 'recover_claim', adoption.created_at, adoption.attempt_id,
                        json_extract(adopted.state_json, '$.stage'),
                        json_extract(adopted.state_json, '$.status'),
-                       NULL, 'Adopted the attempt: ' || adoption.reconciliation, NULL
+                       NULL, 'Adopted the attempt: ' || adoption.reconciliation, NULL, NULL
                 FROM attempt_adoptions AS adoption
                 JOIN transition_history AS adopted
                     ON adopted.execution_id = adoption.execution_id AND adopted.version = adoption.version
@@ -629,7 +679,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                            'Observed ' || json_extract(observation.observation_json, '$.pr.url')
                                || ' ' || json_extract(observation.observation_json, '$.pr.state')
                                || ' at ' || observation.head_sha,
-                           'Observed no PR for the item branch'), NULL
+                           'Observed no PR for the item branch'), NULL, NULL
                 FROM github_observations AS observation
                 JOIN transition_history AS observed
                     ON observed.execution_id = observation.execution_id
@@ -641,7 +691,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                        json_extract(checked.state_json, '$.status'),
                        NULL, CASE WHEN json_array_length(result.failures_json) = 0
                                   THEN 'Local checks passed on ' ELSE 'Local checks failed on ' END
-                           || result.head_sha, NULL
+                           || result.head_sha, NULL, NULL
                 FROM local_check_results AS result
                 JOIN transition_history AS checked
                     ON checked.execution_id = result.execution_id AND checked.version = result.version
@@ -651,14 +701,16 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
                        json_extract(acted.state_json, '$.stage'),
                        json_extract(acted.state_json, '$.status'),
                        NULL, 'Captain ' || substr(action.captain_id, 1, 8) || ' ' || action.action
-                           || ': ' || action.reason, NULL
+                           || ': ' || action.reason, NULL, NULL
                 FROM captain_actions AS action
                 JOIN transition_history AS acted
                     ON acted.execution_id = action.execution_id AND acted.version = action.version
                 WHERE action.execution_id = ?
             )
-            SELECT * FROM events {boundary}
-            ORDER BY version DESC, created_at DESC LIMIT ?""",
+            SELECT events.*, worker.reference AS worker_reference FROM events
+            LEFT JOIN attempt_workers AS worker ON worker.attempt_id = events.attempt_id
+            {boundary}
+            ORDER BY events.version DESC, events.created_at DESC LIMIT ?""",
             (execution_id, execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
         now = datetime.now(UTC)
@@ -668,6 +720,6 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         "attempt": attempt["id"] if attempt else None,
         "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
         "question": question,
-        "events": [dict(row) for row in rows[:limit]],
+        "events": [timeline_event(row) for row in rows[:limit]],
         "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
     }
