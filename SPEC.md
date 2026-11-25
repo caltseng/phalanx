@@ -34,10 +34,13 @@ service entrypoints preserve explicitly configured existing paths and require an
 database unless new-database initialization is explicitly requested. Adoption never moves
 live state or restarts services; the service owner coordinates rollout after review.
 See [deployment tooling and migration](docs/deployment.md).
-On Windows the API entrypoint normalizes its own inherited Idle/BelowNormal CPU priority
+On Windows the API and reconciler entrypoints normalize their own inherited Idle/BelowNormal CPU priority
 to Normal, preserving explicitly higher priorities; supervisor tasks should also use Normal.
 This prevents routine host load from starving API control and writer traffic without changing
 writer capacity, database semantics, other processes or scheduling on other platforms.
+Git commands complete within 60 seconds or raise an explicit caller-specific error, with
+bounded cleanup of their owned process tree. Failed/interrupted ref probes do not count as
+absent refs or refresh a reconciler observation; unrelated items continue through the pass.
 
 ## Work items and repositories
 

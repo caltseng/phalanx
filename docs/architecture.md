@@ -66,6 +66,8 @@ and performs no additional reads.
 
 Execution clients never open the queue database. `server backup` and `server restore`
 are explicit **server-host-only administration**, not an alternative client state path.
+The API and reconciler reuse the storage-free [own-process priority helper](../phalanx/priority.py);
+the reconciler never imports server-host administration or queue storage for scheduling.
 Local credential/pending-intent files and OS locks support launch replay and exclusion;
 they are not local execution journals. Unpushed work remains on its host.
 Writer display names are task-first and may collide or change. Verify the full nonce

@@ -5,7 +5,7 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-from phalanx import server_admin
+from phalanx import priority, server_admin
 from timing import WAIT_SECONDS
 
 
@@ -19,9 +19,9 @@ class ServerPriorityTest(unittest.TestCase):
         run.assert_called_once_with("phalanx.api:app", host="127.0.0.1", port=8765, workers=1)
 
     def test_non_windows_does_not_load_windows_api(self):
-        with patch.object(server_admin.os, "name", "posix"), \
+        with patch.object(priority.os, "name", "posix"), \
                 patch.object(ctypes, "WinDLL", create=True) as load:
-            server_admin.foreground_priority()
+            priority.foreground_priority()
         load.assert_not_called()
 
     @unittest.skipUnless(os.name == "nt", "Windows process scheduling")
@@ -36,7 +36,7 @@ class ServerPriorityTest(unittest.TestCase):
         script = """
 import ctypes
 from ctypes import wintypes
-from phalanx.server_admin import foreground_priority
+from phalanx.priority import foreground_priority
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 kernel.GetCurrentProcess.restype = wintypes.HANDLE
 kernel.GetPriorityClass.argtypes = [wintypes.HANDLE]
@@ -52,21 +52,31 @@ assert kernel.GetPriorityClass(kernel.GetCurrentProcess()) == 0x20
         self.assertEqual(kernel.GetPriorityClass(kernel.GetCurrentProcess()), original)
 
     @unittest.skipUnless(os.name == "nt", "Windows process scheduling")
-    def test_normal_and_explicit_higher_priorities_are_unchanged(self):
-        for priority in (0x20, 0x8000, 0x80, 0x100):
-            with self.subTest(priority=priority):
+    def test_idle_and_below_normal_rise_only_to_normal(self):
+        for value in (0x40, 0x4000):
+            with self.subTest(priority=value):
                 kernel = Mock()
-                kernel.GetPriorityClass.return_value = priority
+                kernel.GetPriorityClass.return_value = value
                 with patch.object(ctypes, "WinDLL", return_value=kernel):
-                    server_admin.foreground_priority()
+                    priority.foreground_priority()
+                kernel.SetPriorityClass.assert_called_once_with(kernel.GetCurrentProcess.return_value, 0x20)
+
+    @unittest.skipUnless(os.name == "nt", "Windows process scheduling")
+    def test_normal_and_explicit_higher_priorities_are_unchanged(self):
+        for value in (0x20, 0x8000, 0x80, 0x100):
+            with self.subTest(priority=value):
+                kernel = Mock()
+                kernel.GetPriorityClass.return_value = value
+                with patch.object(ctypes, "WinDLL", return_value=kernel):
+                    priority.foreground_priority()
                 kernel.SetPriorityClass.assert_not_called()
 
     @unittest.skipUnless(os.name == "nt", "Windows process scheduling")
     def test_priority_errors_abort_startup_instead_of_silently_serving(self):
-        for priority, changed in ((0, True), (0x4000, False), (0x40, False)):
-            with self.subTest(priority=priority):
+        for value, changed in ((0, True), (0x4000, False), (0x40, False)):
+            with self.subTest(priority=value):
                 kernel = Mock()
-                kernel.GetPriorityClass.return_value = priority
+                kernel.GetPriorityClass.return_value = value
                 kernel.SetPriorityClass.return_value = changed
                 with patch.object(ctypes, "WinDLL", return_value=kernel), \
                         patch.object(ctypes, "get_last_error", return_value=5), \
