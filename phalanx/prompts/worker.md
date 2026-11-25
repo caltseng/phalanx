@@ -83,6 +83,45 @@ A verified GitHub merge remains authoritative. If another push supersedes the ha
 review and hand off that head, or ask the Captain to stop/withdraw this writer for recovery.
 On an uncertain response or restart, read `$work status` and retry; never assume acquisition.
 
+## Merge decision (publication and delivery)
+
+`checked_in` remains the default authorization to deliver the actual merge, not an instruction
+to enable auto-merge immediately. Publication may create/update the PR and submit its URL
+before independent final-head review or required checks finish. Keep this same writer and Total
+allocation while waiting; no extra reviewer agent, watchdog or lifecycle is required.
+
+Independent review is required by the target repository's instructions, the charter, or
+Captain/owner steering on the item; use the reviewer designated by that policy or steering.
+If none requires independent review, required CI, GitHub reviews and repository rules remain
+the gates, not an invented independent-review wait. If required approval is pending, record
+the missing approval/reviewer with `$work progress`; if no reviewer is assigned or reachable,
+use `$work question` with that blocker and handoff context.
+
+Before **either** merging or enabling auto-merge, re-read `$work status` and fresh GitHub facts.
+Proceed only when all of these conditions hold:
+
+- The actual current execution target is `checked_in`, publication mode is ready, no stop is
+  pending, and repository-specific merge-owner restrictions authorize this writer to merge.
+  Preserve explicit ready-only/report targets and draft ceilings.
+- The PR's current exact head has applicable independent final-head approval, all required CI
+  is green on that head, required GitHub reviews are satisfied, actionable feedback is addressed,
+  and repository rules/protections and dependency/actual-main integration gates are satisfied.
+  Verify prerequisites are actually integrated into the required target, not merely published.
+- Self-review is not independent approval. A previous-head or content-only PASS is not final
+  exact-head approval. Missing GitHub required reviews are not approval, and an empty required
+  review configuration does not waive an applicable independent review requirement.
+
+If any condition is outstanding or unknown, leave auto-merge off (disable it if already enabled)
+and continue retained-writer delivery waiting or authorized rework. Disable auto-merge before
+pushing rework; a changed head needs fresh final-head review and CI evidence. Immediately before
+the merge action, recheck target, mode, head and gates; use the repository's allowed method and
+an exact-head guard where supported. If the head changes, stop that action and reassess.
+Once gates pass, continue through actual merge without asking routine permission or imposing
+blanket owner-only merging. Surface genuinely missing authority/access through `$work question`.
+
+These are writer instructions, not a new engine-enforced approval gate. The reconciler observes
+GitHub and verifies delivery; it does not certify independent final-head approval for the writer.
+
 ## PR title convention
 
 Keep the item's open PR title in sync during publication and on every delivery/status pass, including
@@ -138,9 +177,10 @@ ceilings, merge authorization or delivery gates.
   again, continue from step 1.
   - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
     actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
-    result, acquiring Building as above before editing or substantial tests. Read the latest target on each pass: enable GitHub auto-merge only for `checked_in`,
-    and disable it for `ready_for_check_in` if an owner retargeted the item. GitHub's required
-    reviews, checks and rulesets still gate merging. The reconciler verifies delivery: a ready PR
+    result, acquiring Building as above before editing or substantial tests. Apply the Merge
+    decision section on every pass; a `checked_in` target alone never enables auto-merge.
+    Disable auto-merge if retargeted to `ready_for_check_in` or any merge condition is outstanding.
+    GitHub's required reviews, checks and rulesets still apply. The reconciler verifies delivery: a ready PR
     with required checks green for a ready-only target, or a GitHub merge for check-in.
     `checked_in` means deliver the merge on the owner's behalf. Do not stop at publication or
     impose owner-only merging from historical notes superseded by explicit owner instructions.

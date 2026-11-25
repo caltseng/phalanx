@@ -149,6 +149,39 @@ class CharterTest(unittest.TestCase):
         self.assertNotIn("open one ready", prompt)
         self.assertNotIn("mark it ready", prompt)
 
+    def test_ready_publication_retains_writer_before_merge_gates_pass(self):
+        for original, current in (("checked_in", "checked_in"),
+                                  ("checked_in", "ready_for_check_in"),
+                                  ("ready_for_check_in", "checked_in")):
+            with self.subTest(original=original, current=current):
+                item = {"id": "item", "repository_id": "repo", "target": original, "goal": "Deliver",
+                        "execution": {"id": "execution", "state": {"target": current}}}
+                prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "release")
+                publication = " ".join(prompt.split("- `publication`:", 1)[1].split(
+                    "- `delivery`:", 1)[0].split())
+                delivery = " ".join(prompt.split("- `delivery`:", 1)[1].split())
+                self.assertIn(f"Target: {current}", prompt)
+                self.assertIn("gh pr create --base release", publication)
+                self.assertIn("submit the PR URL and retain this writer in delivery", publication)
+                self.assertIn('{"outcome": "succeeded", "pr_url":', publication)
+                self.assertIn("satisfy the Merge decision section", publication)
+                self.assertIn("Apply the Merge decision section on every pass", delivery)
+                self.assertNotIn("enable GitHub auto-merge with any method", prompt)
+                self.assertNotIn("enable GitHub auto-merge only for `checked_in`", delivery)
+
+    def test_merge_decision_defines_review_sources_and_visible_wait_without_inventing_a_gate(self):
+        item = {"id": "item", "repository_id": "repo", "goal": "Deliver",
+                "execution": {"id": "execution", "state": {"target": "checked_in"}}}
+        prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
+        decision = " ".join(prompt.split("## Merge decision (publication and delivery)", 1)[1].split(
+            "## PR title convention", 1)[0].split())
+        self.assertIn("Before **either** merging or enabling auto-merge", decision)
+        self.assertIn("target repository's instructions, the charter, or Captain/owner steering", decision)
+        self.assertIn("If none requires independent review", decision)
+        self.assertIn("current exact head has applicable independent final-head approval", decision)
+        self.assertIn("record the missing approval/reviewer with `phx work progress`", decision)
+        self.assertIn("if no reviewer is assigned or reachable, use `phx work question`", decision)
+
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
                 ("Fix writer recovery", "Fix writer recovery"),

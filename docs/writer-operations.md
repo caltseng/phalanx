@@ -48,14 +48,72 @@ transitions are fenced by writer identity and allocation revision; no lease time
 PR stages are `development`, `self_review`, `publication`, `delivery`. Writers push and open
 their own PRs with the explicit target base, reusing the item's existing open PR. Honor
 `publication_mode`: draft work stays draft and never enables auto-merge. Ready work opens a
-ready PR and enables GitHub auto-merge only for `checked_in`; `ready_for_check_in` leaves merging
-to the owner. Re-read the current target after steering and disable auto-merge if retargeted.
+ready PR and submits its URL even when merge gates are outstanding, retaining the same writer
+in delivery with auto-merge off. Merge or enable GitHub auto-merge only for the actual current
+`checked_in` target after the gates below pass; `ready_for_check_in` leaves merging to the
+owner. Re-read the current target after steering and disable auto-merge if retargeted.
 Never reuse a PR merged by an earlier execution.
 
 The reconciler observes GitHub; its observations drive server delivery and flags. Writers fix
 checks, conflicts and actionable feedback on the same PR while it waits. Repository checks and
 reviews gate merging. Trusted local checks run from reconciler policy and raise flags, not an
 extra Phalanx gate. See [publication and delivery](direct-sessions.md#pr-publication-and-delivery).
+
+### Merge decision before auto-merge
+
+Independent review is required by the target repository's instructions, the charter, or
+Captain/owner steering on the item; use the reviewer designated by that policy or steering.
+If none requires independent review, required CI, GitHub reviews and repository rules remain
+the gates, not an invented independent-review wait. If required approval is pending, record
+the missing approval/reviewer with `work progress`; if no reviewer is assigned or reachable,
+use `work question` with that blocker and handoff context.
+
+Before either direct merge or auto-merge activation, read fresh `work status` and GitHub facts.
+Require the current execution's `checked_in` target, ready publication, no pending stop,
+repository-specific merge-owner authority, applicable independent final approval of the
+**current exact PR head**, green required CI on that head, required GitHub reviews, resolved
+actionable feedback, repository rules/protections and dependency/actual-main integration.
+A dependency PR being published is not proof its prerequisite reached the required target.
+Self-review is not independent approval; previous-head or content-only PASS is not final
+exact-head approval. Missing required GitHub reviews, or no configured GitHub review requirement,
+cannot stand in for applicable independent review.
+
+While any gate is unknown or outstanding, disable any existing auto-merge and retain the same
+writer and Total allocation in delivery. Disable auto-merge before pushing rework, acquire
+Building before editing/self-review/substantial tests, then commit and hand off with
+`work capacity delivering` before pushing. Obtain fresh final-head approval and CI evidence.
+Immediately before the merge action recheck target, mode, head and all gates, using an
+exact-head guard where supported. Once satisfied, deliver the actual merge without another
+routine permission request; explicit owner-ready/report/draft ceilings and repository
+merge-owner restrictions still govern. No admin bypass is authorized.
+
+This corrects generated writer instructions, **not an engine-enforced independent approval
+predicate**. The reconciler still observes GitHub; its ready milestone or a GitHub configuration
+without required reviews does not certify independent final-head review. There is no new review
+agent, watchdog, scheduler, state field, API/CLI contract or lifecycle system.
+
+The [PR #251 reproduction and validation narrative](https://github.com/caltseng/phalanx/pull/255)
+records the incident behind this ordering. The focused `test_shift.py` regressions verify the
+generated instructions and current-target routing, not mathematical enforcement of agent behavior.
+
+### Retained-session activation
+
+After review and check-in, the authorized deployment owner installs the reviewed package through
+the existing deployment procedure. No runtime restart is part of this fix. Newly generated
+kickoffs then use the corrected generator and packaged worker template. Retained native sessions
+do not automatically reload earlier instructions: the Captain relays the exact updated **Merge
+decision (publication and delivery)** section and delivery clause from canonical `shift prompt worker`
+to still-live retained writers as needed, using their existing command for `$work`.
+Explicitly state that this section supersedes the earlier generated publication-time instruction
+to enable auto-merge. The command prints a template, not a new item kickoff: do not relay the
+unexpanded `$publication` placeholder or call `shift launch` to regenerate an existing writer.
+Verify receipt and inspect current target/head/gates before any further merge action.
+
+Existing in-flight writers already received explicit corrective gate instructions for this
+incident; preserve that containment, rather than reverting them to older kickoff wording.
+Do not contact, revive or replace ended writers. Keep the same live writer/Total through rework
+and respect Building acquisition/handoff. This activation does not change the new24h Captain
+cadence: 24-hour shifts, five-minute reconciliation and 90-minute reinforcement remain unchanged.
 
 If cancellation or forced failure sets `state.stopping`, stop new work and reconcile any
 in-flight GitHub effects. Delivery has no open attempt, but its writer is still live:
