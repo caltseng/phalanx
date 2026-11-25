@@ -14,6 +14,12 @@
 
   function client(token) {
     const snapshots = new Map();
+    const projections = new WeakMap();
+    async function projected(path, signal, project) {
+      const body = await read(path, signal);
+      if (!projections.has(body)) projections.set(body, project(body));
+      return projections.get(body);
+    }
     async function read(path, signal, accept = "application/json") {
       const headers = { Accept: accept };
       if (token) headers.Authorization = "Bearer " + token;
@@ -232,18 +238,18 @@
           if (!value) continue;
           params.set(name, value);
         }
-        const result = await read(EXECUTIONS + "?" + params, signal);
-        return { items: pageRows(result.items, limit).map(item), nextCursor: nextCursor(result.next_cursor) };
+        return projected(EXECUTIONS + "?" + params, signal, result => ({
+          items: pageRows(result.items, limit).map(item), nextCursor: nextCursor(result.next_cursor)
+        }));
       },
       async currentItem(id, signal) {
-        const result = await read("/v1/operator/items/" + identifier(id), signal);
-        return item(result.item);
+        return projected("/v1/operator/items/" + identifier(id), signal, result => item(result.item));
       },
       async detail({ id, cursor, limit, signal }) {
         const params = query(limit, cursor);
-        const page = await read(EXECUTIONS + "/" + identifier(id) + "/timeline?" + params, signal);
-        return {
+        return projected(EXECUTIONS + "/" + identifier(id) + "/timeline?" + params, signal, page => ({
           item: item(page.item),
+          usage: page.usage,
           nextAction: page.item.next_action,
           previousExecutionId: page.previous_execution_id ? identifier(page.previous_execution_id) : null,
           nextExecutionId: page.next_execution_id ? identifier(page.next_execution_id) : null,
@@ -264,19 +270,21 @@
             stage: event.stage, status: event.status, reason: event.reason
           })),
           nextCursor: nextCursor(page.next_cursor)
-        };
+        }));
       },
       report({ itemId, id }, signal) {
         const path = "/v1/items/" + identifier(itemId) + "/executions/" + identifier(id) + "/report";
         return read(path, signal, "text/plain");
       },
       async captains({ signal }) {
-        const page = await read("/v1/captains?limit=25", signal);
-        return { captains: pageRows(page.captains, 25).map(captain), nextCursor: null };
+        return projected("/v1/captains?limit=25", signal, page => ({
+          captains: pageRows(page.captains, 25).map(captain), nextCursor: null
+        }));
       },
       async flags({ signal }) {
-        const page = await read("/v1/flags", signal);
-        return { flags: Array.isArray(page.flags) ? page.flags.map(flag) : [], nextCursor: null };
+        return projected("/v1/flags", signal, page => ({
+          flags: Array.isArray(page.flags) ? page.flags.map(flag) : [], nextCursor: null
+        }));
       }
     };
   }

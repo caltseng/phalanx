@@ -129,7 +129,7 @@ DASHBOARD_SCHEMA = (
         for table in (
             "work_items", "executions", "attempts", "dispatch_settings", "writers",
             "external_rechecks", "attempt_workers", "github_observations", "transition_history",
-            "local_check_results", "captain_actions",
+            "local_check_results", "captain_actions", "writer_usage",
         )
         for event in ("INSERT", "UPDATE", "DELETE")
     ),

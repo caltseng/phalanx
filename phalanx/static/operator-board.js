@@ -73,6 +73,7 @@
     const text = span(now - time) + " ago";
     const { "aria-label": context, ...rest } = attrs;
     return h("time", { datetime: new Date(time).toISOString(), title: stamp(time), ...rest,
+      "data-age-context": context,
       "aria-label": [context, text, stamp(time)].filter(Boolean).join(" · "), text });
   }
 
@@ -275,6 +276,7 @@
    * source.openReport?(output) opens a stored report in the host. Reject failed reads.
    * source.openNewItem?(trigger, created) opens host intake; call created(item) on acknowledgment.
    * source.concurrencyControl? is the host's authoritative settings disclosure; the host restores it on cleanup.
+   * Reads reuse the same result object for unchanged snapshots; changed snapshots return new objects.
    * options selects home/queue/history/detail, URL filters/cursors and an itemId or executionId.
    */
   function mount(root, source, options = {}) {
@@ -301,6 +303,7 @@
     let disposed = false;
     let readFrame = null;
     let clearConcurrency;
+    const reportOutputs = new WeakMap();
 
     const announce = h("p", { class: "sr-only", role: "status" });
     const health = h("div", { class: "health" });
@@ -530,11 +533,16 @@
         });
         const data = await Promise.race([read(current.signal), deadline]);
         if (current.signal.aborted) return undefined;
+        if (target.failed || !target.updated || target.snapshot !== data) renderRead();
+        target.snapshot = data;
         target.failed = false;
         target.updated = Date.now();
         return data;
       } catch {
-        if (!current.signal.aborted) target.failed = true;
+        if (!current.signal.aborted) {
+          if (!target.failed) renderRead();
+          target.failed = true;
+        }
         return undefined;
       } finally {
         clearTimeout(timer);
@@ -553,25 +561,21 @@
         target.next = data.nextCursor ?? null;
         noteChanges(data.items);
       }
-      renderRead();
     }
 
     async function loadFlags() {
       const data = await guarded(state.flags, signal => source.flags({ signal }));
       if (data) state.flags.rows = data.flags;
-      renderRead();
     }
 
     async function loadCaptains() {
       const data = await guarded(state.captains, signal => source.captains({ signal }));
       if (data) state.captains.rows = data.captains;
-      renderRead();
     }
 
     async function loadOverview() {
       const data = await guarded(state.overview, signal => source.overview({ signal }));
       if (data) state.overview.data = data.sections;
-      renderRead();
     }
 
     function detailState(id) {
@@ -591,7 +595,6 @@
         detail.data = data;
         detail.next = data.nextCursor ?? null;
       }
-      if (state.expanded === id) renderRead();
     }
 
     async function loadRoute() {
@@ -605,7 +608,6 @@
         target.data = data;
         target.next = data.nextCursor ?? null;
       }
-      renderRead();
     }
 
     function noteChanges(items) {
@@ -623,7 +625,8 @@
       if (disposed || state.open.rows.some(row => row.id === item.id)) return;
       state.open.request?.abort();
       state.open.request = null;
-      state.open.rows.push(item);
+      state.open.rows = [...state.open.rows, item];
+      state.open.snapshot = null;
       state.changed.set(item.id, Date.now());
       const { scrollX: x, scrollY: y } = window;
       render();
@@ -717,10 +720,7 @@
         if (source.openReport) {
           const button = h("button", { type: "button", class: "link pr", text: "report",
             "data-report": item.id, "data-focus": "report:" + item.id });
-          button.addEventListener("click", event => {
-            event.stopPropagation();
-            source.openReport(item.output);
-          });
+          reportOutputs.set(button, item.output);
           return button;
         }
         const report = safeUrl(item.output.url);
@@ -791,10 +791,6 @@
         h("span", { class: "name" }, title, chips(flags)),
         h("span", { class: "repo", title: item.repo, text: item.repo }),
         cells);
-      line.addEventListener("click", event => {
-        if (!event.target.closest("a, button")) toggle(item.id);
-      });
-      title.addEventListener("click", () => toggle(item.id));
       const changedAt = state.changed.get(item.id);
       const row = h("li", { class: "row t-" + itemTone + (expanded ? " open" : "") +
         (changedAt != null ? " changed" : ""), "data-id": item.id }, line);
@@ -835,6 +831,49 @@
       return h("div", { class: "block" }, h("h4", { text: "Stage path" + (returns ? " · " + returns + " returns" : "") }), rail);
     }
 
+    function observedUsage(usage, executionId) {
+      const box = h("div", { class: "block" }, h("h4", { text: "Observed usage" }));
+      if (!usage) {
+        box.append(h("p", { text: "Writer usage unavailable; native observation not supplied. Credits and money unavailable." }));
+        return box;
+      }
+      const tokens = value => Object.entries(value.tokens).map(([name, count]) =>
+        name.replaceAll("_", " ") + " tokens: " + (count == null ? "unavailable" : String(count)) +
+        " (" + value.field_sessions[name] + "/" + value.bound_sessions + " sessions)").join("; ");
+      for (const [title, value] of [["Current execution writer subtotal", usage.execution],
+        ["All executions item writer subtotal", usage.item]]) {
+        box.append(h("p", { text: title + " · " + label(value.status) + " · " +
+          value.covered_sessions + "/" + value.bound_sessions + " bound sessions covered. " + tokens(value) }));
+      }
+      box.append(h("p", { text: "Credits and money are unavailable unless explicitly reported below; never token-derived. " + usage.overhead }));
+      for (const session of usage.sessions) {
+        const snapshot = session.snapshot || session.acquisition_error;
+        const text = [
+          session.execution_id === executionId ? "Current execution" : "Other execution " + short(session.execution_id),
+          session.runtime, session.session_id || "native session unconfirmed",
+          label(session.status), session.reason,
+          session.ended_at && "Ownership ended " + session.ended_at,
+          snapshot && (snapshot.provider + " · model " + (snapshot.model || "unavailable") +
+            " · " + snapshot.source + " " + snapshot.source_version + " · " + snapshot.origin),
+          snapshot && ("Window " + snapshot.window_start + " to " + snapshot.cutoff +
+            "; observed " + snapshot.observed_at + "; " + snapshot.scope.replaceAll("_", " ")),
+          snapshot && Object.entries(snapshot.tokens).map(([name, count]) =>
+            name.replaceAll("_", " ") + " tokens: " + (count == null ? "unavailable" : String(count))).join("; "),
+          ...["credits", "money"].map(name => {
+            const value = snapshot?.[name];
+            return name + ": " + (value ? value.amount + " " + value.unit + " (" + value.basis +
+              "; " + value.source + "; same window)" : "unavailable");
+          }),
+          session.acquisition_error && ("Latest acquisition unavailable at " +
+            session.acquisition_error.observed_at + ": " + session.acquisition_error.reason)
+        ].filter(Boolean).join(" · ");
+        box.append(h("p", { class: "pre", text }));
+      }
+      box.append(h("p", { class: "faint", text: Object.entries(usage.capabilities)
+        .map(([runtime, reason]) => runtime + ": " + reason).join(" · ") }));
+      return box;
+    }
+
     function renderDetail(row, flags, now, detail = state.details.get(row.id)) {
       const box = h("div", { class: "detail", id: "detail-" + row.id, role: "region", "aria-label": "Details: " + row.title });
       box.style.setProperty("--since", state.expandedAt - now + "ms");
@@ -854,6 +893,7 @@
       }
       box.append(links);
       box.append(h("div", { class: "goal", text: item.goal || item.title }));
+      box.append(observedUsage(data.usage, item.id));
       box.append(facts([
         ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],
         ["Stage", h("span", {}, label(item.stage), " · ", ago(item.lastAdvancedAt, now))],
@@ -1226,10 +1266,37 @@
       }
     }
 
+    function onRowClick(event) {
+      const report = event.target.closest?.("button[data-report]");
+      if (report && body.contains(report)) {
+        source.openReport(reportOutputs.get(report));
+        return;
+      }
+      const line = event.target.closest?.(".items > .row > .line");
+      if (!line || !body.contains(line)) return;
+      const control = event.target.closest("a, button");
+      const id = line.parentElement.dataset.id;
+      if (!control || control.matches("button.title")) toggle(id);
+    }
+
+    function tick() {
+      if (document.hidden) return;
+      const now = Date.now();
+      for (const node of body.querySelectorAll("time[datetime]")) {
+        const time = epoch(node.dateTime);
+        const text = span(now - time) + " ago";
+        if (node.textContent === text) continue;
+        node.textContent = text;
+        node.setAttribute("aria-label", [node.dataset.ageContext, text, stamp(time)].filter(Boolean).join(" · "));
+      }
+      renderHealth();
+    }
+
     refresh.addEventListener("click", refreshAll);
+    root.addEventListener("click", onRowClick);
     root.addEventListener("keydown", onKey);
     const interval = setInterval(refreshAll, REFRESH_MS);
-    const ticker = setInterval(() => { if (!document.hidden) renderHealth(); }, TICK_MS);
+    const ticker = setInterval(tick, TICK_MS);
     document.addEventListener("visibilitychange", refreshAll);
     applyTheme();
     render();
@@ -1242,6 +1309,7 @@
       clearInterval(interval);
       clearInterval(ticker);
       document.removeEventListener("visibilitychange", refreshAll);
+      root.removeEventListener("click", onRowClick);
       root.removeEventListener("keydown", onKey);
       for (const target of [state.open, state.closed, state.route, state.flags, state.captains, state.overview, ...state.details.values()]) target.request?.abort();
       root.replaceChildren();
