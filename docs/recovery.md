@@ -26,6 +26,9 @@ Confirm the old session and all its writers stopped before replacing it with
 `shift launch --replaces WRITER`. Keep all commits and uncommitted changes. Registration atomically
 revokes the old token and opens an attempt only when the replacement's stage is eligible;
 otherwise its binding retains the wait. A stale writer cannot post.
+`Repository ID has no checkout mapping` refuses replacement without changing the existing
+writer, credential or capacity allocations. Restore the repository's checkout mapping in the
+Captain's shift configuration before retrying the same replacement.
 If the worktree is unavailable, retain server handoff context and report the missing artifact.
 Never reset, clean or discard work to make replacement easier.
 
