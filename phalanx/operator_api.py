@@ -583,43 +583,48 @@ def group(request: Request, response: Response, label: Annotated[str, Path(patte
         unchanged = conditional_read(request, response, db, now)
         if unchanged is not None:
             return unchanged
-        rollup = db.execute(
-            f"""SELECT count(*) AS items,
-                       coalesce(sum(NOT ({CLOSED})), 0) AS open,
-                       sum(pr.additions) AS additions, sum(pr.deletions) AS deletions,
-                       coalesce(sum(pr.execution_id IS NOT NULL
-                                    AND (pr.additions IS NULL OR pr.deletions IS NULL)), 0)
-                           AS size_unknown_count,
-                       min(item.created_at) AS first_created_at,
-                       max(CASE WHEN {CLOSED} THEN execution.updated_at END) AS last_closed_at,
-                       min(CASE WHEN NOT ({CLOSED}) THEN execution.created_at END) AS oldest_open_since
-                FROM work_items AS item JOIN executions AS execution ON execution.item_id = item.id
-                LEFT JOIN operator_pr AS pr ON pr.execution_id = execution.id
-                WHERE item.label = ? AND {CURRENT}""",
-            (label,),
-        ).fetchone()
-        if not rollup["items"]:
-            raise HTTPException(404, "No work items have this label")
-        outcomes = db.execute(
-            f"""SELECT execution.outcome, count(*) AS count
-                FROM work_items AS item JOIN executions AS execution ON execution.item_id = item.id
-                WHERE item.label = ? AND {CURRENT} AND execution.outcome IS NOT NULL
-                GROUP BY execution.outcome""",
-            (label,),
-        ).fetchall()
         boundary = "AND (item.created_at, item.id) > (?, ?)" if after else ""
         rows = db.execute(
-            f"""{SUMMARY} WHERE item.label = ? AND {CURRENT} {boundary}
-                ORDER BY item.created_at, item.id LIMIT ?""",
+            f"""WITH group_page AS MATERIALIZED (
+                    SELECT item.id FROM work_items AS item WHERE item.label = ? {boundary}
+                    ORDER BY item.created_at, item.id LIMIT ?
+                )
+                {SUMMARY} WHERE item.id IN (SELECT id FROM group_page) AND {CURRENT}
+                ORDER BY item.created_at, item.id""",
             (label, *(after or ()), limit + 1),
         ).fetchall()
         context = dispatch_context(db, now)
     closed = {name: 0 for name in Outcome.__args__}
-    closed.update({row["outcome"]: row["count"] for row in outcomes})
+    page = rows[:limit]
+    items = [summary(row, now, context) for row in page]
+    for item in items:
+        if item["outcome"]:
+            closed[item["outcome"]] += 1
+
+    def known_sum(column):
+        values = [row[column] for row in page if row[column] is not None]
+        return sum(values) if values else None
+
+    rollup = {
+        "scope": "page",
+        "items": len(page),
+        "open": sum(row["status"] not in CLOSED_STATUSES for row in page),
+        "additions": known_sum("pr_additions"),
+        "deletions": known_sum("pr_deletions"),
+        "size_unknown_count": sum(row["pr_url"] is not None and
+                                  (row["pr_additions"] is None or row["pr_deletions"] is None)
+                                  for row in page),
+        "first_created_at": min((row["item_created_at"] for row in page), default=None),
+        "last_closed_at": max((row["updated_at"] for row in page
+                               if row["status"] in CLOSED_STATUSES), default=None),
+        "oldest_open_since": min((row["created_at"] for row in page
+                                 if row["status"] not in CLOSED_STATUSES), default=None),
+        "outcomes": closed,
+    }
     return {
         "label": label,
-        "rollup": {**dict(rollup), "outcomes": closed},
-        "items": [summary(row, now, context) for row in rows[:limit]],
+        "rollup": rollup,
+        "items": items,
         "next_cursor": page_cursor(rows, limit, scope,
                                    lambda row: [row["item_created_at"], row["item_id"]]),
     }

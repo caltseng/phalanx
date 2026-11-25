@@ -124,6 +124,9 @@
         return json({ paused: true, aging_seconds: 99, max_writers: maximum, active_writers: 3,
           max_building_writers: buildingMaximum, building_writers: 2, delivering_writers: 1 });
       }
+      if (path === "/v1/operator/overview") return json({
+        sections: { needs_you: 0, running: 0, queued: rows.length, blocked: 0, waiting_on_checks: 0 }
+      });
       if (path.startsWith("/v1/operator/executions?")) {
         if (ownerMode && !options.headers.Authorization) return json({ detail: "Bearer token required" }, 401);
         const limit = Number(new URL(path, location.origin).searchParams.get("limit"));
