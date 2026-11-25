@@ -134,7 +134,8 @@ Stopped-writer replacement preserves local work and reconciles external effects.
 | [`.agents/skills/`](.agents/skills/) | Reusable agent skills: [PR review](.agents/skills/pr-review/SKILL.md) and [complexity-killer](.agents/skills/complexity-killer/SKILL.md) for evidence-based complexity and blocking audits. |
 | [`docs/`](docs/), [`SPEC.md`](SPEC.md), [`STATE_MACHINE.md`](STATE_MACHINE.md) | Operating guides, implementation map and authoritative design/lifecycle references. |
 
-HTTP tests use isolated API applications running in-process on real loopback sockets,
+HTTP tests use isolated API applications running in-process on real loopback sockets
+and selector event loops (avoiding Windows Proactor reset/teardown leaks),
 so urllib and CLI subprocesses still exercise HTTP, authentication and background tasks.
 Each fixture start runs a fresh application lifespan; explicit restart tests still stop
 and start it against the same database. The bootstrap backup/restore test also retains

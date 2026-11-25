@@ -108,8 +108,12 @@ class ServerFixture:
                 log_level="error", access_log=False,
                 timeout_graceful_shutdown=5, timeout_keep_alive=0,
             ))
-            thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]},
-                                      daemon=True)
+            # Proactor TCP reset callbacks can leak transports during Windows teardown.
+            thread = threading.Thread(
+                target=lambda: asyncio.run(server.serve(sockets=[listener]),
+                                           loop_factory=asyncio.SelectorEventLoop),
+                daemon=True,
+            )
             self.addCleanup(self.stop_server, (server, thread, listener))
             # The lifespan snapshots its environment before uvicorn marks startup complete.
             with patch.dict(os.environ, env, clear=True):
