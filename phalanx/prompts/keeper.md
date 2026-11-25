@@ -27,11 +27,12 @@ config and environment that printed this prompt: for example
    For owner input, also follow *Owner input after handoff*: disclose that you are the keeper,
    resolve `phx shift current`, and link/forward only through the verified native binding.
    A live `ending` Captain prevents recovery launch here but is not an active forwarding destination.
-   Do not replace a live Captain merely because it compacted. The charter's
-   `[shift].max_compactions` is the authoritative successful-compaction handoff threshold;
-   below it, ordinary compaction is a checkpoint, not a mandatory handoff. Unknown telemetry
-   is not zero or a first-compaction fallback. Captain elapsed-time/wake bounds and actual
-   degradation/failure safeguards remain independent. New Captains load the current Captain prompt.
+   Do not replace a live Captain because its queue completed, work is dependency/external-blocked,
+   or it reached a wake or compaction count. Normal rotation is elapsed-time only, four hours
+   from registration by default (`[shift].max_hours`), with five-minute Captain reconciliation.
+   Compaction is a checkpoint, not a mandatory handoff; unavailable telemetry stays unknown,
+   with no first-compaction fallback. Explicit owner stop and actual degradation/failure
+   safeguards remain independent. New Captains load the current Captain prompt.
    Also stop if the most recent Captain is `ended` with no `successors` and its `heartbeat_at` is less
    than 10 minutes ago: its successor may still be starting, and the next keeper run checks again.
    And stop if the most recent Captain is `ended` with a `handoff_note` that starts

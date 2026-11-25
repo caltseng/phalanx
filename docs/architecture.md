@@ -223,15 +223,16 @@ authoritative; ending/withdrawing/replacing the writer clears the handoff for re
 Counts, board waits and dispatch-overdue/backlog reporting use `dispatch`'s same state/helpers,
 not stage-derived guesses or a second budget. Intents and waiting writers retain Total.
 `shift launch` supplies no limit, and charters reject concurrency keys; `deploy init` writes
-only `max_hours`, `max_wakes` and `max_compactions`. Existing stores retain their saved Total, all live writers and
+only `max_hours = 4` for elapsed-time rotation. Existing stores retain their saved Total, all live writers and
 conservative Building allocations. Shipped code does not prove installation state: follow
 [separate deployment and activation](deployment.md#two-limit-writer-activation); do not treat
 approval or an open PR as deployment.
-The charter's `max_compactions` is the only compaction-handoff threshold (default five).
-The server retains monotone cumulative successful telemetry; `shift heartbeat` compares
-that total with the freshly loaded charter. Packaged Captain/keeper instructions defer
-to that result, not a hardcoded first-compaction rule. See the
-[retained-conversation rollout boundary](deployment.md#compaction-threshold-activation).
+`shift heartbeat` compares the Captain's registration age with freshly loaded charter
+`max_hours` (default four). Wake and compaction counts remain monotone telemetry, not
+rotation triggers. Packaged Captain/keeper instructions retain five-minute reconciliation
+through queue completion and dependency/external waits, with explicit owner stop and genuine
+safety exceptions. The client rejects retired count-limit keys rather than silently ignoring
+them. See the [retained-conversation rollout boundary](deployment.md#elapsed-time-shift-activation).
 Likewise tokenless local-board actions require both shipped code and verified deployment:
 explicit `PHALANX_LOCAL_BOARD=1`, a loopback-only listener, direct loopback peer and local
 Host, with exact same-origin writes and no forwarding headers. Narrow `/operator/api/`

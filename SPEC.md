@@ -175,12 +175,14 @@ review and storage always reference the exact immutable draft revision.
 ### Captain shifts and continuity
 
 An operator-owned charter defines goal, repo scope, authority, escalation and
-stop conditions. Captain wakes every five minutes and hands off after four hours, 48 wakes,
-five successful compactions or actual degradation/failure by default. The positive-integer
-charter `[shift].max_compactions` is the authoritative compaction handoff threshold.
-Below it an ordinary compaction is a checkpoint, not a mandatory handoff. Unknown
-telemetry never implies a count or a first-compaction fallback; elapsed-time/wake bounds
-and actual degradation/failure signals remain independent. Overlap is bounded to thirty minutes. The
+stop conditions. Captain wakes every five minutes. Normal rotation is purely elapsed-time:
+four hours from registration by default, using positive-integer charter `[shift].max_hours`.
+Queue completion, empty queues, dependency/external waits, wake counts and compaction counts
+never end a shift early, including under older charter stop prose. Idle Captains retain
+ownership and reconcile on schedule. Compaction is a checkpoint, not a rotation trigger;
+unknown telemetry stays unknown. Explicit owner stop, missing/invalid authority and actual
+degradation/failure remain safety exceptions with visible reasons and recovery.
+Overlap is bounded to thirty minutes. The
 predecessor finishes/abandons uncertain intents and performs creator-owned cleanup before
 ending, without waiting forever for a successor. Only the owner grants repository trust.
 

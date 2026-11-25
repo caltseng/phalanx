@@ -51,6 +51,10 @@ each writer uses its own scoped credential stored in the item's Git directory.
 The operator keeps a charter outside mapped repositories. On each wake, the Captain uses
 `python -m phalanx shift` commands, re-reads the charter and chooses work within its repository scope
 and lane policy.
+Normal Captain rotation is elapsed-time only: four hours from registration, with five-minute
+reconciliation retained even when the queue is empty or dependency-blocked. Wake and compaction
+counts are telemetry, not early handoff triggers. Explicit owner stop and genuine safety
+failures remain exceptions.
 The owner's persisted Building (`max_building_writers`, initially 5) and Total (`max_writers`,
 initially 10 on new installs) limits, editable together under **Writer concurrency** in Scribe,
 apply across all Captains and repositories. Existing installs retain their approved Total until

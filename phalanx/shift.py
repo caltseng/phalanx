@@ -26,8 +26,8 @@ from .display_text import reason_text, short_title
 from .session_links import session_reference
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
-# Shift bounds (D7). Actual degradation remains an independent reason to hand off.
-SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48, "max_compactions": 5}
+# Elapsed-time rotation. Actual degradation remains an independent reason to hand off.
+SHIFT_DEFAULTS = {"max_hours": 4}
 # A launch's staged intent. It becomes the live credential once the server accepts its nonce.
 PENDING = "phalanx-writer.pending.json"
 
@@ -100,9 +100,12 @@ def load_charter(config):
     shift = charter.get("shift", {})
     if isinstance(shift, dict) and {"max_writers", "max_building_writers"} & shift.keys():
         raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
+    if isinstance(shift, dict) and {"max_wakes", "max_compactions"} & shift.keys():
+        raise ShiftError("Captain rotation is elapsed-time only; remove max_wakes and max_compactions "
+                         "from charter [shift] and use max_hours")
     if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
-        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes and max_compactions")
+        raise ShiftError("Charter [shift] takes a positive integer max_hours")
     return {**charter, "shift": {**SHIFT_DEFAULTS, **shift},
             "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
@@ -129,11 +132,7 @@ def shift_bounds(captain, charter, now=None):
     due = []
     if age.total_seconds() >= bounds["max_hours"] * 3600:
         due.append(f"shift age reached {bounds['max_hours']} h")
-    if captain["wake_count"] >= bounds["max_wakes"]:
-        due.append(f"wake count reached {bounds['max_wakes']}")
     compactions = captain.get("compaction_count")
-    if compactions is not None and compactions >= bounds["max_compactions"]:
-        due.append(f"successful compaction count reached {bounds['max_compactions']}")
     return {"age_minutes": int(age.total_seconds() // 60), "wakes": captain["wake_count"], **bounds,
             "compaction_count": compactions, "handoff_due": due}
 

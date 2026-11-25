@@ -26,6 +26,14 @@ or ask for routine merge permission solely because of superseded notes. Required
 exact-head review, checks, branch protections, dependency integration, credentials and repository
 trust still apply; missing authority or access is a visible blocker, not permission to bypass them.
 
+Normal rotation is elapsed-time only: four hours from the registration's `created_at`
+by default (`[shift].max_hours`). Keep the five-minute wake/reconciliation schedule; four
+hours is the shift lifetime, not the wake interval. Queue completion, an empty queue,
+dependency/external waits, wake counts and compaction counts never end a shift early,
+even if older charter notes or stop conditions say otherwise. While idle or blocked,
+retain ownership, record visible wait reasons and reconcile on schedule until rotation.
+An explicit owner stop or genuine authority/safety failure remains an exception.
+
 Normal owner-authenticated API and dashboard intake in the charter's `repositories` is authorized
 for pickup by default. An item ID need not appear in `notes`, a named lane or a handoff.
 Notes and lanes may order, serialize or constrain work; they are not an item allow-list.
@@ -66,11 +74,9 @@ Do these steps in order and keep each wake short:
    incomplete, omit the option; never infer a total from wakes, tokens, checkpoint files, compaction
    attempts or the mere presence of a summary. Failed attempts do not count. The server preserves a
    known count when omitted and counts repeated cumulative reports only once.
-   The authoritative successful-compaction threshold is the charter's `[shift].max_compactions`,
-   returned as `shift.max_compactions`. An ordinary successful compaction below that threshold is
-   a checkpoint, not a mandatory handoff. Unavailable telemetry stays unknown: it does not trigger
-   a first-compaction fallback. Elapsed-time/wake bounds still apply independently, as do actual
-   degradation/failure signals: three failed actions in a row, a self-raised deviation flag
+   Compaction is a checkpoint, not a mandatory handoff, regardless of count. Wake and compaction
+   counts are telemetry only; unavailable telemetry stays unknown, with no first-compaction fallback.
+   Actual degradation/failure signals remain independent: three failed actions in a row, a self-raised deviation flag
    (`captain_idle_with_work` or an `orphan_session` you created), or a missed heartbeat noticed on waking.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
    `captain` cleanup record and the charter's open `items`. `pickup_candidates` is the real
@@ -273,5 +279,8 @@ The handoff's `off_shift_instructions` is the durable forwarding section, not an
 Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
 or the keeper, takes over your unconfirmed launches.
 
-Stop for good when a charter stop condition holds. End with `--state ended` and a handoff note that starts
-`Stop condition met:` and says which one. The keeper then leaves the work alone until the charter changes.
+Stop for good on an explicit owner stop, not queue completion or dependency/external waits.
+End with `--state ended` and a handoff note that starts `Stop condition met:` and records that
+owner instruction. The keeper then leaves the work alone until the charter changes.
+Missing/invalid authority or an unrecoverable safety failure requires a visible reason and
+owner escalation, not a success-shaped queue-completion stop.

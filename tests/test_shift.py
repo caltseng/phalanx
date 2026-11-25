@@ -24,7 +24,7 @@ CHARTER = """goal = "Deliver the pilot's queued work"
 repositories = ["repo"]
 allowed_actions = ["launch and replace writer sessions"]
 escalate = ["anything outside the goal"]
-stop_when = ["the queue is empty"]
+stop_when = ["the owner ends the run"]
 """
 
 
@@ -52,10 +52,10 @@ class CharterTest(unittest.TestCase):
         return shift.load_charter(dict(self.config, charter=str(path)))
 
     def test_charter_is_validated_and_revisioned(self):
-        charter = self.charter(CHARTER + "[shift]\nmax_wakes = 2\n")
+        charter = self.charter(CHARTER + "[shift]\nmax_hours = 2\n")
         self.assertEqual(charter["revision"], hashlib.sha256(Path(self.config["charter"]).read_bytes()).hexdigest())
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2, "max_compactions": 5})
-        for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the queue is empty"]', "[]"),
+        self.assertEqual(charter["shift"], {"max_hours": 2})
+        for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the owner ends the run"]', "[]"),
                      CHARTER + "[shift]\nmax_hours = 0\n",
                      CHARTER + "[shift]\nmax_hours = true\n", "goal = [\n"):
             with self.subTest(text=text), self.assertRaises(shift.ShiftError):
@@ -71,36 +71,28 @@ class CharterTest(unittest.TestCase):
                         "concurrency moved to dispatch settings; remove it from the charter"):
                     self.charter(CHARTER + f"[shift]\n{field} = {value}\n")
 
-    def test_compaction_threshold_is_a_positive_integer_charter_setting(self):
-        for value in ("0", "-1", "true", "1.5", '"5"'):
-            with self.subTest(value=value), self.assertRaisesRegex(shift.ShiftError, "max_compactions"):
-                self.charter(CHARTER + f"[shift]\nmax_compactions = {value}\n")
-        for threshold in (1, 3, 8):
-            with self.subTest(threshold=threshold):
-                charter = self.charter(CHARTER + f"[shift]\nmax_compactions = {threshold}\n")
-                now = datetime.now(UTC)
-                captain = {"created_at": now.isoformat(), "wake_count": 0}
-                for count in (threshold - 1, threshold, threshold + 1):
-                    result = shift.shift_bounds(dict(captain, compaction_count=count), charter, now)
-                    self.assertEqual(bool(result["handoff_due"]), count >= threshold)
-                    self.assertEqual(result["max_compactions"], threshold)
+    def test_charter_rejects_retired_count_limits_with_elapsed_time_guidance(self):
+        for field in ("max_wakes", "max_compactions"):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    shift.ShiftError, "rotation is elapsed-time only; remove"):
+                self.charter(CHARTER + f"[shift]\n{field} = 5\n")
 
-    def test_shift_bounds_keep_unknown_counts_and_independent_age_and_wake_limits(self):
+    def test_rotation_is_due_at_four_elapsed_hours_regardless_of_counts_or_queue_stop_prose(self):
         charter = self.charter(CHARTER)
+        old_charter = self.charter(CHARTER.replace("the owner ends the run", "the queue is empty"))
         now = datetime.now(UTC)
         captain = {"created_at": now.isoformat(), "wake_count": 0}
-        for count in (None, 0, 1, 4, 5, 6):
-            with self.subTest(count=count):
-                current = dict(captain, compaction_count=count)
-                bounds = shift.shift_bounds(current, charter, now)
-                self.assertEqual(bounds["compaction_count"], count)
-                self.assertEqual(bounds["handoff_due"],
-                                 ["successful compaction count reached 5"] if count in (5, 6) else [])
-                for key, value, reason in (
-                        ("created_at", (now - timedelta(hours=4)).isoformat(), "shift age reached 4 h"),
-                        ("wake_count", 48, "wake count reached 48")):
-                    due = shift.shift_bounds(dict(current, **{key: value}), charter, now)["handoff_due"]
-                    self.assertIn(reason, due)
+        for policy in (charter, old_charter):
+            for count in (None, 0, 5, 100):
+                for wakes in (0, 48, 1000):
+                    for seconds in (21 * 60, 4 * 3600 - 1, 4 * 3600, 4 * 3600 + 1):
+                        with self.subTest(count=count, wakes=wakes, seconds=seconds, policy=policy["stop_when"]):
+                            current = dict(captain, wake_count=wakes, compaction_count=count)
+                            bounds = shift.shift_bounds(current, policy, now + timedelta(seconds=seconds))
+                            self.assertEqual(bounds["compaction_count"], count)
+                            self.assertEqual(bounds["wakes"], wakes)
+                            self.assertEqual(bounds["handoff_due"],
+                                             ["shift age reached 4 h"] if seconds >= 4 * 3600 else [])
         self.assertIsNone(shift.shift_bounds(captain, charter, now)["compaction_count"])
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
@@ -205,7 +197,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         git(checkout, "push", "-q", "origin", "main")
         (root / "charter").mkdir()
         charter = root / "charter" / "charter.toml"
-        charter.write_text(CHARTER + "[shift]\nmax_wakes = 2\n", encoding="utf-8")
+        charter.write_text(CHARTER + "[shift]\nmax_hours = 4\n", encoding="utf-8")
         self.config = {"base_url": self.url, "runtime": "any-runtime", "worktrees": str(root / "worktrees"),
                        "charter": str(charter), "session_workspace": "ws-1",
                        "repositories": {"repo": {"checkout": str(checkout), "base_branch": "main"}}}
@@ -401,7 +393,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         beat = shift.heartbeat(self.api, self.charter, captain, wake=True, handoff_note="Pilot running")
         self.assertEqual((beat["captain"]["wake_count"], beat["captain"]["focus"], beat["captain"]["sessions"]),
                          (2, [item["id"]], [{"id": "s-1", "name": launched["session_name"], "first_seen": first_seen}]))
-        self.assertEqual(beat["shift"]["handoff_due"], ["wake count reached 2"])
+        self.assertEqual(beat["shift"]["handoff_due"], [])
         ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
         self.assertEqual((ended["state"], ended["handoff_note"], ended["wake_count"]), ("ended", "Pilot running", 2))
 
@@ -424,34 +416,43 @@ class ShiftTest(ServerFixture, unittest.TestCase):
             with self.subTest(count=count, expected=expected):
                 beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=count)
                 self.assertEqual(beat["captain"]["compaction_count"], expected)
-                self.assertEqual(beat["shift"]["handoff_due"], ["successful compaction count reached 5"])
+                self.assertEqual(beat["shift"]["handoff_due"], [])
         ended = shift.heartbeat(self.api, self.charter, captain, state="ended")["captain"]
         self.assertEqual(ended["compaction_count"], 6)
         successor = shift.start(self.api, self.charter, "new-native-session", captain)["captain"]
         self.assertIsNone(successor["compaction_count"])
         self.assertEqual(shift.status(self.api, self.charter, captain)["captain"]["compaction_count"], 6)
 
-    def test_heartbeat_rereads_changed_compaction_threshold_without_resetting_known_total(self):
+    def test_heartbeat_rereads_elapsed_time_bound_without_resetting_registration_or_telemetry(self):
         captain = shift.start(self.api, self.charter, "native-session")["captain"]["id"]
-        beat = shift.heartbeat(self.api, self.charter, captain, compaction_count=4)
+        beat = shift.heartbeat(self.api, self.charter, captain, wake=True, compaction_count=100)
         self.assertEqual(beat["shift"]["handoff_due"], [])
-        Path(self.config["charter"]).write_text(CHARTER + "[shift]\nmax_compactions = 3\n", encoding="utf-8")
+        created_at = beat["captain"]["created_at"]
+        Path(self.config["charter"]).write_text(CHARTER + "[shift]\nmax_hours = 1\n", encoding="utf-8")
         changed = shift.load_charter(self.config)
-        beat = shift.heartbeat(self.api, changed, captain)
-        self.assertEqual(beat["captain"]["compaction_count"], 4)
+        with mock.patch.object(shift, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(created_at) + timedelta(hours=1)
+            beat = shift.heartbeat(self.api, changed, captain)
+        self.assertEqual(beat["captain"]["compaction_count"], 100)
+        self.assertEqual(beat["captain"]["wake_count"], 1)
+        self.assertEqual(beat["captain"]["created_at"], created_at)
         self.assertEqual(beat["captain"]["charter_revision"], changed["revision"])
-        self.assertEqual(beat["shift"]["handoff_due"], ["successful compaction count reached 3"])
+        self.assertEqual(beat["shift"]["handoff_due"], ["shift age reached 1 h"])
 
     def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
         captain = " ".join(shift.prompt("captain").split())
         keeper = " ".join(shift.prompt("keeper").split())
         for prompt in (captain, keeper):
-            self.assertIn("[shift].max_compactions", prompt)
+            self.assertIn("rotation is elapsed-time only", prompt)
+            self.assertIn("[shift].max_hours", prompt)
             self.assertIn("checkpoint, not a mandatory handoff", prompt)
             self.assertIn("first-compaction fallback", prompt)
-            self.assertNotIn("at your first compaction", prompt)
+            self.assertNotIn("max_compactions", prompt)
+        self.assertIn("five-minute wake/reconciliation schedule", captain)
+        self.assertIn("Stop for good on an explicit owner stop, not queue completion", captain)
+        self.assertIn("dependency/external waits", captain)
         for signal in ("three failed actions in a row", "self-raised deviation flag",
-                       "missed heartbeat noticed on waking", "Elapsed-time/wake bounds still apply"):
+                       "missed heartbeat noticed on waking"):
             self.assertIn(signal, captain)
 
     def test_interrupted_registration_reply_replays_the_pending_reservation(self):

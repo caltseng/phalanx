@@ -1,5 +1,6 @@
 from argparse import Namespace
 from contextlib import nullcontext, redirect_stdout
+from datetime import timedelta
 import hashlib
 import io
 import json
@@ -67,13 +68,15 @@ class DeploymentTest(unittest.TestCase):
         config["repositories"] = {"repo": {"checkout": str(self.root / "checkout")}}
         charter = shift.load_charter(config)
         self.assertEqual(charter["repositories"], ["repo"])
-        self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 48, "max_compactions": 5})
+        self.assertEqual(charter["shift"], {"max_hours": 4})
         now = shift.datetime.now(shift.UTC)
-        captain = {"created_at": now.isoformat(), "wake_count": 0}
+        captain = {"created_at": now.isoformat(), "wake_count": 1000}
         for count in (4, 5, 6):
             with self.subTest(count=count):
                 bounds = shift.shift_bounds(dict(captain, compaction_count=count), charter, now)
-                self.assertEqual(bool(bounds["handoff_due"]), count >= 5)
+                self.assertEqual(bounds["handoff_due"], [])
+                bounds = shift.shift_bounds(captain, charter, now + timedelta(hours=4))
+                self.assertEqual(bounds["handoff_due"], ["shift age reached 4 h"])
 
     def test_init_refuses_existing_directory_without_touching_contents(self):
         home = self.install()
