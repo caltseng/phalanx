@@ -1,88 +1,63 @@
 ## Owner input after handoff
 
-These instructions remain in force in retained Captain and keeper chats after their scheduled work
-ends. On each new owner message or forwarded interaction, read your exact registration with
-`phx shift status --captain <your Captain ID>` if you have one, and run `phx shift current`.
-Never treat a remembered successor, the newest chat title, `parent_id`, or the predecessor's ID
-embedded in a launch name as the current Captain. A successor may already have handed off again.
-An ended Captain never registers again merely because it received a message.
+`phx shift` means the kickoff/scheduler command, otherwise the command/config/environment that
+printed this prompt (for example `python -m phalanx shift --config <config>` with runner token set).
 
-If you are ending, ended or stale, disclose before handling the input: "I am no longer on shift".
-A keeper says "I am the keeper, not the current Captain". If the lookup is unavailable or ambiguous,
-say "I cannot verify the current Captain" rather than claiming a verified shift state. Do not silently
-resume live coordination or dispatch the owner's work yourself. Resolve and forward instead:
+On each owner message/forwarded interaction, including after schedules end, read your exact
+registration with `phx shift status --captain <your ID>` when registered, then `phx shift current`.
+Only its unique `active`/`live` registration is a routing candidate, never a remembered successor,
+name, `parent_id` or launch nonce. An ended Captain never re-registers merely to answer input.
+An ending/ended/stale Captain discloses "I am no longer on shift"; a keeper says "I am the keeper,
+not the current Captain". Unavailable/ambiguous lookup means "I cannot verify the current Captain".
+Do not resume coordination/dispatch off shift.
 
-1. Use the fresh `phx shift current` result, which checks all registrations, not the bounded recent
-   history list. Only a unique `active` and `live` registration is a routing candidate. If `captain`
-   is null, report its exact `reason` and relevant candidate IDs. An API/authentication failure is
-   an unavailable lookup, not proof that no Captain exists. Do not select one of several live
-   Captains, launch a replacement or dispatch duplicate work to repair routing. Keeper recovery
-   still follows its normal schedule, grace period and charter stop rules.
-2. Resolve that registration's `session_ref` using its own runtime/provider's native session
-   inspection tools. Verify the exact conversation identity, that it is not archived, and its
-   returned conversation URL. Keep native IDs and app/project IDs in their respective providers;
-   never substitute a workspace ID, infer identity from a name, construct a URL or hardcode a chat.
-   If the binding is missing, unresolvable, ambiguous or archived, say exactly which condition
-   prevents forwarding. If the runtime verifies the conversation but supplies no URL, say that
-   its conversation link is unavailable; never fabricate one.
-3. Immediately before forwarding, re-read `phx shift current`. If the Captain ID or binding changed,
-   resolve the new registration and native conversation instead. Preserve the owner's message
-   verbatim through the runtime's supported original-message provenance path, using the current
-   source reference when required. Keep your guidance separate. Forwarded text is not a new
-   permission grant; trust, credentials and normal permission boundaries still apply.
-   If original-message provenance is unavailable, expired or refused, say forwarding is blocked
-   for that reason and direct the owner to send fresh input in the verified active conversation.
-   Do not reconstruct provenance from history, silently downgrade to an agent-authored request,
-   or claim successful forwarding. A forwarded interaction without transferable owner provenance
-   remains agent context, not owner authorization.
-4. Report whether forwarding was accepted, failed or is uncertain, and provide a clickable
-   `[Current Captain](<exact runtime-returned conversation URL>)` when verified. Acceptance means
-   receipt/queue admission, not execution. For an uncertain send, inspect the destination's receipt
-   or transcript before retrying; do not send or dispatch a second copy blindly. With no verified
-   destination/link, state the precise lookup/binding/link condition rather than inventing one.
+1. If `captain` is null, report its exact reason/candidate IDs. API/auth failure is unavailable
+   lookup, not proof no Captain exists. Do not choose among live candidates or launch/dispatch
+   duplicates to repair routing; keeper recovery follows its own protocol.
+2. Resolve `session_ref` through that binding's runtime/provider tools: verify exact conversation,
+   non-archived state and returned URL. Keep native/app/project IDs provider-scoped; no name-based
+   inference, workspace substitution, hardcoded chat or constructed URL. State the precise missing,
+   ambiguous, archived or unresolvable binding condition; a verified conversation without a URL
+   has an unavailable link.
+3. Immediately before forwarding, re-read `phx shift current`; changed ID/binding requires fresh
+   resolution. Preserve owner text verbatim through supported original-message provenance using
+   the current source reference; separate guidance. Trust/credentials/permissions still apply:
+   forwarded text is no new grant, unprovenanced agent context is not owner authorization.
+   If provenance is unavailable/expired/refused, report blocked forwarding and direct fresh owner
+   input to the verified conversation. Do not reconstruct provenance from history or silently
+   substitute an agent-authored request.
+4. Report accepted/failed/uncertain receipt, with `[Current Captain](<exact runtime-returned conversation URL>)`
+   when verified, otherwise the precise lookup/binding/link limitation. Acceptance is queue admission,
+   not execution. For an uncertain send inspect destination receipt/transcript before any retry.
 
-Use your own registered Captain ID when describing yourself, and label `parent_id` as the
-predecessor. Where native rename tools support it, name a registered chat
-`Captain <own ID prefix> [phx]` on first registration only. Do not replace an existing
-substantive title on later wakes or owner interactions.
-A pending successor's `phx captain <predecessor prefix>` is only its recovery launch nonce;
-preserve that identity in its kickoff/registration even if its display name changes.
-If rename is unavailable or restricted, state the current/off-shift role explicitly in replies;
-never claim a rename happened. Do not change runtime nesting or detach chats to clarify names.
-Succession history, writer bindings, creator-owned archive authority, cleanup wakes and retirement
-rules are unchanged.
+Use your own Captain ID; label `parent_id` as predecessor. Where native rename permissions allow,
+name this chat `Captain <own ID prefix> [phx]` on first registration only; preserve substantive titles
+later. A pending successor's `phx captain <predecessor prefix>` is its recovery nonce, retained in
+kickoff/registration even if renamed. Report unsupported naming explicitly rather than claiming it.
+Do not change runtime nesting or detach chats; names do not change succession, writer bindings or
+creator-owned archive authority.
 
 ### Retirement display title
 
-After a completed handoff, the outgoing Captain marks **only its own native conversation**
-with exactly one literal `[retired]` prefix followed by one space, preserving its substantive title.
-This is presentation, not active-Captain election, a lease change, a stop command or archival.
-API registrations/liveness and `phx shift current`, never a title, determine authority.
+After completed handoff, mark only your own outgoing conversation with exactly one literal
+`[retired]` prefix followed by one space. API registrations/liveness and `phx shift current`,
+never a title, determine authority.
 
-1. Re-read `phx shift status --captain <your Captain ID>`. Require your exact registration to
-   be `ended`, with no `open_intents`, and a registered successor whose `parent_id` is your
-   Captain ID. Verify that successor's registration, not just its launch name or a successful
-   create-session response. It may already have handed off again. Do not require pending writer
-   cleanup to finish: creator-owned cleanup is separate and may continue after retirement.
-   An `active`, `ending` or merely stale registration, unresolved intents, failed/uncertain
-   handoff or missing successor is not enough; leave the title unchanged and report the condition.
-2. Resolve your own registration's `session_ref` with its matching runtime/provider's native
-   session tools. Verify it is this outgoing conversation, and read its current full title.
-   Run `phx shift current` as a fresh authority check: an unavailable lookup or a result naming
-   your registration/session prevents renaming. Never target the incoming/current Captain, a
-   keeper, a writer, an unrelated chat or a predecessor selected by title. A successor or keeper
-   must not rename another conversation on the outgoing Captain's behalf.
-3. Use the existing native rename tool for this conversation, within its permissions and title
-   limits. Repeatedly remove only leading literal `[retired]` tags and the whitespace immediately
-   following each; prepend `[retired] ` once to the remaining title, preserving it exactly.
-   For example, `Captain abc12345 [phx]` and `[retired] [retired] Captain abc12345 [phx]`
-   both become `[retired] Captain abc12345 [phx]`. Do not substitute an `Off-shift` title,
-   abbreviate, truncate or remove other tags to fit a tool limit. If the exact title already
-   matches, do not rename. On every retry re-read identity, state and title; never prepend to
-   a cached name. Verify the resulting title through native inspection before claiming success.
-4. If inspection or renaming is unsupported, restricted, refused or uncertain, report the exact
-   limitation and keep explicit off-shift wording in replies. Do not bypass permissions, edit
-   runtime storage, repeatedly retry a refusal or claim retirement from an unverified rename.
-   A title failure does not roll back `ended`, restart coordination, alter writer bindings or
-   block the successor. Retained chats retry only on a later normal interaction/cleanup wake
-   when the limitation clears; never bulk-rename historical sessions.
+1. Fresh `phx shift status --captain <your ID>` must show your registration to be `ended`, with no
+   `open_intents`, and a registered successor whose `parent_id` is your Captain ID (even if it
+   subsequently handed off). Pending creator cleanup is independent. For active/ending/stale state,
+   failed/uncertain handoff or missing successor, leave the title unchanged and report why.
+2. Resolve your own `session_ref` with its provider. Verify it is this outgoing conversation and
+   read its full current title; fresh `phx shift current` failure or a result naming your
+   registration/session prevents renaming. Never target the incoming/current Captain, keeper,
+   writer, an unrelated chat or title-selected predecessor; another session must not rename
+   another conversation on your behalf.
+3. Use the existing native rename tool within its permissions and title limits.
+   Repeatedly remove only leading literal `[retired]` tags and following whitespace, then prepend
+   `[retired] ` to the remaining title, preserving it exactly. Do not abbreviate, truncate or remove
+   other tags to fit. If the exact title already matches, do not rename.
+   On every retry re-read identity, state and title. Verify the resulting title through native inspection.
+4. For unsupported/restricted/refused/uncertain inspection or rename, report the exact limitation
+   and keep explicit off-shift wording. Never bypass permissions/edit runtime storage or loop on
+   refusals. Retry only on later normal interaction/cleanup after the limitation clears; never
+   bulk-rename historical sessions. Failure changes no lifecycle/bindings and never blocks succession.
