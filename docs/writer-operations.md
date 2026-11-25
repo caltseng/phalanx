@@ -155,6 +155,32 @@ a question during a delivery wait with no attempt; do not invent an attempt or C
 If the execution already completed, preserve it and attach the classification/follow-up through
 existing audit/action records rather than pretending to edit the closed scope.
 
+For example, the authorized operator can use PowerShell with the existing private environment.
+Set `$item` to the verified item ID. Prepare `$approvedCriteria` as the **complete** approved criteria
+list from the exact `$view` read below, preserving every unrelated criterion and measured miss.
+Do not print the headers or credential environment:
+
+```powershell
+$api = $env:PHALANX_API_URL.TrimEnd('/')
+$headers = @{ Authorization = "Bearer $env:PHALANX_OWNER_TOKEN" }
+$view = Invoke-RestMethod "$api/v1/items/$item" -Headers $headers
+# Prepare $approvedCriteria from this exact $view.acceptance_criteria before continuing.
+$execution = $view.execution.id
+$route = "$api/v1/items/$item/executions/$execution"
+$body = @{ expected_version = $view.execution.version
+           acceptance_criteria = $approvedCriteria
+           steered_by = "captain" } | ConvertTo-Json -Depth 8
+$headers["Idempotency-Key"] = "ordinary-timing-$execution-$($view.execution.version)"
+$receipt = Invoke-RestMethod $route -Method Patch -Headers $headers `
+    -ContentType "application/json" -Body $body
+$timeline = Invoke-RestMethod "$route/timeline" -Headers $headers
+```
+
+Verify the inspected execution is still the intended attempt-free delivery wait before the PATCH.
+An uncertain response is not a new edit: retry the exact body/key or read the timeline first.
+Never refresh only the version while reusing criteria prepared from an older view.
+The existing queued-only rule applies on older APIs; HTTP 409 is not permission to modify storage.
+
 Verify the receipt's version and timeline before/after criteria and unchanged writer/allocations.
 Relay accepted classification and next action to that same retained writer through supported
 messaging. Fresh independent review must cover the effective scope at the current exact head;
