@@ -18,6 +18,7 @@ from .operator_web import assets as operator_assets, router as operator_web_rout
 from .store import connect, initialize, write_transaction
 from .writers import router as writers_router
 from .usage import router as usage_router
+from .issue_scout import router as issue_scout_router
 
 
 @asynccontextmanager
@@ -91,3 +92,4 @@ app.include_router(flags_router)
 app.include_router(writers_router)
 app.include_router(usage_router)
 app.include_router(muster_router)
+app.include_router(issue_scout_router)

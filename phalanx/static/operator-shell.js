@@ -136,6 +136,16 @@
         }
         return result;
       },
+      async decideScout(issue, decision) {
+        const path = "/operator/api/issue-scout/" + encodeURIComponent(issue.repository_id)
+          + "/" + issue.number + "/decision";
+        const response = await transport.write(path, {
+          method: "POST",
+          body: JSON.stringify({ expected_fingerprint: issue.fingerprint, decision })
+        });
+        if (!response.ok) throw new Error("Decision rejected (HTTP " + response.status + "). Refresh before retrying.");
+        return response.json();
+      },
       boardAccess: signal => read(EXECUTIONS + "?limit=1", signal),
       capacity: signal => read("/operator/api/dispatch/settings", signal),
       async saveCapacity(building, maximum) {

@@ -283,7 +283,8 @@ class CharterTest(unittest.TestCase):
                    "heartbeat_at": (created + timedelta(hours=24)).isoformat(),
                    "reinforcement": {"due": False}}
         api = mock.Mock(return_value=captain)
-        with mock.patch.object(shift, "heartbeat", return_value={"captain": captain, "charter": charter}):
+        with (mock.patch.object(shift, "heartbeat", return_value={"captain": captain, "charter": charter}),
+              mock.patch("phalanx.issue_scout_client.scout", return_value={"state": "disabled"})):
             result = shift.wake(api, charter, "captain", config=self.config)
         self.assertEqual(result["shift"]["handoff_due"], ["shift age reached 24 h"])
 

@@ -12,16 +12,10 @@ from urllib.parse import quote, urlencode, urljoin, urlsplit
 from urllib.request import Request, build_opener
 
 from .api_client import NoRedirect
+from .pr_models import github_repository
 
 _SHA = re.compile(r"[0-9a-fA-F]{40}")
 _NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
-
-
-def github_repository(remote):
-    from .pr_models import GITHUB_REMOTE
-
-    match = GITHUB_REMOTE.fullmatch(remote)
-    return match[1].lower() if match else None
 
 
 class GitHubError(Exception):
@@ -286,6 +280,57 @@ class GitHubClient:
         except (KeyError, TypeError, ValueError):
             raise GitHubError(operation, "invalid issue response (expected an issue, not a PR)") from None
         return issue
+
+    def authenticated_user(self) -> dict:
+        operation = "verify scouting identity"
+        data, _ = self._request(operation, "GET", f"{self._api_url}/user")
+        if (not isinstance(data, dict) or type(data.get("id")) is not int or data["id"] < 1
+                or not isinstance(data.get("login"), str)
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", data["login"])):
+            raise GitHubError(operation, "invalid authenticated user response")
+        return {"id": data["id"], "login": data["login"]}
+
+    def scout_issues_page(self, page: int) -> tuple[list[dict], bool]:
+        """Stable created-order pages include closures; callers durably own the cursor."""
+        from datetime import datetime
+
+        if type(page) is not int or page < 1:
+            raise ValueError("a positive scout page is required")
+        operation = "list scouting issues"
+        data, _ = self._request(
+            operation, "GET",
+            f"{self._repo_url}/issues?state=all&sort=created&direction=asc&per_page=30&page={page}")
+        if not isinstance(data, list) or len(data) > 30:
+            raise GitHubError(operation, "invalid issue page")
+        issues = []
+        for row in data:
+            if not isinstance(row, dict):
+                raise GitHubError(operation, "invalid issue page entry")
+            if "pull_request" in row:
+                continue
+            try:
+                user = row["user"]
+                login, author_id = (user["login"], user["id"]) if user else (None, None)
+                if (
+                    type(row["number"]) is not int or row["number"] < 1
+                    or row["html_url"].casefold() != self._issue_web_url(row["number"]).casefold()
+                    or row["state"] not in ("open", "closed")
+                    or not isinstance(row["title"], str) or not row["title"].strip()
+                    or len(row["title"]) > 16000
+                    or row["body"] is not None and not isinstance(row["body"], str)
+                    or len(row["body"] or "") > 1000000
+                    or login is not None and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,92}(?:\[bot\])?", login)
+                    or author_id is not None and (type(author_id) is not int or author_id < 1)
+                    or datetime.fromisoformat(row["updated_at"]).utcoffset() is None
+                ):
+                    raise ValueError("unexpected issue fields")
+            except (KeyError, TypeError, ValueError, AttributeError):
+                raise GitHubError(operation, "invalid scouting issue response") from None
+            issues.append({
+                "number": row["number"], "author_login": login, "author_id": author_id,
+                "state": row["state"], "title": row["title"], "body": row["body"] or "",
+                "updated_at": row["updated_at"]})
+        return issues, len(data) == 30
 
     def _issue_web_url(self, number: int) -> str:
         endpoint = urlsplit(self._api_url)

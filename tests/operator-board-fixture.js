@@ -137,10 +137,27 @@
   let releaseOverview;
   const firstOverview = new Promise(resolve => { releaseOverview = resolve; });
   let overviewReady = false;
+  const scoutDecisions = [];
+  let scoutNeeds = [1, 2].map(number => ({
+    repository_id: "example", number, url: "https://github.com/example/project/issues/" + number,
+    author_login: "<img src=x>", reason: "Other author requires owner approval.",
+    fingerprint: String(number).repeat(64)
+  }));
+  source.decideScout = async (issue, decision) => {
+    scoutDecisions.push([issue.number, decision, issue.fingerprint]);
+    scoutNeeds = scoutNeeds.filter(row => row.number !== issue.number);
+  };
   source.overview = async () => {
     if (offline) throw new Error("API offline");
     if (!overviewReady) await firstOverview;
-    return { sections: { needs_you: 10, running: 200, queued: 9390, blocked: 0, waiting_on_checks: 400 } };
+    return {
+      sections: { needs_you: 10, running: 200, queued: 9390, blocked: 0, waiting_on_checks: 400 },
+      issue_scout: { state: "failed", settings: { due_at: now },
+        counts: { imported: 3, needs_owner: scoutNeeds.length, approved: scoutDecisions.filter(row => row[1] === "approved").length },
+        last_pass: { failure_kind: "github", repository_index: 0, page: 2 },
+        resume_trigger: "Restore GitHub access; next Captain wake resumes." },
+      issue_scout_needs_owner: scoutNeeds
+    };
   };
 
   const tick = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -256,6 +273,21 @@
     releaseOpen();
     await tick();
     assert(root.querySelector(".h-live"), "Live appears after all enabled reads succeed");
+    assert(section("issue-scout").textContent.includes("Failure: github") &&
+      section("issue-scout").textContent.includes("page 2"), "Scouting exposes real failure and durable cursor");
+    assert(!section("needs").querySelector("img") &&
+      section("needs").textContent.includes("<img src=x>"), "Scouted author is untrusted text");
+    const scoutButton = name => [...section("needs").querySelectorAll("button")].find(node => node.textContent === name);
+    scoutButton("Approve intake").click();
+    await tick();
+    assert(section("issue-scout").textContent.includes("approved waiting for recheck (not queued): 1"),
+      "Approval remains visibly distinct from queued intake after the decision row leaves Needs you");
+    scoutButton("Decline").click();
+    await tick();
+    assert(JSON.stringify(scoutDecisions.map(row => row.slice(0, 2))) === '[[1,"approved"],[2,"declined"]]' &&
+      scoutDecisions.every(row => row[2].length === 64), "Needs you sends explicit revision-bound owner decisions");
+    assert(!scoutButton("Approve intake") && !scoutButton("Decline"),
+      "Resolved scouting decisions leave Needs you without fabricating a queued work row");
     const activeAge = item("run").closest("li").querySelector(".age");
     const queuedAge = item("queue").closest("li").querySelector(".age");
     assert(activeAge.textContent.startsWith("active ") &&

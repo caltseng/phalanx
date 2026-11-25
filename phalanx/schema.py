@@ -47,6 +47,7 @@ SCHEMA = (
         CHECK ((status IN ('completed', 'failed', 'cancelled'))
                = (json_type(state_json, '$.final_output') = 'object'))
     )""",
+    """CREATE INDEX work_items_by_repository ON work_items(repository_id, created_at, id)""",
     """CREATE UNIQUE INDEX one_open_execution ON executions(item_id)
         WHERE status NOT IN ('completed', 'failed', 'cancelled')""",
     """CREATE INDEX executions_by_item ON executions(item_id, created_at, id)""",
@@ -94,6 +95,67 @@ SCHEMA = (
         max_writers INTEGER NOT NULL DEFAULT 10 CHECK (typeof(max_writers) = 'integer' AND max_writers > 0),
         max_building_writers INTEGER NOT NULL DEFAULT 5
             CHECK (typeof(max_building_writers) = 'integer' AND max_building_writers > 0)
+    )""",
+    """CREATE TABLE issue_scout_settings (
+        id INTEGER PRIMARY KEY CHECK (id=1),
+        revision INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+        cadence_minutes INTEGER NOT NULL DEFAULT 60,
+        author_login TEXT,
+        author_id INTEGER,
+        repositories_json TEXT NOT NULL DEFAULT '[]',
+        due_at TEXT,
+        changed_by TEXT,
+        updated_at TEXT
+    )""",
+    "INSERT INTO issue_scout_settings (id) VALUES (1)",
+    """CREATE TABLE issue_scout_passes (
+        id TEXT PRIMARY KEY NOT NULL,
+        revision INTEGER NOT NULL,
+        state TEXT NOT NULL,
+        repository_index INTEGER NOT NULL,
+        page INTEGER NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        claim_id TEXT,
+        captain_id TEXT REFERENCES captains(id),
+        lease_until TEXT,
+        retry_at TEXT,
+        failure_kind TEXT,
+        failure_status INTEGER,
+        failures INTEGER NOT NULL DEFAULT 0,
+        counts_json TEXT NOT NULL DEFAULT '{}'
+    )""",
+    """CREATE UNIQUE INDEX one_active_issue_scout ON issue_scout_passes ((1))
+       WHERE completed_at IS NULL""",
+    """CREATE TABLE issue_sources (
+        repository_id TEXT NOT NULL REFERENCES repositories(id),
+        number INTEGER NOT NULL,
+        url TEXT NOT NULL,
+        author_login TEXT,
+        author_id INTEGER,
+        fingerprint TEXT NOT NULL,
+        issue_state TEXT NOT NULL,
+        state TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        item_id TEXT REFERENCES work_items(id),
+        decision TEXT,
+        decided_by TEXT,
+        decided_at TEXT,
+        observed_by TEXT NOT NULL REFERENCES captains(id),
+        observed_at TEXT NOT NULL,
+        resume_trigger TEXT NOT NULL,
+        PRIMARY KEY (repository_id, number)
+    )""",
+    """CREATE INDEX issue_sources_needs_owner ON issue_sources(state, observed_at, repository_id, number)""",
+    """CREATE TABLE issue_scout_decisions (
+        repository_id TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        fingerprint TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        decided_by TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        FOREIGN KEY(repository_id, number) REFERENCES issue_sources(repository_id, number)
     )""",
     """CREATE TABLE report_finalizations (
         execution_id TEXT PRIMARY KEY NOT NULL,

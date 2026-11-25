@@ -25,6 +25,7 @@ flowchart LR
     Keeper["Runtime-scheduled keeper"] -->|Native session tools| Captain
     Charter["Operator charter and shift config"] --> Captain
     Captain["Native Captain chat: shift"] -->|Runner or owner bearer: bindings, actions, heartbeat| API
+    Captain -->|One fenced issue-scout page per existing wake; local GitHub credential| GH
     Captain -->|Native launch, confirm, coordinate| Writer
     Writer["Native writer session: work"] -->|Scoped bearer: attempts, progress, results, questions| API
     Writer -->|Work in isolated item worktree| Git["Local Git and GitHub credentials"]
@@ -51,6 +52,7 @@ It does not launch sessions, write GitHub, or merge PRs.
 | Execution host | Mapped checkouts, isolated item worktrees, Git credentials, prepared checks environments, scoped credential files and artifacts | [workspaces](../phalanx/workspaces.py), [configuration](configuration.md) |
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
 | Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [models](../phalanx/usage_models.py), [API/projection](../phalanx/usage.py), [schema](../phalanx/schema.py) |
+| Periodic issue scouting | Owner settings, due/cursor, fenced page claims, retry and source/owner-decision metadata in server SQLite; local credential verifies configured login/ID; ordinary intake owns admitted work | [server](../phalanx/issue_scout.py), [wake client](../phalanx/issue_scout_client.py), [activation](direct-path.md#periodic-github-issue-scouting) |
 
 Operator summary waits are selected in `operator_api.summary_wait`: writerless queued
 work uses only `pickup.decision`; otherwise Building acquisition, delivery rework/handoff,
@@ -117,6 +119,10 @@ local shorthand, not a separately installed executable.
   or a draft publication ceiling explicitly.
 - `ingest-issue` reads a registered github.com issue/comments with the local GitHub
   credential and submits an immutable snapshot. It is not a webhook, poller or sync.
+- Optional periodic scouting is a separate, owner-enabled part of `shift wake`, with a
+  durable server cursor and no separate scout session/scheduler. Other-author decisions
+  use Scribe Needs you. Claim/completion/failure and metadata survive Captain rotation;
+  bodies are only stored in admitted work, not scout diagnostics.
 - `onboard` registers/verifies a remote, clone, mapping and proposed validation entry.
   The operator still prepares checks environments, copies reconciler mappings and
   grants runtime trust. It does not start sessions.

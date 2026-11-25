@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
-from . import dispatch, pickup
+from . import dispatch, issue_scout, pickup
 from .auth import authenticate_board_read
 from .captains import availability_reports
 from .display_text import reason_text, short_title
@@ -183,7 +183,8 @@ def conditional_read(request, response, db, now, context=None):
     holds = tuple(sorted(context["pickup"]["holds"]))
     sessions = tuple(sorted(context["session_reports"].items(), key=repr))
     live_pickup = context["pickup"]["captains"]
-    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}:{live_pickup}"
+    scouting = issue_scout.status(db) if request.url.path.endswith("/overview") else None
+    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}:{live_pickup}:{scouting}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, no-cache"
@@ -546,6 +547,8 @@ def overview(request: Request, response: Response):
                WHERE status = 'queued' AND dependency_wait_json IS NULL AND ready_since <= ?""",
             (now_ms,),
         ).fetchone()[0]
+        scouting = issue_scout.status(db)
+        scout_needs_owner = issue_scout.needs_owner(db)
     sections = {"needs_you": 0, "running": 0, "waiting_on_checks": 0, "queued": 0, "blocked": 0}
     for row in open_counts:
         if row["status"] == Status.QUEUED:
@@ -557,7 +560,10 @@ def overview(request: Request, response: Response):
     closed = {name: 0 for name in Outcome.__args__}
     closed.update({row["outcome"]: row["count"] for row in closed_counts})
     sections["delivered_24h"] = sum(closed[name] for name in DELIVERED)
+    sections["needs_you"] += scouting["counts"].get("needs_owner", 0)
     return {
+        "issue_scout": scouting,
+        "issue_scout_needs_owner": scout_needs_owner,
         "generated_at": stamp(now),
         "sections": sections,
         "closed_24h": closed,
