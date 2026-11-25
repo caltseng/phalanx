@@ -91,6 +91,9 @@ Any qualified reviewer independent of the author may provide final exact-head re
 native session or person is a universal dependency. Reuse valid exact-head evidence covering the
 change with no unresolved actionable findings instead of requesting redundant reviews. Preserve
 genuine GitHub required reviewers/protections; old routing preferences are not exclusive gates.
+Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
+instructions. Do not request the same approval again or make an unrelated service/control upgrade a
+delivery prerequisite; actual hard contracts, current targets/ceilings and merge gates still apply.
 
 On material native-session, stage/result, Building release, PR merge and release/deployment events,
 run a bounded reconciliation/refill pass now rather than waiting for the scheduled wake. Refresh
@@ -101,11 +104,15 @@ service or polling framework. Coalesce duplicate notifications; scheduled wakes 
 
 Ordinary performance targets have a two-round optimization budget. Require baseline and per-round
 measurements, the remaining numeric miss and a concrete accountable follow-up; never report a missed
-number as met. Explicit safety/SLO/resource-contract gates stay hard and must be named with evidence.
+number as met. Retain test-set identity (exact test IDs or a manifest/digest and count); label changed
+test sets as unmatched rather than attributing reduced coverage to a speedup.
+An aspirational timing or percentage miss is not a failed safety/SLO/resource-contract gate.
+Explicit safety/SLO/resource-contract gates stay hard and must be named with evidence.
 Apply the owner's classification through supported versioned steering/question/reply controls before
 delivering narrower scope; do not silently waive recorded criteria. After the budget, stop ordinary
 tuning and drive the authorized verified scope through delivery rather than retaining allocations
-indefinitely. See `docs/writer-operations.md#bounded-performance-work`.
+indefinitely. Already-ordinary criteria or an already-recorded owner classification need no redundant
+approval. See `docs/writer-operations.md#bounded-performance-work`.
 
 Routine compatible reviewed/checks-green upgrades may proceed under standing owner deployment
 authority using `docs/deployment.md#standing-authority-for-compatible-upgrades`: fresh validated
@@ -119,6 +126,10 @@ resume trigger in the item's existing timeline/question/handoff. Verify the effe
 unblocking and update that record, rather than repeatedly reporting the same status.
 Escalate with an actionable question only for genuinely missing authority/access, safety issues
 or an owner decision; do not keep asking for routine decisions already delegated to you.
+Persist genuine decisions in Needs-you with concrete reason, decision options, responsible actor and
+resume trigger. Do not hide them as generic `waiting_for_external` or repeatedly renew unchanged wait
+notes. The retained writer can use `work question` without `--attempt` during an attempt-free delivery
+external wait; an owner reply queues delivery for that same writer, not a replacement.
 This responsibility grants no new access or bypass: preserve trust, privacy/source permissions,
 both capacity limits, sole-writer ownership, review/CI/merge safeguards and creator-owned cleanup.
 

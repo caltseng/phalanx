@@ -1,4 +1,4 @@
-from argparse import Namespace
+from argparse import ArgumentParser, Namespace
 from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -937,6 +937,113 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(timeline[-1]["details"], {
                     "before": {"acceptance_criteria": original},
                     "after": {"acceptance_criteria": criteria}, "steered_by": "captain"})
+
+    def test_ordinary_missed_target_records_matched_evidence_and_delivers_after_budget(self):
+        criteria = ["Ordinary aspirational latency target: 2 seconds; two optimization rounds",
+                    "Correctness, exact-head independent review and required CI remain hard"]
+        item_id, execution_id = self.pr_item("checked_in", acceptance_criteria=criteria)
+        binding, token, _ = self.register(item_id, execution_id)
+        reviewed = self.submit(token, binding, candidate=HEAD)
+        evidence = ("Same 326 test IDs in manifest sha256:" + "e" * 64
+                    + "; Windows/Python 3.14; baseline 5.0s; round 1 3.8s; round 2 3.1s. "
+                    "Remaining ordinary miss 1.1s; not met. Captain follow-up: profile CLI startup. "
+                    "Owner's current direction: check in ordinary improvements, no redundant approval.")
+        publication = self.submit(token, reviewed, reviewed_candidate=HEAD, review_notes=evidence)
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        route = f"/v1/items/{item_id}/executions/{execution_id}"
+        timeline = self.ok(route + "/timeline", OWNER)
+        self.assertIn(evidence, [event["details"].get("review_notes") for event in timeline])
+        self.assertEqual(self.ok(f"/v1/items/{item_id}", OWNER)["acceptance_criteria"], criteria)
+        self.assertEqual(self.ok("/v1/owner/inbox", OWNER), [])
+        self.assertFalse(delivery["writer"]["building"])
+        self.assertEqual(self.observe(delivery, checks="waiting")["state"]["status"], "waiting_for_external")
+        self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_external")
+        merged = self.observe(delivery, state="closed", merged=True, merge_commit=MERGE,
+                              merge_method="merge",
+                              merged_at=datetime.now(UTC).isoformat())
+        self.assertEqual(merged["state"]["status"], "completed")
+
+    def test_delivery_hard_contract_question_is_visible_and_owner_reply_resumes_same_writer(self):
+        publication, token = self.publish(
+            "checked_in", acceptance_criteria=["Explicit hard resource contract: peak memory <= 1 GiB"])
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+        parser = ArgumentParser()
+        work_cli.add_work_command(parser.add_subparsers())
+        args = parser.parse_args([
+            "work", "question", "Owner: explicit 1 GiB memory contract missed at 1.2 GiB after two rounds",
+            "--option", "Keep contract; optimize memory", "--option", "Approve specified revised contract",
+            "--handoff", "Same workload and test manifest; baseline 1.5 GiB, rounds 1.3/1.2 GiB. "
+            "Resume this writer on versioned owner reply; preserve all other hard gates."])
+        with patch.object(work_cli, "credential", return_value=(self.url, token)), patch("builtins.print") as output:
+            work_cli.run_work(args)
+        asked = json.loads(output.call_args.args[0])
+        self.assertEqual((asked["state"]["stage"], asked["state"]["status"]),
+                         ("delivery", "waiting_for_input"))
+        self.assertEqual(asked["state"]["wait"]["trigger"], "owner reply")
+        self.assertEqual(asked["writer"], delivery["writer"])
+        inbox = self.ok("/v1/owner/inbox", OWNER)
+        self.assertEqual(len(inbox), 1)
+        self.assertEqual(inbox[0]["question"]["prompt"], args.prompt)
+        self.assertEqual(inbox[0]["question"]["options"], args.options)
+        self.assertEqual(inbox[0]["question"]["handoff"], args.handoff)
+        payload = {"attempt_id": None, "stage": "delivery", "outcome": "needs_input",
+                   "expected_version": delivery["version"], "question": inbox[0]["question"]}
+        headers = {"Idempotency-Key": f"{delivery['id']}-question-{delivery['version']}"}
+        self.assertEqual(self.ok(route + "/result", token, payload, headers=headers), asked)
+        self.ok(route + "/result", token, {**payload, "expected_version": asked["version"]}, 409)
+        with connect(self.path) as db:
+            event = db.execute(
+                "SELECT attempt_id, details_json FROM transition_history WHERE execution_id=? AND version=?",
+                (delivery["id"], asked["version"]),
+            ).fetchone()
+            self.assertIsNone(event["attempt_id"])
+            self.assertEqual(json.loads(event["details_json"])["writer_id"], delivery["writer"]["id"])
+        board = self.ok(f"/v1/operator/executions/{delivery['id']}/timeline", OWNER)
+        self.assertEqual(board["question"], inbox[0]["question"])
+        self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_input")
+        with patch.object(work_cli, "credential", return_value=(self.url, token)):
+            with self.assertRaisesRegex(ValueError, "An attempt ID is required"):
+                work_cli.run_work(args)
+        self.assertEqual(self.ok("/v1/writer", token)["version"], asked["version"])
+        answer = {"expected_version": asked["version"], "answer": "Keep the hard contract; optimize memory"}
+        self.ok(route + "/reply", token, answer, 403, headers={"Idempotency-Key": "writer-answer"})
+        self.ok(route + "/reply", OWNER, answer, headers={"Idempotency-Key": "owner-answer"})
+        resumed = self.ok("/v1/writer/attempt", token, method="POST")
+        self.assertEqual(resumed["writer"]["id"], delivery["writer"]["id"])
+        self.assertIsNotNone(resumed["writer"]["attempt_id"])
+        self.assertEqual(resumed["last_reply"]["answer"], answer["answer"])
+        self.assertEqual(resumed["state"]["stage"], "delivery")
+        self.assertFalse(resumed["writer"]["building"])
+        self.assertEqual(self.ok("/v1/owner/inbox", OWNER), [])
+        waiting = self.submit(token, resumed)
+        self.assertEqual(waiting["state"]["status"], "waiting_for_external")
+        self.assertIsNone(waiting["writer"]["attempt_id"])
+        self.assertEqual(self.ok(f"/v1/items/{delivery['item_id']}", OWNER)["acceptance_criteria"],
+                         ["Explicit hard resource contract: peak memory <= 1 GiB"])
+
+    def test_attempt_free_question_cannot_bypass_attempt_stage_version_or_stop_fences(self):
+        publication, token = self.publish("checked_in")
+        route = f"/v1/items/{publication['item_id']}/executions/{publication['id']}"
+        body = {"stage": "delivery", "outcome": "needs_input",
+                "expected_version": publication["version"],
+                "question": {"prompt": "Owner authority missing: choose grant or defer",
+                             "options": ["Grant scoped authority", "Defer"],
+                             "handoff": "Resume the same writer after owner reply"}}
+        self.ok(route + "/result", token, body, 409)
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        self.ok(route + "/result", token, body, 409)
+        body["expected_version"] = delivery["version"]
+        self.ok(route + "/result", OWNER, body, 403)
+        self.ok(route + "/result", RUNNER, body, 403)
+        self.ok(route + "/result", token, {**body, "outcome": "succeeded", "question": None}, 422)
+        _, other_token, _ = self.register(*self.item())
+        self.ok(route + "/result", other_token, body, 403)
+        self.ok(route + "/result", token, {**body, "stage": "publication"}, 422)
+        stopped = self.ok(route + "/cancel", OWNER,
+                          {"expected_version": delivery["version"], "reason": "Owner stop"})
+        self.ok(route + "/result", token, {**body, "expected_version": stopped["version"]}, 409)
+        self.assertEqual(self.ok("/v1/writer", token)["state"], stopped["state"])
 
     def test_delivery_criteria_steering_refuses_mixed_active_stopping_and_terminal_work(self):
         publication, token = self.publish("ready_for_check_in")

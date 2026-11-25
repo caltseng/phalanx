@@ -224,6 +224,26 @@ class CharterTest(unittest.TestCase):
                 self.assertIn("standing owner deployment authority", text)
                 self.assertIn("Source merge is not a deployed result", text)
 
+    def test_ordinary_misses_and_real_owner_decisions_have_distinct_delivery_protocols(self):
+        worker = shift.kickoff(
+            {"id": "item", "repository_id": "repo", "goal": "Deliver ordinary improvement",
+             "acceptance_criteria": ["Aspirational 40% improvement; two rounds, report misses"],
+             "execution": {"id": "execution", "state": {"target": "checked_in"}}},
+            "worktree", "nonce", "phx work", "main")
+        for name, prompt in (("writer", worker), ("captain", shift.prompt("captain")),
+                             ("review", (ROOT / ".agents" / "skills" / "pr-review" / "SKILL.md").read_text(
+                                 encoding="utf-8"))):
+            text = " ".join(prompt.split())
+            with self.subTest(protocol=name):
+                for clause in ("test-set identity", "remaining numeric miss", "two-round optimization budget",
+                               "safety/SLO/resource-contract gates stay hard", "no redundant approval",
+                               "current owner", "historical instructions", "service/control upgrade",
+                               "Needs-you", "resume trigger"):
+                    self.assertIn(clause, text)
+        self.assertIn("During an attempt-free delivery external wait, omit `--attempt`",
+                      " ".join(worker.split()))
+        self.assertIn("An aspirational timing or percentage miss is not a failed", worker)
+
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
                 ("Fix writer recovery", "Fix writer recovery"),

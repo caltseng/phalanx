@@ -366,6 +366,9 @@ def decide(
         if retry_allowed:
             return _queue(state)
         return _wait(state, Status.WAITING_FOR_INPUT, wait)
+    if (event is Event.RESULT and state.stage is Stage.DELIVERY
+            and state.status is Status.WAITING_FOR_EXTERNAL and outcome is Outcome.NEEDS_INPUT):
+        return _wait(state, Status.WAITING_FOR_INPUT, wait)
     _require(event is Event.RESULT and state.status is Status.RUNNING,
              "Stage results require a running attempt")
     if outcome is Outcome.SUCCEEDED:

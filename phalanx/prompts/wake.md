@@ -33,6 +33,11 @@ review. Genuine GitHub required reviewers/protections remain hard.
 Ordinary performance targets have a two-round optimization budget; retain measurements, remaining
 numeric miss and concrete follow-up. Explicit safety/SLO/resource-contract gates stay hard.
 Use supported versioned controls for owner-approved classification; never silently waive criteria.
+Retain test-set identity; already-ordinary criteria need no redundant approval. Current explicit
+owner check-in direction supersedes contradictory historical instructions, not hard contracts or
+merge gates. Unrelated service/control upgrades are not prerequisites. Genuine owner decisions go
+to Needs-you with reason, options, actor and resume trigger, not unchanged generic external waits;
+the same writer may omit `--attempt` on `work question` during an attempt-free delivery external wait.
 Routine compatible reviewed/checks-green upgrades use standing owner deployment authority and the
 backup/rehearsal/service-ownership/continuity/rollback procedure in `docs/deployment.md`.
 Destructive/data-loss/schema-downgrade/new-service/credential-scope changes remain owner decisions.

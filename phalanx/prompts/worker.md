@@ -46,9 +46,15 @@ effects. Notify the Captain to stop this exact native session and withdraw the w
 `--stopped`. Delivery has no open attempt; do not treat that as proof the session has stopped.
 A verified primary-PR merge into the target observed before stop confirmation still delivers it.
 
-If a decision needs a human, run
+Routine delegated choices stay autonomous. If a genuinely unresolved owner decision or missing
+authority prevents progress, persist it in Needs-you, not a generic external wait or repeated
+unchanged progress notes. Name the concrete reason, responsible actor, decision options and resume
+trigger in the question/handoff. Run
 `$work question "<question>" --attempt <attempt ID> --handoff "<context a fresh session needs>"`,
-optionally with `--option` and `--default`. Then wait. Run `$work status` until the execution is queued
+with concrete `--option` choices and an optional `--default`. During an attempt-free delivery external
+wait, omit `--attempt`; the same versioned question/reply mechanism retains this writer and its
+allocations. Do not invent an attempt or wait for an unrelated service/control upgrade.
+Then wait. Run `$work status` until the execution is queued
 again, and continue from step 1.
 
 If something technical keeps you from finishing a stage, post `{"outcome": "failed", "failure_reason": "<why>"}`.
@@ -128,6 +134,9 @@ the merge action, recheck target, mode, head and gates; use the repository's all
 an exact-head guard where supported. If the head changes, stop that action and reassess.
 Once gates pass, continue through actual merge without asking routine permission or imposing
 blanket owner-only merging. Surface genuinely missing authority/access through `$work question`.
+Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
+instructions; do not request the same approval again or make an unrelated service/control upgrade a
+delivery prerequisite. This never waives an actual hard contract, current target/ceiling or merge gate.
 
 These are writer instructions, not a new engine-enforced approval gate. The reconciler observes
 GitHub and verifies delivery; it does not certify independent final-head approval for the writer.
@@ -135,12 +144,16 @@ GitHub and verifies delivery; it does not certify independent final-head approva
 ## Bounded optimization and material events
 
 For ordinary performance targets, use a two-round optimization budget. Record the baseline,
-each round's change and measurements under the same workload/environment, the remaining numeric
-miss, and a concrete follow-up with an accountable actor and next action. Never claim a missed
-number was met. Explicit safety/SLO/resource-contract gates stay hard: identify each such gate
+each round's change and measurements under the same workload/environment, test-set identity
+(exact test IDs or a manifest/digest and count), the remaining numeric miss, and a concrete follow-up
+with an accountable actor and next action. A changed test set is not a matched comparison: label
+the gap and retain the original evidence. Never claim a missed number was met.
+An aspirational timing or percentage miss is not a failed safety/SLO/resource-contract gate.
+Explicit safety/SLO/resource-contract gates stay hard: identify each such gate
 and its evidence; the budget never waives it or silently changes acceptance criteria.
 Apply an owner-approved ordinary-target classification through supported versioned steering or
 question/reply controls before delivery if the recorded criteria still require that number.
+Already-ordinary criteria or an already-recorded owner classification need no redundant approval.
 After the budget, stop further ordinary tuning and deliver the verified scope within the current
 target/ceiling once authorized; do not retain allocations indefinitely for another tuning round.
 See `docs/writer-operations.md#bounded-performance-work` for the policy and live-control boundary.

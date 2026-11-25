@@ -20,6 +20,27 @@ def result(state, evidence=Evidence(), outcome=Outcome.SUCCEEDED, **kwargs):
 
 
 class TransitionTests(unittest.TestCase):
+    def test_delivery_owner_question_retains_scope_and_cannot_turn_a_miss_into_success(self):
+        state = result(start(Target.MERGED), Evidence(candidate=REV.head))
+        state = result(state, Evidence(reviewed_candidate=REV.head))
+        state = result(state, Evidence(published_pr=READY.url))
+        wait = Wait("Owner: explicit memory contract missed; choose optimization or a revised contract",
+                    "owner reply")
+        asked = decide(state, Event.RESULT, outcome=Outcome.NEEDS_INPUT, wait=wait)
+        self.assertEqual(asked, replace(state, status=Status.WAITING_FOR_INPUT, wait=wait))
+        self.assertEqual(decide(asked, Event.PR_OBSERVED, evidence=Evidence(pr=READY, pr_ready=True)), asked)
+        with self.assertRaises(ValueError):
+            decide(asked, Event.RESULT, outcome=Outcome.NEEDS_INPUT, wait=wait)
+        with self.assertRaises(ValueError):
+            decide(state, Event.RESULT, outcome=Outcome.SUCCEEDED)
+        stopping = decide(state, Event.CANCEL)
+        with self.assertRaises(ValueError):
+            decide(stopping, Event.RESULT, outcome=Outcome.NEEDS_INPUT, wait=wait)
+        resumed = decide(asked, Event.REPLY)
+        self.assertEqual((resumed.stage, resumed.status, resumed.target, resumed.candidate),
+                         (Stage.DELIVERY, Status.QUEUED, Target.MERGED, REV.head))
+        self.assertEqual(result(resumed), state)
+
     def test_draft_delivery_preserves_the_reviewed_head_across_close_and_reopen(self):
         state = start(Target.MERGED, PublicationMode.DRAFT)
         state = result(state, Evidence(candidate=REV.head))
