@@ -42,10 +42,27 @@ Charter revision, wake counts and liveness retain their existing contracts.
 normal dashboard refreshes display it as `compactions N` or `compactions unavailable`.
 `shift heartbeat` returns `compaction_count` and `wakes` as telemetry only. `handoff_due`
 compares elapsed time from the registration's `created_at` with charter `[shift].max_hours`
-(default 4), never wake or compaction counts. Compaction is a checkpoint, with no count-based
+(default 24), never wake or compaction counts. Compaction is a checkpoint, with no count-based
 handoff or first-compaction fallback. Five-minute reconciliation continues through queue
 completion and dependency/external waits. Explicit owner stop and actual degradation/failure
 safeguards remain independent; the server's telemetry contract is unchanged.
+
+## Captain workflow reinforcement
+
+Captain detail/list and heartbeat responses include `reinforcement`: `interval_minutes` (90),
+the current registration-relative `interval`, `acknowledged_interval` and `due`. Only an
+active Captain with a newer interval is due; server UTC determines elapsed time, not the
+client clock. Negative elapsed time is clamped to interval zero.
+
+`shift wake --captain <id>` counts one wake and returns the fresh charter and compact
+briefing. When due it includes the current canonical workflow and acknowledgement CLI
+arguments. Read the workflow before using those arguments.
+`PUT /captains/{id}/reinforcement` takes `{"interval": N}` under coordinator authorization.
+N must be a positive strict integer and not a future unacknowledged interval (409).
+The acknowledged interval only increases, so duplicate/late acknowledgements, including
+retries after clock rollback, cannot undo progress. Heartbeats never acknowledge reminders.
+Failed or unread output remains due; missed intervals coalesce on the next wake. No
+additional runtime session, local timing file or scheduler is involved.
 
 ## Session archival records
 

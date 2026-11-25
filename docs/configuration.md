@@ -63,11 +63,15 @@ The pair updates atomically; omitted settings remain unchanged. Both must be str
 and blocks affected admissions; raising takes effect on the next admission/acquisition retry.
 `GET /v1/dispatch/settings` shows both limits, `building_writers`, `delivering_writers` and
 `active_writers` (Total usage), all derived from registered allocations.
-Charter `[shift]` accepts positive-integer `max_hours` (default 4). Normal rotation uses
+Charter `[shift]` accepts positive-integer `max_hours` (default 24). Normal rotation uses
 elapsed time since registration only; wake and compaction counts remain telemetry.
 Remove retired `max_wakes` and `max_compactions` settings; the client rejects them with
 explicit guidance. Queue completion and dependency/external waits never end a shift early.
 Five-minute reconciliation, explicit owner stop and genuine safety behavior remain.
+The same wake reinforces the fresh charter and canonical workflow every 90 elapsed minutes.
+This interval is fixed, not another charter setting or a compaction threshold; acknowledgements
+are server-owned. See [activation](deployment.md#elapsed-time-shift-activation) before updating
+an existing installation's client, API or retained wake instructions.
 Either concurrency key is
 rejected with guidance to remove it and use dispatch settings instead. Remove that entry
 in the same deployment cutover that introduces this implementation, leaving the live
