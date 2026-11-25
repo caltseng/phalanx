@@ -100,7 +100,11 @@ preference in an old kickoff or handoff does not create an exclusive reviewer re
 If none requires independent review, required CI, GitHub reviews and repository rules remain
 the gates, not an invented independent-review wait. If required approval is pending, record
 the missing approval/reviewer with `$work progress`; seek another qualified independent reviewer
-through the Captain when the preferred reviewer is unavailable. Use `$work question` only when
+directly when the preferred reviewer is unavailable. An authorized writer may choose and reach
+a qualified independent peer or read-only review agent with no authorship; Captain assignment
+is not a prerequisite. Record reviewer identity, verdict, scope and exact final SHA with the
+review evidence. The Captain can help with routing, not grant substitute self-approval.
+Use `$work question` only when
 required review cannot be obtained or authority/access is genuinely missing.
 
 Before **either** merging or enabling auto-merge, re-read `$work status` and fresh GitHub facts.

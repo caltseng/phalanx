@@ -194,6 +194,8 @@ class CharterTest(unittest.TestCase):
         self.assertIn("current exact head has applicable independent final-head approval", decision)
         self.assertIn("record the missing approval/reviewer with `phx work progress`", decision)
         self.assertIn("seek another qualified independent reviewer", decision)
+        self.assertIn("Captain assignment is not a prerequisite", decision)
+        self.assertIn("Record reviewer identity, verdict, scope and exact final SHA", decision)
         self.assertIn("Any qualified reviewer independent of the author", decision)
         self.assertIn("no particular native session or person is a universal dependency", decision)
         self.assertIn("Reuse valid recorded approval for the current exact head", decision)

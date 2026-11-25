@@ -16,6 +16,9 @@ session or person is a universal dependency. Reuse valid recorded approval cover
 exact head and effective scope with no unresolved actionable findings instead of adding another
 review. Preserve genuine GitHub required reviewers, CODEOWNERS and protections. A preferred
 reporting recipient or stale routing note does not make that reviewer exclusive.
+Authorized writers may choose and reach a qualified independent peer or read-only review agent
+with no authorship without Captain assignment. Record reviewer identity, verdict, scope and final
+SHA; self-review is never substitute independent approval.
 
 ## What matters most
 

@@ -70,7 +70,11 @@ and change scope and has no unresolved actionable findings; do not demand a redu
 If none requires independent review, required CI, GitHub reviews and repository rules remain
 the gates, not an invented independent-review wait. If required approval is pending, record
 the missing approval/reviewer with `work progress` and route to another qualified independent
-reviewer through the Captain if needed. Use `work question` when required review cannot be
+reviewer directly if needed. An authorized writer may choose and reach a qualified independent
+peer or read-only review agent with no authorship; Captain assignment is not a prerequisite.
+Record reviewer identity, verdict, effective scope and exact final SHA in the review evidence.
+The Captain may help route a request but cannot substitute self-review for independent approval.
+Use `work question` when required review cannot be
 obtained or authority/access is genuinely missing, not just because a preferred session is busy.
 
 Before either direct merge or auto-merge activation, read fresh `work status` and GitHub facts.
