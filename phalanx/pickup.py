@@ -15,11 +15,13 @@ def live_captains(db, now):
 
 def context(db, now, *, capacity=None):
     capacity = dispatch.settings(db) if capacity is None else capacity
+    rework = dispatch.first_rework(db)
     return {
         "captains": live_captains(db, now),
         "holds": active_holds(db, now),
         "capacity": capacity,
-        "admission": {stage: dispatch.admission_wait(db, stage, capacity=capacity)
+        "rework": rework,
+        "admission": {stage: dispatch.admission_wait(db, stage, capacity=capacity, rework=rework)
                       for stage in Stage},
     }
 
@@ -31,7 +33,7 @@ def decision(row, now, current):
 
     state = json.loads(row["state_json"])
     if state.get("stopping") or state.get("pending_output"):
-        return blocked("closing", "Execution is stopping or finalizing", "Finish the pending disposition")
+        return blocked("closing", "Execution is stopping or finalizing", "Finish the pending finalization")
     if current["capacity"]["paused"]:
         return blocked("paused", "Dispatch is paused", "The owner resumes dispatch")
     unmet = json.loads(row["dependency_wait_json"] or "[]")

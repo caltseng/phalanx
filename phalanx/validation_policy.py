@@ -3,16 +3,15 @@
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field, StringConstraints, TypeAdapter, ValidationError, field_validator, model_validator
 
-from .github_checks import PreviewReader
 from .local_checks import LocalCheck
-from .intake_models import Identifier, Payload, Text
+from .intake_models import Identifier, Payload
 from .json_utils import unique_object
 from .pr_models import RequiredCheck as CheckConfig
-from .validation import CheckKind, PreCheck, PreOutcome, RequiredCheck
+from .validation import CheckKind, PreCheck, RequiredCheck
 
 _IDENTIFIER = TypeAdapter(Identifier)
 _MAX_BYTES = 1024 * 1024
@@ -29,7 +28,6 @@ class PublishedValidationPolicy:
     """Complete ready-phase policy from trusted reconciler configuration."""
 
     required: tuple[RequiredCheck, ...] | None
-    read_preview: PreviewReader | None = None
 
 
 @dataclass(frozen=True)
@@ -39,19 +37,10 @@ class RepositoryValidationPolicy:
     ready: PublishedValidationPolicy
 
 
-class _Bypass(Payload):
-    outcome: Literal["skipped", "inapplicable"]
-    reason: Text
-    authorization: Text
-
-
 class _LocalConfig(Payload):
     name: _NAME
-    argv: list[_ARGUMENT] | None = Field(default=None, min_length=1)
+    argv: list[_ARGUMENT] = Field(min_length=1)
     timeout_seconds: Annotated[int, Field(strict=True, ge=1, le=86400)] = 60
-    allow_skip: Annotated[bool, Field(strict=True)] = False
-    allow_inapplicable: Annotated[bool, Field(strict=True)] = False
-    bypass: _Bypass | None = None
 
     @field_validator("name")
     @classmethod
@@ -59,25 +48,12 @@ class _LocalConfig(Payload):
         return _exact_name(value)
 
     @model_validator(mode="after")
-    def authorized_check(self):
-        if self.bypass is not None:
-            if "argv" in self.model_fields_set or "timeout_seconds" in self.model_fields_set:
-                raise ValueError("A bypass cannot configure a command or timeout")
-            allowed = (self.allow_skip if self.bypass.outcome == "skipped"
-                       else self.allow_inapplicable)
-            if not allowed:
-                raise ValueError("The bypass must be authorized for this check's disposition")
+    def valid_command(self):
         self.to_check()
         return self
 
     def to_check(self) -> LocalCheck:
-        policy = PreCheck(self.name, self.allow_inapplicable, self.allow_skip)
-        if self.bypass is not None:
-            return LocalCheck(policy, disposition=PreOutcome(self.bypass.outcome),
-                              reason=self.bypass.reason, authorization=self.bypass.authorization)
-        if self.argv is None:
-            raise ValueError("A local check requires argv or an authorized bypass")
-        return LocalCheck(policy, tuple(self.argv), self.timeout_seconds)
+        return LocalCheck(PreCheck(self.name), tuple(self.argv), self.timeout_seconds)
 
 
 class _PublishedConfig(CheckConfig):

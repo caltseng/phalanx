@@ -239,8 +239,7 @@ class Reconciler:
                 # None means the policy doesn't establish this phase's checks, so there is nothing to report.
                 if required is not None:
                     collected = collect_github_checks(
-                        github, pull, Phase.DRAFT if pull.draft else Phase.READY, required,
-                        read_preview=None if pull.draft else policy.ready.read_preview)
+                        github, pull, Phase.DRAFT if pull.draft else Phase.READY, required)
                     # An incomplete read (rate limit, transport error, or the PR moving) posts nothing,
                     # so the previous observation's checks stand until the repo's backoff ends.
                     if collected.retry_after_seconds is not None:
@@ -249,7 +248,7 @@ class Reconciler:
                     body["checks"] = collected.gate.state
                     body["check_reasons"] = [_clip(reason) for reason in collected.gate.reasons[:20]]
                 if policy is not None:
-                    checks = tuple(check for check in policy.local_checks or () if check.disposition is None)
+                    checks = policy.local_checks or ()
                 body["feedback"] = [_clip(text) for _, text in self.feedback(github, pull.number)[:50]]
         execution_path = f"/items/{quote(item_id, safe='')}/executions/{quote(execution['id'], safe='')}"
         result = self.api.call(execution_path + "/github-observation", body)

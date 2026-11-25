@@ -15,7 +15,7 @@ from .dispatch_schema import (
 )
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
-from .operator_schema import BLOCKER_SCHEMA, DASHBOARD_SCHEMA, ITEM_TITLE_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
+from .operator_schema import DASHBOARD_SCHEMA, ITEM_TITLE_SCHEMA, OPERATOR_SCHEMA
 from .reconciliation_schema import RECONCILIATION_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
@@ -97,10 +97,10 @@ MIGRATIONS = (
     STAGE_QUEUE_SCHEMA,
     DEPENDENCY_SCHEMA,
     WAIT_SCHEMA,
-    WORKER_SCHEMA,
+    (),  # Retired worker metadata; keep subsequent version numbers stable.
     ADOPTION_SCHEMA,
     REVISION_MIGRATION,
-    BLOCKER_SCHEMA,
+    (),  # Retired runner blockers.
     DIRECT_SCHEMA,
     RECONCILIATION_SCHEMA,
     CAPTAIN_SHIFT_SCHEMA,

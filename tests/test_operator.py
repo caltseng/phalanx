@@ -1,12 +1,15 @@
 from dataclasses import asdict, replace
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from urllib.request import Request, urlopen
 
-from phalanx import intake
+from phalanx import dispatch, intake, operator_api
 from phalanx.intake import record, steer
 from phalanx.intake_models import Intake, Steering
 from phalanx.intake_schema import INTAKE_SCHEMA
@@ -214,16 +217,12 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         first = self.page(route + "?limit=2")
         self.assertEqual([row["version"] for row in first["events"]], [5000, 4999])
         with write_transaction(self.path) as db:
-            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
-                       ("attempt", identifier(10), QUEUED.stage, "runner-secret", "lease-digest", 9999, LATEST))
+            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, NULL)",
+                       ("attempt", identifier(10), QUEUED.stage, LATEST))
             transition(db, 10, 5001, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
-            db.execute("INSERT INTO external_rechecks VALUES (?, 5001, 1700000000000)", (identifier(10),))
         later = self.page(f"{route}?limit=2&cursor={first['next_cursor']}")
         self.assertEqual(later["attempt"], "attempt")
-        self.assertEqual(later["item"]["recheck_at_ms"], 1700000000000)
         self.assertEqual([row["version"] for row in later["events"]], [4998, 4997])
-        self.assertNotIn("lease-digest", json.dumps(later))
-        self.assertNotIn("runner-secret", json.dumps(later))
         self.assertEqual(self.get(f"{BOARD}/{identifier(11)}/timeline?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])
@@ -284,9 +283,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                 if index:
                     transition(db, 9000, version - 1, Execution(Target.READY, stage))
                 attempt = f"result-attempt-{index}"
-                db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-                           (attempt, identifier(9000), stage, "runner", "lease-digest", 9999, EARLY, LATER))
-                db.execute("INSERT INTO attempt_workers VALUES (?, ?, NULL)", (attempt, f"worker-{index}"))
+                db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?)",
+                           (attempt, identifier(9000), stage, EARLY, LATER))
                 transition(db, 9000, version, Execution(Target.READY, Stage.DEVELOPMENT), attempt=attempt)
                 db.execute("UPDATE transition_history SET details_json=? WHERE execution_id=? AND version=?",
                            (json.dumps(details), identifier(9000), version))
@@ -301,8 +299,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         for index, (stage, _, sha, reason) in enumerate(cases):
             event = next(row for row in events if row["version"] == 2 * index + 2)
             self.assertEqual((event["from_stage"], event["stage"]), (stage, "development"))
-            self.assertEqual((event["attempt_id"], event["worker_reference"]),
-                             (f"result-attempt-{index}", f"worker-{index}"))
+            self.assertEqual(event["attempt_id"], f"result-attempt-{index}")
             self.assertEqual((event["candidate"], event["reason"]), (sha, reason))
             self.assertEqual(event["pr_url"], pr_url if index == 1 else None)
             self.assertNotIn("details", event)
@@ -523,7 +520,8 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         self.assertEqual(group["items"][0]["outcome"], "draft_published")
 
     def test_conditional_reads_are_authenticated_scoped_and_invalidated_by_writes(self):
-        routes = (BOARD, "/v1/operator/overview", "/v1/operator/groups/wave-1")
+        routes = (BOARD, "/v1/operator/overview", "/v1/operator/groups/wave-1",
+                  f"/v1/operator/items/{self.row(BOARD)['item_id']}")
         for route in routes:
             with self.subTest(route=route):
                 with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {OWNER}"})) as response:
@@ -540,6 +538,28 @@ class DashboardTest(ServerFixture, unittest.TestCase):
                                       headers={"If-None-Match": "*"})[0], 400)
         self.assertEqual(self.request("/v1/operator/groups/missing", OWNER,
                                       headers={"If-None-Match": "*"})[0], 404)
+
+    def test_read_context_is_shared_with_validators_and_304_skips_summary(self):
+        from fastapi import Response
+        item_id = self.row(BOARD)["item_id"]
+        handlers = ((operator_api.list_executions, ()), (operator_api.overview, ()),
+                    (operator_api.group, ("wave-1",)), (operator_api.current_item, (item_id,)))
+        for handler, args in handlers:
+            with self.subTest(handler=handler.__name__), ExitStack() as stack:
+                reads = [stack.enter_context(patch.object(module, name, wraps=getattr(module, name)))
+                         for module, name in ((dispatch, "settings"), (dispatch, "first_rework"),
+                                              (operator_api, "availability_reports"), (operator_api.pickup, "active_holds"))]
+                request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(database_path=self.path)),
+                                          url=SimpleNamespace(path=handler.__name__, query=""), headers={})
+                response = Response()
+                handler(request, response, *args)
+                self.assertEqual([read.call_count for read in reads], [1, 1, 1, 1])
+                for read in reads:
+                    read.reset_mock()
+                request.headers["if-none-match"] = response.headers["ETag"]
+                stack.enter_context(patch.object(operator_api, "SUMMARY", "INVALID SUMMARY"))
+                self.assertEqual(handler(request, Response(), *args).status_code, 304)
+                self.assertEqual([read.call_count for read in reads], [1, 1, 1, 1])
 
     def test_retry_expiry_changes_token_and_queue_reason_without_a_write(self):
         from fastapi import Response

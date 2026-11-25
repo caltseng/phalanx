@@ -16,7 +16,7 @@ BACKOFF_SECONDS = (2, 4, 8, 16)
 BATCH_SIZE = 32
 
 
-def _disposition_report(db, execution_id, state, details):
+def _closure_report(db, execution_id, state, details):
     attempts = db.execute(
         """SELECT stage, count(*) AS count FROM attempts WHERE execution_id=?
            GROUP BY stage ORDER BY stage""",
@@ -49,7 +49,7 @@ def _finish(db, row, state, job):
             "SELECT details_json FROM transition_history WHERE execution_id=? AND version=?",
             (row["id"], job["intent_version"]),
         ).fetchone()
-        markdown = _disposition_report(db, row["id"], state, json.loads(intent["details_json"]))
+        markdown = _closure_report(db, row["id"], state, json.loads(intent["details_json"]))
     existing = db.execute("SELECT markdown FROM reports WHERE execution_id=?", (row["id"],)).fetchone()
     if existing is None:
         db.execute("INSERT INTO reports VALUES (?, ?)", (row["id"], markdown))

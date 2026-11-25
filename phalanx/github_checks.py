@@ -1,6 +1,6 @@
 """Read-only collection of one configured validation phase for the primary PR."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 from phalanx.github import CommitChecks, GitHubClient, GitHubError, PullRequest
@@ -25,13 +25,6 @@ class CheckCollection:
     observations: tuple[PublishedEvidence, ...] = ()
     retry_after_seconds: int | None = None
 
-
-# A repository-specific adapter verifies the preview provider, environment, and
-# served SHA (including any smoke test) before returning evidence. Returning
-# None means missing; raise GitHubError for an inaccessible provider.
-PreviewReader = Callable[
-    [PublishedCandidate, Phase, RequiredCheck, str], PublishedEvidence | None
-]
 
 # A moved target or a concurrent PR update is observed afresh on the next attempt.
 _CHANGED_RETRY_SECONDS = 30
@@ -120,8 +113,7 @@ def _check_rows(
 
 def collect_github_checks(
     github: GitHubClient, expected: PullRequest, phase: Phase,
-    required: tuple[RequiredCheck, ...] | None, *,
-    read_preview: PreviewReader | None = None,
+    required: tuple[RequiredCheck, ...] | None,
 ) -> CheckCollection:
     """Read a bounded snapshot using the caller's complete, phase-specific policy.
 
@@ -169,17 +161,6 @@ def collect_github_checks(
                         PublishedEvidence(pull.url, revision, sha, phase, name, kind, outcome, app)
                         for name, kind, outcome, app in _check_rows(pull, checks, selected)
                     )
-                for check in selected:
-                    if check.kind != CheckKind.PREVIEW:
-                        continue
-                    if read_preview is None:
-                        return _blocked(f"No preview reader is configured for {check.name}")
-                    preview = read_preview(current, phase, check, sha)
-                    if preview is not None and (
-                        preview.pr_url, preview.revision, preview.tested_sha,
-                        preview.phase, preview.name, preview.kind,
-                    ) == (pull.url, revision, sha, phase, check.name, CheckKind.PREVIEW):
-                        observations.append(preview)
 
         after = github.get_pull_request(pull.number)
         if (

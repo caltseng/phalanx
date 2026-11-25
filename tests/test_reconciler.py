@@ -783,8 +783,6 @@ class ReconcilerPassTest(unittest.TestCase):
             "local_checks": [
                 {"name": "slow", "argv": [sys.executable, "-c", "import time; time.sleep(1)"]},
                 {"name": "fail", "argv": [sys.executable, "-c", "import sys; print('broken'); sys.exit(3)"]},
-                {"name": "skipped", "allow_skip": True,
-                 "bypass": {"outcome": "skipped", "reason": "slow", "authorization": "owner"}},
             ],
             "draft_checks": None, "ready_checks": None,
         }}}))
