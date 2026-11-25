@@ -12,11 +12,9 @@ from urllib.request import Request, urlopen
 from phalanx import dispatch, intake, operator_api
 from phalanx.intake import record, steer
 from phalanx.intake_models import Intake, Steering
-from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, conditional_read, filtered_open_page, open_page, short_title
-from phalanx.operator_schema import DASHBOARD_SCHEMA
 from phalanx.reconciliation import Observation, record as record_observation
-from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, migrate, write_transaction
+from phalanx.store import APPLICATION_ID, connect, initialize, write_transaction
 from phalanx.transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target, Wait, item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -53,12 +51,97 @@ def transition(db, number, version, state, at=LATER, attempt=None):
     record(db, execution, version, "result", {}, data, at, attempt)
 
 
+class SummaryWaitTest(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.fromisoformat(LATER)
+        self.row = {
+            "id": "execution", "status": Status.QUEUED, "stage": Stage.DEVELOPMENT,
+            "writer_id": "writer", "writer_ended_at": None, "writer_building": False,
+            "building_requested_at": None, "writer_confirmed_at": None,
+            "writer_nonce": "nonce", "writer_created_at": EARLY,
+            "handoff_head": None, "pr_head_sha": None,
+            "wait_since": LATER, "blocked_count": 0, "retry_at": None,
+        }
+        self.context = {"pickup": {"capacity": {"paused": False}, "holds": {}, "rework": None}}
+        self.state = {"wait": None}
+
+    def select(self):
+        return operator_api.summary_wait(self.row, self.state, self.now, self.context)
+
+    def test_writerless_queue_uses_only_pickup_even_with_competing_waits(self):
+        self.state["wait"] = {"reason": "Persisted wait", "trigger": "reply"}
+        self.row.update(blocked_count=2, building_requested_at=EARLY, retry_at=2**53)
+        self.context["pickup"]["capacity"]["paused"] = True
+        self.context["pickup"]["holds"]["execution"] = "Hold"
+        for writer_id, ended_at in ((None, None), ("writer", EARLY)):
+            self.row.update(writer_id=writer_id, writer_ended_at=ended_at)
+            for eligible in (False, True):
+                decision = {"eligible": eligible, "reason": "Pickup reason", "trigger": "Pickup trigger"}
+                with self.subTest(writer_id=writer_id, eligible=eligible), patch.object(
+                    operator_api.pickup, "decision", return_value=decision,
+                ) as pickup, patch.object(operator_api.dispatch, "building_wait") as building:
+                    wait, since, projected = self.select()
+                    self.assertEqual(wait, {} if eligible else {
+                        "reason": decision["reason"], "trigger": decision["trigger"],
+                    })
+                    self.assertEqual(since, LATER)
+                    self.assertEqual(projected, decision)
+                    pickup.assert_called_once_with(self.row, self.now, self.context["pickup"])
+                    building.assert_not_called()
+
+    def test_rework_waits_override_persisted_waits_but_capacity_respects_dependencies(self):
+        self.row.update(status=Status.WAITING_FOR_EXTERNAL, stage=Stage.DELIVERY,
+                        building_requested_at=EARLY, handoff_head="a" * 40, pr_head_sha="b" * 40)
+        self.state["wait"] = {"reason": "Waiting for CI", "trigger": "Checks finish"}
+        with patch.object(operator_api.dispatch, "building_wait", return_value="Building capacity exhausted"):
+            self.assertEqual(self.select()[0]["reason"], "Building capacity exhausted")
+        with patch.object(operator_api.dispatch, "building_wait", return_value=None):
+            self.assertEqual(self.select()[0]["reason"], "Building capacity available; retry acquisition")
+        self.row["writer_building"] = True
+        self.assertEqual(self.select()[0]["reason"], "Writer is building or reviewing PR rework")
+        self.row.update(writer_building=False, blocked_count=1)
+        self.assertEqual(self.select()[0]["reason"], "Awaiting publication handoff " + "a" * 40)
+        self.row["pr_head_sha"] = "a" * 40
+        self.assertEqual(self.select()[0], self.state["wait"])
+        self.state["wait"] = None
+        self.assertEqual(self.select()[0]["reason"], "Waiting for 1 prerequisite")
+
+    def test_retained_writer_queue_and_launch_fallbacks_preserve_precedence_and_age(self):
+        self.state["wait"] = {"reason": "Persisted wait", "trigger": "reply"}
+        self.row.update(blocked_count=2, retry_at=int(self.now.timestamp() * 1000) + 1000)
+        self.context["pickup"]["capacity"]["paused"] = True
+        self.context["pickup"]["holds"]["execution"] = "Hold"
+        self.assertEqual(self.select()[0], self.state["wait"])
+        self.state["wait"] = None
+        self.assertEqual(self.select()[0]["reason"], "Waiting for 2 prerequisites")
+        self.row["blocked_count"] = 0
+        self.assertEqual(self.select()[0]["reason"], "Dispatch is paused")
+        self.context["pickup"]["capacity"]["paused"] = False
+        self.assertEqual(self.select()[0]["reason"], "Retry scheduled for 2025-01-02T00:00:01+00:00")
+        self.row["retry_at"] = int(self.now.timestamp() * 1000)
+        self.assertEqual(self.select()[0]["reason"], "Hold")
+        self.context["pickup"]["holds"].clear()
+        self.assertEqual(self.select(), ({}, LATER, None))
+        self.row["status"] = Status.RUNNING
+        wait, since, projected = self.select()
+        self.assertIn("Native writer launch unconfirmed", wait["reason"])
+        self.assertEqual((since, projected), (EARLY, None))
+        for updates in ({"writer_confirmed_at": EARLY}, {"writer_ended_at": EARLY}):
+            with self.subTest(updates=updates):
+                original = self.row.copy()
+                self.row.update(updates)
+                self.assertEqual(self.select(), ({}, LATER, None))
+                self.row = original
+        self.state["stopping"] = {"reason": "Stop"}
+        self.assertEqual(self.select(), ({}, LATER, None))
+
+
 class OperatorTest(ServerFixture, unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
         with write_transaction(self.path) as db:
             db.execute("INSERT INTO repositories VALUES ('repo', 'https://github.com/a/b', ?)", (EARLY,))
             for number in range(1, 5001):
@@ -434,12 +517,8 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        # Stop before the dashboard migration so the server backfills reads from history.
-        with write_transaction(self.path, create=True) as db:
-            for version, statements in enumerate(MIGRATIONS[:MIGRATIONS.index(DASHBOARD_SCHEMA)], start=1):
-                for statement in statements:
-                    db.execute(statement)
-                db.execute(f"PRAGMA user_version = {version}")
+        initialize(self.path)
+        with write_transaction(self.path) as db:
             intake.register(db, "repo", "https://github.com/a/b.git")
             item = intake.create(db, Intake(repository_id="repo", goal="Ship it", target="ready_for_check_in", label="wave-1"))
             self.execution = item["execution"]["id"]

@@ -3,21 +3,16 @@
 import json
 
 from . import dispatch
-from .captains import active_holds, is_live
+from .captains import active_holds, live_captains
 from .transitions import Stage
-
-
-def live_captains(db, now):
-    return [{"id": row["id"], **json.loads(row["pickup_json"])}
-            for row in db.execute("SELECT * FROM captains WHERE state='active' ORDER BY id")
-            if is_live(row, now)]
 
 
 def context(db, now, *, capacity=None):
     capacity = dispatch.settings(db) if capacity is None else capacity
     rework = dispatch.first_rework(db)
     return {
-        "captains": live_captains(db, now),
+        "captains": [{"id": key, **json.loads(row["pickup_json"])}
+                     for key, row in sorted(live_captains(db, now).items()) if row["state"] == "active"],
         "holds": active_holds(db, now),
         "capacity": capacity,
         "rework": rework,

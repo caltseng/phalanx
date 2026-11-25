@@ -23,7 +23,7 @@ New installations default to `~/.phalanx_muster`. The [tracked deployment setup]
 generates consistent absolute paths, a five-writer charter template and configurable service
 entrypoints without starting anything. Keep the database, client configs, reconciler scratch
 directory and validation policy there, outside every mapped checkout. Explicit existing
-locations, including legacy `phalanx-muster` homes, are honored and must not be renamed
+locations, including existing `phalanx-muster` homes, are honored and must not be renamed
 under running workers. [Resume an existing install](resume.md) uses the recorded runbook.
 
 ## Install the package

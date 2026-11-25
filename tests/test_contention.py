@@ -86,7 +86,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
     def test_refresh_retries_real_admission_failure_without_losing_its_audit(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "refresh.sqlite3"
-            store.migrate(path)
+            store.initialize(path)
             with store.write_transaction(path) as db:
                 db.execute("UPDATE dependency_audit SET cursor=''")
             refreshed = threading.Event()
@@ -132,7 +132,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
     def test_http_writer_contention_is_retryable_and_recovers_without_restarting(self):
         with TemporaryDirectory() as directory, ExitStack() as cleanup:
             path = Path(directory) / "http.sqlite3"
-            store.migrate(path)
+            store.initialize(path)
             with store.write_transaction(path) as db:
                 intake.register(db, "repo", "https://github.com/e/r.git")
                 db.execute("UPDATE dispatch_settings SET max_building_writers=10, max_writers=20")
