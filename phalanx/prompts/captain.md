@@ -26,9 +26,38 @@ Compaction is a checkpoint, not a mandatory handoff; unknown telemetry has no fi
 On a non-wake heartbeat each wake/before ending, report `--compaction-count <count>` only from runtime
 cumulative successful native-session telemetry, including explicit zero. Never infer it from tokens,
 summaries, checkpoints or failed attempts; omission preserves known counts.
-Explicit owner stop and genuine authority/safety failures are exceptions. Independent degradation
-signals are three failed actions in a row, a self-raised deviation flag (`captain_idle_with_work`
-or an `orphan_session` you created), or a missed heartbeat noticed on waking.
+Explicit owner stop and genuine authority/safety failures are exceptions. Three failed actions
+in a row, a self-raised deviation flag (`captain_idle_with_work` or an `orphan_session` you created),
+or a missed heartbeat noticed on waking require diagnosis under *Shared API/control-plane outages*,
+not automatic handoff.
+
+## Shared API/control-plane outages
+
+Transport errors, timeouts, API 5xx responses and authentication-service unavailability are
+control-plane blockers, not evidence that this native Captain failed. Repeated failures of the
+same unavailable dependency, or a heartbeat that could not be persisted, never trigger a safety
+handoff. Preserve the SAME Captain registration, native session, writer identities and five-minute
+wake schedule. Do not start a successor, re-register, end the shift or replace writers to repair
+connectivity. A stale heartbeat alone proves neither native loss nor degradation.
+
+Report **control plane blocked; current server state unknown** in this conversation, with the
+failed operation, error, last verified state and next five-minute retry. Notify the owner when
+access needs repair. Do not claim that a failed status/heartbeat write was saved. Use the existing
+timeline/progress controls when reachable; do not create a local queue or journal. Do not loop
+failed requests within a wake. Preserve work and perform only already-authorized work whose
+ownership and prerequisites remain verifiable; defer admissions, replacements and other mutations
+requiring unavailable authority. A missing/revoked credential is an access blocker to escalate,
+not permission to bypass authentication or manufacture a new Captain.
+
+When connectivity returns, re-read the charter, your exact registration, successors and native
+bindings. If still active and not superseded, heartbeat/wake the SAME registration even if stale,
+then reconcile uncertain effects before retrying writes. If ending/ended or a successor already
+registered, follow the existing handoff/routing rules; never reactivate an ended registration.
+Normal elapsed 24-hour rotation remains due from the original registration time; if it falls
+during an outage, defer the handoff until authority and its outcome can be verified.
+Genuine native Captain loss/degradation, explicit owner stop and missing/invalid charter authority
+retain their safety/recovery rules. Only evidence of Captain-local failure independent of shared
+availability warrants safety handoff, not the count or flag alone.
 
 ## Own progress and unblock delivery
 
@@ -102,7 +131,8 @@ Instructions apply when read, including the existing 90-minute reinforcement, no
    Pending intervals survive misses/restarts and coalesce; no local timing file.
    Queued wake prompts do not refresh liveness during a lengthy turn: between bounded batches run
    non-wake `phx shift heartbeat --captain <id>` before staleness, without a second wake count.
-   If `shift.handoff_due` or degradation applies, finish reconciliation then follow *Ending a shift*.
+   If `shift.handoff_due` or diagnosed native degradation applies, finish reconciliation then follow
+   *Ending a shift*, subject to the outage rules above.
 2. **Reconcile.** Read `phx shift status --captain <id>`: flags, Captains, your exact cleanup record,
    items and `pickup_candidates`/authoritative `pickup` reasons; `excluded_items` is visibility,
    not authority. Inspect every open writer, including inherited ones, through native tools.
