@@ -5,7 +5,7 @@
   --raised: light-dark(#faf7f1, #22201d);
   --hover: light-dark(#f2ede3, #26241f);
   --line: light-dark(#e7e1d5, #2e2b26);
-  --line-strong: light-dark(#d6cdbb, #3d3932);
+  --line-strong: light-dark(#8c8274, #83796b);
   --ink: light-dark(#1f1a14, #ece7de);
   --muted: light-dark(#5f574b, #b3ab9e);
   --faint: light-dark(#70675d, #ada49a);
@@ -171,7 +171,7 @@ body { margin: 0; }
   font-size: 11px; font-weight: 600; letter-spacing: 0; padding: 0 .45rem; border-radius: 99px;
   background: var(--raised); border: 1px solid var(--line); color: var(--muted); font-variant-numeric: tabular-nums;
 }
-.count.t-attn { background: var(--attn); border-color: var(--attn); color: var(--surface); }
+.count.t-attn { background: var(--attn); border-color: var(--attn); color: light-dark(#fffdf9, #1a1917); }
 .count.t-wait { color: var(--wait); border-color: color-mix(in srgb, var(--wait) 40%, transparent); }
 .sec-needs .rows.items { border-color: color-mix(in srgb, var(--attn) 35%, var(--line)); }
 .empty { margin: 0; padding: .4rem .75rem; color: var(--faint); border: 1px dashed var(--line); border-radius: 8px; }
@@ -302,6 +302,15 @@ body { margin: 0; }
 
 /* Narrow: two lines per row. */
 @media (max-width: 760px) {
+  .phalanx-board :is(button, a, summary, input), #operator-session :is(button, input),
+  #operator-report :is(button, a) {
+    min-width: 44px; min-height: 44px; box-sizing: border-box;
+  }
+  .phalanx-board a, #operator-report a {
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .phalanx-board .name > button.title { min-height: 44px; flex: 1; }
+  .phalanx-board .fgroup > summary { min-height: 44px; }
   .line, .closed .line, .captains .line, .fgroup > summary, .flist .line {
     display: flex; flex-wrap: wrap; column-gap: .55rem; padding: .3rem .6rem; min-height: 0;
   }
@@ -459,7 +468,7 @@ body { margin: 0; }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
   @supports (background-clip: text) or (-webkit-background-clip: text) {
     .brand h1 {
-      background: linear-gradient(105deg, var(--accent) 42%, var(--gold) 50%, var(--accent) 58%) 100% 0 / 300% 100% no-repeat;
+      background: linear-gradient(105deg, var(--accent) 42%, var(--captain) 50%, var(--accent) 58%) 100% 0 / 300% 100% no-repeat;
       -webkit-background-clip: text; background-clip: text;
       -webkit-text-fill-color: transparent;
       animation: glint 9s ease-in-out 1s infinite;

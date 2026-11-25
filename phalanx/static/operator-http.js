@@ -13,9 +13,12 @@
     : location.pathname === "/operator/history" ? "history" : "home";
 
   function client(token) {
+    const snapshots = new Map();
     async function read(path, signal, accept = "application/json") {
       const headers = { Accept: accept };
       if (token) headers.Authorization = "Bearer " + token;
+      const cached = snapshots.get(path);
+      if (cached) headers["If-None-Match"] = cached.etag;
       const response = await fetch(path, {
         signal,
         redirect: "error",
@@ -23,6 +26,10 @@
         credentials: "omit",
         headers
       });
+      if (response.status === 304) {
+        if (!cached) throw new Error("The server returned 304 without a saved response.");
+        return cached.body;
+      }
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
           throw new Error(token ? "The server rejected the owner token." : "The server requires an owner token.");
@@ -35,7 +42,14 @@
       if (response.headers.get("content-type")?.split(";")[0] !== accept) {
         throw new Error("The server returned an unexpected response type.");
       }
-      return accept === "application/json" ? response.json() : response.text();
+      const body = await (accept === "application/json" ? response.json() : response.text());
+      const etag = response.headers.get("etag");
+      if (etag) {
+        snapshots.delete(path);
+        snapshots.set(path, { etag, body });
+        if (snapshots.size > 64) snapshots.delete(snapshots.keys().next().value);
+      } else snapshots.delete(path);
+      return body;
     }
 
     function query(limit, cursor) {
@@ -108,6 +122,7 @@
         lastProgressAt: row.last_progress_at,
         waitSince: row.wait_since,
         waitReason: row.wait_reason,
+        nextAction: row.next_action,
         resumeTrigger: row.resume_trigger,
         retryAt: epochMs(row.retry_at_ms),
         recheckAt: epochMs(row.recheck_at_ms),
@@ -155,6 +170,14 @@
 
     return {
       owner: signal => read("/v1/owner/status", signal),
+      async overview({ signal }) {
+        const result = await read("/v1/operator/overview", signal);
+        if (!["needs_you", "running", "queued", "blocked", "waiting_on_checks"].every(name =>
+          Number.isSafeInteger(result.sections?.[name]) && result.sections[name] >= 0)) {
+          throw new Error("The server returned invalid global queue counts.");
+        }
+        return result;
+      },
       boardAccess: signal => read(EXECUTIONS + "?limit=1", signal),
       capacity: signal => read("/operator/api/dispatch/settings", signal),
       async saveCapacity(maximum) {

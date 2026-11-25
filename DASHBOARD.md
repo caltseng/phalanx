@@ -204,6 +204,11 @@ these filters and keeps independent `open_cursor` and `closed_cursor` parameters
 filters starts at the first page; paging updates the URL and preserves filters. A bookmarked
 later page can return to the first page, and a filtered empty page with a continuation still
 shows More. Counts beside headings describe the loaded page, not a server-wide total.
+Home's top-bar queue totals come from the global overview, independent of filters and
+pagination. Empty sections explicitly describe this page, not the whole queue. Running
+rows retain the server's next action. Live appears only after every enabled initial read
+succeeds; failed reads remain Partial/Disconnected. Polls retain bounded in-memory
+snapshots and send `If-None-Match`, reusing the snapshot on a bodyless 304.
 
 The global search form always searches both open and closed work on Home, using PH-29a's
 `q` matching (item ID, execution ID, observed PR number/URL or goal/title text). The filter
@@ -406,7 +411,7 @@ reads current server values; charter settings cannot undo dashboard edits.
   `next_execution_id` for navigating reruns without reading the full execution list.
 - Draft-completed executions use `draft_published` consistently in summary rows, the outcome filter, overview and label-group rollups. They count as delivered in the overview, not as ready for check-in.
 - Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. `outcome` and `closed_after` apply to `kind=closed`, and `status` must match the kind; otherwise the server returns 400. `q` matches goal text, an item or execution ID, or an observed PR URL or number. Filtered cursors are bound to their filters. A filtered page inspects at most 2,000 indexed candidate executions, so it can return fewer rows than requested (even zero) with a cursor to continue.
-- `GET /v1/operator/groups/{label}`: a rollup of the current executions with that label (items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed) and an item page. Returns 404 when no item has the label.
+- `GET /v1/operator/groups/{label}`: a bounded page of current executions with that label and a rollup **of that page only** (`scope: "page"`; items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed). Follow `next_cursor` for subsequent pages; no request aggregates the whole label. Returns 404 when no item has the label.
 - Execution lists, overview and groups return a weak `ETag` and accept `If-None-Match`. An unchanged poll returns `304` before reading rows or rollups. A durable change token and indexed retry/lease/24-hour-closure boundaries invalidate the tag. Ticking display ages alone do not: retain the last snapshot and calculate elapsed age from its timestamps and `generated_at`. Authentication is checked before conditional reads.
 - Reports render as sanitized Markdown on the local board, with raw HTML stripped and no
   browser dependency or change to the plain-text report API.

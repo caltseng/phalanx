@@ -17,6 +17,7 @@
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
     primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
+    nextAction: "A worker is running the self_review stage",
     writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId },
     historicalWorker: { workerRef: "opaque-worker-7" }
   };
@@ -80,6 +81,9 @@
     }],
     nextCursor: cursor ? null : "older-events"
   });
+  let releaseOpen;
+  const firstOpen = new Promise(resolve => { releaseOpen = resolve; });
+  let openReady = false;
 
   const source = {
     concurrencyControl: document.querySelector("#operator-settings"),
@@ -87,6 +91,7 @@
       calls.push([kind, cursor, limit]);
       if (offline) throw new Error("API offline");
       if (kind === "open") {
+        if (!openReady) await firstOpen;
         return { items: cursor ? [queued] : [waiting, running, queued, external, resumed], nextCursor: cursor ? null : "more-open" };
       }
       return { items: cursor ? [] : [success, observed, ready, short, failure, draft, cancelled, report], nextCursor: cursor ? null : "older-closed" };
@@ -109,8 +114,16 @@
       return detailData([running, success, observed, ready, short, failure, draft].find(row => row.id === id), cursor);
     }
   };
+  let releaseOverview;
+  const firstOverview = new Promise(resolve => { releaseOverview = resolve; });
+  let overviewReady = false;
+  source.overview = async () => {
+    if (offline) throw new Error("API offline");
+    if (!overviewReady) await firstOverview;
+    return { sections: { needs_you: 10, running: 200, queued: 9390, blocked: 0, waiting_on_checks: 400 } };
+  };
 
-  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const tick = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const button = name => root.querySelector('button[aria-label="' + name + '"]');
   const item = id => root.querySelector('button[data-item="' + id + '"]');
@@ -157,6 +170,18 @@
       assert(colors(".glyph.t-handoff") !== colors(".glyph.t-ok") &&
         colors(".glyph.t-fail") !== colors(".glyph.t-attn"), theme + ": handoff/success and failure/attention differ");
       let iconMinimum = Infinity, textMinimum = Infinity;
+      for (const token of ["--bg", "--surface", "--raised", "--hover"]) {
+        surface.style.background = "var(" + token + ")";
+        const bg = getComputedStyle(surface).backgroundColor;
+        for (const text of ["--faint", "--accent", "--captain"]) {
+          surface.style.color = "var(" + text + ")";
+          assert(ratio(getComputedStyle(surface).color, bg) >= 4.5,
+            theme + ": secondary text and every brand glint stop meet AA on " + token);
+        }
+        surface.style.color = "var(--line-strong)";
+        assert(ratio(getComputedStyle(surface).color, bg) >= 3,
+          theme + ": control boundaries meet non-text AA on " + token);
+      }
       for (const glyph of root.querySelectorAll(".rows .glyph")) {
         const icon = glyph.querySelector("svg") || glyph;
         const color = getComputedStyle(icon).color;
@@ -187,6 +212,21 @@
 
   try {
     await tick();
+    assert(root.querySelector(".health").textContent.includes("Connecting") &&
+      !root.querySelector(".h-live"), "Live waits for every initial read, including overview");
+    overviewReady = true;
+    releaseOverview();
+    await tick();
+    assert(!root.querySelector(".h-live"), "A delayed initial open read cannot show Live");
+    openReady = true;
+    releaseOpen();
+    await tick();
+    assert(root.querySelector(".h-live"), "Live appears after all enabled reads succeed");
+    assert(root.querySelector(".counts").textContent.includes("200 running") &&
+      root.querySelector(".counts").textContent.includes("9790 queued and waiting"),
+    "Home counts cover the entire queue, not the loaded page");
+    assert(item("run").closest("li").querySelector(".reason").textContent === running.nextAction,
+      "Running rows retain the server's next action");
     const target = window.PhalanxOperatorBoard.sessionTarget;
     assert(target({ runtime: "copilot-app", sessionId: nativeId }).url === copilotUrl &&
       target({ runtime: "codex", sessionId: nativeId }).url === codexUrl, "Known native IDs route only to their host");

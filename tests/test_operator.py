@@ -600,3 +600,32 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.page(BOARD + "?kind=closed&closed_after=2025-01-03T00:00:00Z")["items"], [])
         rollup = self.page("/v1/operator/groups/wave-2")["rollup"]
         self.assertEqual((rollup["open"], rollup["outcomes"]["cancelled"]), (0, 1))
+
+    def test_group_rollup_is_bounded_to_its_item_page(self):
+        with write_transaction(self.path) as db:
+            for number in range(20, 25):
+                insert(db, number)
+                db.execute("UPDATE work_items SET request_json=json_set(request_json, '$.label', 'wave-1') "
+                           "WHERE id=?", (identifier(number + 100000),))
+            transition(db, 23, 2, replace(QUEUED, status=Status.CANCELLED,
+                                         final_output=StoredReport("/v1/report")))
+        cursor = None
+        seen = set()
+        totals = {"items": 0, "open": 0, "cancelled": 0}
+        while True:
+            url = "/v1/operator/groups/wave-1?limit=2"
+            group = self.page(url + ("&cursor=" + cursor if cursor else ""))
+            rollup = group["rollup"]
+            self.assertEqual(rollup["scope"], "page")
+            self.assertEqual(rollup["items"], len(group["items"]))
+            self.assertLessEqual(rollup["items"], 2)
+            for row in group["items"]:
+                self.assertNotIn(row["id"], seen)
+                seen.add(row["id"])
+            totals["items"] += rollup["items"]
+            totals["open"] += rollup["open"]
+            totals["cancelled"] += rollup["outcomes"]["cancelled"]
+            cursor = group["next_cursor"]
+            if cursor is None:
+                break
+        self.assertEqual(totals, {"items": 6, "open": 5, "cancelled": 1})
