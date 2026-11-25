@@ -20,6 +20,7 @@
   const row = { id: execution, item_id: id, title: "Searchable report", goal: "Keep the existing details",
     repository_id: "example", stage: "report_storage", status: "completed", created_at: now,
     last_advanced_at: now, closed_at: now, outcome: "report_stored", output: { kind: "report" },
+    delivery: { merged: true, merge_commit: "f".repeat(40), merged_at: now, merge_method: "merge" },
     writer: { state: "ended", runtime: "copilot-app", session_id: nativeId, session_url: writerUrl,
       session_availability: "unverified" } };
   const report = [
@@ -42,6 +43,8 @@
     stage: "development", version: 3, wait_reason: approval, resume_trigger: approval });
   let calls = [];
   let conditionalReads = 0;
+  let allNotModified = false;
+  let pollFailure = false;
   let fail = false;
   let shell;
   const errors = [];
@@ -53,18 +56,22 @@
     });
     const win = frame.contentWindow;
     const doc = win.document;
-    const clock = win.Date.now.bind(win.Date);
-    win.Date.now = () => clock() + ageOffset * 60000;
+    const intervals = [];
+    win.setInterval = (callback, delay) => intervals.push({ callback, delay });
+    win.clearInterval = () => {};
+    const clock = win.Date.now();
+    win.Date.now = () => clock + ageOffset * 60000;
     win.history.replaceState(null, "", path);
     doc.open();
     win.onerror = message => errors.push(message);
     calls = [];
     win.fetch = async (path, options = {}) => {
       calls.push(String(path));
+      if (pollFailure) throw new Error("Fixture poll disconnected");
       const json = (body, status = 200) => new win.Response(JSON.stringify(body), {
         status, headers: { "content-type": "application/json" }
       });
-      if (path === "/v1/operator/overview" || path.startsWith("/v1/operator/executions?")) {
+      if (allNotModified || path === "/v1/operator/overview" || path.startsWith("/v1/operator/executions?")) {
         if (options.headers["If-None-Match"] === 'W/"fixture"') {
           conditionalReads++;
           return new win.Response(null, { status: 304, headers: { ETag: 'W/"fixture"' } });
@@ -73,24 +80,33 @@
       const snapshot = body => new win.Response(JSON.stringify(body), {
         headers: { "content-type": "application/json", ETag: 'W/"fixture"' }
       });
+      if (path === "/operator/api/repositories") return json([{ id: "example" }]);
+      if (path === "/operator/api/items") {
+        const payload = JSON.parse(options.body);
+        return json({ id: "e".repeat(32), ...payload, execution: {
+          id: "d".repeat(32), version: 1, created_at: now, updated_at: now,
+          state: { target: payload.target, publication_mode: payload.publication_mode,
+            stage: "development", status: "queued" }
+        } }, 201);
+      }
       if (path === "/v1/operator/overview") return snapshot({
         sections: { needs_you: 10, running: 200, queued: 9390, blocked: 0, waiting_on_checks: 400 }
       });
-      if (path === "/v1/flags") return json({ flags: [
+      if (path === "/v1/flags") return snapshot({ flags: [
         { kind: "head_drift", reason: "Head moved", recovery: "Reconcile the current head",
           first_seen: now, notify_owner: false }
       ] });
-      if (path.startsWith("/v1/captains?")) return json({ captains: [
+      if (path.startsWith("/v1/captains?")) return snapshot({ captains: [
         { id: "cap-live", session_ref: captainUrl, state: "active", live: true, stale: false, heartbeat_at: now,
           wake_count: 7, compaction_count: 4, charter_revision: "opaque-hash", focus: [id] },
         { id: "cap-stale", state: "active", live: false, stale: true, heartbeat_at: now, compaction_count: null },
         { id: "cap-ended", state: "ended", live: false, stale: false, heartbeat_at: now, compaction_count: 0 }
       ] });
-      if (path === "/v1/operator/items/" + id) return fail ? json({}, 404) : json({ item: row });
+      if (path === "/v1/operator/items/" + id) return fail ? json({}, 404) : snapshot({ item: row });
       if (path.startsWith("/v1/operator/executions/" + execution + "/timeline?")) {
         if (fail) return json({}, 404);
         const cursor = new URL(path, location.origin).searchParams.get("cursor");
-        return json({ item: readingLayout ? waitingRow() : row, attempt: null, prerequisites: [],
+        return snapshot({ item: readingLayout ? waitingRow() : row, attempt: null, prerequisites: [],
           question: readingLayout ? { prompt: approval, options: [approval], proposed_default: approval } : null,
           previous_execution_id: previous, next_execution_id: null,
           events: [{ created_at: now, stage: "report_storage", status: "completed", event: "result" }],
@@ -114,7 +130,7 @@
       JSON.stringify(path) + ");</script>"));
     doc.close();
     await until(() => doc.querySelector(".board-navigation"));
-    return { win, doc };
+    return { win, doc, intervals };
   }
 
   try {
@@ -341,6 +357,70 @@
     "Real adapter reads global totals from overview");
     assert(app.doc.querySelector(".sec-active .reason").textContent === "A worker is running the development stage",
       "Real adapter retains next_action on list rows");
+    const unchangedPoll = async (expectedReads, renderExpected = false) => {
+      await new Promise(resolve => app.win.requestAnimationFrame(() => app.win.requestAnimationFrame(resolve)));
+      const mutations = [];
+      const observer = new app.win.MutationObserver(records => mutations.push(...records));
+      observer.observe(app.doc.querySelector("#operator-board"), {
+        subtree: true, childList: true, attributes: true, characterData: true
+      });
+      const before = conditionalReads;
+      allNotModified = true;
+      app.intervals.find(timer => timer.delay === 15000).callback();
+      await until(() => conditionalReads >= before + expectedReads);
+      await new Promise(resolve => app.win.requestAnimationFrame(() => app.win.requestAnimationFrame(resolve)));
+      mutations.push(...observer.takeRecords());
+      observer.disconnect();
+      allNotModified = false;
+      assert(conditionalReads === before + expectedReads, "Every poll read returns a bodyless 304");
+      assert(renderExpected ? mutations.length > 0 : mutations.length === 0,
+        renderExpected ? "A cached poll reconciles changed local read state" :
+          "All-304 poll makes no DOM mutations, including health and summary");
+    };
+    await unchangedPoll(5);
+    app.doc.querySelector(".sec-active [data-item]").click();
+    await until(() => app.doc.querySelector(".detail-links"));
+    await unchangedPoll(6);
+    const ages = [...app.doc.querySelectorAll(".sections time[datetime]")].map(node => ({
+      node, text: node.textContent, title: node.title, context: node.dataset.ageContext
+    }));
+    const ageTick = app.intervals.find(timer => timer.delay === 5000).callback;
+    ageOffset = 2;
+    ageTick();
+    assert(ages.length > 0 && ages.every(({ node, text, title, context }) =>
+      node.isConnected && node.textContent !== text && node.title === title &&
+      node.getAttribute("aria-label").includes(node.textContent) &&
+      (!context || node.getAttribute("aria-label").startsWith(context + " · "))),
+    "Ticker updates unchanged stage, closed, merged, flag and Captain ages in place across a span boundary");
+    const ageMutations = [];
+    const ageObserver = new app.win.MutationObserver(records => ageMutations.push(...records));
+    ageObserver.observe(app.doc.querySelector(".sections"), {
+      subtree: true, childList: true, attributes: true, characterData: true
+    });
+    ageTick();
+    ageMutations.push(...ageObserver.takeRecords());
+    ageObserver.disconnect();
+    assert(ageMutations.length === 0, "Ticker leaves row DOM untouched while displayed age spans are unchanged");
+    ageOffset = 0;
+    ageTick();
+    await unchangedPoll(6);
+    app.doc.querySelector(".sec-active [data-item]").click();
+    pollFailure = true;
+    app.doc.querySelector('[data-action="refresh"]').click();
+    await until(() => app.doc.querySelector(".h-down"));
+    pollFailure = false;
+    await unchangedPoll(5, true);
+    assert(app.doc.querySelector(".h-live") && !app.doc.querySelector(".sections .warn"),
+      "Cached snapshots recover from failed reads without requiring a changed server body");
+    app.doc.querySelector(".new-item").click();
+    const createForm = app.doc.querySelector("#operator-create-form");
+    await until(() => !createForm.hidden);
+    createForm.elements.goal.value = "Optimistic intake outside the current cached page";
+    createForm.requestSubmit();
+    await until(() => app.doc.querySelector('[data-item="' + "d".repeat(32) + '"]'));
+    await unchangedPoll(5, true);
+    assert(!app.doc.querySelector('[data-item="' + "d".repeat(32) + '"]'),
+      "Create does not mutate cached list projections; the next all-304 poll removes the optimistic row");
     const beforeConditional = conditionalReads;
     app.doc.querySelector('[data-action="refresh"]').click();
     await until(() => conditionalReads >= beforeConditional + 3);
