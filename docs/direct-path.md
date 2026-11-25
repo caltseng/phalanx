@@ -375,10 +375,27 @@ guidance: direct the owner to send fresh input at the verified conversation. Rep
 failure or uncertainty honestly; inspect uncertain receipt before retrying. Forwarding grants no
 new permissions and does not change repository trust or scoped credentials.
 
-After registration, use the new Captain's own ID in its display name where native rename is
-supported; label its `parent_id` as predecessor. An ended chat can be named
-`Off-shift <own ID prefix> [phx]`. When renaming is unavailable, explicit role wording in replies
-is required. Preserve the predecessor-derived launch nonce in kickoff/history for recovery.
+On first registration, use the new Captain's own ID in its display name where native rename is
+supported; label its `parent_id` as predecessor. After a completed handoff, the outgoing Captain
+uses the existing native rename tool on **its own conversation only** to add exactly `[retired] `
+to its current substantive title. Re-read the exact registration (`ended`, no open intents,
+verified registered successor with its `parent_id`) and resolve its native `session_ref` to this
+conversation before renaming; a fresh `shift current` lookup must not identify it as current.
+Starting handoff, becoming stale, launching an unregistered successor or failing a handoff does
+not qualify. On first registration the successor notifies the predecessor's verified native
+binding once, letting the outgoing chat perform its own retirement after ending even when its
+schedule has stopped. The outgoing chat still checks authoritative state; the message alone
+is not completion evidence. Report unavailable/refused messaging rather than renaming another
+chat. Pending writer cleanup remains separate. Never rename the incoming/active Captain,
+another chat or historical chats in bulk. Strip repeated leading literal `[retired]` tags and
+their following whitespace before adding one prefix; preserve the remaining title exactly.
+Re-read on retries, skip an already correct title and verify the rename. Do not replace the
+title with a generic off-shift name, truncate it to fit runtime limits or bypass native permissions.
+If native inspection/rename is unavailable, restricted or uncertain, report the precise limitation
+and use explicit off-shift wording instead of claiming success. No runtime storage edits or new
+rename adapter are needed. The title is presentation only: API registration/liveness and
+`shift current`, never title text, determine authority; title failure cannot block the successor
+or restart coordination. Preserve the predecessor-derived launch nonce in kickoff/history for recovery.
 Never detach or reparent chats as a naming fix. Existing creator cleanup, writer bindings,
 five-minute Captain wakes, thirty-minute keeper recovery and retirement rules are unchanged.
 
@@ -386,7 +403,9 @@ five-minute Captain wakes, thirty-minute keeper recovery and retirement rules ar
 `shift prompt captain` and `shift prompt keeper`, and included in generated handoffs.
 Deploy both API and client from the reviewed revision through the normal service-owner rollout;
 an old server will not serve `shift current`. No private muster instruction patch is required.
-Existing chats do not retroactively receive new prompts: explicitly relay the changed section
+Title retirement uses existing client prompts and native tools; it adds no API, schema or runtime
+election change and needs no service restart. Existing chats do not retroactively receive new prompts:
+explicitly relay the changed section
 verbatim from `shift prompt forwarding` to retained Captain/keeper chats via supported messaging.
 Do not claim that merge/deployment updated those chats or that the relay was delivered without
 runtime evidence. This item does not itself grant authority to edit unrelated retained chats.

@@ -658,6 +658,47 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 self.assertIn(instruction, " ".join(forwarding.split()))
         self.assertNotIn(forwarding, shift.prompt("worker"))
 
+    def test_handoff_prompts_require_completed_handoff_before_retirement(self):
+        captain = shift.start(self.api, self.charter, "outgoing-chat")["captain"]["id"]
+        handoff = shift.handoff(self.api, self.charter, captain, "Transfer work", "phx shift")
+        for prompt in (handoff["off_shift_instructions"], handoff["kickoff"],
+                       shift.prompt("captain"), shift.prompt("keeper")):
+            text = " ".join(prompt.split())
+            for guard in ("be `ended`, with no `open_intents`",
+                          "successor whose `parent_id` is your Captain ID",
+                          "failed/uncertain handoff or missing successor",
+                          "leave the title unchanged"):
+                with self.subTest(guard=guard):
+                    self.assertIn(guard, text)
+        self.assertIn("Ending the shift alone is not a completed handoff",
+                      handoff["kickoff"])
+        self.assertIn("notify your predecessor's verified native `session_ref` once",
+                      handoff["kickoff"])
+        self.assertIn("never rename the predecessor yourself", handoff["kickoff"])
+
+    def test_retirement_prompt_preserves_title_and_makes_retries_idempotent(self):
+        text = " ".join(shift.prompt("forwarding").split())
+        for instruction in ("exactly one literal `[retired]` prefix followed by one space",
+                            "Repeatedly remove only leading literal `[retired]` tags",
+                            "preserving it exactly", "If the exact title already matches, do not rename",
+                            "On every retry re-read identity, state and title",
+                            "abbreviate, truncate or remove other tags",
+                            "Verify the resulting title through native inspection"):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, text)
+        self.assertNotIn("an off-shift chat `Off-shift", text)
+
+    def test_retirement_prompt_protects_incoming_and_unrelated_sessions(self):
+        text = " ".join(shift.prompt("forwarding").split())
+        for instruction in ("Verify it is this outgoing conversation",
+                            "a result naming your registration/session prevents renaming",
+                            "Never target the incoming/current Captain",
+                            "an unrelated chat", "must not rename another conversation",
+                            "never a title, determine authority", "within its permissions and title limits",
+                            "report the exact limitation", "never bulk-rename historical sessions"):
+            with self.subTest(instruction=instruction):
+                self.assertIn(instruction, text)
+
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
             result = subprocess.run([sys.executable, "-m", "phalanx", "shift", *arguments],
