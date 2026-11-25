@@ -97,7 +97,7 @@ Example explicit shift config:
 
 For `copilot-app` and `codex`, `shift start` records a UUID native session reference
 as `ghapp://sessions/<UUID>` or `codex://threads/<UUID>` respectively, so Scribe can
-link to the correct app without guessing. Other runtimes and legacy opaque references
+link to the correct app without guessing. Other runtimes and opaque references
 are preserved. Canonical references still match the native ID for ownership and cleanup.
 The server never opens an app or starts a conversation for a link.
 
@@ -394,7 +394,7 @@ A successor does not inherit creator-only runtime authority.
    It confirms the session with `shift writer --session-id <session ID>` and, when the
    runtime returns a link, `--session-url <that exact link>`. Do not construct a session
    URL from its ID.
-   To recover a lost launch, list the full inventory, including task-first and legacy names, then
+   To recover a lost launch, list the full inventory, including renamed sessions, then
    inspect candidate kickoffs/metadata for the exact `session_identity.writer_nonce`. Names and
    goals may collide and titles may change; neither is identity. If inspection is unavailable or
    inconclusive, retain the intent and report the blocker instead of launching twice.

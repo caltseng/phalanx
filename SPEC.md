@@ -21,7 +21,7 @@ reconciler freshness and pause. See [layout and precedence](README.md#direct-mus
 
 Separate, explicit `deploy init` writes credential-free new-install templates under
 `~/.phalanx_muster` by default, refusing an existing directory. Versioned foreground
-service entrypoints preserve explicitly configured legacy paths and require an existing
+service entrypoints preserve explicitly configured existing paths and require an existing
 database unless new-database initialization is explicitly requested. Adoption never moves
 live state or restarts services; the service owner coordinates rollout after review.
 See [deployment tooling and migration](docs/deployment.md).

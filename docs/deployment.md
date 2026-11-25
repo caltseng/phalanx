@@ -58,7 +58,7 @@ and eligible-capacity refill; it is not permission to increase limits.
 
 ## Helper inventory and ownership
 
-The legacy deployment was inspected read-only. No private values or live state are copied
+The existing deployment was inspected read-only. No private values or live state are copied
 into the repository. Adopt these replacements **after review**, with the service owner:
 
 | External helper | Tracked replacement / disposition |
@@ -196,7 +196,7 @@ runner and GitHub tokens, `PHALANX_DB`, `PHALANX_API_URL`, `PHALANX_HOME`,
 `PHALANX_SHIFT_CONFIG` and `PHALANX_LOCAL_BOARD`. Unknown/duplicate keys and empty
 values fail without printing values. No shell is evaluated. Inherited environment settings
 take precedence; audit those on the service account before rollout. `shift_config` supplies
-`PHALANX_SHIFT_CONFIG` only when not already set. Preserve any explicit legacy value.
+`PHALANX_SHIFT_CONFIG` only when not already set. Preserve any explicit existing value.
 
 Git/GitHub credentials and noninteractive credential-helper setup remain service-account
 configuration, not hard-coded shell injection. The reconciler uses `PHALANX_GITHUB_TOKEN`
@@ -229,10 +229,10 @@ appropriate to that repository; the Windows junction helper is not a portable in
 
 ## Existing runtime: reviewed adoption, not a rename
 
-Legacy `phalanx-muster` homes, explicit `captain.json` paths and current service/worktree/
+Existing `phalanx-muster` homes, explicit `captain.json` paths and current service/worktree/
 session paths remain valid. **Do not run `deploy init` on the live home, rename it, change
 the discovery locator, or relocate the database to adopt the new spelling.** The raw API's
-legacy `.phalanx/phalanx.sqlite3` fallback remains unchanged for compatibility; supported
+default `.phalanx/phalanx.sqlite3` path remains unchanged; supported
 new setup writes an explicit absolute path under `.phalanx_muster` instead.
 
 1. Before review, inventory only: record the owning account/supervisor, exact API
@@ -256,7 +256,7 @@ new setup writes an explicit absolute path under `.phalanx_muster` instead.
    Run `python -m phalanx deploy check --config <that file>`. This is a read-only
    path/credential-presence check, **not** a connectivity, schema or GitHub validation.
    It never starts services, opens SQLite or alters configs. Do not add/change
-   `PHALANX_HOME` in a legacy API until its owner has reviewed the identity change;
+   `PHALANX_HOME` in an existing API until its owner has reviewed the identity change;
    explicit configs work without it.
 3. After review and required checks pass, the authorized service operator executes rollout under
    [standing authority](#standing-authority-for-compatible-upgrades). Record authenticated
@@ -310,7 +310,7 @@ After review/check-in, the authorized deployment owner:
    API calls during the short outage may need their normal retry. Never reset registrations,
    attempts, counters, limits or a dirty checkout. Advance the complete clean pinned deployment
    checkout to the reviewed merge commit, not a selection of runtime files. There is no new
-   migration or legacy-schema fallback. Verify health, authenticated status and existing
+   migration or old-schema fallback. Verify health, authenticated status and existing
    writer bindings after startup. A missing column/API is an activation blocker, not a
    reason to report reinforcement as active.
 

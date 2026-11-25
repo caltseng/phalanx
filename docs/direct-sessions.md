@@ -53,7 +53,7 @@ merging. Config, credentials, worktrees, result artifacts and logs stay on the h
    never borrow another checkout's environment or install packages.
 3. The Captain confirms the native ID and link with `PATCH .../writer`. If the launch reply
    was lost, search the full native session list and inspect kickoffs/metadata for the exact full
-   nonce before launching anything. Legacy names containing the nonce remain discoverable.
+   nonce before launching anything. A title alone never establishes writer identity.
    If inspection is unavailable or inconclusive, retain the intent and surface the blocker. Only
    the owning Captain acts on an unconfirmed intent until it ends, goes stale or abandons it.
    Complete reserve/create/confirm for one item before reserving another. `shift launch`
@@ -301,7 +301,7 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
     its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
     suppress dispatch-overdue warnings and exclude normal Captain pickup while active, but reserve no capacity.
     Full-capacity backlog remains visible even with an active hold.
-  - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, legacy `phx …` names, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` by registered session ID and full nonce, falling back to legacy item-prefix/nonce name words only when structured identity is absent. Titles never establish ownership for task-first sessions. A pending successor's name is exempt while its parent is `ending`.
+  - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` only by registered session ID and full nonce. Titles never establish writer ownership. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
   - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
 - **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`, a freshness
@@ -376,10 +376,9 @@ not the retired recovery machinery.
    handoff and keeper restart in the [pilot](pilots/direct-sessions.md). Retire the previous
    transport and reservations in part 1, then runner-only stages/local stores in part 2.
    Each removal updates the specs and operational docs and runs full CI and the envelope probe.
-   Dropped schema objects use one appended `MIGRATIONS` entry (decision 67), not compatibility
-   layers or new migration machinery. The part 2 entry also normalizes removed stage names
-   only on closed execution snapshots to `delivery`; immutable history, attempts, outputs,
-   versions and timestamps are preserved.
+   Startup creates only the canonical schema; it never converts deployed data.
+   Existing stores require the operator-owned [offline conversion](development.md#existing-store-conversion).
+   Immutable history, attempts, outputs, versions and timestamps are preserved.
 
 ## Decisions
 

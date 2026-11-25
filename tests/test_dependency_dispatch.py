@@ -6,7 +6,7 @@ import unittest
 
 from phalanx import dependencies, finalization, intake
 from phalanx.intake_models import Intake, Rerun
-from phalanx.store import connect, migrate, write_transaction
+from phalanx.store import connect, initialize, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, Stage, Status, StoredReport, Target
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -16,7 +16,7 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
     def setUp(self):
         directory = self.enterContext(TemporaryDirectory())
         self.path = Path(directory) / "queue.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
         with write_transaction(self.path) as db:
             intake.register(db, "source", "https://example.com/source.git")
             intake.register(db, "consumer", "https://example.com/consumer.git")

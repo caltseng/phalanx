@@ -15,7 +15,7 @@ from .intake_api import router as intake_router
 from .muster_api import configured_home, router as muster_router
 from .operator_api import router as operator_router
 from .operator_web import assets as operator_assets, router as operator_web_router
-from .store import connect, migrate, write_transaction
+from .store import connect, initialize, write_transaction
 from .writers import router as writers_router
 from .usage import router as usage_router
 
@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     app.state.local_board = local_board()
     app.state.database_path = database_path()
     app.state.muster_home = configured_home()
-    migrate(app.state.database_path)
+    initialize(app.state.database_path)
     with write_transaction(app.state.database_path) as db:
         dependencies.start_reconciliation(db)
     tasks = (

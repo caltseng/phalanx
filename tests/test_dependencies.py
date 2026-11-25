@@ -7,7 +7,7 @@ import unittest
 
 from phalanx.dependencies import Dependency, dependents, replace_dependencies, resolve_dependencies
 from phalanx.intake import Conflict, current_execution, digest, encode, new_execution, register, timestamp
-from phalanx.store import connect, migrate, write_transaction
+from phalanx.store import connect, initialize, write_transaction
 from phalanx.transitions import PullRequest, Revision, Stage, Status, StoredReport, Target, start
 
 
@@ -15,7 +15,7 @@ class DependencyTests(unittest.TestCase):
     def setUp(self):
         directory = self.enterContext(TemporaryDirectory())
         self.path = Path(directory) / "dependencies.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
         with write_transaction(self.path) as db:
             register(db, "consumer", "https://example.com/consumer")
             register(db, "producer", "https://example.com/producer")

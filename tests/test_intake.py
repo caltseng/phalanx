@@ -204,16 +204,14 @@ class IntakeTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(cli.returncode, 0, cli.stderr)
                 self.assertEqual(json.loads(cli.stdout)["execution"]["state"]["target"], target)
 
-    def test_default_publication_mode_keeps_the_pre_upgrade_fingerprint(self):
+    def test_receipt_fingerprints_the_complete_validated_intake(self):
         item, body, _, _ = self.create(target="ready_for_check_in")
-        # The request as fingerprinted before publication_mode existed.
-        before = {**body, "context_links": [], "acceptance_criteria": [], "target_branch": None,
-                  "priority": "normal"}
+        from phalanx.intake_models import Intake
+        expected = Intake(**body).model_dump(mode="json")
         with connect(self.path, mode="ro") as db:
             stored, = db.execute("SELECT request_digest FROM request_receipts WHERE idempotency_key='first'"
                                  ).fetchone()
-        self.assertEqual(stored, digest(encode(before)))
-        # A retry from before the upgrade, or one naming the default, returns the original item.
+        self.assertEqual(stored, digest(encode(expected)))
         self.assertEqual(self.submit("/v1/items", body, key="first"), (201, item))
         self.assertEqual(self.submit("/v1/items", dict(body, publication_mode="ready"), key="first"), (201, item))
         self.assertEqual(self.submit("/v1/items", dict(body, publication_mode="draft"), key="first")[0], 409)

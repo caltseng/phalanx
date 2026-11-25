@@ -6,7 +6,7 @@ privately; never initialize a second store to repair discovery.
 
 [`deploy init`](deployment.md) creates new-install templates under `~/.phalanx_muster`;
 `deploy run` and `deploy cli` use a local `deployment.json` for private environment,
-shift/reconciler paths and loopback host/port. Explicit legacy locations stay valid.
+shift/reconciler paths and loopback host/port. Explicit existing locations stay valid.
 This setup never renames or upgrades live directories.
 
 ## Environment variables

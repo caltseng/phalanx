@@ -10,7 +10,6 @@ from .auth import (
     authenticate, require_coordinator, require_owner, require_runner, require_same_origin, require_writer,
 )
 from .store import read_transaction, write_transaction
-from .transitions import PublicationMode
 from .intake_models import (
     AttemptEvent, Cancel, DisplayTitle, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
@@ -50,18 +49,8 @@ def repositories(request: Request):
 @router.post("/items", status_code=201,
              dependencies=[Depends(require_owner), Depends(require_same_origin)])
 def create(request: Request, body: Intake, key: Key = None):
-    omitted = set()
-    if body.runner_affinity is None:
-        omitted.add("runner_affinity")
-    if body.label is None:
-        omitted.add("label")
-    if not body.dependencies:
-        omitted.add("dependencies")
-    if body.publication_mode is PublicationMode.READY:
-        omitted.add("publication_mode")
-    payload = body.model_dump(mode="json", exclude=omitted)
     return run(request, intake.create, body, write=True,
-               scope="intake", key=key, payload=payload)
+               scope="intake", key=key, payload=body.model_dump(mode="json"))
 
 
 @router.get("/items/{item_id}")
@@ -144,13 +133,6 @@ def attempt_event(request, operation, item_id, execution_id, body, key):
 
     writer = request.state.writer
     payload = body.model_dump(mode="json")
-    if isinstance(body, Result):
-        for field in (
-            "failure_reason", "question", "retry_after_seconds", "review_notes",
-            "report_review_notes", "pr_url",
-        ):
-            if payload[field] is None:
-                payload.pop(field)
     receipt = {"body": payload, "writer_id": writer["id"]}
     def perform(db, *args):
         view = operation(db, *args)
