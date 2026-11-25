@@ -21,10 +21,6 @@ from .pr_models import SHA
 from .transitions import TERMINAL, Event, Stage, Status
 
 
-# Writer attempts have no timed expiry. The writer token is the fence.
-WRITER_RUNNER_ID = "@writer"
-NO_EXPIRY = 253402300799
-
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Nonce = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{16,100}$")]
 TokenDigest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
@@ -128,8 +124,7 @@ def claim_next(db, writer, *, continued_from=None):
             and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)):
         if not dispatch.needs_building(state.stage) or acquire_building(db, writer):
             claim = intake.claim_attempt(
-                db, row, state, runner_id=WRITER_RUNNER_ID, lease_digest=writer["token_digest"],
-                lease_expires_at=NO_EXPIRY, now=now, continued_from=continued_from,
+                db, row, state, writer_id=writer["id"], now=now, continued_from=continued_from,
             )
     db.execute("UPDATE writers SET attempt_id=? WHERE id=?",
                (claim["attempt_id"] if claim else None, writer["id"]))
@@ -149,7 +144,7 @@ def acquire_building(db, writer):
     return True
 
 
-def release_building(db, writer_id):
+def relinquish_building(db, writer_id):
     db.execute("""UPDATE writers SET building=0, building_requested_at=NULL,
                   capacity_revision=capacity_revision+1
                   WHERE id=? AND (building=1 OR building_requested_at IS NOT NULL)""", (writer_id,))
@@ -173,7 +168,7 @@ def capacity(db, writer_id, payload):
                 raise intake.Conflict("Returning to delivery requires the reviewed commit's handoff_head")
             db.execute("UPDATE executions SET handoff_head=? WHERE id=?",
                        (payload.handoff_head, execution["id"]))
-        release_building(db, writer_id)
+        relinquish_building(db, writer_id)
     else:
         if (state.status == Status.WAITING_FOR_INPUT or execution["dependency_wait_json"] is not None
                 or execution["retry_at"] is not None and execution["retry_at"] > int(time() * 1000)
@@ -200,7 +195,7 @@ def release(db, writer, reason):
     elif attempt is not None and attempt["id"] == writer["attempt_id"]:
         intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
                      details=details)
-    release_building(db, writer["id"])
+    relinquish_building(db, writer["id"])
     db.execute("UPDATE executions SET handoff_head=NULL WHERE id=?", (writer["execution_id"],))
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
@@ -244,7 +239,7 @@ def register(db, item_id, execution_id, payload):
                               f"active writers: {names}. Retry when a writer ends; no escalation needed")
     state = intake.STATE.validate_json(intake.execution_row(db, item_id, execution_id)["state_json"])
     if state.status == Status.RUNNING:
-        raise intake.Conflict("A runner attempt holds this execution")
+        raise intake.Conflict("An active attempt holds this execution")
     writer_id = uuid4().hex
     db.execute(
         """INSERT INTO writers (id, execution_id, item_id, captain_id, runtime, nonce, token_digest,
@@ -327,7 +322,7 @@ def advance(db, writer_id, previous_attempt_id, view):
             previous = db.execute("SELECT stage FROM attempts WHERE id=?", (previous_attempt_id,)).fetchone()
             if (previous is not None and previous["stage"] == Stage.SELF_REVIEW
                     and view["state"]["stage"] == Stage.PUBLICATION):
-                release_building(db, writer_id)
+                relinquish_building(db, writer_id)
                 db.execute("UPDATE executions SET handoff_head=NULL WHERE id=?", (writer["execution_id"],))
                 writer = writer_row(db, writer_id)
             claim_next(db, writer, continued_from=previous_attempt_id)

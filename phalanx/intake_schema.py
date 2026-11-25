@@ -38,9 +38,6 @@ INTAKE_SCHEMA = (
         id TEXT PRIMARY KEY NOT NULL,
         execution_id TEXT NOT NULL REFERENCES executions(id),
         stage TEXT NOT NULL,
-        runner_id TEXT NOT NULL,
-        lease_digest TEXT NOT NULL,
-        lease_expires_at INTEGER NOT NULL,
         started_at TEXT NOT NULL,
         ended_at TEXT
     )""",

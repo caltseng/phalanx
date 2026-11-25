@@ -110,7 +110,7 @@ End each created PR description with
    credential in the item's Git directory. Never expose it in chat or commits.
 4. Accepted results end one attempt and open the next runnable stage for the same writer.
    The writer remains registered across input, external, retry and dependency waits.
-   After a reply or recheck, `work next` resumes when eligible. Keep working until a real
+   After a reply or satisfied prerequisite, `work next` resumes when eligible. Keep working until a real
    blocker or verified completion, not merely a stage boundary.
 5. The reconciler independently observes GitHub and posts timestamped facts/flags. It
    does not launch/stop sessions, mutate GitHub, or require a worker attempt.
@@ -151,7 +151,7 @@ so existing reports, board pages and later owner-merge reconciliation remain rea
 
 - Status is `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`,
   `failed` or `cancelled`, separate from stage. Every open state has an action, resume
-  trigger or recovery path. Persist wait reasons and recheck due external waits with jitter.
+  trigger or recovery path. Persist wait reasons; reconciler observations advance delivery waits.
 - Results require the current writer binding, attempt, stage and expected version. A
   writer token has no timed expiry. Ended/replaced writers and stale attempts cannot submit.
   Retryable mutations are idempotent; reconcile uncertain remote effects first.

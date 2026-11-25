@@ -57,8 +57,6 @@ class Outcome(StrEnum):
 class Event(StrEnum):
     CLAIM = "claim"
     RESULT = "result"
-    EXTERNAL_WAIT = "external_wait"
-    RECHECK = "recheck"
     REPLY = "reply"
     RETRY = "retry"
     CANCEL = "cancel"
@@ -323,7 +321,7 @@ def decide(
     """Decide one event or raise ValueError for an inadmissible event.
 
     Retry admission follows session/effect reconciliation and bounded retry
-    policy. Scheduling a retry or recheck is the caller's responsibility.
+    policy. Scheduling a retry is the caller's responsibility.
     STOP_CONFIRMED attests that the worker and in-flight effects were accounted
     for. A successful RESULT ends the current attempt, even on a stage loop.
     Self-review leads to publication; PR_OBSERVED follows GitHub through delivery.
@@ -362,20 +360,12 @@ def decide(
     if event is Event.REPLY:
         _require(state.status is Status.WAITING_FOR_INPUT, "No input wait is active")
         return _queue(state)
-    if event is Event.RECHECK:
-        _require(state.status is Status.WAITING_FOR_EXTERNAL, "No external wait is active")
-        return _queue(state)
     if event is Event.RETRY:
         _require(state.status in {Status.RUNNING, Status.WAITING_FOR_INPUT},
                  "Retry requires an active attempt or input wait")
         if retry_allowed:
             return _queue(state)
         return _wait(state, Status.WAITING_FOR_INPUT, wait)
-    if event is Event.EXTERNAL_WAIT:
-        _require(state.status in {Status.RUNNING, Status.WAITING_FOR_EXTERNAL},
-                 "External wait requires an active attempt or external wait")
-        return _wait(state, Status.WAITING_FOR_EXTERNAL, wait)
-
     _require(event is Event.RESULT and state.status is Status.RUNNING,
              "Stage results require a running attempt")
     if outcome is Outcome.SUCCEEDED:

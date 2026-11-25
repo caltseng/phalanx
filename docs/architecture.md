@@ -138,6 +138,9 @@ Status is separate from stage. Input, dependency, retry and external waits retai
 the writer; pause blocks new registrations and Building acquisitions, not an allocated writer's stage continuation.
 Writer bindings have no timed expiry. Nonce replay, expected versions and stopped-session
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
+Attempts contain only stage timing and identity; results check the live writer-to-attempt
+binding in the write transaction. There are no runner leases, scheduled external rechecks
+or separate historical-worker records. Scribe gets native session identity from writers.
 
 The writer self-review stage is not a second independent PR reviewer. GitHub reviews,
 checks and repository rules still apply. The generated writer instructions require the

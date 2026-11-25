@@ -16,10 +16,9 @@
   const running = {
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
-    primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
+    primaryPrUrl: "https://example.com/pull/7",
     nextAction: "A worker is running the self_review stage",
-    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId },
-    historicalWorker: { workerRef: "opaque-worker-7" }
+    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId }
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",

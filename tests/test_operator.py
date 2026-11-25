@@ -214,16 +214,12 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         first = self.page(route + "?limit=2")
         self.assertEqual([row["version"] for row in first["events"]], [5000, 4999])
         with write_transaction(self.path) as db:
-            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
-                       ("attempt", identifier(10), QUEUED.stage, "runner-secret", "lease-digest", 9999, LATEST))
+            db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, NULL)",
+                       ("attempt", identifier(10), QUEUED.stage, LATEST))
             transition(db, 10, 5001, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
-            db.execute("INSERT INTO external_rechecks VALUES (?, 5001, 1700000000000)", (identifier(10),))
         later = self.page(f"{route}?limit=2&cursor={first['next_cursor']}")
         self.assertEqual(later["attempt"], "attempt")
-        self.assertEqual(later["item"]["recheck_at_ms"], 1700000000000)
         self.assertEqual([row["version"] for row in later["events"]], [4998, 4997])
-        self.assertNotIn("lease-digest", json.dumps(later))
-        self.assertNotIn("runner-secret", json.dumps(later))
         self.assertEqual(self.get(f"{BOARD}/{identifier(11)}/timeline?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])
@@ -284,9 +280,8 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                 if index:
                     transition(db, 9000, version - 1, Execution(Target.READY, stage))
                 attempt = f"result-attempt-{index}"
-                db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-                           (attempt, identifier(9000), stage, "runner", "lease-digest", 9999, EARLY, LATER))
-                db.execute("INSERT INTO attempt_workers VALUES (?, ?, NULL)", (attempt, f"worker-{index}"))
+                db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, ?)",
+                           (attempt, identifier(9000), stage, EARLY, LATER))
                 transition(db, 9000, version, Execution(Target.READY, Stage.DEVELOPMENT), attempt=attempt)
                 db.execute("UPDATE transition_history SET details_json=? WHERE execution_id=? AND version=?",
                            (json.dumps(details), identifier(9000), version))
@@ -301,8 +296,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         for index, (stage, _, sha, reason) in enumerate(cases):
             event = next(row for row in events if row["version"] == 2 * index + 2)
             self.assertEqual((event["from_stage"], event["stage"]), (stage, "development"))
-            self.assertEqual((event["attempt_id"], event["worker_reference"]),
-                             (f"result-attempt-{index}", f"worker-{index}"))
+            self.assertEqual(event["attempt_id"], f"result-attempt-{index}")
             self.assertEqual((event["candidate"], event["reason"]), (sha, reason))
             self.assertEqual(event["pr_url"], pr_url if index == 1 else None)
             self.assertNotIn("details", event)
