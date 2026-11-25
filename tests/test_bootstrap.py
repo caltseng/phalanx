@@ -224,7 +224,8 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                     second = self.start_server(Path(directory) / "second.sqlite3")
                 second_url = self.url
                 try:
-                    self.assertEqual(dict(os.environ), before)
+                    self.assertTrue(dict(os.environ) == before,
+                                    "In-process fixtures must restore the process environment")
                     self.assertFalse(any(
                         call.args[0][:3] == [sys.executable, "-c", SERVER_PROCESS]
                         for call in spawn.call_args_list
