@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
-from time import monotonic, sleep, time
+from time import monotonic, sleep
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -294,12 +294,11 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         path = route + "/result"
         claim = self.claim(item, item["execution"])
         with write_transaction(self.path) as db:
-            db.execute("UPDATE attempts SET lease_digest='revoked' WHERE id=?", (claim["attempt_id"],))
+            db.execute("UPDATE writers SET attempt_id=NULL")
         body = dict(claim, candidate="abc")
         self.assertEqual(self.submit(path, body, token=LEASE)[0], 409)
         with write_transaction(self.path) as db:
-            db.execute("UPDATE attempts SET lease_digest=? WHERE id=?",
-                       (digest(LEASE), claim["attempt_id"]))
+            db.execute("UPDATE writers SET attempt_id=?", (claim["attempt_id"],))
         status, publication = self.submit(path, body, token=LEASE)
         self.assertEqual(status, 200, publication)
         claim = self.claim(item, publication)
@@ -320,12 +319,6 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         status, stopping = self.submit(route + "/cancel", cancellation, key="cancel")
         self.assertEqual(status, 200, stopping)
         self.assertEqual(stopping["state"]["stopping"], "cancelled")
-        external = {
-            "expected_version": stopping["version"], "attempt_id": claim["attempt_id"],
-            "stage": claim["stage"], "reason": "Waiting for CI", "gate": "ci",
-            "revision": {"head": "head-one", "base": "base-one"},
-        }
-        self.assertEqual(self.submit(route + "/external-wait", external, token=LEASE, key="stopping")[0], 409)
         self.assertIsNone(stopping["state"]["final_output"])
         self.assertEqual(self.submit(route + "/cancel", cancellation, key="cancel"), (200, stopping))
         self.assertEqual(self.submit(route + "/result", dict(claim, report_markdown="# Late"),
@@ -354,23 +347,6 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 200, closed)
         self.assertEqual(closed["state"]["status"], "cancelled")
         self.assertIn("No stages claimed", self.get(route + "/report", OWNER)[1])
-
-    def test_cancel_scheduled_external_wait_without_an_open_attempt(self):
-        item, _, _, route = self.create("ready_for_check_in")
-        claim = self.claim(item, item["execution"])
-        status, waiting = self.submit(route + "/external-wait", {
-            key: claim[key] for key in ("expected_version", "attempt_id", "stage")
-        } | {"reason": "Waiting for CI", "gate": "ci", "revision": {"head": "head", "base": "base"},
-             "retry_after_seconds": 60}, token=LEASE, key="wait")
-        self.assertEqual(status, 200, waiting)
-        status, closed = self.submit(
-            route + "/cancel", {"expected_version": waiting["version"], "reason": "Withdrawn"},
-        )
-        self.assertEqual(status, 200, closed)
-        self.assertEqual(closed["state"]["status"], "cancelled")
-        self.assertIn("development", self.get(route + "/report", OWNER)[1])
-        self.assertEqual([event["event"] for event in self.get(route + "/timeline", OWNER)[1]],
-                         ["intake", "claim", "external_wait", "cancel", "stop_confirmed", "finalize"])
 
     def test_input_wait_reply_survives_restart_and_queues_same_stage_once(self):
         item, _, _, route = self.create()
@@ -477,96 +453,6 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             "question": question,
         })
 
-    def test_external_wait_is_due_after_restart_and_recheck_does_not_pass_gate(self):
-        item, intake_body, _, route = self.create("ready_for_check_in")
-        claim = self.claim(item, item["execution"])
-        body = {key: claim[key] for key in ("expected_version", "attempt_id", "stage")}
-        body.update(reason="Waiting for CI", gate="ci",
-                    revision={"head": "head-one", "base": "base-one"}, retry_after_seconds=60)
-        path = route + "/external-wait"
-        self.assertEqual(self.submit(path, body, token="z" * 32, key="wait")[0], 401)
-        earliest = int(time() * 1000) + 60_000
-        status, waiting = self.submit(path, body, token=LEASE, key="wait")
-        self.assertEqual(status, 200, waiting)
-        self.assertEqual(waiting["state"]["status"], "waiting_for_external")
-        self.assertEqual(self.submit(path, body, token=LEASE, key="wait"),
-                         (200, waiting))
-        due_path = "/v1/runner/due-rechecks?limit=1"
-        self.assertEqual(self.get(due_path, OWNER)[0], 403)
-        self.assertEqual(self.get(due_path, RUNNER), (200, []))
-        recheck = {"expected_version": waiting["version"]}
-        self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="poll")[0], 409)
-        status, unrelated = self.submit("/v1/items", intake_body, key="unrelated")
-        self.assertEqual(status, 201, unrelated)
-        with write_transaction(self.path) as db:
-            due_at = db.execute("SELECT due_at_ms FROM external_rechecks").fetchone()[0]
-            self.assertGreaterEqual(due_at, earliest)
-            self.assertLessEqual(due_at, int(time() * 1000) + 65_000)
-            db.execute("UPDATE external_rechecks SET due_at_ms=1")
-            db.execute("INSERT INTO external_rechecks VALUES (?, ?, 0)",
-                       (unrelated["execution"]["id"], unrelated["execution"]["version"] + 1))
-        self.stop_server(self.server)
-        self.server = self.start_server(self.path)
-        status, batch = self.get(due_path, RUNNER)
-        self.assertEqual(status, 200)
-        self.assertEqual(len(batch), 1)
-        self.assertEqual(batch[0]["revision"], body["revision"])
-        self.assertEqual(batch[0]["version"], waiting["version"])
-        self.assertEqual(self.submit(route + "/recheck", recheck, key="owner")[0], 403)
-        status, queued = self.submit(route + "/recheck", recheck, token=RUNNER, key="poll")
-        self.assertEqual(status, 200, queued)
-        self.assertEqual(queued["state"]["status"], "queued")
-        self.assertEqual(queued["state"]["stage"], waiting["state"]["stage"])
-        self.assertIsNone(queued["state"]["final_output"])
-        self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="poll"),
-                         (200, queued))
-        self.assertEqual(self.submit(route + "/recheck", recheck, token=RUNNER, key="dupe")[0], 409)
-        self.assertEqual(self.get(due_path, RUNNER), (200, []))
-
-    def test_external_wait_limit_asks_owner_after_elapsed_time_on_one_revision(self):
-        item, _, _, route = self.create("ready_for_check_in")
-        claim = self.claim(item, item["execution"])
-
-        def wait(claim, key):
-            body = {name: claim[name] for name in ("expected_version", "attempt_id", "stage")}
-            body.update(reason="Draft checks pending", gate="draft_checks", retry_after_seconds=5,
-                        revision={"head": "head-one", "base": "base-one"}, wait_limit_seconds=60)
-            status, updated = self.submit(route + "/external-wait", body, token=LEASE, key=key)
-            self.assertEqual(status, 200, updated)
-            return updated
-
-        def recheck(waiting, key):
-            with write_transaction(self.path) as db:
-                db.execute("UPDATE external_rechecks SET due_at_ms=1")
-            status, queued = self.submit(route + "/recheck", {"expected_version": waiting["version"]},
-                                         token=RUNNER, key=key)
-            self.assertEqual(status, 200, queued)
-            return self.claim(item, queued)
-
-        def pending_since(waiting):
-            with write_transaction(self.path) as db:
-                return db.execute("""SELECT json_extract(details_json, '$.pending_since_ms')
-                    FROM transition_history WHERE execution_id=? AND version=?""",
-                                  (item["execution"]["id"], waiting["version"])).fetchone()[0]
-
-        first = wait(claim, "wait-1")
-        self.assertEqual(first["state"]["status"], "waiting_for_external")
-        second = wait(recheck(first, "poll-1"), "wait-2")
-        self.assertEqual(second["state"]["status"], "waiting_for_external")
-        since = pending_since(first)
-        self.assertEqual(pending_since(second), since)
-        with write_transaction(self.path) as db:
-            db.execute("""UPDATE transition_history SET details_json=json_set(details_json,
-                '$.pending_since_ms', ?) WHERE execution_id=? AND version=?""",
-                       (since - 60_000, item["execution"]["id"], second["version"]))
-        asked = wait(recheck(second, "poll-2"), "wait-3")
-        self.assertEqual(asked["state"]["status"], "waiting_for_input")
-        with write_transaction(self.path) as db:
-            question = db.execute("""SELECT json_extract(details_json, '$.question.prompt')
-                FROM transition_history WHERE execution_id=? AND version=?""",
-                                  (item["execution"]["id"], asked["version"])).fetchone()[0]
-        self.assertIn("Draft-only checks never reported", question)
-
     def test_trusted_success_can_open_a_human_wait_without_worker_question(self):
         item, _, _, route = self.create("ready_for_check_in")
         url = "https://github.com/example/project/pull/1"
@@ -576,8 +462,7 @@ class IntakeTest(ServerFixture, unittest.TestCase):
             row, state = check_current(db, item["id"], execution["id"], execution["version"])
             state = replace(state, stage=Stage.DELIVERY, primary_pr=url,
                             candidate=revision.head)
-            claim = claim_attempt(db, row, state, runner_id="local", lease_digest=digest(LEASE),
-                                  lease_expires_at=int(time()) + 3600)
+            claim = claim_attempt(db, row, state, writer_id="fixture")
             row, state = check_current(db, item["id"], execution["id"], claim["execution"]["version"])
             waiting = apply(
                 db, row, replace(state, status=Status.WAITING_FOR_EXTERNAL), Event.PR_OBSERVED,
