@@ -18,7 +18,7 @@ from .flags import LAUNCH_UNCONFIRMED, launch_wait
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
-from .operator_schema import CLOSED, INPUT_RANK, OPEN
+from .operator_schema import ACTIVE_STARTED_AT, CLOSED, INPUT_RANK, OPEN
 from .session_links import session_key
 from .store import read_transaction
 from .transitions import Stage, Status
@@ -37,7 +37,7 @@ SCAN_LIMIT = 2000
 REASON_LIMIT = 400
 SHA = re.compile(r"[0-9a-f]{7,64}")
 
-SUMMARY = """
+SUMMARY = f"""
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at, execution.handoff_head,
            execution.ready_since, item.created_at AS item_created_at, item.label,
@@ -46,6 +46,7 @@ SUMMARY = """
            execution.queue_affinity AS runner_affinity, execution.dependency_wait_json,
            json_extract(item.request_json, '$.target') AS target,
            progress.last_advanced_at, progress.wait_since, progress.revision_round,
+           {ACTIVE_STARTED_AT} AS active_started_at,
            pr.url AS pr_url, pr.number AS pr_number, pr.state AS pr_state, pr.draft AS pr_draft,
            pr.merged AS pr_merged, pr.head_sha AS pr_head_sha, pr.additions AS pr_additions,
            pr.deletions AS pr_deletions, pr.ci AS pr_ci, pr.ci_head_sha AS pr_ci_head_sha,
@@ -327,6 +328,16 @@ def summary(row, now, context):
         "publication_mode": state.get("publication_mode", "ready"),
         "repository_id": row["repository_id"],
         "created_at": row["created_at"],
+        "active_started_at": row["active_started_at"],
+        "active_age_seconds": (
+            max(0, int(((datetime.fromisoformat(row["updated_at"]) if output is not None else now)
+                        - datetime.fromisoformat(row["active_started_at"])).total_seconds()))
+            if row["active_started_at"] else None
+        ),
+        "stage_started_at": (
+            max(row["last_advanced_at"], row["active_started_at"])
+            if row["active_started_at"] else None
+        ),
         "stage": row["stage"],
         "status": status,
         "revision_round": row["revision_round"],

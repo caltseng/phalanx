@@ -68,6 +68,44 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 "expected_version": binding["version"], "outcome": "succeeded", **fields}
         return self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/result", token, body)
 
+    def test_long_queue_new_writer_has_fresh_active_and_stage_age_without_overdue_warning(self):
+        queued_at = (datetime.now(UTC) - timedelta(days=3)).isoformat(timespec="microseconds")
+        with patch("phalanx.intake.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(queued_at)
+            with write_transaction(self.path) as db:
+                item = intake.create(db, Intake(repository_id="repo", goal="Long queued work", target="report"))
+        item_id, execution_id = item["id"], item["execution"]["id"]
+        board = f"/v1/operator/items/{item_id}"
+        queued = self.ok(board, OWNER)["item"]
+        self.assertIsNone(queued["active_started_at"])
+        self.assertIsNone(queued["active_age_seconds"])
+        self.assertIsNone(queued["stage_started_at"])
+        binding, token, _ = self.register(item_id, execution_id)
+        with connect(self.path) as db:
+            started = db.execute("SELECT started_at FROM attempts WHERE id=?",
+                                 (binding["writer"]["attempt_id"],)).fetchone()[0]
+        for route in (board, f"/v1/operator/executions/{execution_id}/timeline",
+                      "/v1/operator/executions"):
+            result = self.ok(route, OWNER)
+            active = result["item"] if "item" in result else result["items"][0]
+            self.assertEqual(active["created_at"], queued_at)
+            self.assertEqual(active["last_advanced_at"], queued_at)
+            self.assertEqual(active["active_started_at"], started)
+            self.assertEqual(active["stage_started_at"], started)
+            self.assertLess(active["active_age_seconds"], 60)
+        self.assertNotIn("active_overdue", [
+            flag["kind"] for flag in self.ok("/v1/writer", token)["flags"]])
+        review = self.submit(token, binding, report_markdown="# Report\n")
+        rework = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/result", token, {
+            "attempt_id": review["writer"]["attempt_id"], "stage": "report_review",
+            "expected_version": review["version"], "outcome": "changes_required",
+            "report_revision": intake.digest("# Report\n"), "report_review_notes": "Clarify evidence"})
+        self.assertEqual(rework["state"]["stage"], "report_drafting")
+        current = self.ok(board, OWNER)["item"]
+        self.assertEqual(current["active_started_at"], started)
+        self.assertEqual(current["stage_started_at"], current["last_advanced_at"])
+        self.assertGreater(current["stage_started_at"], started)
+
     def test_overdue_age_survives_progress_stages_replacement_but_not_completion_or_rerun(self):
         item_id, execution_id = self.item()
         binding, token, _ = self.register(item_id, execution_id)
@@ -94,14 +132,25 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         if flag["kind"] == "active_overdue")
         self.assertEqual(replaced["first_seen"], first["first_seen"])
         self.assertIn(replacement["writer"]["id"], replaced["recovery"])
+        board = f"/v1/operator/items/{item_id}"
+        active = self.ok(board, OWNER)["item"]
+        self.assertEqual(active["active_started_at"], started.isoformat(timespec="microseconds"))
+        self.assertGreaterEqual(active["active_age_seconds"], 91 * 60)
         binding = self.submit(replacement_token, replacement, report_revision=intake.digest("# Report\n"))
         done = self.submit(replacement_token, binding, report_revision=intake.digest("# Report\n"))
         self.assertEqual(done["state"]["status"], "completed")
+        closed = self.ok(board, OWNER)["item"]
+        self.assertEqual(closed["active_started_at"], active["active_started_at"])
+        self.assertEqual(closed["active_age_seconds"], max(0, int((
+            datetime.fromisoformat(closed["closed_at"]) - started).total_seconds())))
         self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
         rerun = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/rerun", OWNER,
                        {"expected_version": done["version"], "target": "report"})
         fresh, _, _ = self.register(item_id, rerun["id"])
         self.assertEqual(fresh["id"], rerun["id"])
+        current = self.ok(board, OWNER)["item"]
+        self.assertNotEqual(current["active_started_at"], active["active_started_at"])
+        self.assertLess(current["active_age_seconds"], 60)
         self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
 
     def test_overdue_delivery_surfaces_known_blocker_actor_and_trigger_through_existing_reads(self):

@@ -16,6 +16,7 @@
   const running = {
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
+    activeStartedAt: now, stageStartedAt: now,
     primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
     nextAction: "A worker is running the self_review stage",
     writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId },
@@ -23,7 +24,7 @@
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
-    stage: "development", status: "queued", lastAdvancedAt: hourAgo, publicationMode: "draft"
+    stage: "development", status: "queued", lastAdvancedAt: hourAgo, createdAt: hourAgo, publicationMode: "draft"
   };
   const external = { ...queued, id: "external", title: "Await CI", status: "waiting_for_external" };
   const resumed = { ...queued, id: "resumed", title: "Resumed work",
@@ -256,6 +257,16 @@
     releaseOpen();
     await tick();
     assert(root.querySelector(".h-live"), "Live appears after all enabled reads succeed");
+    const activeAge = item("run").closest("li").querySelector(".age");
+    const queuedAge = item("queue").closest("li").querySelector(".age");
+    assert(activeAge.textContent.startsWith("active ") &&
+      activeAge.querySelector("time").dateTime === now,
+      "A newly active writer uses activation, not its hour-old intake or stage clock");
+    assert(queuedAge.textContent.startsWith("queued ") &&
+      queuedAge.querySelector("time").dateTime === hourAgo,
+      "Never-active queue age is explicitly labeled and retains intake time");
+    assert([activeAge, queuedAge].every(node => node.scrollWidth <= node.clientWidth),
+      "Clock labels and durations remain visible without truncation");
     assert(root.querySelector(".counts").textContent.includes("200 running") &&
       root.querySelector(".counts").textContent.includes("9790 queued and waiting"),
     "Home counts cover the entire queue, not the loaded page");

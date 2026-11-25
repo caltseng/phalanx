@@ -261,7 +261,8 @@
    * source.list({kind, cursor, limit, signal}) resolves to {items, nextCursor}. kind is "open" or "closed".
    * Cursors are opaque strings or null. Closed items come newest first; open work puts input waits first.
    * Items contain string id, itemId?, version?, title (one line), goal?, target?, publicationMode?, repo, stage, status,
-   * createdAt?, lastAdvancedAt, lastProgressAt?, waitSince?, waitReason?, nextAction?, resumeTrigger?, retryAt? and
+   * createdAt?, activeStartedAt?, stageStartedAt?, lastAdvancedAt, lastProgressAt?, waitSince?,
+   * waitReason?, nextAction?, resumeTrigger?, retryAt? and
    * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
    * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?} and
@@ -781,7 +782,9 @@
       ] : [
         h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status),
           text: label(item.stage) + (item.publicationMode === "draft" ? " · draft only" : "") }),
-        ago(item.lastAdvancedAt, now, { class: "age", "aria-label": "In stage" }),
+        h("span", { class: "age" }, item.activeStartedAt ? "active " : "queued ",
+          ago(item.activeStartedAt || item.createdAt, now,
+            { "aria-label": item.activeStartedAt ? "Active since" : "Queued since" })),
         prCell(item),
         writerCell(item),
         h("span", { class: "reason", title: rowReason(item, flags), text: rowReason(item, flags) })
@@ -909,11 +912,13 @@
       box.append(observedUsage(data.usage, item.id));
       box.append(facts([
         ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],
-        ["Stage", h("span", {}, label(item.stage), " · ", ago(item.lastAdvancedAt, now))],
+        ["Stage", h("span", {}, label(item.stage),
+          item.stageStartedAt ? h("span", {}, " · ", ago(item.stageStartedAt, now)) : null)],
         ["Target", item.target && label(item.target)],
         ["Publication", item.publicationMode === "draft" ? "Draft only; no promotion or merge" : "Ready"],
         ["Version", item.version != null && "v" + item.version],
-        ["Age", ago(item.createdAt, now)],
+        ["Execution created", ago(item.createdAt, now)],
+        ["Active since", item.activeStartedAt && ago(item.activeStartedAt, now)],
         ["Last progress", epoch(item.lastProgressAt) && ago(item.lastProgressAt, now)],
         ["Waiting", epoch(item.waitSince) && ago(item.waitSince, now)],
         ["Retry", item.retryAt && stamp(item.retryAt)],
