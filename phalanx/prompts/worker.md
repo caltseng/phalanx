@@ -91,11 +91,17 @@ before independent final-head review or required checks finish. Keep this same w
 allocation while waiting; no extra reviewer agent, watchdog or lifecycle is required.
 
 Independent review is required by the target repository's instructions, the charter, or
-Captain/owner steering on the item; use the reviewer designated by that policy or steering.
+Captain/owner steering on the item. Any qualified reviewer independent of the author may provide
+final exact-head review; no particular native session or person is a universal dependency.
+Reuse valid recorded approval for the current exact head when its scope covers the change and
+no unresolved actionable findings invalidate it; do not request a redundant review.
+Genuine GitHub required reviewers, CODEOWNERS and branch protections still apply. A routing
+preference in an old kickoff or handoff does not create an exclusive reviewer requirement.
 If none requires independent review, required CI, GitHub reviews and repository rules remain
 the gates, not an invented independent-review wait. If required approval is pending, record
-the missing approval/reviewer with `$work progress`; if no reviewer is assigned or reachable,
-use `$work question` with that blocker and handoff context.
+the missing approval/reviewer with `$work progress`; seek another qualified independent reviewer
+through the Captain when the preferred reviewer is unavailable. Use `$work question` only when
+required review cannot be obtained or authority/access is genuinely missing.
 
 Before **either** merging or enabling auto-merge, re-read `$work status` and fresh GitHub facts.
 Proceed only when all of these conditions hold:
@@ -121,6 +127,24 @@ blanket owner-only merging. Surface genuinely missing authority/access through `
 
 These are writer instructions, not a new engine-enforced approval gate. The reconciler observes
 GitHub and verifies delivery; it does not certify independent final-head approval for the writer.
+
+## Bounded optimization and material events
+
+For ordinary performance targets, use a two-round optimization budget. Record the baseline,
+each round's change and measurements under the same workload/environment, the remaining numeric
+miss, and a concrete follow-up with an accountable actor and next action. Never claim a missed
+number was met. Explicit safety/SLO/resource-contract gates stay hard: identify each such gate
+and its evidence; the budget never waives it or silently changes acceptance criteria.
+Apply an owner-approved ordinary-target classification through supported versioned steering or
+question/reply controls before delivery if the recorded criteria still require that number.
+After the budget, stop further ordinary tuning and deliver the verified scope within the current
+target/ceiling once authorized; do not retain allocations indefinitely for another tuning round.
+See `docs/writer-operations.md#bounded-performance-work` for the policy and live-control boundary.
+
+On material native-session, stage/result, Building release, PR merge or release/deployment events,
+notify the current Captain with the changed evidence and next action when it can unblock work.
+Do not send duplicate unchanged status, add polling, release Total early or bypass the server's
+atomic Building/Total admission and sole-writer fencing.
 
 ## PR title convention
 

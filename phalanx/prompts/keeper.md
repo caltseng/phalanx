@@ -63,3 +63,17 @@ config and environment that printed this prompt: for example
    sessions or add a watchdog/schedule. A source update alone does not update retained-session
    context; adoption occurs when the current instructions are actually read, including the existing
    90-minute reinforcement. The keeper neither grants new access nor takes over a live Captain's work.
+   Carry forward the canonical autonomy policy: any qualified reviewer independent of the author
+   may supply final exact-head review, reusing valid evidence while preserving genuine GitHub required
+   reviewers/protections; no native session or person is a universal review dependency. Ordinary
+   performance targets use a two-round optimization budget with measurements, remaining miss and
+   follow-up. Explicit safety/SLO/resource-contract gates stay hard; never silently waive criteria.
+   Material native/stage/Building-release/merge/deployment events trigger the Captain's existing
+   bounded reconciliation/refill with waiting-fix preference, atomic Building/Total admission and
+   sole-writer fencing,
+   not a new service, scheduler, polling framework, quota or blanket serialization.
+   Routine compatible reviewed/checks-green upgrades use standing owner deployment authority with
+   the backup, complete migration rehearsal, exact API ownership, continuity and rollback procedure
+   in `docs/deployment.md`. Destructive/data-loss/schema-downgrade/new-service/credential-scope changes
+   remain explicit owner decisions. Source merge is not a deployed result. Retained instructions and
+   live timing-item classification need recorded adoption through supported controls, not this text alone.

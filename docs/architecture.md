@@ -158,6 +158,14 @@ completed ready outputs and release check-in dependencies without restarting wri
 Optional deployment checks observe the delivered **merge commit**; they are flags,
 not stages, and never reopen delivery.
 
+Owner-authenticated `intake.steer` also allows acceptance-criteria-only edits during attempt-free
+delivery external waits, using the existing version fence and before/after timeline audit. This
+supports [explicit ordinary-performance classification](writer-operations.md#bounded-performance-work)
+without replacing writers or changing lifecycle/capacity/ceilings. Captain material-event messages
+reuse existing bounded reconciliation/refill; there is no event bus or new scheduler. Runtime
+installation, complete schema rehearsal and retained-instruction adoption remain
+[separate operator receipts](deployment.md#coordination-policy-adoption-boundary), not source-merge evidence.
+
 ## Deployment and recovery boundaries
 
 ```mermaid

@@ -829,6 +829,64 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertNotEqual(rerun["id"], done["id"])
         self.assertEqual(rerun["state"]["target"], "checked_in")
 
+    def test_delivery_criteria_steering_is_owner_versioned_audited_and_preserves_writer(self):
+        original = ["Timing target: 5 seconds", "No data loss"]
+        criteria = ["Ordinary timing target: 5 seconds; measured 7 seconds after two rounds; "
+                    "Captain tracks follow-up profiling", "No data loss"]
+        for mode in ("ready", "draft"):
+            with self.subTest(mode=mode):
+                publication, token = self.publish(
+                    "checked_in", acceptance_criteria=original, publication_mode=mode)
+                delivery = self.submit(token, publication, pr_url=PR_URL)
+                if mode == "ready":
+                    self.capacity(token, "building")
+                    delivery = self.ok("/v1/writer", token)
+                route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+                payload = {"expected_version": delivery["version"],
+                           "acceptance_criteria": criteria, "steered_by": "captain"}
+                key = f"criteria-{mode}"
+                headers = {"Idempotency-Key": key}
+                for forbidden in (RUNNER, token):
+                    self.ok(route, forbidden, payload, 403, method="PATCH", headers=headers)
+                changed = self.ok(route, OWNER, payload, method="PATCH", headers=headers)
+                self.assertEqual(self.ok(route, OWNER, payload, method="PATCH", headers=headers), changed)
+                self.ok(route, OWNER, payload, 409, method="PATCH",
+                        headers={"Idempotency-Key": f"{key}-stale"})
+                self.assertEqual(changed["acceptance_criteria"], criteria)
+                self.assertEqual(changed["execution"]["version"], delivery["version"] + 1)
+                self.assertEqual(changed["execution"]["state"], delivery["state"])
+                current = self.ok("/v1/writer", token)
+                self.assertEqual(current["writer"], delivery["writer"])
+                self.assertEqual(current["state"], delivery["state"])
+                timeline = self.ok(route + "/timeline", OWNER)
+                self.assertEqual(timeline[-1]["event"], "steer")
+                self.assertEqual(timeline[-1]["details"], {
+                    "before": {"acceptance_criteria": original},
+                    "after": {"acceptance_criteria": criteria}, "steered_by": "captain"})
+
+    def test_delivery_criteria_steering_refuses_mixed_active_stopping_and_terminal_work(self):
+        publication, token = self.publish("ready_for_check_in")
+        route = f"/v1/items/{publication['item_id']}/executions/{publication['id']}"
+        payload = {"expected_version": publication["version"], "acceptance_criteria": ["Updated"]}
+        self.ok(route, OWNER, payload, 409, method="PATCH")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        payload["expected_version"] = delivery["version"]
+        for fields in ({"goal": "Different work"}, {"target": "checked_in"},
+                       {"dependencies": []}, {"acceptance_criteria": None}):
+            self.ok(route, OWNER, {**payload, **fields}, 409, method="PATCH")
+        self.assertEqual(self.ok("/v1/writer", token)["version"], delivery["version"])
+        completed = self.observe(delivery)
+        payload["expected_version"] = completed["version"]
+        self.ok(route, OWNER, payload, 409, method="PATCH")
+
+        publication, token = self.publish("checked_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+        stopping = self.ok(route + "/cancel", OWNER,
+                           {"expected_version": delivery["version"], "reason": "Owner stop"})
+        self.ok(route, OWNER, {"expected_version": stopping["version"],
+                              "acceptance_criteria": ["Updated"]}, 409, method="PATCH")
+
     def test_steered_check_in_waits_for_required_checks_and_records_the_merge(self):
         binding, token = self.publish("ready_for_check_in")
         binding = self.submit(token, binding, pr_url=PR_URL)

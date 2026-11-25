@@ -215,6 +215,17 @@ independent final exact-head approval and applicable required gates; preserve re
 actual-main integration where applicable and merge safeguards. This policy adds no access,
 trust/privacy/source permission, capacity exception, ownership bypass or owner-only merge gate.
 
+Any qualified reviewer independent of the author may provide final exact-head approval; reuse valid
+evidence covering the scope rather than waiting on a particular native session. Genuine GitHub
+required reviewers/protections remain hard. Material native/stage/Building-release/merge/deployment
+events trigger the same bounded reconciliation/refill immediately, with waiting-fix preference and
+fresh atomic Building/Total admission; the schedule is a fallback, not an avoidable wait.
+Ordinary optimization uses the [two-round budget and versioned classification controls](writer-operations.md#bounded-performance-work);
+explicit safety/SLO/resource-contract gates stay hard. Compatible upgrades use
+[standing deployment authority](deployment.md#standing-authority-for-compatible-upgrades), not
+repeated routine permission requests. The [tracked/live boundary](deployment.md#coordination-policy-adoption-boundary)
+requires actual operator receipts; source merge alone activates neither code nor retained sessions.
+
 The existing flags feed also emits **Active overdue** strictly after 90 elapsed minutes from
 the current execution's first persisted attempt. It counts every stage and CI/review/delivery,
 input and external waits, not just time without progress. Progress, heartbeat, writer replacement
@@ -229,9 +240,9 @@ The warning alone is informational for PR title classification and never authori
 replacing, changing capacity or merging; there is no new deadline, gate, scheduler or quota.
 Five-minute wakes, 24-hour shifts and 90-minute reinforcement are unchanged.
 
-Source check-in is separate from live activation: the deployment owner must authorize installing
-the reviewed package using the existing deployment procedure. No service restart, schema change
-or live database edit is part of this feature. Retained Captains need the updated canonical
+Source check-in is separate from live activation: the authorized operator installs
+the reviewed package using the existing standing-authority deployment procedure. No service restart,
+schema change or live database edit is implied by a source merge. Retained Captains need the updated canonical
 workflow through the existing prompt/reinforcement path after authorized deployment.
 
 `[shift]` is optional. Its positive-integer `max_hours` defaults to 24, measured from

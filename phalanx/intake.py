@@ -265,8 +265,16 @@ def steer(db, item_id, execution_id, payload):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     edits = payload.model_dump(mode="json", exclude_unset=True, exclude={"expected_version", "steered_by"})
     target_only = state.status not in TERMINAL and set(edits) == {"target"}
-    if (state.status != Status.QUEUED and not target_only) or state.stopping or state.pending_output:
-        raise Conflict("Steering requires queued work or a target-only change to open PR work. "
+    delivery_criteria = (
+        state.stage == Stage.DELIVERY and state.status == Status.WAITING_FOR_EXTERNAL
+        and set(edits) == {"acceptance_criteria"}
+        and not db.execute("SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL",
+                           (execution_id,)).fetchone()
+    )
+    if ((state.status != Status.QUEUED and not target_only and not delivery_criteria)
+            or state.stopping or state.pending_output):
+        raise Conflict("Steering requires queued work, a target-only change to open PR work, "
+                       "or acceptance-criteria-only changes during an attempt-free delivery wait. "
                        "Resolve the active execution or rerun it first.")
 
     if not edits or any(value is None for name, value in edits.items() if name not in ("runner_affinity", "label")):
