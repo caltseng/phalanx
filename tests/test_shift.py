@@ -320,7 +320,7 @@ class CharterTest(unittest.TestCase):
         self.assertEqual(result["shift"]["handoff_due"], ["shift age reached 24 h"])
 
 
-class ShiftTest(ServerFixture, unittest.TestCase):
+class ShiftFixture(ServerFixture):
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -329,22 +329,14 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.database = database
         initialize(database)
         self.start_server(database)
-        bare, checkout = root / "origin.git", root / "checkout"
-        git(root, "init", "-q", "--bare", str(bare))
-        checkout.mkdir()
-        git(checkout, "init", "-q", "-b", "main")
-        (checkout / "README.md").write_text("pilot\n", encoding="utf-8")
-        git(checkout, "add", "README.md")
-        git(checkout, "commit", "-q", "-m", "Initial")
-        git(checkout, "remote", "add", "origin", bare.as_uri())
-        git(checkout, "push", "-q", "origin", "main")
+        checkout, remote = self.prepare_repository(root)
         (root / "charter").mkdir()
         charter = root / "charter" / "charter.toml"
         charter.write_text(CHARTER + "[shift]\nmax_hours = 4\n", encoding="utf-8")
         self.config = {"base_url": self.url, "runtime": "any-runtime", "worktrees": str(root / "worktrees"),
                        "charter": str(charter), "session_workspace": "ws-1",
                        "repositories": {"repo": {"checkout": str(checkout), "base_branch": "main"}}}
-        for repository, remote in (("repo", bare.as_uri()), ("other", "https://github.com/e/o.git")):
+        for repository, remote in (("repo", remote), ("other", "https://github.com/e/o.git")):
             self.assertEqual(self.request("/v1/repositories", OWNER, {"id": repository, "remote": remote})[0], 200)
         patch = mock.patch.dict(os.environ, {"PHALANX_RUNNER_TOKEN": RUNNER})
         patch.start()
@@ -358,6 +350,23 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                                                          **options})
         self.assertEqual(status, 201, item)
         return item
+
+
+class ShiftTest(ShiftFixture, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        temporary = TemporaryDirectory()
+        cls.addClassCleanup(temporary.cleanup)
+        cls.source = Path(temporary.name) / "source"
+        repository = Path(__file__).resolve().parents[1]
+        git(repository, "clone", "-q", "--shared", "--no-checkout", str(repository), str(cls.source))
+        # CI may check out a detached PR head without a local main branch.
+        git(cls.source, "update-ref", "refs/heads/main", "HEAD")
+
+    def prepare_repository(self, root):
+        checkout = root / "checkout"
+        git(root, "clone", "-q", "--shared", "-b", "main", str(self.source), str(checkout))
+        return checkout, self.source.as_uri()
 
     def test_normal_intake_enters_real_captain_discovery_without_named_charter_ids(self):
         captain = shift.start(self.api, self.charter, "intake-captain", config=self.config)["captain"]["id"]
@@ -1187,6 +1196,20 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                      "session_identity.writer_nonce", "--session-writer",
                      "If inspection is unavailable or inconclusive", "even if renamed"):
             self.assertIn(text, prompt)
+
+
+class ShiftArchiveTest(ShiftFixture, unittest.TestCase):
+    def prepare_repository(self, root):
+        bare, checkout = root / "origin.git", root / "checkout"
+        git(root, "init", "-q", "--bare", str(bare))
+        checkout.mkdir()
+        git(checkout, "init", "-q", "-b", "main")
+        (checkout / "README.md").write_text("pilot\n", encoding="utf-8")
+        git(checkout, "add", "README.md")
+        git(checkout, "commit", "-q", "-m", "Initial")
+        git(checkout, "remote", "add", "origin", bare.as_uri())
+        git(checkout, "push", "-q", "origin", "main")
+        return checkout, bare.as_uri()
 
     def ended_writer(self, *, push=True, **options):
         captain = shift.start(self.api, self.charter, "creator")["captain"]["id"]
