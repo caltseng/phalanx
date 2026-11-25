@@ -23,6 +23,23 @@ from phalanx.workspaces import any_file_lock
 from timing import WAIT_SECONDS
 
 
+# Ask the real CLI/server to stop in its interpreter, not its Windows venv launcher.
+DEPLOYMENT_PROCESS = """
+import signal
+import sys
+from threading import Thread
+
+from phalanx.__main__ import main
+
+def stop_on_eof():
+    sys.stdin.buffer.read()
+    signal.raise_signal(signal.SIGINT)
+
+Thread(target=stop_on_eof, daemon=True).start()
+main()
+"""
+
+
 class DeploymentTest(unittest.TestCase):
     def setUp(self):
         temporary = TemporaryDirectory()
@@ -257,8 +274,9 @@ class DeploymentTest(unittest.TestCase):
         for first in (True, False):
             with (home / "service-test.log").open("w+") as log:
                 process = subprocess.Popen(
-                    [*command, *(["--initialize-database"] if first else [])],
-                    env=env, stdout=log, stderr=log)
+                    [sys.executable, "-c", DEPLOYMENT_PROCESS, *command[3:],
+                     *(["--initialize-database"] if first else [])],
+                    env=env, stdin=subprocess.PIPE, stdout=log, stderr=log)
                 try:
                     deadline = time.monotonic() + WAIT_SECONDS
                     while True:
@@ -285,12 +303,18 @@ class DeploymentTest(unittest.TestCase):
                     self.assertNotEqual(duplicate.returncode, 0)
                     self.assertIn("already owns", duplicate.stderr)
                 finally:
-                    process.terminate()
+                    process.stdin.close()
                     try:
                         process.wait(timeout=30)
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=30)
+                        raise
+                log.seek(0)
+                self.assertIn("Application shutdown complete.", log.read())
+                self.assertEqual(process.returncode, 0)
+                with any_file_lock([home / "db" / "phalanx.sqlite3.service.lock"]) as locked:
+                    self.assertIsNotNone(locked, "Stopped deployment retained its service lock")
         self.assertTrue((home / "db" / "phalanx.sqlite3").is_file())
 
 

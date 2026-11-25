@@ -130,6 +130,19 @@ class CharterTest(unittest.TestCase):
         path.write_text(json.dumps(self.config), encoding="utf-8")
         self.assertEqual(shift.load_config(path), self.config)
 
+    def test_overdue_guidance_is_in_ordinary_wakes_and_canonical_reinforcement(self):
+        for name in ("captain", "wake"):
+            text = " ".join(shift.prompt(name).split())
+            with self.subTest(prompt=name):
+                for instruction in ("`active_overdue`", "90 elapsed minutes", "first persisted attempt",
+                                    "green open PR is not checked-in completion",
+                                    "responsible actor and resume trigger", "`shift action`",
+                                    "original batch reason no longer applies"):
+                    self.assertIn(instruction, text)
+                self.assertIn("five-minute", text)
+                self.assertIn("24-hour", text)
+                self.assertIn("90-minute reinforcement", text)
+
     def test_kickoff_names_the_current_executions_target_not_the_original_request(self):
         item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Rerun for review",
                 "execution": {"id": "execution", "state": {"target": "ready_for_check_in"}}}

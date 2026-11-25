@@ -215,6 +215,25 @@ independent final exact-head approval and applicable required gates; preserve re
 actual-main integration where applicable and merge safeguards. This policy adds no access,
 trust/privacy/source permission, capacity exception, ownership bypass or owner-only merge gate.
 
+The existing flags feed also emits **Active overdue** strictly after 90 elapsed minutes from
+the current execution's first persisted attempt. It counts every stage and CI/review/delivery,
+input and external waits, not just time without progress. Progress, heartbeat, writer replacement
+and stage changes do not reset it. Never-started queued and terminal executions are excluded;
+reruns start a separate execution clock. A launch reservation is not proof its native session ran.
+Warnings include age/stage and timestamped recorded evidence/recovery, not a guessed blocker.
+On the ordinary wake, inspect actual delivery evidence, act within existing authority and
+record unresolved blocker, responsible actor and resume trigger using `shift action` and
+existing question/progress/handoff controls. Reconsider holds whose original batch reason
+has cleared rather than manufacturing a new permission gate. A green open PR is not a merge.
+The warning alone is informational for PR title classification and never authorizes cancelling,
+replacing, changing capacity or merging; there is no new deadline, gate, scheduler or quota.
+Five-minute wakes, 24-hour shifts and 90-minute reinforcement are unchanged.
+
+Source check-in is separate from live activation: the deployment owner must authorize installing
+the reviewed package using the existing deployment procedure. No service restart, schema change
+or live database edit is part of this feature. Retained Captains need the updated canonical
+workflow through the existing prompt/reinforcement path after authorized deployment.
+
 `[shift]` is optional. Its positive-integer `max_hours` defaults to 24, measured from
 Captain registration (D7, amended for elapsed-time-only rotation). Remove retired
 `max_wakes` and `max_compactions` keys; they are rejected, not silently ignored.

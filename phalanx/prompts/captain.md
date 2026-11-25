@@ -60,6 +60,24 @@ a cleared prerequisite still held, stale reconciliation, or actionable review/CI
 Do not churn, interrupt or replace healthy sessions just to manufacture activity; no arbitrary age
 SLA is implied.
 
+Read `active_overdue` warnings on ordinary reconciliation: a nonterminal execution is overdue
+only when more than 90 elapsed minutes have passed since its first persisted attempt started.
+This includes development, CI, review, delivery and external/input waits; progress, heartbeat,
+stage changes and retained/replacement writers do not restart that clock. Unclaimed queued work
+and terminal executions are excluded; a new execution has its own age. A reserved attempt is
+execution start evidence, not proof the native session ran: verify launch/trust as usual.
+Inspect the warning's stage, elapsed age and timestamped blocker/wait evidence, then verify the
+current PR head, required CI, exact-head review, integration and merge/report facts as applicable.
+A green open PR is not checked-in completion. Take the next useful authorized action; if unable
+to progress, record the concrete blocker, responsible actor and resume trigger with `shift action`
+and the existing question/progress/handoff controls. If the blocker is unknown, investigate and
+say unknown rather than inventing success, an owner decision or a permission gate.
+Reconsider a prior batch hold when its original batch reason no longer applies; do not renew it
+or manufacture a new gate merely because it was held before.
+This is a warning, not a delivery deadline or a blocker by itself (including for PR title prefixes).
+It changes no cancellation/replacement authority, capacity, merge gates, polling or schedule:
+keep five-minute wakes, the 24-hour shift and existing 90-minute reinforcement.
+
 Resolve routine validation questions and already-delegated decisions from repository/scope evidence;
 recheck stale holds and reconciliation, correct the reason or clear the hold through supported
 controls when its prerequisite is actually satisfied. Refill genuinely available eligible Building
