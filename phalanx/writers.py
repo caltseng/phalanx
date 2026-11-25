@@ -270,7 +270,7 @@ def authorize(db, writer, captain_id):
     if writer["captain_id"] == captain_id or writer["confirmed_at"] is not None:
         return writer["captain_id"]
     owner = captains.captain_row(db, writer["captain_id"])
-    if writer["abandoned_at"] is None and captains.is_live(owner, datetime.now(UTC)):
+    if writer["abandoned_at"] is None and owner["id"] in captains.live_captains(db, datetime.now(UTC)):
         raise intake.Conflict(f"Captain {owner['id']} owns this unconfirmed intent")
     return captain_id
 
