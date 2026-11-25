@@ -133,6 +133,20 @@ Stopped-writer replacement preserves local work and reconciles external effects.
 | [`.agents/skills/`](.agents/skills/) | Reusable agent skills: [PR review](.agents/skills/pr-review/SKILL.md) and [complexity-killer](.agents/skills/complexity-killer/SKILL.md) for evidence-based complexity and blocking audits. |
 | [`docs/`](docs/), [`SPEC.md`](SPEC.md), [`STATE_MACHINE.md`](STATE_MACHINE.md) | Operating guides, implementation map and authoritative design/lifecycle references. |
 
+CI runs the full unit suite on Windows/Python 3.12 (three shards), Linux/Python 3.14
+(two), and macOS/Python 3.14 (two), plus one standalone envelope probe: eight test jobs.
+The `Tests` aggregate remains the required check. Shards use deterministic longest-first
+assignment with platform-specific runtime estimates in `tests/shard_timings.json`, not
+test-count round-robin. New tests inherit their module's estimate (one second for a new
+module), so discovery never drops unmeasured tests. Each shard still runs in test-ID order.
+The timing file links its source CI run; initial estimates use elapsed time between verbose
+test-completion timestamps. Values are seconds, with a module mean for ordinary tests and
+exact-ID overrides for outliers above both one second and twice the module mean.
+Module means exclude those outliers. When balance drifts, refresh estimates from a green
+run's complete duration log on each target, then compare actual slowest/fastest shard
+runtimes and end-to-end workflow wall time against the baseline. CI logs all test durations
+to support that comparison; estimates alone are not performance acceptance evidence.
+
 HTTP tests use isolated API applications running in-process on real loopback sockets
 and selector event loops (avoiding Windows Proactor reset/teardown leaks),
 so urllib and CLI subprocesses still exercise HTTP, authentication and background tasks.

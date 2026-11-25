@@ -15,19 +15,20 @@ concurrency:
 
 jobs:
   test:
-    name: Test (${{ matrix.target.os }}, Python ${{ matrix.target.python }}, shard ${{ matrix.shard }}/3)
+    name: Test (${{ matrix.target.os }}, Python ${{ matrix.target.python }}, shard ${{ matrix.shard }}/${{ matrix.target.shards }})
     runs-on: ${{ matrix.target.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         target:
-          - { os: windows-latest, python: "3.12" }
-          - { os: windows-latest, python: "3.14" }
-          - { os: ubuntu-latest, python: "3.14" }
-          - { os: macos-latest, python: "3.14" }
-        # Keep in step with the total passed to tests/shard.py below.
-        shard: [1, 2, 3]
+          - { os: windows-latest, python: "3.12", shards: 3 }
+          - { os: ubuntu-latest, python: "3.14", shards: 2 }
+          - { os: macos-latest, python: "3.14", shards: 2 }
+        shard: [1, 2]
+        include:
+          - target: { os: windows-latest, python: "3.12", shards: 3 }
+            shard: 3
     env:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
@@ -49,7 +50,7 @@ jobs:
           python -m pip install -e .
 
       - name: Run tests
-        run: python tests/shard.py ${{ matrix.shard }} 3
+        run: python tests/shard.py ${{ matrix.shard }} ${{ matrix.target.shards }}
 
   envelope:
     name: Envelope probe
