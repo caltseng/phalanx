@@ -2,15 +2,16 @@
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 import hashlib
 import os
 from pathlib import Path
 import re
-import subprocess
 import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 
+from .git import git_text
 from .transitions import item_branch
 
 if os.name == "nt":
@@ -31,23 +32,7 @@ class Workspace:
     dirty: bool
 
 
-def _git(path: Path, *args: str, stdin: str | None = None) -> str:
-    # Inherited Git overrides can redirect operations away from the verified checkout.
-    env = {key: value for key, value in os.environ.items()
-           if not key.upper().startswith("GIT_")}
-    try:
-        result = subprocess.run(
-            ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", *args],
-            cwd=path, env=env, input=stdin.encode() if stdin is not None else None,
-            capture_output=True,
-        )
-    except OSError as exc:
-        raise WorkspaceError(f"Cannot run Git in {path}: {exc}") from exc
-    stdout = result.stdout.decode("utf-8", errors="surrogateescape")
-    if result.returncode:
-        detail = result.stderr.decode("utf-8", errors="replace").strip() or stdout.strip()
-        raise WorkspaceError(f"Git {args[0]} failed in {path}: {detail}")
-    return stdout
+_git = partial(git_text, error=WorkspaceError)
 
 
 def _rev_parse(path: Path, *args: str, count: int) -> list[str]:

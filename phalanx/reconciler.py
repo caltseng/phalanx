@@ -6,7 +6,7 @@ flags from what it posts. Local check results are reported, never gated on.
 
 from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
-from http.client import HTTPException
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -15,14 +15,14 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.error import HTTPError
-from urllib.parse import quote, urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import quote, urlencode
 
-from .github import GitHubClient, GitHubError, merge_method
+from .api_client import APIClient
+from .git import run_git
+from .github import GitHubClient, GitHubError, github_repository, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
-from .pr_models import DEPLOYMENT_WINDOW, GITHUB_REMOTE
+from .pr_models import DEPLOYMENT_WINDOW
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy
@@ -40,58 +40,20 @@ class ReconcilerError(RuntimeError):
     pass
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-class API:
+class API(APIClient):
     """Phalanx API calls with the runner token."""
 
+    error = ReconcilerError
+    timeout = 30
+    detailed_errors = True
+
     def __init__(self, base_url, token):
-        url = urlsplit(base_url)
-        if (not url.hostname or url.username or url.password or url.query or url.fragment
-                or (url.scheme != "https" and not (
-                    url.scheme == "http" and url.hostname in {"localhost", "127.0.0.1", "::1"}))):
-            raise ReconcilerError("Use HTTPS or a loopback HTTP API URL without credentials")
+        super().__init__(base_url, token)
         if not token:
             raise ReconcilerError("Set PHALANX_RUNNER_TOKEN for the reconciler")
-        self.base_url = base_url.rstrip("/")
-        self.token = token
-        self.opener = build_opener(_NoRedirect())
-
-    def call(self, path, body=None):
-        headers = {"Authorization": f"Bearer {self.token}"}
-        data = None
-        if body is not None:
-            headers["Content-Type"] = "application/json"
-            data = json.dumps(body).encode()
-        request = Request(self.base_url + "/v1" + path, data=data, headers=headers,
-                          method="GET" if body is None else "POST")
-        try:
-            with self.opener.open(request, timeout=30) as response:
-                return json.load(response)
-        except HTTPError as error:
-            with error:
-                detail = error.read()[:500].decode("utf-8", errors="replace")
-            raise ReconcilerError(f"Phalanx API returned HTTP {error.code} for {path}: {detail}") from None
-        # OSError covers URLError, timeouts and dropped connections while the server restarts.
-        except (OSError, HTTPException, ValueError) as error:
-            raise ReconcilerError(f"Phalanx API unavailable for {path}: {error!r}") from None
 
 
-def git(path, *args, check=True):
-    # Inherited Git overrides can redirect operations away from the configured checkout.
-    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
-    try:
-        result = subprocess.run(["git", "--no-optional-locks", "-c", "core.fsmonitor=false", *args],
-                                cwd=path, env=env, stdin=subprocess.DEVNULL, capture_output=True)
-    except OSError as error:
-        raise ReconcilerError(f"Cannot run Git in {path}: {error}") from None
-    if check and result.returncode:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ReconcilerError(f"Git {args[0]} failed in {path}: {detail}")
-    return result
+git = partial(run_git, error=ReconcilerError)
 
 
 def _clip(text):
@@ -225,10 +187,10 @@ class Reconciler:
         base = item.get("target_branch") or mapping["base_branch"]
         if execution.get("outcome") == "checked_in" and base != mapping["base_branch"]:
             return 0, None
-        match = GITHUB_REMOTE.fullmatch(remote)
-        if match is None:
+        repository = github_repository(remote)
+        if repository is None:
             raise ReconcilerError(f"{repo} has no registered github.com remote")
-        owner, name = match[1].split("/")
+        owner, name = repository.split("/")
         github = self.github_client(owner, name, token=self.github_token)
         branch = item_branch(item_id)
         primary = execution.get("primary_pr_url")
@@ -350,10 +312,10 @@ class Reconciler:
         top = git(checkout, "rev-parse", "--show-toplevel").stdout.decode().strip()
         # The configured URL, before any local insteadOf rewrite, names the repository.
         urls = git(checkout, "config", "--get-all", "remote.origin.url", check=False).stdout.decode().split()
-        origin = GITHUB_REMOTE.fullmatch(urls[0]) if len(urls) == 1 else None
-        expected = GITHUB_REMOTE.fullmatch(remote)
+        origin = github_repository(urls[0]) if len(urls) == 1 else None
+        expected = github_repository(remote)
         if (Path(top).resolve() != checkout or origin is None or expected is None
-                or origin[1].lower() != expected[1].lower()):
+                or origin != expected):
             raise ReconcilerError(f"{checkout} is not a checkout of the registered remote for {repo}")
         if self.state.is_relative_to(checkout):
             raise ReconcilerError("The reconciler state directory must be outside the mapped checkout")

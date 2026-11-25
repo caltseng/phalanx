@@ -87,6 +87,10 @@ local shorthand, not a separately installed executable.
 See [installation](install.md), [work items](work-items.md), [writer operations](writer-operations.md)
 and [API reference](api.md) for executable examples and authentication.
 
+Direct clients share no-redirect HTTP and API URL validation in `api_client.py`,
+checkout-confined Git execution in `git.py`, and duplicate-key JSON decoding in
+`json_utils.py`. GitHub remote recognition is shared through `github_repository`.
+
 ## One writer, separately fenced stages
 
 ```mermaid

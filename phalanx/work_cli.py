@@ -6,19 +6,19 @@ item's worktree. The file is a credential under the git directory, never committ
 
 import json
 from pathlib import Path
-import subprocess
 from urllib.error import HTTPError
 from urllib.parse import quote
-from urllib.request import Request, urlopen
+
+from .api_client import request as api_request
+from .git import git_text
 
 CREDENTIAL = "phalanx-writer.json"
 
 
 def credential(cwd=None):
     try:
-        path = subprocess.run(["git", "rev-parse", "--git-path", CREDENTIAL], cwd=cwd, check=True,
-                              capture_output=True, text=True).stdout.strip()
-    except (OSError, subprocess.CalledProcessError) as error:
+        path = git_text(cwd, "rev-parse", "--git-path", CREDENTIAL, error=ValueError).strip()
+    except ValueError as error:
         raise ValueError("phx work must run inside the item's git worktree") from error
     path = Path(cwd or ".") / path
     try:
@@ -30,18 +30,9 @@ def credential(cwd=None):
     return data["base_url"], data["token"]
 
 
-def request(base_url, token, route, *, body=None, method=None, key=None):
-    headers = {"Authorization": f"Bearer {token}"}
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    if key:
-        headers["Idempotency-Key"] = key
-    call = Request(base_url.rstrip("/") + route, data=data, headers=headers, method=method)
+def request(base_url, token, route, *, body=None, method=None, key=None, timeout=30):
     try:
-        with urlopen(call, timeout=30) as response:
-            return json.load(response)
+        return api_request(base_url, token, route, body=body, method=method, key=key, timeout=timeout)
     except HTTPError as error:
         with error:
             detail = error.read().decode("utf-8", errors="replace")
@@ -101,10 +92,8 @@ def run_work(args):
         body = {"phase": args.phase, "expected_revision": current["writer"]["capacity_revision"]}
         if args.phase == "delivering" and current["writer"]["building"]:
             try:
-                body["handoff_head"] = subprocess.run(
-                    ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
-                ).stdout.strip()
-            except (OSError, subprocess.CalledProcessError) as error:
+                body["handoff_head"] = git_text(None, "rev-parse", "HEAD", error=ValueError).strip()
+            except ValueError as error:
                 raise ValueError("Cannot read the reviewed commit for the publication handoff") from error
         result = request(base_url, token, "/v1/writer/capacity", body=body)
     elif args.work_command == "progress":
