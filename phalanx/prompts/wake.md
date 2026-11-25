@@ -23,6 +23,18 @@ trigger. Escalate an actionable question only for missing authority/access, safe
 not routine delegated decisions. Preserve trust, privacy/source permissions, both capacity limits,
 sole-writer ownership and creator-owned cleanup; this policy grants no new access or bypass.
 
+Assess `active_overdue` warnings during this reconciliation: strictly more than 90 elapsed minutes
+from the execution's first persisted attempt, including development, CI, review, delivery and
+external/input waits. Heartbeats, progress, stages and writer replacement never reset execution age.
+Verify the warning's timestamped evidence; a reserved attempt does not prove a native session ran,
+and a green open PR is not checked-in completion. Take the next authorized unblocking action or
+record the concrete blocker, responsible actor and resume trigger with `shift action` and existing
+question/progress/handoff controls. Unknown blockers remain unknown pending investigation.
+Reconsider a hold whose original batch reason no longer applies; do not invent another permission
+gate. The warning alone is not a PR-title blocker, deadline, cancellation/replacement instruction,
+capacity change or merge authorization. Unclaimed queued and terminal executions are excluded.
+Keep five-minute wakes, the 24-hour Captain lifetime and existing 90-minute reinforcement.
+
 Follow the canonical Captain workflow: reconcile `shift status --captain <your id>`,
 inspect native writer sessions and trust, recover uncertain launches before new dispatch,
 act on at most five items and record focus/session observations without `--wake`.

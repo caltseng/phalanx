@@ -152,6 +152,19 @@ so existing reports, board pages and later owner-merge reconciliation remain rea
 - Status is `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`,
   `failed` or `cancelled`, separate from stage. Every open state has an action, resume
   trigger or recovery path. Persist wait reasons; reconciler observations advance delivery waits.
+- `active_overdue` is a read-time warning in existing flags, visible in Scribe, writer status
+  and Captain reconciliation, strictly after 90 elapsed minutes from the execution's first
+  persisted attempt (`min(attempts.started_at)`). Unclaimed queued work and terminal executions
+  are excluded. All stages and input/external/CI/review/delivery waits count; heartbeat,
+  progress, stage changes and retained/replacement writers do not reset age. A rerun has
+  its own execution clock. Reservation starts execution, not proof a native session ran.
+  The warning gives age/stage and timestamped recorded wait, flag, writer/Captain evidence
+  with recovery/assessment actors; unknown blockers remain unknown. Captains verify actual
+  delivery, take the next authorized action and record concrete blocker/actor/resume triggers.
+  Reassess obsolete batch holds; a busy label or green open PR is not completion.
+  This adds no lifecycle gate, deadline, cancellation/replacement, capacity change,
+  auto-merge authorization, scheduler or quota. Five-minute wakes, 24-hour Captain lifetime,
+  90-minute reinforcement, exact-head review, CI, trust and explicit output ceilings remain.
 - Results require the current writer binding, attempt, stage and expected version. A
   writer token has no timed expiry. Ended/replaced writers and stale attempts cannot submit.
   Retryable mutations are idempotent; reconcile uncertain remote effects first.

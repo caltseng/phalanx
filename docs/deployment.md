@@ -121,6 +121,26 @@ stack a polling task, PowerShell restart loop and service-manager restart policy
 database lock coordinates these entrypoints, not arbitrary preexisting raw Uvicorn
 commands; inventory and retire those with the service owner first.
 
+### Windows deployment-test teardown
+
+The isolated deployment test must stop the service interpreter before waiting for its
+launcher. On Windows, a virtual-environment `python.exe` can launch another interpreter:
+terminating and waiting for the launcher's PID does not wait for that child's teardown.
+The deployment test reproduced `WinError 32` deleting its own `.service.lock` on repetition
+11. A diagnostic opening synchronization handles for only the launcher's direct children
+observed `WAIT_TIMEOUT` (258) for the service child immediately after the launcher wait
+returned. A later exact-installation process lookup found no persistent service process;
+an orphan, antivirus interference or a broken lock implementation was not established.
+
+The test now owns a stdin pipe into the interpreter running the real deployment CLI.
+Closing that pipe raises SIGINT inside that interpreter, letting Uvicorn shut down and
+the deployment context release its lock before the launcher exits. It asserts completed
+application shutdown, successful process exit and immediate service-lock reacquisition
+after each stop, while retaining real bootstrap, restart and duplicate-owner checks.
+The pipe is test-only: production service behavior and lock ownership are unchanged.
+Cleanup errors and shutdown timeouts remain failures; no process-name termination,
+shared temporary-root deletion or live-service intervention is part of this procedure.
+
 ## Environment and local shims
 
 `environment_file` accepts the same literal `KEY=VALUE` syntax as muster discovery, or
