@@ -11,9 +11,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 from pydantic import StringConstraints
 
-from . import dispatch, intake, reconciliation
+from . import dispatch, intake, pickup, reconciliation
 from .auth import authenticate_board_read, require_coordinator
-from .captains import IDLE_WITH_WORK, STALE, active_holds, gone_at, is_live, successor_name
+from .captains import IDLE_WITH_WORK, STALE, gone_at, is_live, successor_name
 from .intake_api import run
 from .intake_models import Payload, Text
 from .operator_schema import OPEN
@@ -91,28 +91,35 @@ def no_live_captain(db, now):
 
 
 def captain_idle_with_work(db, now):
-    """Distinguish overdue dispatch from informational capacity backlog, not Captain failure."""
+    """Distinguish overdue dispatch, pickup blockers and informational capacity backlog."""
     if not any(is_live(row, now) for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")):
         return []
     cutoff = int((now - IDLE_WITH_WORK).timestamp() * 1000)
-    holds = active_holds(db, now)
-    capacity = dispatch.settings(db)
+    pickup_context = pickup.context(db, now)
+    holds = pickup_context["holds"]
+    capacity = pickup_context["capacity"]
     occupied, maximum = capacity["active_writers"], capacity["max_writers"]
     result = []
     for row in db.execute(
-            """SELECT id, item_id, ready_since, stage FROM executions AS execution
+            """SELECT execution.*, queue_repository AS repository_id, queue_affinity AS runner_affinity
+               FROM executions AS execution
                WHERE status = 'queued' AND ready_since <= ? AND dependency_wait_json IS NULL
                  AND NOT EXISTS (SELECT 1 FROM writers
                                  WHERE execution_id = execution.id AND ended_at IS NULL)
                ORDER BY ready_since, id""", (cutoff,)):
-        waiting = dispatch.admission_wait(db, row["stage"], capacity=capacity)
-        if waiting:
+        decision = pickup.decision(row, now, pickup_context)
+        waiting = pickup_context["admission"][row["stage"]]
+        if waiting and decision["code"] in ("capacity", "paused", "held"):
             kind = "queue_backlogged"
             reason = (f"{waiting}; Building {capacity['building_writers']}/{capacity['max_building_writers']}, "
                       f"Delivering {capacity['delivering_writers']}, Total {occupied}/{maximum}")
             recovery = "Wait for the affected capacity, resume dispatch or service eligible waiting PR fixes"
-        elif row["id"] in holds:
+        elif decision["code"] in ("held", "retry", "not_ready", "closing"):
             continue
+        elif not decision["eligible"]:
+            kind = "pickup_blocked"
+            reason = decision["reason"]
+            recovery = decision["trigger"]
         else:
             kind = "captain_idle_with_work"
             reason = ("Dispatch overdue: runnable for 30 min with no registered writer; "
@@ -122,7 +129,7 @@ def captain_idle_with_work(db, now):
             reason += f". Captain hold: {holds[row['id']]}"
         result.append(flag(kind, reason, recovery,
              datetime.fromtimestamp(row["ready_since"] / 1000, UTC) + IDLE_WITH_WORK,
-             item_id=row["item_id"], execution_id=row["id"]))
+             item_id=row["item_id"], execution_id=row["id"], notify_owner=kind == "pickup_blocked"))
         if len(result) >= DERIVED_LIMIT:
             break
     return result

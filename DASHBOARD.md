@@ -123,7 +123,10 @@ not hide full-capacity backlog. **Dispatch overdue** keeps warning styling only 
 unassigned runnable work with free capacity, dispatch enabled and no active hold
 (the API retains `captain_idle_with_work` for compatibility). Dependency waits are
 not missed launches. Flags retain first-seen ages and execution/item links; paused
-dispatch is informational, not evidence that a Captain stopped.
+dispatch is informational, not evidence that a Captain stopped. **Pickup blocked**
+uses the same 30-minute budget to notify the owner about scope, uninitialized authority,
+affinity or repository/trust blockers, carrying the shared pickup reason and recovery.
+It is not a Captain failure or handoff signal.
 
 ## Who uses it
 
@@ -407,7 +410,8 @@ reads current server values; charter settings cannot undo dashboard edits.
   - `revision_round`: 1, plus one each time the execution re-enters development or report drafting (and PR revision in retained historical events);
   - `duplicate_count`: other open PRs on the item branch in the latest reconciler observation, or `null` when not observed;
   - `pr`: the PR in the latest reconciler GitHub observation, with `url`, `number`, `state` (`open`, `closed` or `merged`), `draft`, `head_sha`, `head_ci`, `additions` and `deletions`. `head_ci` is the gate result observed on that head. Each field is `null` when not observed; `pr` is `null` before an observation or when the latest observation found no PR. Writer-supplied PR URLs and lifecycle evidence never populate these facts.
-  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. Existing lifecycle/prerequisite waits take precedence; otherwise queued rows show dispatch pause, a scheduled retry, a current deliberate Captain hold, or **Awaiting a direct Captain** for unbound work. A queued row with a writer and no wait says a Captain dispatches a writer. Runner presence and capacity never infer a direct-path wait.
+  - `pickup`: the shared server decision for an unbound queued item, including eligibility and a concrete reason for exclusion. Normal authorized intake in a charter repository is eligible without naming its ID in charter notes. Scope/readiness snapshots, affinity, persisted dependencies, reasoned holds, retry, pause and canonical Building/Total capacity supply the decision; uninitialized and stale observations never imply readiness.
+  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. An eligible queued item calls for Captain dispatch; an excluded item shows the same specific pickup reason as `shift status`. Eligible unlaunched items use the existing 30-minute **Dispatch overdue** flag; paused/capacity-bound work uses **Queue backlogged**, without another budget.
 
     Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
 - `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch `paused` (false means on); the oldest eligible queued timestamp and age; and `generated_at` for data age.

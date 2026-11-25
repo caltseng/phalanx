@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from phalanx import shift
-from phalanx.store import migrate
+from phalanx.store import migrate, write_transaction
 from phalanx.work_cli import credential, request
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -56,10 +56,12 @@ class CharterTest(unittest.TestCase):
         self.assertEqual(charter["revision"], hashlib.sha256(Path(self.config["charter"]).read_bytes()).hexdigest())
         self.assertEqual(charter["shift"], {"max_hours": 4, "max_wakes": 2, "max_compactions": 5})
         for text in (CHARTER + 'extra = "x"\n', CHARTER.replace('["the queue is empty"]', "[]"),
-                     CHARTER.replace('["repo"]', '["repo", "other"]'), CHARTER + "[shift]\nmax_hours = 0\n",
+                     CHARTER + "[shift]\nmax_hours = 0\n",
                      CHARTER + "[shift]\nmax_hours = true\n", "goal = [\n"):
             with self.subTest(text=text), self.assertRaises(shift.ShiftError):
                 self.charter(text)
+        self.assertEqual(self.charter(CHARTER.replace('["repo"]', '["repo", "other"]'))["repositories"],
+                         ["repo", "other"])
 
     def test_charter_rejects_writer_limits_with_dispatch_settings_guidance(self):
         for field in ("max_writers", "max_building_writers"):
@@ -222,6 +224,108 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 201, item)
         return item
 
+    def test_normal_intake_enters_real_captain_discovery_without_named_charter_ids(self):
+        captain = shift.start(self.api, self.charter, "intake-captain", config=self.config)["captain"]["id"]
+        item = self.item()
+        excluded = self.item("other")
+        status = shift.status(self.api, self.charter, captain)
+        self.assertEqual(status["pickup_candidates"], [item["id"]])
+        self.assertTrue(status["items"][0]["pickup"]["eligible"])
+        self.assertEqual(status["excluded_items"][0]["pickup"]["code"], "out_of_scope")
+        self.assertIn("other", status["excluded_items"][0]["wait_reason"])
+        board = self.api(f"/v1/operator/items/{item['id']}")["item"]
+        self.assertEqual(board["pickup"], status["items"][0]["pickup"])
+        self.assertEqual(board["next_action"], "Next to run: a Captain dispatches a writer")
+        code, dashboard = self.request("/operator/api/items", OWNER, {
+            "repository_id": "repo", "goal": "Dashboard intake", "target": "report"},
+            headers={"Origin": self.url, "Sec-Fetch-Site": "same-origin"})
+        self.assertEqual(code, 201, dashboard)
+        self.assertIn(dashboard["id"], shift.status(self.api, self.charter, captain)["pickup_candidates"])
+        with write_transaction(self.database) as db:
+            db.execute("UPDATE executions SET ready_since=0 WHERE item_id=?", (item["id"],))
+        overdue = [flag for flag in self.api("/v1/flags")["flags"] if flag["item_id"] == item["id"]]
+        self.assertEqual([flag["kind"] for flag in overdue], ["captain_idle_with_work"])
+        launched = shift.launch(self.api, self.config, self.charter, captain, status["pickup_candidates"][0])
+        self.assertEqual(launched["status"], "running")
+        self.assertFalse(any(flag["item_id"] == item["id"] for flag in self.api("/v1/flags")["flags"]))
+        with self.assertRaisesRegex(shift.ShiftError, "outside the charter"):
+            shift.launch(self.api, self.config, self.charter, captain, excluded["id"])
+
+    def test_pickup_reasons_preserve_pause_dependencies_capacity_and_lane_holds(self):
+        captain = shift.start(self.api, self.charter, "policy-captain", config=self.config)["captain"]["id"]
+        first = self.item()
+        dependent = self.item(dependencies=[{"upstream_id": first["id"], "milestone": "report"}])
+
+        def decision(item, code, reason):
+            board = self.api(f"/v1/operator/items/{item['id']}")["item"]
+            status = shift.status(self.api, self.charter, captain)
+            discovery = next(row for row in status["items"] if row["item_id"] == item["id"])
+            self.assertEqual(board["pickup"], discovery["pickup"])
+            self.assertEqual(board["wait_reason"], discovery["wait_reason"])
+            self.assertEqual(board["pickup"]["code"], code)
+            self.assertIn(reason, board["wait_reason"])
+            self.assertNotIn(item["id"], status["pickup_candidates"])
+            with self.assertRaisesRegex(shift.ShiftError, reason):
+                shift.launch(self.api, self.config, self.charter, captain, item["id"])
+
+        decision(dependent, "dependency", first["id"])
+        self.assertEqual(self.request("/v1/dispatch/settings", OWNER, {"paused": True}, method="PUT")[0], 200)
+        decision(first, "paused", "Dispatch is paused")
+        self.assertEqual(self.request("/v1/dispatch/settings", OWNER, {"paused": False}, method="PUT")[0], 200)
+        reason = f"Lane serialized behind {dependent['id']}: owner requires ordered publication"
+        self.api(f"/v1/items/{first['id']}/captain-actions",
+                 body={"captain_id": captain, "action": "held", "reason": reason})
+        decision(first, "held", "Lane serialized behind")
+        self.api(f"/v1/items/{first['id']}/captain-actions",
+                 body={"captain_id": captain, "action": "released", "reason": "Owner cleared lane order"})
+        self.assertEqual(self.request("/v1/dispatch/settings", OWNER,
+                                     {"max_building_writers": 1, "max_writers": 2}, method="PUT")[0], 200)
+        shift.launch(self.api, self.config, self.charter, captain, first["id"])
+        queued = self.item()
+        decision(queued, "capacity", "Building capacity exhausted")
+        self.assertEqual(self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")[0], 200)
+        decision(queued, "capacity", "Total capacity exhausted")
+
+    def test_pickup_reports_mapping_affinity_and_persistent_runtime_trust_blocks(self):
+        captain = shift.start(self.api, self.charter, "readiness-captain", config=self.config)["captain"]["id"]
+        item = self.item()
+        affinity = self.item(runner_affinity="another-runner")
+        board = self.api(f"/v1/operator/items/{affinity['id']}")["item"]
+        self.assertEqual(board["pickup"]["code"], "affinity")
+        self.assertIn("another-runner", board["wait_reason"])
+        shift.heartbeat(self.api, self.charter, captain, config=self.config,
+                        repository_blocks=[("repo", "Owner trust approval required for shared workspace")])
+        shift.heartbeat(self.api, self.charter, captain, config=self.config)
+        board = self.api(f"/v1/operator/items/{item['id']}")["item"]
+        self.assertEqual(board["pickup"]["code"], "repository_blocked")
+        self.assertIn("Owner trust approval required", board["wait_reason"])
+        shift.heartbeat(self.api, self.charter, captain, config=self.config, repository_ready=["repo"])
+        self.assertIn(item["id"], shift.status(self.api, self.charter, captain)["pickup_candidates"])
+        config = {**self.config, "repositories": {}}
+        shift.heartbeat(self.api, self.charter, captain, config=config)
+        board = self.api(f"/v1/operator/items/{item['id']}")["item"]
+        self.assertEqual(board["pickup"]["code"], "repository_blocked")
+        self.assertIn("no checkout mapping", board["wait_reason"])
+
+    def test_pickup_scope_expires_with_authority_and_never_guesses_a_changed_charter(self):
+        captain = shift.start(self.api, self.charter, "scope-captain", config=self.config)["captain"]["id"]
+        item = self.item()
+        route = f"/v1/captains/{captain}"
+        self.api(route, body={"charter_revision": self.charter["revision"], "wake_count": 1,
+                              "state": "active"}, method="PUT")
+        self.assertIn(item["id"], shift.status(self.api, self.charter, captain)["pickup_candidates"])
+        self.api(route, body={"charter_revision": "a-changed-charter-hash", "wake_count": 2,
+                              "state": "active"}, method="PUT")
+        board = self.api(f"/v1/operator/items/{item['id']}")["item"]
+        self.assertEqual(board["pickup"]["code"], "uninitialized")
+        shift.heartbeat(self.api, self.charter, captain, config=self.config)
+        self.assertIn(item["id"], shift.status(self.api, self.charter, captain)["pickup_candidates"])
+        with write_transaction(self.database) as db:
+            db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                       ((datetime.now(UTC) - timedelta(minutes=16)).isoformat(), captain))
+        board = self.api(f"/v1/operator/items/{item['id']}")["item"]
+        self.assertEqual(board["pickup"]["code"], "no_captain")
+
     def test_captain_reference_records_host_without_rewriting_legacy_identities(self):
         native = "12345678-1234-1234-1234-123456789abc"
         for runtime, prefix in (("copilot-app", "ghapp://sessions/"), ("codex", "codex://threads/"),
@@ -369,7 +473,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 if session:
                     self.api(route, body={"captain_id": captain, "writer_id": writer["id"],
                                           "session_id": session}, method="PATCH")
-                with self.assertRaisesRegex(ValueError, f"Wait: dispatch Total capacity exhausted: max_writers=1.*{writer['id']}"):
+                with self.assertRaisesRegex(ValueError, "Total capacity exhausted: max_writers=1"):
                     shift.launch(self.api, self.config, self.charter, other, queued["id"])
                 status = shift.status(self.api, self.charter, other)
                 self.assertEqual((status["active_writers"], status["max_writers"]), (1, 1))

@@ -54,9 +54,11 @@ def load_config(path, *, home=None):
             raise ShiftError(f"Discovered shift config must use muster charter {expected}")
         config["charter"] = str(expected)
     missing = [key for key in ("base_url", "repositories", "charter", "worktrees", "runtime")
-               if not config.get(key)]
+               if key not in config or (key != "repositories" and not config[key])]
     if missing:
         raise ShiftError(f"Shift config {path} needs {', '.join(missing)}")
+    if not isinstance(config["repositories"], dict):
+        raise ShiftError("Shift config repositories must map repository IDs to checkout settings")
     for repository, mapping in config["repositories"].items():
         if "checks_environment" in mapping:
             environment = mapping["checks_environment"]
@@ -75,7 +77,8 @@ def load_charter(config):
     """Read and validate the charter. Its revision is the SHA-256 of the file's bytes."""
     path = Path(config["charter"]).resolve()
     data = path.read_bytes()
-    guarded = [Path(mapping["checkout"]).resolve() for mapping in config["repositories"].values()]
+    guarded = [Path(mapping["checkout"]).resolve() for mapping in config["repositories"].values()
+               if mapping.get("checkout")]
     guarded.append(Path(config["worktrees"]).resolve())
     if any(path.is_relative_to(root) for root in guarded) or _git_tree(path.parent):
         raise ShiftError(f"The charter {path} must live outside every checkout, worktree and Git repository")
@@ -94,9 +97,6 @@ def load_charter(config):
         if not (isinstance(value, list) and value
                 and all(isinstance(entry, str) and entry.strip() for entry in value)):
             raise ShiftError(f"Charter {key} must be a non-empty list of text")
-    unmapped = sorted(set(charter["repositories"]) - set(config["repositories"]))
-    if unmapped:
-        raise ShiftError(f"Charter repositories without a checkout mapping: {', '.join(unmapped)}")
     shift = charter.get("shift", {})
     if isinstance(shift, dict) and {"max_writers", "max_building_writers"} & shift.keys():
         raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
@@ -138,9 +138,33 @@ def shift_bounds(captain, charter, now=None):
             "compaction_count": compactions, "handoff_due": due}
 
 
-def start(api, charter, session_ref, parent_id=None, *, runtime=None):
+def pickup_scope(api, charter, config=None):
+    repositories = {repository: None for repository in charter["repositories"]}
+    if config is not None:
+        registered = {entry["id"]: entry["remote"] for entry in api("/v1/repositories")}
+        for repository in repositories:
+            mapping = config["repositories"].get(repository)
+            if not mapping:
+                repositories[repository] = f"Repository {repository} has no checkout mapping"
+            elif not mapping.get("checkout") or not mapping.get("base_branch"):
+                repositories[repository] = f"Repository {repository} mapping needs checkout and base_branch"
+            elif repository not in registered:
+                repositories[repository] = f"Repository {repository} is not registered"
+            elif not config.get("session_workspace"):
+                repositories[repository] = "Native session_workspace is not configured"
+            else:
+                try:
+                    WorkspaceManager(Path(mapping["checkout"]), registered[repository],
+                                     Path(config["worktrees"])).verify_checkout()
+                except WorkspaceError as error:
+                    repositories[repository] = f"Checkout blocked: {error}"
+    return {"repositories": repositories, "runner_id": (config or {}).get("runner_id")}
+
+
+def start(api, charter, session_ref, parent_id=None, *, runtime=None, config=None):
     session_ref = session_reference(session_ref, runtime)
-    body = {"session_ref": session_ref, "charter_revision": charter["revision"]}
+    body = {"session_ref": session_ref, "charter_revision": charter["revision"],
+            "pickup": pickup_scope(api, charter, config)}
     if parent_id:
         body["parent_id"] = parent_id
     # A lost reply replays the same registration instead of leaving a stale twin.
@@ -150,12 +174,13 @@ def start(api, charter, session_ref, parent_id=None, *, runtime=None):
 
 
 def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, sessions=None,
-              handoff_note=None, compaction_count=None):
+              handoff_note=None, compaction_count=None, config=None, repository_blocks=(), repository_ready=()):
     """Post a heartbeat with the charter's current revision. Omitted fields keep their last value."""
     current = api(f"/v1/captains/{_q(captain_id)}")
     if sessions is None:
         sessions = [{key: value for key, value in session.items() if key != "first_seen"}
                     for session in current["sessions"]]
+    scope = pickup_scope(api, charter, config)
     body = {
         "charter_revision": charter["revision"],
         "wake_count": current["wake_count"] + int(wake),
@@ -163,7 +188,20 @@ def heartbeat(api, charter, captain_id, *, wake=False, state=None, focus=None, s
         "focus": current["focus"] if focus is None else focus,
         "sessions": sessions,
         "handoff_note": current["handoff_note"] if handoff_note is None else handoff_note,
+        "pickup": {**scope, "repositories": dict(scope["repositories"])},
     }
+    # Native trust observations persist until the runtime explicitly confirms readiness.
+    for repository, reason in current["pickup"]["repositories"].items():
+        if reason and reason.startswith("Runtime blocked:") and repository in body["pickup"]["repositories"]:
+            body["pickup"]["repositories"][repository] = reason
+    for repository in repository_ready:
+        if repository not in body["pickup"]["repositories"]:
+            raise ShiftError(f"Repository {repository} is outside the charter")
+        body["pickup"]["repositories"][repository] = scope["repositories"][repository]
+    for repository, reason in repository_blocks:
+        if repository not in body["pickup"]["repositories"]:
+            raise ShiftError(f"Repository {repository} is outside the charter")
+        body["pickup"]["repositories"][repository] = f"Runtime blocked: {reason}"
     if compaction_count is not None:
         body["compaction_count"] = compaction_count
     captain = api(f"/v1/captains/{_q(captain_id)}", body=body, method="PUT")
@@ -178,6 +216,7 @@ def _summary(item):
         "item_id": item["item_id"], "execution_id": item["id"], "version": item["version"],
         "repository_id": item["repository_id"], "title": item["title"], "stage": item["stage"],
         "status": item["status"], "wait_reason": item["wait_reason"],
+        "pickup": item["pickup"],
         "blocked_prerequisites": item["blocked_prerequisite_count"], "primary_pr_url": item["primary_pr_url"],
         "writer": writer and {key: writer[key] for key in ("id", "state", "captain_id", "session_id",
                                                              "last_progress_at", "progress_note")},
@@ -201,6 +240,10 @@ def status(api, charter, captain_id=None):
         "flags": api("/v1/flags")["flags"],
         "captains": api("/v1/captains?limit=100")["captains"],
         "items": scoped,
+        "excluded_items": [_summary(item) for item in items if item["repository_id"] not in scope],
+        "pickup_candidates": [item["item_id"] for item in scoped
+                              if item["pickup"] and item["pickup"]["eligible"]
+                              and (not captain_id or captain_id in item["pickup"]["captain_ids"])],
         "active_writers": capacity["active_writers"],
         "max_writers": capacity["max_writers"],
         "building_writers": capacity["building_writers"],
@@ -289,6 +332,13 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     repository = item["repository_id"]
     if repository not in charter["repositories"]:
         raise ShiftError(f"Repository {repository} is outside the charter")
+    execution = item["execution"]
+    if replaces is None and execution["state"]["status"] == "queued":
+        decision = api(f"/v1/operator/items/{_q(item_id)}")["item"]["pickup"]
+        if decision and not decision["eligible"]:
+            raise ShiftError(decision["reason"])
+        if decision and captain_id not in decision["captain_ids"]:
+            raise ShiftError("This Captain's scope, runner affinity or repository readiness excludes pickup")
     mapping = config["repositories"][repository]
     remote = next((entry["remote"] for entry in api("/v1/repositories") if entry["id"] == repository), None)
     if remote is None:
@@ -469,6 +519,10 @@ def add_shift_command(commands):
                       help="explicit native lookup result: present, missing or deleted; requires --session")
     beat.add_argument("--no-sessions", action="store_true", help="report that no such session is visible")
     beat.add_argument("--handoff-note")
+    beat.add_argument("--repository-blocked", nargs=2, action="append", metavar=("REPOSITORY", "REASON"),
+                      help="record a native trust/readiness blocker until explicitly cleared")
+    beat.add_argument("--repository-ready", action="append", metavar="REPOSITORY",
+                      help="clear a runtime blocker after native verification")
     show_status = actions.add_parser("status", parents=[shared], help="flags, Captains and the charter's open items")
     show_status.add_argument("--captain", help="also read this Captain, including ended-writer cleanup")
     actions.add_parser("current", parents=[shared],
@@ -534,7 +588,7 @@ def run_shift(args):
     if args.shift_command == "charter":
         result = charter
     elif args.shift_command == "start":
-        result = start(API(config), charter, args.session_ref, args.parent, runtime=config["runtime"])
+        result = start(API(config), charter, args.session_ref, args.parent, runtime=config["runtime"], config=config)
     elif args.shift_command == "heartbeat":
         if args.no_sessions and (args.sessions or args.session_writer or args.session_availability):
             raise ShiftError("Pass --session or --no-sessions, not both")
@@ -551,7 +605,9 @@ def run_shift(args):
             by_id[session_id]["availability"] = availability
         result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
-                           compaction_count=args.compaction_count)
+                           compaction_count=args.compaction_count, config=config,
+                           repository_blocks=args.repository_blocked or (),
+                           repository_ready=args.repository_ready or ())
     elif args.shift_command == "status":
         result = {**status(API(config), charter, args.captain),
                   "dashboard_url": config["base_url"].rstrip("/") + "/operator/"}

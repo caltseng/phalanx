@@ -273,7 +273,7 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
     active only while it is the latest Captain action on the queued execution's current version,
     is less than 30 minutes old, and its Captain is live and not ended. The board and item view show
     its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
-    suppress dispatch-overdue warnings but do not change dispatch eligibility or reserve capacity.
+    suppress dispatch-overdue warnings and exclude normal Captain pickup while active, but reserve no capacity.
     Full-capacity backlog remains visible even with an active hold.
   - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, legacy `phx …` names, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` by registered session ID and full nonce, falling back to legacy item-prefix/nonce name words only when structured identity is absent. Titles never establish ownership for task-first sessions. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
@@ -297,6 +297,7 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
 | `captain_idle_with_work` | **Dispatch overdue**: live Captains, dispatch enabled, both admission limits permit the work, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
 | `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while Building or Total admission is exhausted, eligible waiting PR fixes take preference, or dispatch is paused. Counts and precise affected limit included; informational even with a Captain hold, never a stopped/failed Captain signal | Wait for affected capacity, service eligible PR fixes or resume dispatch. Existing writer-health flags remain independent |
+| `pickup_blocked` | Unassigned work waiting 30 min on scope/uninitialized authority, affinity or repository/trust readiness; not a Captain failure or handoff signal | The shared pickup decision supplies the concrete reason and recovery; notify the owner |
 | `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
 | `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |

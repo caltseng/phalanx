@@ -75,8 +75,10 @@ End each created PR description with
 `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`, exactly once.
 
 1. Authenticated owner intake files the item. Missing prerequisites keep it queued with
-   a visible reason. Otherwise an unbound item visibly **awaits a direct Captain**; unpinned
-   intake must not disappear behind an unavailable scheduler.
+   a visible reason. Normal intake in a charter repository is eligible by default without
+   naming its ID in charter notes. A shared pickup projection exposes scope, affinity,
+   checkout/trust, hold, dependency, pause and capacity reasons in Captain discovery and Scribe.
+   Eligible unbound intake must not disappear behind an unavailable scheduler or a prose allow-list.
 2. The Captain re-reads its charter and API/GitHub/native session state. It chooses named
    eligible work, records a writer intent/nonce and scoped token digest before launching
    one native session. Registration atomically enforces one open writer per execution and

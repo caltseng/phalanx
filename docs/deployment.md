@@ -259,3 +259,27 @@ Rollback changes only the client revision and charter setting under the same own
 remove the new key if the previous client does not accept it.
 Relay the reverted instructions explicitly. Never roll back the database or fabricate
 telemetry to exercise the live threshold; boundary tests use isolated fixtures.
+
+### Default intake pickup activation
+
+This change extends the direct schema, without appending a store migration. Only the service
+owner applies it to an existing installation, rehearsing on a backup before deployment.
+Do not reset or replace the store. Preserve credentials, Captain/writer rows, attempts,
+dispatch settings and history. Before starting the updated API against an existing store,
+the owner applies this additive schema change once through controlled server administration:
+
+```sql
+ALTER TABLE captains ADD COLUMN pickup_json TEXT NOT NULL
+    DEFAULT '{"repositories":{},"runner_id":null}';
+```
+
+The default backfills existing Captain rows with **unknown/no pickup authority**, not guessed
+scope from a hash or old prose. No work-item backfill or per-item charter edits are needed.
+After deploying the reviewed API and client, relay the updated Captain prompt verbatim to
+retained coordinating Captains, and have each run its normal `shift heartbeat --captain ID --wake`
+with the current config/charter. This populates scope/readiness without re-registering the Captain
+or replacing its writers. Include a stable config `runner_id` for any pinned intake and publish
+known native repository trust blocks with `--repository-blocked`. Verify `pickup_candidates`,
+specific wait reasons and unchanged writer/capacity state through status and Scribe.
+Keep deployment, schema application, external charter edits and retained-prompt activation
+with the service owner; item writers do none of these live operations.

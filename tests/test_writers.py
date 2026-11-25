@@ -38,7 +38,9 @@ class WriterTest(ServerFixture, unittest.TestCase):
         migrate(self.path)
         self.start_server(self.path)
         self.assertEqual(self.request("/v1/repositories", OWNER, {"id": "repo", "remote": "https://github.com/e/r.git"})[0], 200)
-        self.captain = self.ok("/v1/captains", RUNNER, {"session_ref": "chat-1", "charter_revision": "c1"}, 201)
+        self.captain = self.ok("/v1/captains", RUNNER, {
+            "session_ref": "chat-1", "charter_revision": "c1",
+            "pickup": {"repositories": {"repo": None}}}, 201)
 
     def ok(self, path, token, body=None, code=200, **options):
         status, response = self.request(path, token, body, **options)
@@ -145,7 +147,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
         self.assertEqual((recorded["status"], recorded["writer"]["state"]), ("queued", "ended"))
         self.assertEqual(recorded["writer"]["session_id"], "recorded-session")
-        self.assertEqual(recorded["wait_reason"], "Awaiting a direct Captain")
+        self.assertIsNone(recorded["wait_reason"])
         self.assertIsNone(shift._summary(recorded)["writer"])
         builds = [self.register(*self.item())[0] for _ in range(5)]
         recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
@@ -1309,7 +1311,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(route, RUNNER, dict(action, reason="Charter max_writers=1"), 201)
         self.assertEqual(self.ok(timeline, OWNER)["item"]["wait_reason"], "Charter max_writers=1")
         self.ok(route, RUNNER, dict(action, action="released", reason="Capacity available"), 201)
-        self.assertEqual(self.ok(timeline, OWNER)["item"]["wait_reason"], "Awaiting a direct Captain")
+        self.assertIsNone(self.ok(timeline, OWNER)["item"]["wait_reason"])
 
 
 class CaptainFlagTest(ServerFixture, unittest.TestCase):
@@ -1326,7 +1328,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
     def backlog(self, db):
         intake.register(db, "repo", "https://github.com/e/r.git")
         captain = captains.register(db, captains.CaptainRegistration(
-            session_ref="chat", charter_revision="c1"))
+            session_ref="chat", charter_revision="c1", pickup=captains.Pickup(repositories={"repo": None})))
         active = intake.create(db, Intake(repository_id="repo", goal="Building", target="report"))
         binding = writers.register(db, active["id"], active["execution"]["id"], writers.Registration(
             expected_version=active["execution"]["version"], captain_id=captain["id"],
@@ -1376,6 +1378,42 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                     db.execute("UPDATE executions SET ready_since=? WHERE id=?",
                                (cutoff, queued["execution"]["id"]))
                     self.assertEqual(flags.captain_idle_with_work(db, now)[0]["kind"], kind)
+
+    def test_owner_action_pickup_blockers_remain_visible_after_the_existing_queue_budget(self):
+        from phalanx.operator_api import SUMMARY, dispatch_context, summary
+
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/e/r.git")
+            captain = captains.register(db, captains.CaptainRegistration(
+                session_ref="chat", charter_revision="c1"))
+            item = intake.create(db, Intake(repository_id="repo", goal="Queued intake", target="report"))
+            now = datetime.now(UTC)
+            cutoff = int((now - flags.IDLE_WITH_WORK).timestamp() * 1000)
+            cases = (
+                ("uninitialized", {}, ""),
+                ("out_of_scope", {"other": None}, ""),
+                ("repository_blocked", {"repo": "Owner trust approval required"}, ""),
+                ("affinity", {"repo": None}, "assigned-runner"),
+            )
+            for code, repositories, affinity in cases:
+                with self.subTest(code=code):
+                    captains.heartbeat(db, captain["id"], captains.Heartbeat(
+                        charter_revision="c1", wake_count=1, state="active",
+                        pickup=captains.Pickup(repositories=repositories)))
+                    db.execute("UPDATE executions SET ready_since=?, queue_affinity=? WHERE id=?",
+                               (cutoff + 1, affinity, item["execution"]["id"]))
+                    self.assertEqual(flags.captain_idle_with_work(db, now), [])
+                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                               (cutoff, item["execution"]["id"]))
+                    (blocked,) = flags.all_flags(db, now)["flags"]
+                    row = db.execute(SUMMARY + " WHERE execution.id=?", (item["execution"]["id"],)).fetchone()
+                    board = summary(row, now, dispatch_context(db, now))
+                    self.assertEqual(board["pickup"]["code"], code)
+                    self.assertEqual(blocked["kind"], "pickup_blocked")
+                    self.assertEqual(blocked["execution_id"], item["execution"]["id"])
+                    self.assertEqual(blocked["reason"], board["wait_reason"])
+                    self.assertEqual(blocked["recovery"], board["resume_trigger"])
+                    self.assertTrue(blocked["notify_owner"])
 
     def test_slot_release_changes_backlog_to_overdue_and_assignment_clears_it_over_http(self):
         with write_transaction(self.path) as db:
@@ -1448,7 +1486,8 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             intake.create(db, Intake(repository_id="repo", goal="Work", target="report"))
         self.assertEqual(self.kinds(now), {("no_live_captain", "server")})
         with write_transaction(self.path) as db:
-            captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+            captain = captains.register(db, captains.CaptainRegistration(
+                session_ref="chat", charter_revision="c1", pickup=captains.Pickup(repositories={"repo": None})))
         now = datetime.now(UTC)  # after the item and heartbeat exist, so slow hosts can't make them look newer
         self.assertEqual(self.kinds(now), set())
         later = now + captains.STALE + timedelta(seconds=1)
@@ -1490,7 +1529,8 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         with write_transaction(self.path) as db:
             intake.register(db, "repo", "https://github.com/e/r.git")
             # A second live Captain keeps idle detection enabled when the holder goes stale/ends.
-            captains.register(db, captains.CaptainRegistration(session_ref="other", charter_revision="c1"))
+            captains.register(db, captains.CaptainRegistration(
+                session_ref="other", charter_revision="c1", pickup=captains.Pickup(repositories={"repo": None})))
         for lapse in ("none", "expired", "stale", "ended", "version", "superseded", "ending_overdue"):
             with self.subTest(lapse=lapse), write_transaction(self.path) as db:
                 item = intake.create(db, Intake(repository_id="repo", goal="Work", target="report"))
@@ -1526,8 +1566,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(execution_id in idle, lapse != "none")
                 row = db.execute(SUMMARY + " WHERE execution.id=?", (execution_id,)).fetchone()
                 wait = summary(row, now, dispatch_context(db, now))["wait_reason"]
-                self.assertEqual(wait, "Charter mutual exclusion" if lapse == "none"
-                                 else "Awaiting a direct Captain")
+                self.assertEqual(wait, "Charter mutual exclusion" if lapse == "none" else None)
 
     def test_latest_hold_lookup_does_not_scan_unrelated_executions(self):
         with write_transaction(self.path) as db:

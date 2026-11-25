@@ -94,7 +94,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         })
         self.assertEqual(status, 201)
         row = self.get("/v1/operator/executions?kind=open", OWNER)[1]["items"][0]
-        self.assertEqual(row["wait_reason"], "Awaiting a direct Captain")
+        self.assertEqual(row["wait_reason"], "No live active Captain with pickup authority")
         status, captain = self.request("/v1/captains", RUNNER, {
             "session_ref": "captain", "charter_revision": "one",
         })

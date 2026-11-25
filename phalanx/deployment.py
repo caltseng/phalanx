@@ -61,6 +61,8 @@ def initialize(home=None, *, api_url=None, port=8000):
         "# PHALANX_OWNER_TOKEN=\n# PHALANX_RUNNER_TOKEN=\n# PHALANX_GITHUB_TOKEN=\n"
         "PHALANX_LOCAL_BOARD=0\n", encoding="utf-8")
     (root / "charter.toml").write_text(
+        '# Normal owner intake in these repositories is eligible without listing item IDs.\n'
+        '# Notes may order or constrain work; they are not an intake allow-list.\n'
         'goal = "SET_GOAL"\nrepositories = []\n'
         'allowed_actions = ["Implement scoped work and publish PRs under repository rules"]\n'
         'escalate = ["Missing authority or credentials"]\nstop_when = ["Owner stops the muster"]\n'
