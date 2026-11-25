@@ -46,6 +46,7 @@ It does not launch sessions, write GitHub, or merge PRs.
 | GitHub | PR identity, actual head/base, checks, feedback, merge and deployment facts | [GitHub reader](../phalanx/github.py), [reconciliation](../phalanx/reconciliation.py) |
 | Captain runtime | Native launch/discovery, coordination, trust-block escalation, shift handoff and creator-owned cleanup | [shift client](../phalanx/shift.py), [Captain prompt](../phalanx/prompts/captain.md), [keeper prompt](../phalanx/prompts/keeper.md) |
 | Pickup projection | Request-local capacity/rework, holds and native availability snapshots feed board validators and rows; writer reads derive only their execution's flags, sharing capacity with the binding | [pickup](../phalanx/pickup.py), [operator views](../phalanx/operator_api.py), [flags](../phalanx/flags.py) |
+| Scribe browser | Shared DOM/link helpers, board and Markdown rendering, fetch/auth transport, and shell-owned response projections and form/dialog wiring | [helpers](../phalanx/static/operator-helpers.js), [board](../phalanx/static/operator-board.js), [Markdown](../phalanx/static/operator-markdown.js), [HTTP](../phalanx/static/operator-http.js), [shell](../phalanx/static/operator-shell.js) |
 | Writer runtime | Implement, run repository checks, self-review, commit, publish, and fix its primary PR through delivery | [writer binding](../phalanx/writers.py), [work CLI](../phalanx/work_cli.py), [worker prompt](../phalanx/prompts/worker.md) |
 | Execution host | Mapped checkouts, isolated item worktrees, Git credentials, prepared checks environments, scoped credential files and artifacts | [workspaces](../phalanx/workspaces.py), [configuration](configuration.md) |
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
@@ -86,6 +87,10 @@ local shorthand, not a separately installed executable.
 
 See [installation](install.md), [work items](work-items.md), [writer operations](writer-operations.md)
 and [API reference](api.md) for executable examples and authentication.
+
+Direct clients share no-redirect HTTP and API URL validation in `api_client.py`,
+checkout-confined Git execution in `git.py`, and duplicate-key JSON decoding in
+`json_utils.py`. Direct-client GitHub remote recognition uses `github_repository`.
 
 ## One writer, separately fenced stages
 
@@ -157,6 +162,14 @@ Ready-only writers never merge or enable auto-merge. Later owner merges can enri
 completed ready outputs and release check-in dependencies without restarting writers.
 Optional deployment checks observe the delivered **merge commit**; they are flags,
 not stages, and never reopen delivery.
+
+Owner-authenticated `intake.steer` also allows acceptance-criteria-only edits during attempt-free
+delivery external waits, using the existing version fence and before/after timeline audit. This
+supports [explicit ordinary-performance classification](writer-operations.md#bounded-performance-work)
+without replacing writers or changing lifecycle/capacity/ceilings. Captain material-event messages
+reuse existing bounded reconciliation/refill; there is no event bus or new scheduler. Runtime
+installation, complete schema rehearsal and retained-instruction adoption remain
+[separate operator receipts](deployment.md#coordination-policy-adoption-boundary), not source-merge evidence.
 
 ## Deployment and recovery boundaries
 

@@ -49,6 +49,14 @@ See [deployment tooling and migration](docs/deployment.md).
   notes; Captains surface stale policy for operator correction, not an extra owner-merge gate.
   This does not retarget explicit ready-only/report work, lift draft ceilings or waive required
   review, checks, dependency integration, credentials or trust.
+- Any qualified reviewer independent of the author may supply applicable final exact-head review;
+  no native session/person is a universal dependency. Reuse valid evidence covering the effective
+  scope without unresolved findings; genuine GitHub required reviewers/protections remain hard.
+- Ordinary performance optimization has a two-round budget, retaining measurements, remaining miss
+  and concrete follow-up; explicit safety/SLO/resource-contract gates remain hard. Owner-approved
+  classification uses [versioned controls](docs/writer-operations.md#bounded-performance-work).
+  Acceptance-criteria-only owner steering is permitted during an attempt-free delivery external
+  wait, audited before/after without altering state, writer, capacity, target or publication mode.
 - A completed ready execution stays completed when its primary PR later merges into the
   target at the verified head or a proven descendant. Reconciliation enriches its final
   output once with final revision, merge commit and `merged_at`, and releases check-in
@@ -114,6 +122,16 @@ End each created PR description with
    blocker or verified completion, not merely a stage boundary.
 5. The reconciler independently observes GitHub and posts timestamped facts/flags. It
    does not launch/stop sessions, mutate GitHub, or require a worker attempt.
+
+Material native/stage/Building-release/merge/deployment events prompt the Captain's existing bounded
+reconciliation/refill as well as scheduled wakes, preferring waiting PR fixes and preserving atomic
+Building/Total admission and sole-writer fencing. There is no new event service, scheduler, polling
+framework, quota or blanket serialization. Routine compatible reviewed/checks-green upgrades use
+[standing owner deployment authority](docs/deployment.md#standing-authority-for-compatible-upgrades)
+with backup, complete rehearsal, exact API ownership, continuity and recoverable rollback; destructive/
+data-loss/schema-downgrade/new-service/credential-scope changes require explicit owner decisions.
+Source merge is not a deployed result; [live adoption](docs/deployment.md#coordination-policy-adoption-boundary)
+is separately verified.
 
 ## Development lifecycle state machine
 

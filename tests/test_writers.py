@@ -115,6 +115,44 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual(stored, intake.digest(intake.encode({
             "body": Result(**body).model_dump(mode="json"), "writer_id": binding["writer"]["id"]})))
 
+    def test_long_queue_new_writer_has_fresh_active_and_stage_age_without_overdue_warning(self):
+        queued_at = (datetime.now(UTC) - timedelta(days=3)).isoformat(timespec="microseconds")
+        with patch("phalanx.intake.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(queued_at)
+            with write_transaction(self.path) as db:
+                item = intake.create(db, Intake(repository_id="repo", goal="Long queued work", target="report"))
+        item_id, execution_id = item["id"], item["execution"]["id"]
+        board = f"/v1/operator/items/{item_id}"
+        queued = self.ok(board, OWNER)["item"]
+        self.assertIsNone(queued["active_started_at"])
+        self.assertIsNone(queued["active_age_seconds"])
+        self.assertIsNone(queued["stage_started_at"])
+        binding, token, _ = self.register(item_id, execution_id)
+        with connect(self.path) as db:
+            started = db.execute("SELECT started_at FROM attempts WHERE id=?",
+                                 (binding["writer"]["attempt_id"],)).fetchone()[0]
+        for route in (board, f"/v1/operator/executions/{execution_id}/timeline",
+                      "/v1/operator/executions"):
+            result = self.ok(route, OWNER)
+            active = result["item"] if "item" in result else result["items"][0]
+            self.assertEqual(active["created_at"], queued_at)
+            self.assertEqual(active["last_advanced_at"], queued_at)
+            self.assertEqual(active["active_started_at"], started)
+            self.assertEqual(active["stage_started_at"], started)
+            self.assertLess(active["active_age_seconds"], 60)
+        self.assertNotIn("active_overdue", [
+            flag["kind"] for flag in self.ok("/v1/writer", token)["flags"]])
+        review = self.submit(token, binding, report_markdown="# Report\n")
+        rework = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/result", token, {
+            "attempt_id": review["writer"]["attempt_id"], "stage": "report_review",
+            "expected_version": review["version"], "outcome": "changes_required",
+            "report_revision": intake.digest("# Report\n"), "report_review_notes": "Clarify evidence"})
+        self.assertEqual(rework["state"]["stage"], "report_drafting")
+        current = self.ok(board, OWNER)["item"]
+        self.assertEqual(current["active_started_at"], started)
+        self.assertEqual(current["stage_started_at"], current["last_advanced_at"])
+        self.assertGreater(current["stage_started_at"], started)
+
     def test_overdue_age_survives_progress_stages_replacement_but_not_completion_or_rerun(self):
         item_id, execution_id = self.item()
         binding, token, _ = self.register(item_id, execution_id)
@@ -141,14 +179,25 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         if flag["kind"] == "active_overdue")
         self.assertEqual(replaced["first_seen"], first["first_seen"])
         self.assertIn(replacement["writer"]["id"], replaced["recovery"])
+        board = f"/v1/operator/items/{item_id}"
+        active = self.ok(board, OWNER)["item"]
+        self.assertEqual(active["active_started_at"], started.isoformat(timespec="microseconds"))
+        self.assertGreaterEqual(active["active_age_seconds"], 91 * 60)
         binding = self.submit(replacement_token, replacement, report_revision=intake.digest("# Report\n"))
         done = self.submit(replacement_token, binding, report_revision=intake.digest("# Report\n"))
         self.assertEqual(done["state"]["status"], "completed")
+        closed = self.ok(board, OWNER)["item"]
+        self.assertEqual(closed["active_started_at"], active["active_started_at"])
+        self.assertEqual(closed["active_age_seconds"], max(0, int((
+            datetime.fromisoformat(closed["closed_at"]) - started).total_seconds())))
         self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
         rerun = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/rerun", OWNER,
                        {"expected_version": done["version"], "target": "report"})
         fresh, _, _ = self.register(item_id, rerun["id"])
         self.assertEqual(fresh["id"], rerun["id"])
+        current = self.ok(board, OWNER)["item"]
+        self.assertNotEqual(current["active_started_at"], active["active_started_at"])
+        self.assertLess(current["active_age_seconds"], 60)
         self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
 
     def test_overdue_delivery_surfaces_known_blocker_actor_and_trigger_through_existing_reads(self):
@@ -716,10 +765,9 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.submit(token, publication, pr_url=PR_URL)
         with patch.object(work_cli, "credential", return_value=(self.url, token)), patch("builtins.print"):
             work_cli.run_work(Namespace(work_command="capacity", phase="building"))
-            with patch.object(work_cli.subprocess, "run",
-                              return_value=subprocess.CompletedProcess([], 0, stdout=OTHER + "\n")) as git:
+            with patch.object(work_cli, "git_text", return_value=OTHER + "\n") as git:
                 work_cli.run_work(Namespace(work_command="capacity", phase="delivering"))
-            git.assert_called_once()
+            git.assert_called_once_with(None, "rev-parse", "HEAD", error=ValueError)
         current = self.ok("/v1/writer", token)
         self.assertFalse(current["writer"]["building"])
         self.assertEqual(current["writer"]["handoff_head"], OTHER)
@@ -854,6 +902,64 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         {"expected_version": done["version"], "target": "checked_in"})
         self.assertNotEqual(rerun["id"], done["id"])
         self.assertEqual(rerun["state"]["target"], "checked_in")
+
+    def test_delivery_criteria_steering_is_owner_versioned_audited_and_preserves_writer(self):
+        original = ["Timing target: 5 seconds", "No data loss"]
+        criteria = ["Ordinary timing target: 5 seconds; measured 7 seconds after two rounds; "
+                    "Captain tracks follow-up profiling", "No data loss"]
+        for mode in ("ready", "draft"):
+            with self.subTest(mode=mode):
+                publication, token = self.publish(
+                    "checked_in", acceptance_criteria=original, publication_mode=mode)
+                delivery = self.submit(token, publication, pr_url=PR_URL)
+                if mode == "ready":
+                    self.capacity(token, "building")
+                    delivery = self.ok("/v1/writer", token)
+                route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+                payload = {"expected_version": delivery["version"],
+                           "acceptance_criteria": criteria, "steered_by": "captain"}
+                key = f"criteria-{mode}"
+                headers = {"Idempotency-Key": key}
+                for forbidden in (RUNNER, token):
+                    self.ok(route, forbidden, payload, 403, method="PATCH", headers=headers)
+                changed = self.ok(route, OWNER, payload, method="PATCH", headers=headers)
+                self.assertEqual(self.ok(route, OWNER, payload, method="PATCH", headers=headers), changed)
+                self.ok(route, OWNER, payload, 409, method="PATCH",
+                        headers={"Idempotency-Key": f"{key}-stale"})
+                self.assertEqual(changed["acceptance_criteria"], criteria)
+                self.assertEqual(changed["execution"]["version"], delivery["version"] + 1)
+                self.assertEqual(changed["execution"]["state"], delivery["state"])
+                current = self.ok("/v1/writer", token)
+                self.assertEqual(current["writer"], delivery["writer"])
+                self.assertEqual(current["state"], delivery["state"])
+                timeline = self.ok(route + "/timeline", OWNER)
+                self.assertEqual(timeline[-1]["event"], "steer")
+                self.assertEqual(timeline[-1]["details"], {
+                    "before": {"acceptance_criteria": original},
+                    "after": {"acceptance_criteria": criteria}, "steered_by": "captain"})
+
+    def test_delivery_criteria_steering_refuses_mixed_active_stopping_and_terminal_work(self):
+        publication, token = self.publish("ready_for_check_in")
+        route = f"/v1/items/{publication['item_id']}/executions/{publication['id']}"
+        payload = {"expected_version": publication["version"], "acceptance_criteria": ["Updated"]}
+        self.ok(route, OWNER, payload, 409, method="PATCH")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        payload["expected_version"] = delivery["version"]
+        for fields in ({"goal": "Different work"}, {"target": "checked_in"},
+                       {"dependencies": []}, {"acceptance_criteria": None}):
+            self.ok(route, OWNER, {**payload, **fields}, 409, method="PATCH")
+        self.assertEqual(self.ok("/v1/writer", token)["version"], delivery["version"])
+        completed = self.observe(delivery)
+        payload["expected_version"] = completed["version"]
+        self.ok(route, OWNER, payload, 409, method="PATCH")
+
+        publication, token = self.publish("checked_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+        stopping = self.ok(route + "/cancel", OWNER,
+                           {"expected_version": delivery["version"], "reason": "Owner stop"})
+        self.ok(route, OWNER, {"expected_version": stopping["version"],
+                              "acceptance_criteria": ["Updated"]}, 409, method="PATCH")
 
     def test_steered_check_in_waits_for_required_checks_and_records_the_merge(self):
         binding, token = self.publish("ready_for_check_in")

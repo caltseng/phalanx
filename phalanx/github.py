@@ -9,7 +9,9 @@ from time import time
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode, urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request, build_opener
+
+from .api_client import NoRedirect
 
 _SHA = re.compile(r"[0-9a-fA-F]{40}")
 _NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="next"')
@@ -62,15 +64,9 @@ def _read_retry_delay(response: HTTPResponse) -> int | None:
 Transport = Callable[[Request, float], HTTPResponse]
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    # Do not replay writes or forward credentials on redirects.
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def _send(request: Request, timeout: float) -> HTTPResponse:
     try:
-        response = build_opener(_NoRedirect()).open(request, timeout=timeout)
+        response = build_opener(NoRedirect()).open(request, timeout=timeout)
     except HTTPError as error:
         response = error
     with response:

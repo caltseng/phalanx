@@ -15,12 +15,12 @@ from pathlib import Path
 import re
 import secrets
 from string import Template
-import subprocess
 import tomllib
 import unicodedata
 from urllib.parse import quote, urlencode
 
 from .work_cli import CREDENTIAL, request
+from .git import run_git
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 from .display_text import reason_text, short_title
 from .session_links import session_reference
@@ -68,9 +68,8 @@ def load_config(path, *, home=None):
 
 
 def _git_tree(path):
-    result = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=path, capture_output=True,
-                            text=True, stdin=subprocess.DEVNULL)
-    return result.returncode == 0 and result.stdout.strip() == "true"
+    result = run_git(path, "rev-parse", "--is-inside-work-tree", check=False, error=ShiftError)
+    return result.returncode == 0 and result.stdout.strip() == b"true"
 
 
 def load_charter(config):
@@ -258,18 +257,18 @@ def status(api, charter, captain_id=None):
 def _fetch(checkout, branch):
     for args in (["check-ref-format", f"refs/heads/{branch}"],
                  ["fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"]):
-        result = subprocess.run(["git", *args], cwd=checkout, capture_output=True, text=True,
-                                stdin=subprocess.DEVNULL)
+        result = run_git(checkout, *args, check=False, error=ShiftError)
         if result.returncode:
-            raise ShiftError(f"git {args[0]} failed for {branch} in {checkout}: {result.stderr.strip()}")
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise ShiftError(f"git {args[0]} failed for {branch} in {checkout}: {detail}")
 
 
 def credential_path(worktree):
-    result = subprocess.run(["git", "rev-parse", "--git-path", CREDENTIAL], cwd=worktree,
-                            capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    result = run_git(worktree, "rev-parse", "--git-path", CREDENTIAL, check=False, error=ShiftError)
     if result.returncode:
-        raise ShiftError(f"Cannot locate the writer credential in {worktree}: {result.stderr.strip()}")
-    return Path(worktree) / result.stdout.strip()
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        raise ShiftError(f"Cannot locate the writer credential in {worktree}: {detail}")
+    return Path(worktree) / result.stdout.decode("utf-8", errors="surrogateescape").strip()
 
 
 def _write_credential(path, data):

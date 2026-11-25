@@ -19,7 +19,8 @@
   const captainUrl = "codex://threads/" + nativeId;
   const row = { id: execution, item_id: id, title: "Searchable report", goal: "Keep the existing details",
     repository_id: "example", stage: "report_storage", status: "completed", created_at: now,
-    last_advanced_at: now, closed_at: now, outcome: "report_stored", output: { kind: "report" },
+    last_advanced_at: now, active_started_at: now, stage_started_at: now,
+    closed_at: now, outcome: "report_stored", output: { kind: "report" },
     delivery: { merged: true, merge_commit: "f".repeat(40), merged_at: now, merge_method: "merge" },
     writer: { state: "ended", runtime: "copilot-app", session_id: nativeId, session_url: writerUrl,
       session_availability: "unverified" } };
@@ -28,6 +29,7 @@
     "- First", "- Second", "", "1. Ordered", "2. List", "", "> Quoted", "",
     "| Check | Result |", "| --- | --- |", "| Tests | Passed |", "",
     "[Safe](https://example.com/report) [Unsafe](javascript:alert%281%29)",
+    "[Relative](/relative-report) [Empty]() [Credentials](https://user:password@example.com/report)",
     "![No image](https://example.com/tracker.png)", "",
     "<script>window.reportExecuted=true</script><img src=x onerror=alert(1)>",
     '<svg onload="alert(1)"><a href="javascript:alert(1)">HTML link</a></svg>', "",
@@ -147,6 +149,10 @@
     await until(() => app.doc.querySelector(".detail-links"));
     assert(calls.includes("/v1/operator/items/" + id), "Item route resolves the current execution");
     assert(app.doc.querySelector(".goal").textContent === row.goal, "Item route reuses full existing detail");
+    const activeSince = [...app.doc.querySelectorAll(".facts dt")]
+      .find(node => node.textContent === "Active since");
+    assert(activeSince?.nextElementSibling.querySelector("time")?.dateTime === now,
+      "Real HTTP adapter preserves authoritative activation for detail age");
     const assertBrief = () => {
       const blocks = [...app.doc.querySelectorAll(".work-brief")];
       assert(blocks.length === 2, "Both labeled brief blocks render");
@@ -203,6 +209,11 @@
     assert(!content.querySelector("script, img, svg, iframe, style") && !app.win.reportExecuted, "Report HTML never becomes DOM");
     assert(!content.querySelector('a[href^="javascript:"]') && content.querySelector("a").protocol === "https:",
       "Only safe generated links survive");
+    const reportLinks = [...content.querySelectorAll("a")];
+    assert(reportLinks.find(link => link.textContent === "Relative")?.href === location.origin + "/relative-report" &&
+      reportLinks.find(link => link.textContent === "Empty")?.href === app.doc.baseURI &&
+      !reportLinks.some(link => link.textContent === "Credentials"),
+    "Shared link validation preserves relative and empty Markdown targets and rejects credentials");
     for (const width of [1280, 390, 320]) {
       frame.style.width = width + "px";
       frame.style.height = "600px";

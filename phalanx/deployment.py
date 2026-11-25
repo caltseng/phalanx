@@ -7,9 +7,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from urllib.parse import urlsplit
 
-from .muster import _unique, read_environment, resolve_home
+from .api_client import validate_api_url
+from .json_utils import unique_object
+from .muster import read_environment, resolve_home
 from .shift import SHIFT_DEFAULTS
 from .workspaces import any_file_lock
 
@@ -26,11 +27,7 @@ def initialize(home=None, *, api_url=None, port=8000):
     if not 1 <= port <= 65535:
         raise ValueError("Server port must be between 1 and 65535")
     api_url = api_url if api_url is not None else f"http://127.0.0.1:{port}"
-    url = urlsplit(api_url)
-    if (not url.hostname or url.username or url.password or url.query or url.fragment
-            or (url.scheme != "https" and not (
-                url.scheme == "http" and url.hostname in {"localhost", "127.0.0.1", "::1"}))):
-        raise ValueError("Use HTTPS or a loopback HTTP API URL without credentials")
+    validate_api_url(api_url)
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     files = {
         "deployment.json": {
@@ -83,13 +80,29 @@ def initialize(home=None, *, api_url=None, port=8000):
         'permissions, both capacity limits, sole-writer ownership and creator-owned cleanup; no new access\n'
         'or bypass. For checked_in, keep auto-merge off until independent final exact-head approval and\n'
         'applicable required gates; verify required CI, actual-main integration where applicable and merge.\n'
+        'Any qualified reviewer independent of the author may provide final exact-head review; reuse\n'
+        'valid exact-head evidence, preserving genuine GitHub required reviewers and protections.\n'
+        'No native session or person is a universal review dependency. Ordinary performance targets\n'
+        'have a two-round optimization budget: retain measurements, remaining miss and concrete follow-up.\n'
+        'Explicit safety/SLO/resource-contract gates stay hard; use supported versioned controls for\n'
+        'owner-approved classification, never silently waive acceptance criteria or claim a missed metric met.\n'
+        'On material native-session, stage/result, Building release, PR merge and release/deployment events,\n'
+        'run bounded reconciliation/refill now, preserving atomic Building/Total and sole-writer fencing;\n'
+        'no new scheduler, service, polling framework, quota or blanket serialization.\n'
+        'Routine compatible reviewed/checks-green upgrades use standing owner deployment authority with\n'
+        'fresh validated backup, complete migration rehearsal, exact scoped API service ownership,\n'
+        'continuity checks and recoverable rollback per docs/deployment.md. Destructive/data-loss/schema-\n'
+        'downgrade/new-service/credential-scope changes remain explicit owner decisions.\n'
+        'Source merge is not a deployed result; record installed revision and retained-session receipts.\n'
         'Use existing five-minute reconciliation, 90-minute reinforcement and 24-hour handoff.\n'
         'Queued wake prompts do not refresh liveness during long turns; use existing non-wake\n'
         'heartbeats between bounded coordination batches before staleness, not another scheduler.\n'
         '"""\n'
         'allowed_actions = ["Deliver scoped work through its current target, including merging '
-        'checked_in PRs under repository rules"]\n'
-        'escalate = ["Missing authority or credentials"]\nstop_when = ["Owner stops the muster"]\n'
+        'checked_in PRs under repository rules", "Execute routine compatible reviewed/checks-green '
+        'upgrades under standing owner deployment authority and docs/deployment.md safeguards"]\n'
+        'escalate = ["Missing authority or credentials", "Destructive/data-loss/schema-downgrade/'
+        'new-service/credential-scope changes"]\nstop_when = ["Owner stops the muster"]\n'
         '[shift]\n' + "".join(f"{key} = {value}\n" for key, value in SHIFT_DEFAULTS.items()),
         encoding="utf-8")
     return root
@@ -98,7 +111,7 @@ def initialize(home=None, *, api_url=None, port=8000):
 def configuration(path):
     """Read config and environment into a child environment, leaving this process unchanged."""
     try:
-        config = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_unique)
+        config = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=unique_object)
     except (ValueError, UnicodeError):
         raise ValueError("Invalid deployment configuration JSON") from None
     expected = {"environment_file", "server", "shift_config", "reconciler_config", "reconciler_state"}

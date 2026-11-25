@@ -21,6 +21,26 @@ Optimistic intake rows are reconciled on the next poll without mutating cached s
 Row title, cell and report clicks share one delegated
 listener per mount, removed on unmount.
 
+The browser scripts share DOM construction and web-link validation in
+`operator-helpers.js`. `operator-http.js` owns only authenticated fetches and conditional
+response caching; `operator-shell.js` projects API responses and wires the board,
+creation/settings forms and report dialog. The shell loads helpers before their consumers
+and the HTTP transport before the shell wiring; the standalone board fixture loads the
+same helpers.
+
+Open rows label their clock **active** from the execution's first persisted attempt,
+not intake or a conversation title. Before any attempt, **queued** means elapsed time
+since execution creation (including prerequisite/dispatch waits), not time actively worked.
+Details retain **Execution created**, show **Active since**, and measure the current
+stage from the later of first activation and recorded stage entry. Initial queue wait
+therefore never appears as development age. Activation is the server's first attempt
+allocation, not proof that the reserved native session has launched; launch confirmation
+and its separate warning remain visible. Retained/replacement writers, rework, input and
+delivery waits do not reset elapsed active age. A rerun starts its own execution clock.
+The active-work warning uses that same first attempt and its unchanged strictly-over-90-minute
+threshold; queue age alone cannot trigger it. Historical timestamps and closed intake-to-close
+durations remain intact. This source change does not activate or reset a live deployment.
+
 ## Goal
 
 The dashboard is a website, reachable from the internet, where each Phalanx user can see what Phalanx is doing across their workspace's repositories, what needs them, and what it delivered. They can use it from a phone or a laptop, and later act on it there too. It serves many users across workspaces ([SPEC.md](SPEC.md#users-and-workspaces)), with Caleb as the first. It must stay fast and readable with thousands of items, tens of workers running at once, and years of history.
