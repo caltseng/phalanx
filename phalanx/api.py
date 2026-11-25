@@ -47,7 +47,7 @@ app.mount("/operator/assets", operator_assets, name="operator-assets")
 
 
 @app.exception_handler(sqlite3.OperationalError)
-def store_unavailable(request: Request, error: sqlite3.OperationalError):
+async def store_unavailable(request: Request, error: sqlite3.OperationalError):
     # Only contention is transient; other operational errors stay 500 so clients don't retry forever.
     code = getattr(error, "sqlite_errorcode", None)
     if code is not None:

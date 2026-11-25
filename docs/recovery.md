@@ -59,6 +59,28 @@ timeline and final output with its own credential. Do not print the credential f
 renew a retired lease, recreate a local journal or launch a second writer to repair
 an ambiguous response.
 
+## Contention recovery and adoption
+
+A 503 is not a stopped writer, a successful mutation, or proof that a timed-out request
+was never accepted. Keep the same writer and allocations; retry with the original
+attempt, expected version and idempotency key after reading current state. Progress and
+heartbeats are safe to repeat; never fabricate a successful capacity acquisition. A
+known stop or 401 still ends the writer's authority. See
+[contention boundaries](architecture.md#sqlite-contention-and-request-threads).
+
+The service owner adopts the reviewed source through the existing
+[deployment procedure](deployment.md#standing-authority-for-compatible-upgrades), not by
+starting a second server or pointing it at a new database. The admission cleanup and
+async error-response fixes need no schema/journal/configuration change. Before adoption,
+take and validate the normal backup, rehearse against a separate copy with the exact
+source revision, and record the existing database identity/schema, credentials, open
+attempts, writer IDs and Building/Total settings. Coordinate the one owned API restart
+with any separately required format conversion; never reset or silently upgrade the store.
+Afterward verify health, authenticated control reads, same-writer status/progress and
+reconciler heartbeat, and compare the recorded allocations/history. Preserve rollback
+artifacts and account for uncertain requests before resuming dispatch. This work item
+does not authorize live service, database, credential or configuration changes.
+
 ## Back up and restore SQLite
 
 These are server-host-only admin commands, not runner operations. Use the existing server's

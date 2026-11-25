@@ -98,6 +98,37 @@ The HTTP fixture fills those actual allocations, refuses a 21st writer and resum
 progress for all 20 retained writers after contention clears.
 No larger thread pool, database reset, new journal mode or watchdog is involved.
 
+**Additional failure paths:** interrupting `read_start` while waiting previously left a
+queued reader behind; the next completed write converted it into an admitted reader that
+would never exit, making later writes time out. Cleanup now removes the reader from its
+current queue even if a write handed off the read batch just before interruption.
+Separately, a synchronous contention exception handler needed another AnyIO request-worker
+slot after SQLite had already failed. Saturating those slots prevented delivery of an
+already-determined 503. The JSON-only handler now runs on the event loop, without moving
+SQLite there. The regression holds a real external EXCLUSIVE lock, waits through SQLite's
+production two-second busy timeout, and requires the 503 within five seconds while all
+request-worker slots remain borrowed.
+
+The same module also drives 20 concurrent writer/control requests against an external
+RESERVED lock with unchanged production admission/busy timeouts and the normal request
+pool. Progress, capacity, results and reconciler heartbeats must return retryable failures
+within a 15-second batch deadline, while owner authentication and health succeed. After
+unlocking, all 20 original writers resume. Failed requests preserve full writer, attempt,
+execution and transition-history rows; result replay, fencing and capacity checks still
+apply. A held read snapshot separately forces COMMIT to time out and verifies rollback.
+Background prerequisite refresh and report finalization retain their durable intents
+through external writer contention. These tests establish bounded recovery for those
+faults, not a general latency guarantee under arbitrary overload.
+
+**Remaining limits:** gate admission and SQLite lock waits have separate budgets; worker
+queueing, authentication and route transactions can add them. SQLite's busy timeout is
+not a wall-clock deadline for SQL execution, filesystem calls or fsync. An admitted slow
+transaction is not forcibly interrupted. Canceling an async task or losing the HTTP
+connection cannot retract an already-running synchronous transaction: it may still commit.
+Normal exception/cancellation unwinding closes the connection and rolls back an unfinished
+transaction. The online backup API can also wait on a held database beyond a busy timeout.
+No new watchdog, forced thread termination or durability downgrade is introduced.
+
 **Adoption boundary:** deployments at `6cf538e` or `629788a` do not contain this
 bounded-admission change. It takes effect only when the service owner adopts the reviewed
 API/store revision containing it through the existing safe deployment procedure.

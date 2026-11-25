@@ -63,11 +63,19 @@ class _Gate:
             if self.writing or self.writers:
                 self.queued += 1
                 writes = self.writes
-                if not self.condition.wait_for(
-                    lambda: self.writes != writes, timeout=ADMISSION_TIMEOUT,
-                ):
-                    self.queued -= 1
-                    raise sqlite3.OperationalError("SQLite store busy waiting for read admission")
+                try:
+                    if not self.condition.wait_for(
+                        lambda: self.writes != writes, timeout=ADMISSION_TIMEOUT,
+                    ):
+                        raise sqlite3.OperationalError("SQLite store busy waiting for read admission")
+                except BaseException:
+                    # A completed write may already have moved this waiter into the read batch.
+                    if self.writes == writes:
+                        self.queued -= 1
+                    else:
+                        self.admitted -= 1
+                    self.condition.notify_all()
+                    raise
             else:
                 self.admitted += 1
         try:
