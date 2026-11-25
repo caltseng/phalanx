@@ -143,16 +143,32 @@ OPEN_WRITERS = """
 """
 
 
+def launch_wait(writer_id, nonce, created_at, now):
+    age = max(0, int((now - at(created_at)).total_seconds()))
+    overdue = now - at(created_at) >= LAUNCH_UNCONFIRMED
+    return {
+        "reason": (f"Native writer launch unconfirmed for {age} s"
+                   f"{' (recovery overdue)' if overdue else ' (handoff pending)'}; "
+                   f"reserved since {created_at}. A reserved stage does not prove a native writer is running."),
+        "trigger": (
+            f"Inspect a fresh full native inventory for full nonce {nonce}, writer {writer_id}. "
+            "Confirm the exact matching session. Only if none exists and no create is in flight, "
+            "the owning Captain replays `shift launch` and creates/confirms once with the same nonce. "
+            "If inventory or replay is inconclusive, retain the reservation and report the recovery blocker."
+        ),
+    }
+
+
 def writer_flags(db, now):
     flags = []
     for row in db.execute(OPEN_WRITERS + " ORDER BY writer.created_at, writer.id LIMIT ?", (DERIVED_LIMIT,)):
         subject = {"item_id": row["item_id"], "execution_id": row["execution_id"],
                    "captain_id": row["captain_id"]}
         if row["confirmed_at"] is None and now - at(row["created_at"]) >= LAUNCH_UNCONFIRMED:
+            wait = launch_wait(row["id"], row["nonce"], row["created_at"], now)
             flags.append(flag(
-                "launch_unconfirmed", f"Writer intent {row['nonce']} unconfirmed since {row['created_at']}",
-                "Inspect native session kickoffs/metadata for the full nonce, then confirm or withdraw",
-                at(row["created_at"]) + LAUNCH_UNCONFIRMED, **subject))
+                "launch_unconfirmed", wait["reason"], wait["trigger"],
+                at(row["created_at"]) + LAUNCH_UNCONFIRMED, notify_owner=True, **subject))
         capacity_wait = (row["building_requested_at"] and not row["building"]
                          and dispatch.building_wait(db, row["id"]))
         if row["state"] == "busy" and not capacity_wait:

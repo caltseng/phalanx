@@ -72,7 +72,10 @@ Do these steps in order and keep each wake short:
    A session awaiting owner trust is a **Repository trust blocked** owner blocker, not a stopped or
    failed writer; handle it as below instead of reporting `stopped` or `error`. Report other changes with
    `phx shift writer --captain <id> --item <item> --execution <execution> --writer <writer> --state busy|idle|stopped|error`.
-4. **Act on a bounded batch.** Handle at most 5 items per wake, oldest first:
+4. **Act on a bounded batch.** Handle at most 5 items per wake, recovering unconfirmed intents first,
+   oldest first within each group. Finish each reserve/create/confirm handoff before reserving another
+   item; do not reserve a batch and defer its native creates to a later wake. `shift launch` only
+   reserves an attempt and capacity: execution `running` is not proof a native writer ran.
    - **Unconfirmed launch** (the writer has no `session_id`): search the full native session inventory,
      not just names starting with `phx `. New writer names start with task words and end in
      `[phx]`; old names contain the full nonce. Inspect candidate sessions' kickoff
@@ -80,8 +83,21 @@ Do these steps in order and keep each wake short:
      goal or worktree alone is not identity: duplicate goals produce identical names.
      If you find the exact nonce, confirm it with
      `phx shift writer ... --session-id <ID> [--session-url <link>]` and check its runtime trust status
-     as after a new launch below. If you are sure no such session
-     exists, withdraw it with `phx shift withdraw ... --reason "never launched"` and launch afresh. Only
+     as after a new launch below. Recover on this wake; do not wait for the ten-minute
+     `launch_unconfirmed` alert. A brief handoff is normal; an overdue alert requires action or an
+     explicit recovery blocker, not another silent wait.
+     If a fresh full inventory proves no matching session exists and no native create is still in
+     flight, rerun `phx shift launch --captain <id> --item <item>` to recover the same saved reservation.
+     Verify the returned writer ID and full nonce equal the original intent, then create and confirm
+     exactly one session as below. Do not withdraw/re-reserve merely because the handoff was interrupted.
+     A partial inventory, unavailable kickoff/metadata, uncertain create outcome or missing replay
+     credential is not proof of absence: retain the intent, record the exact blocker with `shift action`
+     and notify the owner when it needs attention. Never start a competing create or change limits.
+     A takeover Captain may confirm the matching session under existing ownership rules; if it cannot
+     replay the original reservation, report that blocker. Withdraw with
+     `phx shift withdraw ... --reason "never launched"` only after verifying no matching session exists
+     and no create remains in flight, or with `--stopped` after verifying the exact session stopped.
+     Preserve the old intent and local work as recovery evidence. Only
      the owning Captain acts on an unconfirmed launch until that Captain is ended or stale, or abandons
      it with `phx shift writer ... --abandon`.
    - **Queued item in `pickup_candidates` with no writer**:
@@ -101,6 +117,9 @@ Do these steps in order and keep each wake short:
         approval. Never register a workspace per worktree. If `session_workspace` is null,
         stop and ask the owner to set it in the shift config.
      4. Confirm it right away with `phx shift writer ... --session-id <ID> [--session-url <link>]`.
+        If creation or confirmation is interrupted or its reply is lost, return to **Unconfirmed launch**
+        with a fresh full inventory, not another create. Replay confirmation of the same native ID
+        after reading current state; never bind a different session to an already confirmed writer.
      5. Inspect the session's runtime-reported repository trust immediately, including when reusing an
         existing session. If owner approval is pending, handle **Repository trust blocked** below;
         successful session creation does not mean the writer ran.

@@ -544,7 +544,9 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         claimed = claim_stage(self.path, selected["item_id"], "x" * 32, "runner-a")
         rows = self.page(BOARD)["items"]
         running = next(row for row in rows if row["status"] == "running")
-        self.assertEqual(running["next_action"], "A worker is running the report_drafting stage")
+        self.assertIsNone(running["next_action"])
+        self.assertIn("Native writer launch unconfirmed", running["wait_reason"])
+        self.assertIn("fresh full native inventory", running["resume_trigger"])
         queued = next(row for row in rows if row["id"] == self.execution)
         self.assertEqual(queued["wait_reason"], "Captain pickup scope/readiness is uninitialized")
         self.assertIsNone(queued["next_action"])

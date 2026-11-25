@@ -216,9 +216,11 @@ def _summary(item):
         "item_id": item["item_id"], "execution_id": item["id"], "version": item["version"],
         "repository_id": item["repository_id"], "title": item["title"], "stage": item["stage"],
         "status": item["status"], "wait_reason": item["wait_reason"],
+        "resume_trigger": item["resume_trigger"], "wait_age_seconds": item["wait_age_seconds"],
         "pickup": item["pickup"],
         "blocked_prerequisites": item["blocked_prerequisite_count"], "primary_pr_url": item["primary_pr_url"],
         "writer": writer and {key: writer[key] for key in ("id", "state", "captain_id", "session_id",
+                                                             "nonce", "created_at", "confirmed_at", "abandoned_at",
                                                              "last_progress_at", "progress_note")},
     }
 

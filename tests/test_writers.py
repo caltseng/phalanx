@@ -1155,6 +1155,67 @@ class WriterTest(ServerFixture, unittest.TestCase):
             self.assertEqual((beat["charter_revision"], beat["wake_count"]), ("new-charter", 8))
         self.assertEqual(self.ok(route, RUNNER, body, method="PUT")["compaction_count"], 3)
 
+    def test_unconfirmed_launch_wait_is_visible_without_claiming_native_execution(self):
+        from fastapi import Response
+        from starlette.requests import Request
+        from phalanx.operator_api import SUMMARY, conditional_read, dispatch_context, summary
+
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        writer = binding["writer"]
+        created = datetime.fromisoformat(writer["created_at"])
+        request = Request({"type": "http", "path": "/v1/operator/executions", "query_string": b"", "headers": []})
+        etags = []
+        for age in (timedelta(seconds=30), flags.LAUNCH_UNCONFIRMED - timedelta(microseconds=1),
+                    flags.LAUNCH_UNCONFIRMED, timedelta(minutes=30)):
+            with self.subTest(age=age), connect(self.path) as db:
+                now = created + age
+                response = Response()
+                conditional_read(request, response, db, now)
+                etags.append(response.headers["ETag"])
+                row = db.execute(SUMMARY + " WHERE execution.id=?", (execution_id,)).fetchone()
+                projected = summary(row, now, dispatch_context(db, now))
+                overdue = age >= flags.LAUNCH_UNCONFIRMED
+                self.assertEqual(projected["status"], "running")
+                self.assertEqual(projected["writer"]["state"], "launching")
+                self.assertEqual(projected["writer"]["nonce"], writer["nonce"])
+                self.assertEqual(projected["wait_since"], writer["created_at"])
+                self.assertEqual(projected["wait_age_seconds"], int(age.total_seconds()))
+                self.assertIsNone(projected["next_action"])
+                self.assertIn("recovery overdue" if overdue else "handoff pending", projected["wait_reason"])
+                self.assertIn("not prove a native writer is running", projected["wait_reason"])
+                for text in (writer["nonce"], writer["id"], "fresh full native inventory",
+                             "no create is in flight", "same nonce", "retain the reservation"):
+                    self.assertIn(text, projected["resume_trigger"])
+                alerts = [entry for entry in flags.writer_flags(db, now)
+                          if entry["kind"] == "launch_unconfirmed"]
+                self.assertEqual(len(alerts), int(overdue))
+                if overdue:
+                    self.assertTrue(alerts[0]["notify_owner"])
+                    self.assertEqual(alerts[0]["first_seen"],
+                                     (created + flags.LAUNCH_UNCONFIRMED).isoformat(timespec="microseconds"))
+                    self.assertEqual(alerts[0]["recovery"], projected["resume_trigger"])
+        self.assertEqual(etags[0], etags[1])
+        self.assertNotEqual(etags[1], etags[2])
+        # Both HTTP views expose the reservation, but never call it native execution.
+        for projected in (
+                self.ok("/v1/operator/executions?kind=open", OWNER)["items"][0],
+                self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]):
+            self.assertIn("Native writer launch unconfirmed", projected["wait_reason"])
+            self.assertIsNone(projected["next_action"])
+        confirmed = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER, {
+            "captain_id": self.captain["id"], "writer_id": writer["id"], "session_id": "native"},
+            method="PATCH")
+        projected = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
+        self.assertIsNone(projected["wait_reason"])
+        self.assertIn("A worker is running", projected["next_action"])
+        self.assertEqual(confirmed["writer"]["attempt_id"], writer["attempt_id"])
+        self.assertEqual(self.ok("/v1/writer", token)["writer"]["id"], writer["id"])
+        with connect(self.path) as db:
+            self.assertEqual(flags.writer_flags(db, created + timedelta(minutes=30)), [])
+            self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT building FROM writers").fetchone()[0], 1)
+
     def test_captain_sessions_actions_handoff_and_reconciler_retirement(self):
         item_id, execution_id = self.item()
         binding, _, body = self.register(item_id, execution_id)

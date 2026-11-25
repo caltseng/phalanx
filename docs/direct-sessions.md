@@ -56,7 +56,20 @@ merging. Config, credentials, worktrees, result artifacts and logs stay on the h
    nonce before launching anything. Legacy names containing the nonce remain discoverable.
    If inspection is unavailable or inconclusive, retain the intent and surface the blocker. Only
    the owning Captain acts on an unconfirmed intent until it ends, goes stale or abandons it.
-   After ten minutes an unconfirmed launch is flagged, not automatically repeated.
+   Complete reserve/create/confirm for one item before reserving another. `shift launch`
+   reserves capacity and an attempt; it does not create a native session. An execution's
+   `running` status therefore does not prove a native writer ran. Scribe and `shift status`
+   show the unconfirmed wait, reservation age and recovery action immediately. After ten
+   minutes the same wait becomes an owner-notifying `launch_unconfirmed` alert, not an
+   automatic retry or a reason to wait until the next threshold.
+   Recover on the next wake: inspect fresh full native inventory, including all pages and
+   renamed sessions. If the full nonce matches, confirm that session. Only after proving
+   absence and no native create in flight may the owning Captain replay `shift launch`,
+   verify the same writer ID/full nonce and create/confirm once. This preserves the
+   reservation, attempt, credential and Building/Total allocation. Partial inventory or
+   an uncertain create outcome requires retaining the intent and reporting the exact
+   blocker. A takeover without the original replay credential reports that limitation;
+   existing verified-never-launched/stopped withdrawal rules remain unchanged.
 4. Replacement names the current writer ID in `replaces` and requires `replaced_stopped`.
    Verify the exact session stopped and preserve all local changes first. The server
    atomically ends its attempt and revokes its token. A stale writer cannot post.
@@ -298,7 +311,7 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 | `captain_idle_with_work` | **Dispatch overdue**: live Captains, dispatch enabled, both admission limits permit the work, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
 | `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while Building or Total admission is exhausted, eligible waiting PR fixes take preference, or dispatch is paused. Counts and precise affected limit included; informational even with a Captain hold, never a stopped/failed Captain signal | Wait for affected capacity, service eligible PR fixes or resume dispatch. Existing writer-health flags remain independent |
 | `pickup_blocked` | Unassigned work waiting 30 min on scope/uninitialized authority, affinity or repository/trust readiness; not a Captain failure or handoff signal | The shared pickup decision supplies the concrete reason and recovery; notify the owner |
-| `launch_unconfirmed` | Writer intent unconfirmed for 10 min | Captain searches native sessions by nonce, then confirms or withdraws |
+| `launch_unconfirmed` | Writer intent unconfirmed for 10 min; owner notification | Inspect fresh full native inventory by full nonce; confirm the match, or safely replay the same reservation after proving absence and no in-flight create. Retain/report inconclusive recovery |
 | `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
 | `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |
 | `no_progress` | No progress post or stage advance for 2 h while `busy` | Captain checks the session, then nudges or replaces it |
