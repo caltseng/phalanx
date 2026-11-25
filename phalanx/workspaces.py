@@ -243,18 +243,32 @@ class WorkspaceManager:
     def resolve_origin_base(self, branch: str) -> str:
         """Pin the configured origin tracking branch before preparing development."""
         self._verify_checkout()
+        return self._resolve_origin_base(branch)
+
+    def _resolve_origin_base(self, branch: str, *, fetch: bool = False) -> str:
         ref = f"refs/remotes/origin/{branch}"
         if not branch:
             raise WorkspaceError("A development base branch is required")
         _git(self.checkout, "check-ref-format", f"refs/heads/{branch}")
+        if fetch:
+            _git(self.checkout, "fetch", "--quiet", "origin", f"+refs/heads/{branch}:{ref}")
         sha = _git(self.checkout, "show-ref", "--verify", "--hash", ref).strip()
         if _git(self.checkout, "--no-replace-objects", "cat-file", "-t", sha).strip() != "commit":
             raise WorkspaceError("The exact origin tracking ref must point to a commit")
         return sha
 
+    def prepare_from_origin(self, item_id: str, *, branch: str) -> Workspace:
+        """Verify once, fetch and pin the origin branch, then prepare the item worktree."""
+        common = self._verify_checkout()
+        base = self._resolve_origin_base(branch, fetch=True)
+        return self._prepare(item_id, base=base, common=common)
+
     def prepare(self, item_id: str, *, base: str) -> Workspace:
         """Create from a local base ref, or return the existing checkout as found."""
         common = self._verify_checkout()
+        return self._prepare(item_id, base=base, common=common)
+
+    def _prepare(self, item_id: str, *, base: str, common: Path) -> Workspace:
         with _file_lock(common / "phalanx-workspaces.lock"):
             path, branch, owner_ref = self._location(common, item_id)
             registered = self._registered(path, branch)
