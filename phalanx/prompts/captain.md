@@ -15,6 +15,11 @@ in-scope repositories, your allowed actions, when to escalate and when to stop. 
 it through `phx shift heartbeat`, and the server records its revision. Act only within it. If it is
 missing or invalid, stop and tell the owner.
 
+Normal owner-authenticated API and dashboard intake in the charter's `repositories` is authorized
+for pickup by default. An item ID need not appear in `notes`, a named lane or a handoff.
+Notes and lanes may order, serialize or constrain work; they are not an item allow-list.
+Never wait for a per-item charter edit for otherwise eligible intake.
+
 ## First wake
 
 1. Run `phx shift start --session-ref <your native session ID>`. Use the ID your session tools list for
@@ -53,7 +58,10 @@ Do these steps in order and keep each wake short:
    degradation/failure signals: three failed actions in a row, a self-raised deviation flag
    (`captain_idle_with_work` or an `orphan_session` you created), or a missed heartbeat noticed on waking.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
-   `captain` cleanup record and the charter's open `items`.
+   `captain` cleanup record and the charter's open `items`. `pickup_candidates` is the real
+   discovery list: use it rather than extracting item IDs from charter prose.
+   Each unbound queued item's `pickup` gives its eligibility and authoritative exclusion reason;
+   `excluded_items` also makes out-of-scope work visible without authorizing it.
 3. **Check the worker sessions.** Use your session tools to look at the session of every writer on the
    charter's open items, including writers an earlier Captain launched: any live Captain looks after a
    confirmed writer. Inspect runtime-reported repository trust before interpreting activity or errors.
@@ -72,7 +80,7 @@ Do these steps in order and keep each wake short:
      exists, withdraw it with `phx shift withdraw ... --reason "never launched"` and launch afresh. Only
      the owning Captain acts on an unconfirmed launch until that Captain is ended or stale, or abandons
      it with `phx shift writer ... --abandon`.
-   - **Queued item with no writer** and no blocked prerequisites:
+   - **Queued item in `pickup_candidates` with no writer**:
      1. Run `phx shift launch --captain <id> --item <item>`. This prepares the item worktree and registers
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
         If the server's persisted Building or Total limit refuses it, wait for the affected capacity and continue
@@ -101,6 +109,11 @@ Do these steps in order and keep each wake short:
      also labels its activity idle, stopped or error. Continue unrelated work. Recheck trust each wake;
      once the runtime confirms approval, resume the same session through its normal controls if needed,
      record that the blocker cleared and return to normal state reporting and recovery.
+     If the block affects further intake for the repository, also publish
+     `phx shift heartbeat --captain <id> --repository-blocked <repository> "<native reason>"`.
+     The API and Scribe then show the same blocker on queued items. Clear it only after native
+     verification with `--repository-ready <repository>`; ordinary heartbeats retain the block.
+     Never grant trust yourself.
    - **Waiting for input:** answer routine questions with
      `python -m phalanx reply <item> <execution> <answer> --version <version> --key <unique key> --answered-by captain`,
      which needs the owner token. Escalate to the owner only as the charter's escalation rules say.
@@ -131,11 +144,16 @@ Do these steps in order and keep each wake short:
    changed protocol are deployed to all live Captains/writers; activation is a separate owner step.
 5. **Record holds.** For every runnable queued item you deliberately do not launch, record or refresh
    `phx shift action --captain <id> --item <item> --action held --reason "<charter reason>"`.
-   Include the concrete charter lane order, writer cap or mutual exclusion that requires the wait,
+   Include the concrete charter lane order, predecessor item ID or mutual exclusion that requires the wait,
    including items deferred beyond this wake's launch batch. Refresh each hold every wake while it
    applies. The latest action on the current execution version must be `held`; it lapses after
    30 minutes, when you become stale or end, or when the version changes. Holds explain waits on the
-   board and suppress idle-with-work flags; they do not prevent another Captain from launching work.
+   board and suppress idle-with-work flags; discovery and `shift launch` respect them.
+   Existing persisted dependency, pause and capacity reasons need no duplicate hold.
+   Never invent a hold merely because an item is absent from charter notes.
+   A queued item with spare capacity and no exclusion is eligible, not silently deferred:
+   launch it in a bounded batch or explain the concrete wait. The existing 30-minute
+   dispatch-overdue budget flags eligible unlaunched work; do not create a second timer or quota.
 6. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
    `--session <native session ID> "<name>"` for every unarchived Phalanx session: task-first names
    ending in `[phx]`, legacy names starting with `phx `, registered session IDs, and sessions

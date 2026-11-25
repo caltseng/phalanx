@@ -147,7 +147,18 @@ Writer bindings include `last_reply`, scoped to the bound execution: `null` befo
 otherwise `{version, created_at, answer, answered_by}`, the same shape as owner inspection.
 Both `phx work status` and `next` expose it; claiming an attempt does not change the reply.
 
-Unbound queued items show **Awaiting a direct Captain**, even without `runner_affinity`.
+Unbound queued items include `pickup` (`eligible`, `code`, `reason`, `trigger`, and eligible
+`captain_ids`). `wait_reason` is the same concrete exclusion reason, or null when eligible;
+`next_action` then calls for Captain dispatch. Decisions use live active Captain scope/readiness,
+persisted dependencies/holds/retry, affinity and canonical dispatch capacity.
+No live scope and an uninitialized Captain snapshot have distinct explicit wait reasons,
+never scope inferred from a charter hash.
+
+Captain registration and heartbeat accept `pickup` with `repositories` mapping charter
+repository IDs to null (ready) or a concrete readiness blocker, and optional `runner_id`.
+Heartbeat omission preserves the snapshot; normal `shift` commands republish it from the charter
+and local verification. An empty snapshot grants no scope. Snapshots expire with Captain liveness.
+Only trusted coordinator callers can publish them. Item IDs in charter prose are not required.
 Captains select named eligible items, taking dependencies, priority aging and retry time into
 account. Views expose `ready_since_ms`, `retry_at_ms` and `retry_count`. A stopped writer
 is replaced only after its native session and local work are accounted for. No timed expiry

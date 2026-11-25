@@ -5,6 +5,7 @@ DIRECT_SCHEMA = (
         id TEXT PRIMARY KEY NOT NULL,
         session_ref TEXT NOT NULL,
         charter_revision TEXT NOT NULL,
+        pickup_json TEXT NOT NULL DEFAULT '{"repositories":{},"runner_id":null}',
         parent_id TEXT REFERENCES captains(id),
         state TEXT NOT NULL CHECK (state IN ('active', 'ending', 'ended')),
         wake_count INTEGER NOT NULL DEFAULT 0,

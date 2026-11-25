@@ -240,8 +240,20 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 Intake defaults to `checked_in`; explicit ready-only and report targets are preserved.
 Historical `runner_affinity: "direct-hold"` excluded the old runner before PH-DS5
 part 1; there is now no queue claim scheduler or special direct-hold gate.
-Named writer registration does not filter by affinity.
-Unbound queued work, including intake with no affinity, visibly awaits a direct Captain.
+Normal owner-authenticated intake through either `POST /v1/items` or Scribe's **+** enters
+Captain pickup by default when its repository is in the charter's `repositories`.
+An item need not be named in charter notes, lanes or a handoff. No per-item charter edit
+is needed. An out-of-scope repository remains excluded.
+
+Captain start/heartbeat publishes a small `pickup` snapshot: repository scope derived from
+the current charter, verified checkout readiness, optional `runner_id` from the shift config,
+and concrete runtime blockers. The API does not read local charter files or checkout paths.
+Pinned intake requires a matching `runner_id`; unpinned intake can use any ready scoped Captain.
+`shift status --captain ID` exposes `pickup_candidates`, the discovery list to launch,
+and each unbound queued item's `pickup` decision. `excluded_items` exposes out-of-scope work
+with its reason, never as a launch candidate. Scribe and operator API reads use the same
+server decision and `wait_reason`. Named writer registration remains a trusted low-level
+operation; normal Captain dispatch uses `shift launch`, which checks the discovery decision.
 
 Lane order and mutual exclusion belong to the operator's charter and the Captain's
 selection, not a separate server lane setting. For each runnable item deliberately deferred
@@ -250,7 +262,20 @@ by lane order, overlap or the writer cap, the Captain records
 Refresh each wake: a hold expires after 30 minutes, a version change, or its Captain
 ending/becoming stale. It explains the board wait and suppresses dispatch-overdue warnings;
 it does not hide informational backlog when the canonical writer limit is full or dispatch is paused.
-A hold never reserves capacity or prevents another Captain launching the item.
+A hold never reserves capacity. Captain discovery and `shift launch` respect active holds;
+record the predecessor item ID and actual lane/owner constraint, not merely "not listed".
+Existing persisted dependencies, dispatch pause, retry, Building/Total capacity and PR-rework
+preference remain authoritative waits. Eligible intake with no writer and no exclusion
+uses the existing 30-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
+and pause use `queue_backlogged`, without another dispatch budget.
+
+Checkout mappings are checked at start/heartbeat; missing mappings and origin mismatches
+become visible repository blockers instead of preventing observation of the entire charter.
+When native inspection finds a repository-wide trust block, publish it with
+`shift heartbeat --captain ID --repository-blocked REPOSITORY "owner approval needed: ..."`:
+ordinary heartbeats retain it. Only after native verification clear it with
+`--repository-ready REPOSITORY`. Never grant trust on the owner's behalf. A writer already
+awaiting trust keeps its session and allocation.
 
 ### Creator-owned session cleanup
 

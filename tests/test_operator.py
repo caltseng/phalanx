@@ -361,7 +361,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         blocked = self.page(route)
         self.assertEqual(blocked["item"]["status"], "queued")
         self.assertEqual(blocked["item"]["blocked_prerequisite_count"], 1)
-        self.assertEqual(blocked["item"]["wait_reason"], "Waiting for 1 prerequisite")
+        self.assertIn(f"Waiting on dependency {upstream}", blocked["item"]["wait_reason"])
         self.assertEqual(blocked["prerequisites"], [{
             "item_id": upstream, "title": "Work 1", "milestone": "report",
             "reason": "Waiting for prerequisite milestone report",
@@ -371,7 +371,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
                   Steering(expected_version=execution["version"], dependencies=[]))
         ready = self.page(route)
         self.assertEqual(ready["item"]["blocked_prerequisite_count"], 0)
-        self.assertEqual(ready["item"]["wait_reason"], "Awaiting a direct Captain")
+        self.assertEqual(ready["item"]["wait_reason"], "No live active Captain with pickup authority")
         self.assertIsNone(ready["item"]["next_action"])
         self.assertEqual(ready["prerequisites"], [])
 
@@ -506,8 +506,9 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         from starlette.requests import Request as APIRequest
         before = datetime.fromisoformat(LATER)
         with write_transaction(self.path) as db:
-            db.execute("UPDATE executions SET retry_at=? WHERE id=?",
-                       (int((before + timedelta(seconds=1)).timestamp() * 1000), self.execution))
+            ready_at = int((before + timedelta(seconds=1)).timestamp() * 1000)
+            db.execute("UPDATE executions SET retry_at=?, ready_since=? WHERE id=?",
+                       (ready_at, ready_at, self.execution))
         request = APIRequest({"type": "http", "method": "GET", "path": BOARD,
                               "query_string": b"", "headers": []})
         with connect(self.path, mode="ro") as db:
@@ -522,12 +523,12 @@ class DashboardTest(ServerFixture, unittest.TestCase):
             context = dispatch_context(db, before)
         self.assertIn("Retry scheduled", summary(row, before, context)["wait_reason"])
         self.assertEqual(summary(row, before + timedelta(seconds=2), context)["wait_reason"],
-                         "Awaiting a direct Captain")
+                         "No live active Captain with pickup authority")
 
     def test_open_rows_always_say_why_without_capacity_inference(self):
         for row in self.page(BOARD)["items"]:
             self.assertTrue(row["wait_reason"] or row["next_action"], row)
-            self.assertEqual(row["wait_reason"], "Awaiting a direct Captain")
+            self.assertEqual(row["wait_reason"], "No live active Captain with pickup authority")
             self.assertIsNone(row["next_action"])
         overview = self.page("/v1/operator/overview")
         self.assertEqual(overview["sections"]["queued"], 2)
@@ -545,7 +546,7 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         running = next(row for row in rows if row["status"] == "running")
         self.assertEqual(running["next_action"], "A worker is running the report_drafting stage")
         queued = next(row for row in rows if row["id"] == self.execution)
-        self.assertEqual(queued["wait_reason"], "Awaiting a direct Captain")
+        self.assertEqual(queued["wait_reason"], "Captain pickup scope/readiness is uninitialized")
         self.assertIsNone(queued["next_action"])
         overview = self.page("/v1/operator/overview")
         self.assertEqual((overview["sections"]["running"], overview["sections"]["queued"]), (1, 1))

@@ -18,6 +18,10 @@ coordinate visible writer sessions, and **Scribe** provides the work board.
 3. Writers implement, check, self-review and publish their work. An independent reconciler
    follows GitHub, flags actionable problems and supplies the evidence for verified delivery.
 
+Ordinary authorized API and Scribe intake in a charter repository enters Captain pickup
+without listing each item in charter notes. Notes may order or constrain work; excluded queued
+items show the same concrete pickup reason in Captain status and Scribe.
+
 PR work defaults to **`checked_in` (merged)**, subject to the repository's required checks,
 reviews and merge rules. Choose `ready_for_check_in` for a ready PR with owner-controlled
 merging, `report` for a Markdown **field report**, or draft publication for a verified draft.

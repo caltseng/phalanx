@@ -12,7 +12,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "phalanx"
 SERVER = {
     "api", "auth", "captains", "config", "dependencies", "dependency_schema", "direct_schema", "dispatch",
     "dispatch_api", "dispatch_schema", "finalization", "finalization_schema", "flags", "intake", "intake_api",
-    "intake_schema", "muster_api", "operator_api", "operator_schema", "operator_web", "reconciliation",
+    "intake_schema", "muster_api", "operator_api", "operator_schema", "operator_web", "pickup", "reconciliation",
     "reconciliation_schema", "server_admin", "store", "wait_schema", "waits", "writers",
 }
 # Contracts and display helpers both sides import. They depend only on each other.

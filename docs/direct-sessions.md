@@ -262,7 +262,7 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
     active only while it is the latest Captain action on the queued execution's current version,
     is less than 30 minutes old, and its Captain is live and not ended. The board and item view show
     its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
-    suppress dispatch-overdue warnings but do not change dispatch eligibility or reserve capacity.
+    suppress dispatch-overdue warnings and exclude normal Captain pickup while active, but reserve no capacity.
     Full-capacity backlog remains visible even with an active hold.
   - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, legacy `phx …` names, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` by registered session ID and full nonce, falling back to legacy item-prefix/nonce name words only when structured identity is absent. Titles never establish ownership for task-first sessions. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).

@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 
-from . import dispatch
+from . import dispatch, pickup
 from .auth import authenticate_board_read
 from .captains import active_holds, availability_reports
 from .display_text import reason_text, short_title
@@ -41,6 +41,7 @@ SUMMARY = """
            execution.stage, execution.status, execution.state_json, execution.retry_at, execution.handoff_head,
            execution.ready_since, item.created_at AS item_created_at, item.label,
            item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
+           execution.queue_affinity AS runner_affinity, execution.dependency_wait_json,
            json_extract(item.request_json, '$.target') AS target,
            progress.last_advanced_at, progress.wait_since, progress.revision_round,
            pr.url AS pr_url, pr.number AS pr_number, pr.state AS pr_state, pr.draft AS pr_draft,
@@ -166,10 +167,11 @@ def stamp(moment):
 
 def dispatch_context(db, now):
     capacity = dispatch.settings(db)
-    return {"paused": capacity["paused"],
-            "holds": active_holds(db, now),
+    pickup_context = pickup.context(db, now, capacity=capacity)
+    return {"pickup": pickup_context, "paused": capacity["paused"],
+            "holds": pickup_context["holds"],
             "session_reports": availability_reports(db),
-            "admission_waits": {stage: dispatch.admission_wait(db, stage, capacity=capacity) for stage in Stage},
+            "admission_waits": pickup_context["admission"],
             "building_waits": {row["id"]: dispatch.building_wait(db, row["id"], capacity=capacity) or
                               "Building capacity available; retry acquisition"
                               for row in db.execute(
@@ -183,13 +185,16 @@ def conditional_read(request, response, db, now):
     deadlines = tuple(db.execute(
         f"""SELECT
             (SELECT max(retry_at) FROM executions WHERE {OPEN} AND retry_at <= ?),
+            (SELECT max(ready_since) FROM executions WHERE {OPEN} AND ready_since <= ?),
             (SELECT max(lease_expires_at) FROM attempts WHERE ended_at IS NULL AND lease_expires_at <= ?),
             (SELECT max(updated_at) FROM executions WHERE {CLOSED} AND updated_at < ?)""",
-        (int(now.timestamp() * 1000), now.timestamp(), stamp(now - timedelta(days=1))),
+        (int(now.timestamp() * 1000), int(now.timestamp() * 1000), now.timestamp(),
+         stamp(now - timedelta(days=1))),
     ).fetchone())
     holds = tuple(sorted(active_holds(db, now)))
     sessions = tuple(sorted(availability_reports(db).items(), key=repr))
-    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}"
+    live_pickup = pickup.live_captains(db, now)
+    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}:{live_pickup}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
     response.headers["ETag"] = etag
     response.headers["Cache-Control"] = "private, no-cache"
@@ -284,6 +289,11 @@ def summary(row, now, context):
                 "trigger": "The same writer retries `work capacity building` before any rework"}
     if status == Status.QUEUED and not wait:
         wait = queued_wait(row, int(now.timestamp() * 1000), context)
+    pickup_state = None
+    if status == Status.QUEUED and (row["writer_id"] is None or row["writer_ended_at"] is not None):
+        pickup_state = pickup.decision(row, now, context["pickup"])
+        wait = ({} if pickup_state["eligible"] else
+                {"reason": pickup_state["reason"], "trigger": pickup_state["trigger"]})
     next_action = None
     if output is None and not wait:
         if status == Status.QUEUED:
@@ -310,6 +320,7 @@ def summary(row, now, context):
         "last_advanced_at": row["last_advanced_at"],
         "last_progress_at": row["updated_at"],
         "wait_reason": wait.get("reason"),
+        "pickup": pickup_state,
         "blocked_prerequisite_count": blocked_count,
         "resume_trigger": wait.get("trigger"),
         "next_action": next_action,

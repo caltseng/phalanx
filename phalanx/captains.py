@@ -28,10 +28,16 @@ ORDER = {"active": 0, "ending": 1, "ended": 2}
 router = APIRouter(prefix="/v1")
 
 
+class Pickup(Payload):
+    repositories: dict[Identifier, Text | None] = Field(default_factory=dict, max_length=100)
+    runner_id: Identifier | None = None
+
+
 class CaptainRegistration(Payload):
     session_ref: Text
     charter_revision: Short
     parent_id: Identifier | None = None
+    pickup: Pickup = Field(default_factory=Pickup)
 
 
 class Session(Payload):
@@ -51,6 +57,7 @@ class Heartbeat(Payload):
     focus: list[Identifier] = Field(default_factory=list, max_length=100)
     sessions: list[Session] = Field(default_factory=list, max_length=500)
     handoff_note: Text | None = None
+    pickup: Pickup | None = None
 
 
 class Action(Payload):
@@ -183,6 +190,7 @@ def view(db, row, now=None, session_reports=None):
     now = now or datetime.now(UTC)
     return {
         "id": row["id"], "session_ref": row["session_ref"], "charter_revision": row["charter_revision"],
+        "pickup": json.loads(row["pickup_json"]),
         "session_availability": (availability_reports(db) if session_reports is None else session_reports).get(
             session_key(row["session_ref"]), "unverified"),
         "parent_id": row["parent_id"], "state": row["state"], "wake_count": row["wake_count"],
@@ -217,9 +225,11 @@ def register(db, payload):
     captain_id = uuid4().hex
     now = intake.timestamp()
     db.execute(
-        """INSERT INTO captains (id, session_ref, charter_revision, parent_id, state, created_at, heartbeat_at)
-           VALUES (?, ?, ?, ?, 'active', ?, ?)""",
-        (captain_id, payload.session_ref, payload.charter_revision, payload.parent_id, now, now),
+        """INSERT INTO captains (id, session_ref, charter_revision, parent_id, state, created_at, heartbeat_at,
+                                 pickup_json)
+           VALUES (?, ?, ?, ?, 'active', ?, ?, ?)""",
+        (captain_id, payload.session_ref, payload.charter_revision, payload.parent_id, now, now,
+         intake.encode(payload.pickup.model_dump())),
     )
     return view(db, captain_row(db, captain_id))
 
@@ -230,6 +240,12 @@ def heartbeat(db, captain_id, payload):
         raise intake.Conflict(f"A Captain that is {row['state']} cannot become {payload.state}. "
                               "Register a new Captain")
     now = intake.timestamp()
+    if payload.pickup is not None:
+        db.execute("UPDATE captains SET pickup_json=? WHERE id=?",
+                   (intake.encode(payload.pickup.model_dump()), captain_id))
+    elif payload.charter_revision != row["charter_revision"]:
+        db.execute("UPDATE captains SET pickup_json=? WHERE id=?",
+                   (intake.encode(Pickup().model_dump()), captain_id))
     # Each session keeps the time it was first reported, so its flags keep their first_seen.
     seen = {session["id"]: session["first_seen"] for session in json.loads(row["sessions_json"])}
     sessions = [{**session.model_dump(exclude_none=True), "first_seen": seen.get(session.id, now)}
