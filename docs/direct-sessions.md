@@ -212,19 +212,21 @@ than relaunching it. Use one shared trusted worktrees workspace where the runtim
 Long chats degrade as context is compacted. Each Captain works a bounded **shift** and then starts a fresh successor. Shifts can overlap, because safety is per item.
 
 - **Registration.** A new Captain calls `POST /v1/captains` with its native session reference, charter revision and the Captain that spawned it, if any, and receives a Captain ID. Each wake heartbeats `PUT /v1/captains/{id}` with the charter revision, wake count, the items it is acting on and its state (`active`, `ending`, `ended`). The board lists every live Captain, its session link, shift age, last heartbeat and current focus.
-- **Shift end.** A shift ends on the first of these:
-  - a fixed age (4 h);
-  - a wake count (48);
-  - the Captain's cumulative successful-compaction count reaching the charter's
-    `[shift].max_compactions` (default 5);
-  - a degradation signal: three failed actions in a row, a deviation flag it raised against itself (`captain_idle_with_work`, `orphan_session` it created), or a missed heartbeat it notices on waking.
-
-  The bounds are positive-integer charter settings (D7, amended for compaction handoff).
-  Ordinary compaction below the threshold is a checkpoint, not a mandatory handoff.
-  Only trustworthy cumulative successful native telemetry counts. Repeated reports are
-  idempotent and omissions preserve known totals. Unavailable telemetry remains unknown,
-  never a fabricated count or a first-compaction fallback; age/wake and actual
-  degradation/failure safeguards still apply independently.
+- **Reinforcement.** The same five-minute wake calls `shift wake`. Every 90 elapsed minutes
+  from registration it includes the fresh canonical workflow beside the fresh charter and
+  compact briefing. The Captain reads it before explicitly acknowledging that interval.
+  The server stores only the greatest acknowledged interval; non-wake heartbeats, missing
+  wakes and failed output cannot consume it. Delayed wakes coalesce intervals. No separate
+  scheduler, local timing file or compaction hook is required.
+- **Shift end.** Normal rotation is elapsed-time only, 24 hours from registration by
+  default (`[shift].max_hours`, a positive integer). Queue completion, empty queues,
+  dependency/external waits, wake counts and compaction counts never end a shift early,
+  including under older charter stop prose. Continue five-minute reconciliation while idle
+  or blocked. Compaction is a checkpoint; cumulative native counts remain idempotent
+  telemetry, with unknown totals left unknown. Explicit owner stop, missing/invalid authority
+  and genuine degradation/failure remain exceptions: three failed actions in a row, a
+  deviation flag it raised against itself (`captain_idle_with_work`, `orphan_session` it
+  created), or a missed heartbeat it notices on waking. Preserve visible reasons and recovery.
 - **Handoff.**
   1. The outgoing Captain sets `ending` and posts a handoff note: open decisions, its unconfirmed intents and anything it was midway through. The note is a hint. The successor verifies every point against the server, GitHub and session status and never trusts it as state.
   2. It launches the successor with the charter, the parent Captain ID and a nonce, using the same at-most-once launch rule as writers.
@@ -370,5 +372,5 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
 | D6 | Enforce dispatch pause and persisted workspace Building (`max_building_writers`, initially 5) and Total (`max_writers`, initially 10 on new installs) atomically. Publication handoff releases Building, not Total; publication/delivery fixes must reacquire Building before editing or substantial tests. Eligible waiting PR fixes precede new builds. Owner edits persist through reload/restart; existing installations activate separately. |
-| D7 | Shift bounds: four hours, 48 wakes, five successful compactions or actual degradation/failure. Age, wakes and compaction threshold are configurable in charter. The original first-compaction default is superseded by the compaction-handoff work item. |
+| D7 | Normal shifts rotate only on elapsed registration age: 24 hours by default, configured by charter `max_hours`, with canonical charter/workflow reinforcement every 90 elapsed minutes through the same five-minute wake. Five-minute reconciliation continues through empty or blocked queues; wakes and compactions are telemetry only. Explicit owner stop and genuine authority/safety failure remain exceptions. Supersedes earlier wake/compaction bounds and queue-completion stops. |
 | D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |

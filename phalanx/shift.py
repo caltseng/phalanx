@@ -26,8 +26,8 @@ from .display_text import reason_text, short_title
 from .session_links import session_reference
 
 CHARTER_LISTS = ("repositories", "allowed_actions", "escalate", "stop_when")
-# Shift bounds (D7). Actual degradation remains an independent reason to hand off.
-SHIFT_DEFAULTS = {"max_hours": 4, "max_wakes": 48, "max_compactions": 5}
+# Elapsed-time rotation. Actual degradation remains an independent reason to hand off.
+SHIFT_DEFAULTS = {"max_hours": 24}
 # A launch's staged intent. It becomes the live credential once the server accepts its nonce.
 PENDING = "phalanx-writer.pending.json"
 
@@ -100,9 +100,12 @@ def load_charter(config):
     shift = charter.get("shift", {})
     if isinstance(shift, dict) and {"max_writers", "max_building_writers"} & shift.keys():
         raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
+    if isinstance(shift, dict) and {"max_wakes", "max_compactions"} & shift.keys():
+        raise ShiftError("Captain rotation is elapsed-time only; remove max_wakes and max_compactions "
+                         "from charter [shift] and use max_hours")
     if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
-        raise ShiftError("Charter [shift] takes positive integers max_hours, max_wakes and max_compactions")
+        raise ShiftError("Charter [shift] takes a positive integer max_hours")
     return {**charter, "shift": {**SHIFT_DEFAULTS, **shift},
             "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
@@ -129,11 +132,7 @@ def shift_bounds(captain, charter, now=None):
     due = []
     if age.total_seconds() >= bounds["max_hours"] * 3600:
         due.append(f"shift age reached {bounds['max_hours']} h")
-    if captain["wake_count"] >= bounds["max_wakes"]:
-        due.append(f"wake count reached {bounds['max_wakes']}")
     compactions = captain.get("compaction_count")
-    if compactions is not None and compactions >= bounds["max_compactions"]:
-        due.append(f"successful compaction count reached {bounds['max_compactions']}")
     return {"age_minutes": int(age.total_seconds() // 60), "wakes": captain["wake_count"], **bounds,
             "compaction_count": compactions, "handoff_due": due}
 
@@ -402,6 +401,25 @@ def prompt(name):
     return text
 
 
+def wake(api, charter, captain_id, *, config):
+    workflow = prompt("captain")
+    instructions = prompt("wake")
+    current = api(f"/v1/captains/{_q(captain_id)}")
+    if "reinforcement" not in current:
+        raise ShiftError("The API needs the Captain reinforcement deployment; no wake was recorded")
+    result = heartbeat(api, charter, captain_id, wake=True, config=config)
+    captain = result["captain"]
+    result["shift"] = shift_bounds(captain, charter, datetime.fromisoformat(captain["heartbeat_at"]))
+    result["instructions"] = instructions
+    result["reinforcement"] = {**captain["reinforcement"]}
+    if result["reinforcement"]["due"]:
+        result["reinforcement"]["workflow"] = workflow
+        result["reinforcement"]["acknowledgement_arguments"] = [
+            "shift", "ack-reinforcement", "--captain", captain_id,
+            "--interval", str(result["reinforcement"]["interval"])]
+    return result
+
+
 def archive_result(api, session_id, outcome, reason, reported_by):
     return api("/v1/session-archives", method="PUT", body={
         "session_id": session_id, "outcome": outcome, "reason": reason, "reported_by": reported_by})
@@ -505,6 +523,13 @@ def add_shift_command(commands):
                               help="print Captain, keeper, worker or retained-chat forwarding instructions")
     show.add_argument("name", choices=["captain", "keeper", "worker", "forwarding"])
     actions.add_parser("charter", parents=[shared], help="validate the charter and show its revision")
+    wake_up = actions.add_parser("wake", parents=[shared],
+                                 help="heartbeat and print a briefing, with canonical reinforcement when due")
+    wake_up.add_argument("--captain", required=True)
+    acknowledge = actions.add_parser("ack-reinforcement", parents=[shared],
+                                      help="acknowledge the reinforcement interval actually read")
+    acknowledge.add_argument("--captain", required=True)
+    acknowledge.add_argument("--interval", required=True, type=int)
     begin = actions.add_parser("start", parents=[shared], help="register this chat as a Captain")
     begin.add_argument("--session-ref", required=True, help="this chat's native session ID or link")
     begin.add_argument("--parent", help="the Captain that launched this one")
@@ -591,6 +616,11 @@ def run_shift(args):
     charter = load_charter(config)
     if args.shift_command == "charter":
         result = charter
+    elif args.shift_command == "wake":
+        result = wake(API(config), charter, args.captain, config=config)
+    elif args.shift_command == "ack-reinforcement":
+        result = API(config)(f"/v1/captains/{_q(args.captain)}/reinforcement",
+                             method="PUT", body={"interval": args.interval})
     elif args.shift_command == "start":
         result = start(API(config), charter, args.session_ref, args.parent, runtime=config["runtime"], config=config)
     elif args.shift_command == "heartbeat":
