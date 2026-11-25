@@ -79,6 +79,46 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         self.assertEqual(status, 200, body)
         return body
 
+    def test_briefs_are_detail_only_and_titles_invalidate_polling_without_changing_execution(self):
+        item_id, execution_id = identifier(100001), identifier(1)
+        criteria = ["<img src=x onerror=alert(1)>", "Complete " + "long requirement " * 200]
+        context = ["A plain note\nwith a second line", r"docs\work-items.md",
+                   "https://example.com/brief", "javascript:alert(1)"]
+        with write_transaction(self.path) as db:
+            request = {"goal": "Immutable work goal", "acceptance_criteria": criteria,
+                       "context_links": context, "private_result": {"secret": "not projected"}}
+            db.execute("UPDATE work_items SET request_json=? WHERE id=?", (json.dumps(request), item_id))
+        current = f"/v1/operator/items/{item_id}"
+        timeline = f"{BOARD}/{execution_id}/timeline"
+        for path in (current, timeline):
+            detail = self.page(path)
+            self.assertEqual(detail["item"]["acceptance_criteria"], criteria)
+            self.assertEqual(detail["item"]["context_links"], context)
+            self.assertNotIn("private_result", detail["item"])
+            self.assertEqual(self.get(path)[0], 401)
+        for row in self.page(BOARD + "?limit=3")["items"]:
+            self.assertNotIn("acceptance_criteria", row)
+            self.assertNotIn("context_links", row)
+        for path in (f"{BOARD}/{identifier(2)}/timeline", f"/v1/operator/items/{identifier(100002)}"):
+            empty = self.page(path)["item"]
+            self.assertEqual((empty["acceptance_criteria"], empty["context_links"]), ([], []))
+        with urlopen(Request(self.url + current, headers={"Authorization": f"Bearer {OWNER}"})) as response:
+            validator = response.headers["ETag"]
+        before = self.get(f"/v1/items/{item_id}", OWNER)[1]
+        title = "Require independent review before auto-merging PRs"
+        self.assertEqual(self.request(f"/v1/items/{item_id}/title", OWNER,
+                                      {"expected_revision": 0, "title": title},
+                                      {"Idempotency-Key": "title"}, method="PUT")[0], 200)
+        self.assertEqual(self.request(current, OWNER, headers={"If-None-Match": validator})[0], 200)
+        self.assertEqual(self.page(current)["item"]["title"], title)
+        self.assertEqual(self.page(timeline)["item"]["title"], title)
+        self.assertEqual(self.page(BOARD + "?q=auto-merging")["items"][0]["title"], title)
+        self.assertEqual(self.get(f"/v1/items/{item_id}", OWNER)[1], before)
+        self.assertEqual(self.request(f"/v1/items/{item_id}/title", OWNER,
+                                      {"expected_revision": 1, "title": None},
+                                      {"Idempotency-Key": "clear-title"}, method="PUT")[0], 200)
+        self.assertEqual(self.page(current)["item"]["title"], "Immutable work goal")
+
     def test_open_and_closed_pages_during_advancement_and_closure(self):
         first = self.page(BOARD + "?limit=3")
         waiting, queued, _ = first["items"]

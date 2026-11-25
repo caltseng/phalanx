@@ -148,6 +148,39 @@ class CharterTest(unittest.TestCase):
         self.assertNotIn("open one ready", prompt)
         self.assertNotIn("mark it ready", prompt)
 
+    def test_ready_publication_retains_writer_before_merge_gates_pass(self):
+        for original, current in (("checked_in", "checked_in"),
+                                  ("checked_in", "ready_for_check_in"),
+                                  ("ready_for_check_in", "checked_in")):
+            with self.subTest(original=original, current=current):
+                item = {"id": "item", "repository_id": "repo", "target": original, "goal": "Deliver",
+                        "execution": {"id": "execution", "state": {"target": current}}}
+                prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "release")
+                publication = " ".join(prompt.split("- `publication`:", 1)[1].split(
+                    "- `delivery`:", 1)[0].split())
+                delivery = " ".join(prompt.split("- `delivery`:", 1)[1].split())
+                self.assertIn(f"Target: {current}", prompt)
+                self.assertIn("gh pr create --base release", publication)
+                self.assertIn("submit the PR URL and retain this writer in delivery", publication)
+                self.assertIn('{"outcome": "succeeded", "pr_url":', publication)
+                self.assertIn("satisfy the Merge decision section", publication)
+                self.assertIn("Apply the Merge decision section on every pass", delivery)
+                self.assertNotIn("enable GitHub auto-merge with any method", prompt)
+                self.assertNotIn("enable GitHub auto-merge only for `checked_in`", delivery)
+
+    def test_merge_decision_defines_review_sources_and_visible_wait_without_inventing_a_gate(self):
+        item = {"id": "item", "repository_id": "repo", "goal": "Deliver",
+                "execution": {"id": "execution", "state": {"target": "checked_in"}}}
+        prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
+        decision = " ".join(prompt.split("## Merge decision (publication and delivery)", 1)[1].split(
+            "## PR title convention", 1)[0].split())
+        self.assertIn("Before **either** merging or enabling auto-merge", decision)
+        self.assertIn("target repository's instructions, the charter, or Captain/owner steering", decision)
+        self.assertIn("If none requires independent review", decision)
+        self.assertIn("current exact head has applicable independent final-head approval", decision)
+        self.assertIn("record the missing approval/reviewer with `phx work progress`", decision)
+        self.assertIn("if no reviewer is assigned or reachable, use `phx work question`", decision)
+
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
                 ("Fix writer recovery", "Fix writer recovery"),
@@ -469,6 +502,23 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         first = shift.wake(self.api, self.charter, captain_id, config=self.config)
         self.assertFalse(first["reinforcement"]["due"])
         self.assertNotIn("workflow", first["reinforcement"])
+        ordinary = " ".join(first["instructions"].split())
+        for requirement in (
+                "progress and outcome accountability",
+                "every ordinary scheduled wake and material work event",
+                "Is work progressing as expected? What is stalled or at risk?",
+                "Take the next useful authorized action and verify its effect",
+                "stage/progress, dependency, validation, CI/review, integration and merge evidence",
+                "not by themselves delivery progress",
+                "waiting-fix preference", "retaining the same writer",
+                "concrete reason, responsible actor and next action or resume trigger",
+                "Queued wake prompts do not refresh liveness during a lengthy turn",
+                "between bounded coordination batches before the heartbeat becomes stale",
+                "Heartbeat freshness is liveness, not delivery progress",
+                "Preserve explicit report/ready-only targets and draft ceilings",
+                "keep auto-merge off until independent final exact-head approval"):
+            with self.subTest(delivery="ordinary", requirement=requirement):
+                self.assertIn(requirement, ordinary)
         with write_transaction(self.database) as db:
             db.execute("UPDATE captains SET created_at=? WHERE id=?",
                        ((datetime.now(UTC) - timedelta(minutes=91)).isoformat(), captain_id))
@@ -477,6 +527,21 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         due = shift.wake(self.api, self.charter, captain_id, config=self.config)
         self.assertTrue(due["reinforcement"]["due"])
         self.assertEqual(due["reinforcement"]["workflow"], shift.prompt("captain"))
+        reinforced = " ".join(due["reinforcement"]["workflow"].split())
+        for requirement in (
+                "## Own progress and unblock delivery",
+                "every ordinary scheduled wake and material work event",
+                "Take the next useful authorized action and verify its effect",
+                "stage's expectations", "last meaningful evidence",
+                "stale holds and reconciliation", "both capacity limits",
+                "Do not churn, interrupt or replace healthy sessions",
+                "concrete reason, responsible actor, and next action or resume trigger",
+                "current charter revision", "retained sessions need explicit adoption"):
+            with self.subTest(delivery="reinforcement", requirement=requirement):
+                self.assertIn(requirement, reinforced)
+        self.assertIn("run the existing non-wake", reinforced)
+        self.assertIn("before the current heartbeat becomes stale", reinforced)
+        self.assertIn("not delivery progress", reinforced)
         self.assertEqual(due["charter"], shift.load_charter(self.config))
         self.assertEqual(due["reinforcement"]["acknowledgement_arguments"],
                          ["shift", "ack-reinforcement", "--captain", captain_id, "--interval", "1"])
@@ -537,6 +602,21 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         for signal in ("three failed actions in a row", "self-raised deviation flag",
                        "missed heartbeat noticed on waking"):
             self.assertIn(signal, captain)
+
+    def test_keeper_preserves_accountability_and_adoption_without_replacing_live_work(self):
+        keeper = " ".join(shift.prompt("keeper").split())
+        for requirement in (
+                "current canonical Captain workflow and fresh charter revision",
+                "progress and outcome accountability",
+                "taking useful authorized unblocking action and verifying the effect",
+                "blockers' concrete reasons/responsible actors/next actions or resume triggers",
+                "explicit report/ready/draft ceilings and existing writer ownership",
+                "Do not replace healthy sessions or add a watchdog/schedule",
+                "adoption occurs when the current instructions are actually read",
+                "90-minute reinforcement",
+                "keeper neither grants new access nor takes over a live Captain's work"):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, keeper)
 
     def test_interrupted_registration_reply_replays_the_pending_reservation(self):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]

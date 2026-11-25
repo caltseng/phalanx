@@ -56,6 +56,12 @@ class Versioned(Payload):
     expected_version: Annotated[int, Field(strict=True, ge=1)]
 
 
+class DisplayTitle(Payload):
+    expected_revision: Annotated[int, Field(strict=True, ge=0)]
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
+                                           max_length=200, pattern=r"^[^\r\n]+$")] | None
+
+
 class Steering(Versioned):
     goal: Text | None = None
     context_links: list[Text] | None = Field(default=None, max_length=50)

@@ -669,12 +669,13 @@ class WriterTest(ServerFixture, unittest.TestCase):
         delivery = self.submit(token, publication, pr_url=PR_URL)
         with write_transaction(self.path) as db:
             db.execute("UPDATE dispatch_settings SET max_writers=5")
+            db.execute("DROP TABLE item_titles")
             db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")
             db.execute("DROP INDEX waiting_writer_builds")
             db.execute("ALTER TABLE executions DROP COLUMN handoff_head")
             for column in ("building", "building_requested_at", "capacity_revision"):
                 db.execute(f"ALTER TABLE writers DROP COLUMN {column}")
-            db.execute(f"PRAGMA user_version={len(store.MIGRATIONS) - 1}")
+            db.execute(f"PRAGMA user_version={store.MIGRATIONS.index(store.WRITER_CAPACITY_SCHEMA)}")
         migrate(self.path)
         migrate(self.path)
         current = self.ok("/v1/writer", token)

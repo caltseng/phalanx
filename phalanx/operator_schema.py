@@ -4,6 +4,19 @@ CLOSED = "status IN ('completed', 'failed', 'cancelled')"
 OPEN = f"NOT ({CLOSED})"
 INPUT_RANK = "CASE status WHEN 'waiting_for_input' THEN 0 ELSE 1 END"
 
+ITEM_TITLE_SCHEMA = (
+    """CREATE TABLE item_titles (
+        item_id TEXT NOT NULL REFERENCES work_items(id),
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        title TEXT,
+        changed_by TEXT NOT NULL CHECK (changed_by = 'owner'),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (item_id, revision)
+    )""",
+    """CREATE TRIGGER operator_change_item_titles AFTER INSERT ON item_titles
+       BEGIN UPDATE operator_change SET token = hex(randomblob(16)); END""",
+)
+
 OPERATOR_SCHEMA = (
     f"""CREATE INDEX operator_open ON executions (({INPUT_RANK}), created_at, id)
         WHERE {OPEN}""",
