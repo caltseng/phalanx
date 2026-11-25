@@ -47,12 +47,19 @@ def request(base_url, token, route, *, body=None, method=None, key=None, timeout
 
 
 def post_result(base_url, token, attempt, payload, key=None):
-    """Post the pinned attempt's stage result, filling its stage and expected version.
+    """Post the pinned attempt's result or a version-pinned attempt-free delivery question.
 
     The attempt is pinned by the caller, so a resend after a lost reply can never land on the
-    next stage: once the attempt has ended, the post is refused instead.
+    next stage: once the attempt has ended, the post is refused instead. Attempt-free questions
+    require a fresh delivery external wait; an already-open question is not renewed.
     """
     binding = request(base_url, token, "/v1/writer")
+    if attempt is None and not (
+        binding["state"]["stage"] == "delivery"
+        and binding["state"]["status"] == "waiting_for_external"
+        and payload.get("outcome") == "needs_input"
+    ):
+        raise ValueError("An attempt ID is required except for a delivery question during an external wait")
     if binding["writer"]["attempt_id"] != attempt:
         raise ValueError(f"Attempt {attempt} is not open; its result may already be accepted. "
                          "Check `phx work status` before posting again")
@@ -60,7 +67,8 @@ def post_result(base_url, token, attempt, payload, key=None):
             "expected_version": binding["version"], **payload}
     route = (f"/v1/items/{quote(binding['item_id'], safe='')}"
              f"/executions/{quote(binding['id'], safe='')}/result")
-    return request(base_url, token, route, body=body, key=key or f"{attempt}-result")
+    default_key = f"{attempt}-result" if attempt else f"{binding['id']}-question-{binding['version']}"
+    return request(base_url, token, route, body=body, key=key or default_key)
 
 
 def add_work_command(commands):
@@ -81,11 +89,11 @@ def add_work_command(commands):
     result.add_argument("--key", help="idempotency key; defaults to one per attempt")
     question = actions.add_parser("question", help="ask the owner or Captain a question (needs_input)")
     question.add_argument("prompt")
-    question.add_argument("--attempt", required=True, help="the attempt ID from `phx work next` or status")
+    question.add_argument("--attempt", help="the current attempt ID; omit only during a delivery external wait")
     question.add_argument("--handoff", required=True, help="context a fresh session needs to resume")
     question.add_argument("--option", action="append", default=[], dest="options")
     question.add_argument("--default", dest="proposed_default")
-    question.add_argument("--key", help="idempotency key; defaults to one per attempt")
+    question.add_argument("--key", help="idempotency key; defaults to one per attempt or delivery version")
 
 
 def run_work(args):

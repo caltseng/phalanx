@@ -234,6 +234,25 @@ class CharterTest(unittest.TestCase):
             with self.subTest(prompt=name):
                 self.assertIn("phx shift prompt captain", text)
 
+    def test_ordinary_misses_and_real_owner_decisions_have_distinct_delivery_protocols(self):
+        worker = shift.kickoff(
+            {"id": "item", "repository_id": "repo", "goal": "Deliver ordinary improvement",
+             "acceptance_criteria": ["Aspirational 40% improvement; two rounds, report misses"],
+             "execution": {"id": "execution", "state": {"target": "checked_in"}}},
+            "worktree", "nonce", "phx work", "main")
+        review_policy = Path(__file__).resolve().parents[1] / ".agents" / "skills" / "pr-review" / "SKILL.md"
+        for name, prompt in (("writer", worker), ("captain", shift.prompt("captain")),
+                             ("review", review_policy.read_text(encoding="utf-8"))):
+            text = " ".join(prompt.split())
+            with self.subTest(protocol=name):
+                for clause in ("test-set identity", "remaining numeric miss", "no redundant approval",
+                               "current owner", "historical instructions", "service/control upgrade",
+                               "Needs-you", "resume trigger"):
+                    self.assertIn(clause, text)
+        self.assertIn("During an attempt-free delivery external wait, omit `--attempt`",
+                      " ".join(worker.split()))
+        self.assertIn("An aspirational timing or percentage miss is not a failed", worker)
+
     def test_outage_continuity_preserves_confirmed_capacity_and_explicit_ceilings(self):
         for target, mode in (("checked_in", "ready"), ("ready_for_check_in", "ready"),
                              ("checked_in", "draft"), ("report", "ready")):

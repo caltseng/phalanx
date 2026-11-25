@@ -153,9 +153,13 @@ generated instructions and current-target routing, not mathematical enforcement 
 
 Ordinary performance targets have a **two-round optimization budget**, not an indefinite right to
 retain Building or Total for tuning. Record the baseline, each round's change and measured result
-under the same workload/environment, the remaining numeric miss, and a concrete follow-up with an
+under the same workload/environment, test-set identity (exact test IDs or a manifest/digest and count),
+the remaining numeric miss, and a concrete follow-up with an
 accountable actor and next action. Reuse existing measurements rather than resetting the budget
 after a stage transition or reviewer change. Never claim a missed number was met.
+Changed test sets are unmatched evidence, not proof of speedup from dropping tests; retain the
+original comparison and label the gap. An aspirational timing or percentage miss is not a failed
+safety/SLO/resource-contract gate.
 Explicit safety/SLO/resource-contract gates stay hard: name the exact gate and measurement/evidence,
 and fix it or raise the specific owner decision; two rounds cannot waive it. Independent exact-head
 review, required CI, trust, dependency integration and ready/report/draft ceilings also remain hard.
@@ -166,6 +170,39 @@ record the owner-approved classification/change through supported versioned cont
 note, this policy or elapsed time alone cannot silently weaken acceptance. Release Building after
 reviewed work as usual; release Total only through verified completion or safe stop, never by
 abandoning a live writer.
+
+Already-ordinary criteria or an already-recorded owner classification need no redundant approval.
+Explicit current owner direction to check in ordinary improvements supersedes contradictory
+historical instructions; preserve its attribution in the existing timeline/reply evidence and
+deliver once the actual gates pass. Do not silently restore an obsolete owner-only merge rule,
+ask for the same approval again, or make an unrelated service/control upgrade a delivery prerequisite.
+Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are
+historical context, not current authority: prefer the latest applicable owner decision, reply
+and steering evidence rather than renewing an obsolete wait.
+This does not reclassify explicit hard contracts or waive correctness, exact-head independent
+review, required CI, branch protections, sole-writer ownership or current target/publication ceilings.
+
+### Visible owner decisions during delivery
+
+Routine delegated choices remain autonomous. If a genuinely unresolved owner decision or missing
+authority blocks progress, use the existing Needs-you question/reply mechanism instead of generic
+`waiting_for_external` notes. Put the concrete reason and responsible actor in `question.prompt`,
+concrete decision options in `question.options`, and evidence plus the resume trigger in
+`question.handoff`; `owner reply` is the persisted trigger. For example:
+
+```text
+python -m phalanx work question "Owner: explicit memory contract is 1 GiB; measured 1.2 GiB after two rounds. Choose further scoped optimization or an explicit contract change." --option "Keep contract; optimize memory" --option "Approve a specified revised contract" --handoff "PR and exact head, workload/test-set identity, baseline/round measurements, remaining miss. After the versioned answer, resume this same writer and recheck all hard gates."
+```
+
+During a running stage, include the current `--attempt`. During an attempt-free delivery external
+wait, omit it: the CLI pins execution version, stage and writer, and submits only `needs_input`
+through the existing result route. The transaction creates no attempt, retains the writer and
+allocations and exposes the question in the owner inbox and Scribe **Needs-you**. It refuses stale
+versions, changed stages, active attempts, stops and finalization; it cannot report success without
+an attempt. Repeating an unchanged question while it is open is refused rather than renewing the wait.
+An owner-authenticated versioned reply queues the same delivery stage; `work next` opens a fresh
+attempt for the same writer. Read `last_reply`, act within the answer's authority, then post delivery
+success to return to GitHub observation. A reply is neither a passed hard gate nor merge evidence.
 
 ### Applying classification to current timing work
 
@@ -183,6 +220,10 @@ for a later integrated head. Preserve the PR bodies, CI runs and diagnostic mani
 | [#253](https://github.com/caltseng/phalanx/pull/253), head `7e231933` | Five of six Windows reductions passed 40%; Python 3.14/shard 3 was 128 s versus a 125.4 s maximum (38.76%); [CI 45652410596](https://github.com/caltseng/phalanx/actions/runs/45652410596). | API writer preserves the 321-ID matched comparison; Captain tracks the 2.6 s remaining miss and phase-level diagnosis as follow-up, not a blocking forced tuning round. |
 | [#258](https://github.com/caltseng/phalanx/pull/258), earlier CLI-only evidence | Windows shift/writer durations 3.482/3.234 s (3.12), 2.919/3.423 s (3.14) against under-2 s; [CI 45649550659](https://github.com/caltseng/phalanx/actions/runs/45649550659). | CLI writer finishes the already-running frozen 326-ID combined diagnostic and reports actual numbers; Captain tracks residual CLI latency separately. Pending combined evidence is not a passed target or authority to merge other items. |
 
+These are historical measurement snapshots, not current PR dispositions; the later
+[decision-94 closeout](decisions.md#ordinary-performance-case-closeout-decision-94) records verified
+merges separately without claiming the missed metrics passed.
+
 The Captain/service operator, not another item's writer credential, reads fresh authenticated item
 state and uses these existing owner controls:
 
@@ -198,8 +239,8 @@ state and uses these existing owner controls:
 Retain every unrelated criterion verbatim. Annotate the ordinary target with baseline/round evidence,
 the measured remaining miss, the two-round stopping point and concrete follow-up; explicitly retain
 named hard gates. Use `Idempotency-Key` for retries. On HTTP 409, reread state/timeline before retrying,
-not a direct SQLite edit, fake result, cancellation or rerun. `work question --attempt` cannot create
-a question during a delivery wait with no attempt; do not invent an attempt or CLI option.
+not a direct SQLite edit, fake result, cancellation or rerun. Use `work question` without `--attempt`
+for a genuine decision during an attempt-free delivery external wait.
 If the execution already completed, preserve it and attach the classification/follow-up through
 existing audit/action records rather than pretending to edit the closed scope.
 

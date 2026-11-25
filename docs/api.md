@@ -133,6 +133,16 @@ supplies `question.prompt` and `question.handoff`, with optional `options` and
 `proposed_default`. Active cancellation preserves the attempt while effects are reconciled.
 Writer stop confirmation uses its scoped credential.
 
+The sole attempt-free result is a structured `needs_input` question from the currently bound
+writer during `delivery`/`waiting_for_external`: omit `attempt_id` or send `null`, retaining
+`stage: "delivery"` and the exact `expected_version`. The server verifies no attempt is open
+and refuses stops/finalization, stale versions and other stage/outcome combinations. It records
+the writer identity and question in the same history/inbox used by attempted-stage questions;
+no attempt is fabricated and allocations are unchanged. The owner-authenticated versioned reply
+queues delivery for that same writer. `work next` opens its next attempt; delivery success then
+returns to GitHub observation. Use `Idempotency-Key` to replay an uncertain question post; an
+already-open question cannot be replaced or renewed by another result.
+
 ### Prerequisites and queued steering
 
 An owner can include `dependencies` in `POST /v1/items`. Each entry names an `upstream_id` and a `milestone` of `report`, `ready_for_check_in` or `checked_in` (the default). Prerequisites may belong to other repositories. Item inspection includes configured links and the execution's `unmet_dependencies`, with an explanation for each wait.

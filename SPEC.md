@@ -66,7 +66,11 @@ writer capacity, database semantics, other processes or scheduling on other plat
   no native session/person is a universal dependency. Reuse valid evidence covering the effective
   scope without unresolved findings; genuine GitHub required reviewers/protections remain hard.
 - Ordinary performance optimization has a two-round budget, retaining measurements, remaining miss
-  and concrete follow-up; explicit safety/SLO/resource-contract gates remain hard. Owner-approved
+  and concrete follow-up with test-set identity; explicit safety/SLO/resource-contract gates remain hard.
+  Already-ordinary criteria or recorded owner classification need no redundant approval; aspirational
+  timing/percentage misses are not failed hard contracts. Current explicit owner check-in direction
+  supersedes contradictory historical instructions, not merge safeguards or hard contracts.
+  Unrelated service/control upgrades are not delivery prerequisites. Owner-approved
   classification uses [versioned controls](docs/writer-operations.md#bounded-performance-work).
   Acceptance-criteria-only owner steering is permitted during an attempt-free delivery external
   wait, audited before/after without altering state, writer, capacity, target or publication mode.
@@ -135,6 +139,13 @@ End each created PR description with
    blocker or verified completion, not merely a stage boundary.
 5. The reconciler independently observes GitHub and posts timestamped facts/flags. It
    does not launch/stop sessions, mutate GitHub, or require a worker attempt.
+
+A genuine unresolved owner decision or missing authority is a Needs-you question with concrete
+reason, options, responsible actor and resume trigger, not a generic external wait or renewed
+unchanged note. The bound writer may submit a versioned structured `needs_input` result without
+an attempt only during an attempt-free delivery external wait. Existing question history, inbox
+and versioned owner replies apply; no new state store or scheduler exists. A reply queues the
+same stage for the same writer; all ordinary attempt fences and merge safeguards still apply.
 
 Material native/stage/Building-release/merge/deployment events prompt the Captain's existing bounded
 reconciliation/refill as well as scheduled wakes, preferring waiting PR fixes and preserving atomic

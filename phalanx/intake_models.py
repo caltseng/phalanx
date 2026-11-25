@@ -103,6 +103,7 @@ class Reply(Versioned):
 
 
 class Result(AttemptEvent):
+    attempt_id: Identifier | None = None
     outcome: Outcome
     retry_after_seconds: Annotated[int, Field(strict=True, ge=0, le=10**12)] | None = None
     wait: WaitInput | None = None
@@ -116,3 +117,12 @@ class Result(AttemptEvent):
     review_notes: Text | None = None
     # The PR a writer opened at publication. The reconciler's observation records the primary PR.
     pr_url: PullUrl | None = None
+
+    @model_validator(mode="after")
+    def attempt_required(self):
+        if self.attempt_id is None and not (
+            self.stage is Stage.DELIVERY and self.outcome is Outcome.NEEDS_INPUT
+            and self.question is not None
+        ):
+            raise ValueError("An attempt is required except for a delivery question")
+        return self

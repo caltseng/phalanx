@@ -81,10 +81,20 @@ completion. Investigate unknown blockers, labeling them unknown. Reconsider hold
 batch reason no longer applies. This warning alone changes no title, deadline, cancellation,
 replacement, capacity or merge authority.
 
+Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
+instructions. Do not request the same approval again or make an unrelated service/control upgrade a
+delivery prerequisite; actual hard contracts, current targets/ceilings and merge gates still apply.
+Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are not
+current authority; use the latest applicable owner decision, reply and steering evidence.
+
 Use `shift action` and existing question/progress/handoff controls for unresolved blockers: concrete
 reason, responsible actor and resume trigger, next action/pending verification. Repeated failures
 need different evidence-based recovery or an actionable question for missing authority/access,
 safety or owner judgment, not routine delegated decisions.
+Persist genuine decisions in Needs-you with concrete reason, decision options, responsible actor and
+resume trigger. Do not hide them as generic `waiting_for_external` or repeatedly renew unchanged wait
+notes. The retained writer can use `work question` without `--attempt` during an attempt-free delivery
+external wait; an owner reply queues delivery for that same writer, not a replacement.
 
 For existing writers, follow `docs/writer-operations.md#control-plane-outages`: best-effort API
 status, heartbeat, progress, handoff and result transport must not gate already-authorized work
@@ -100,7 +110,12 @@ Ordinary performance gets two optimization rounds with baseline/per-round measur
 numeric miss and accountable follow-up; never claim an unmet number passed. Safety/SLO/resource
 contracts remain hard evidence-backed gates. Use supported versioned steering/question/reply
 controls for owner classification before narrowing recorded criteria, then deliver authorized scope,
-not indefinite tuning. See `docs/writer-operations.md#bounded-performance-work`.
+not indefinite tuning. Retain test-set identity (exact test IDs or a manifest/digest and count);
+label changed test sets as unmatched rather than attributing reduced coverage to a speedup.
+An aspirational timing or percentage miss is not a failed safety/SLO/resource-contract gate.
+Already-ordinary criteria or an already-recorded owner classification need no redundant approval.
+Retain the remaining numeric miss and concrete follow-up; see
+`docs/writer-operations.md#bounded-performance-work`.
 
 Standing authority permits routine compatible reviewed/checks-green upgrades under
 `docs/deployment.md#standing-authority-for-compatible-upgrades`: fresh validated backup, complete

@@ -170,6 +170,10 @@ local shorthand, not a separately installed executable.
   Shared rules are referenced rather than copied into each prompt.
 - `work` runs from the item's worktree and reads its scoped credential from the Git
   directory. Do not copy it, expose it or substitute the Captain's runner token.
+  `work question` reuses the versioned result/question/reply path in `intake`/`waits`:
+  the bound writer may omit an attempt only for a structured delivery external-wait question.
+  The existing inbox/Scribe Needs-you projection exposes it; the owner reply queues that
+  same writer's next delivery attempt without a parallel journal or scheduler.
 - `muster status` discovers existing configuration and reads authenticated API status.
   `deploy init` separately creates new-install templates; neither is a process watchdog.
 

@@ -465,7 +465,7 @@ def request_stop(db, item_id, execution_id, payload, event):
     details = {"reason": payload.reason}
     updated = apply(db, row, state, event, details=details)
     # Delivery writers can still push or merge without an open attempt.
-    if state.status == Status.WAITING_FOR_EXTERNAL:
+    if updated["state"]["stopping"] is not None and state.status != Status.RUNNING:
         active = db.execute(
             "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
         ).fetchone()
@@ -504,7 +504,21 @@ def stopped_retry_at(row, now):
 
 def result(db, item_id, execution_id, payload, writer_id):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    check_attempt(db, execution_id, state, payload, writer_id)
+    if payload.attempt_id is None:
+        writer = db.execute(
+            """SELECT 1 FROM writers WHERE id=? AND item_id=? AND execution_id=?
+               AND ended_at IS NULL AND attempt_id IS NULL""",
+            (writer_id, item_id, execution_id),
+        ).fetchone()
+        active = db.execute(
+            "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
+        ).fetchone()
+        if (writer is None or active is not None or state.stage != Stage.DELIVERY
+                or payload.stage != state.stage or state.status != Status.WAITING_FOR_EXTERNAL
+                or payload.outcome != Outcome.NEEDS_INPUT or payload.question is None):
+            raise Conflict("An attempt-free question requires this writer's delivery external wait")
+    else:
+        check_attempt(db, execution_id, state, payload, writer_id)
     if payload.review_notes is not None and (
         state.stage != Stage.SELF_REVIEW
         or state.candidate is None
@@ -519,6 +533,8 @@ def result(db, item_id, execution_id, payload, writer_id):
     excluded.update(field for field in ("review_notes", "pr_url")
                     if getattr(payload, field) is None)
     details = payload.model_dump(mode="json", exclude=excluded)
+    if payload.attempt_id is None:
+        details["writer_id"] = writer_id
     publishing = state.stage == Stage.PUBLICATION and payload.outcome == Outcome.SUCCEEDED
     if (payload.pr_url is not None) != publishing:
         raise Conflict("A successful publication result reports the PR URL, and only it does")
