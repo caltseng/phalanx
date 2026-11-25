@@ -419,8 +419,9 @@ captured the old prompt and needs the same supported message. Do not start a Cap
 When an unrelated schema upgrade prevents package deployment, an authorized operator may apply
 an independently reviewed **outage-only prompt patch** to the exact installed baseline: back up
 the affected prompt files, verify the baseline and absence of conflicting edits, apply only the
-reviewed hunks and verify the actual installed `shift prompt captain|keeper|wake|forwarding`
-output. Record baseline revision, patch digest, file hashes and recipient receipts separately
+reviewed hunks and verify the installed CLI's `shift prompt captain|keeper|forwarding` output
+and packaged `wake` text through the same prompt loader (`wake` is not a CLI prompt choice).
+Record baseline revision, patch digest, file hashes and recipient receipts separately
 from source merge. Keep API Python code, database/schema/config/credentials, services, writers,
 capacity and schedules unchanged. Old server stale/no-live recovery text remains undeployed
 until the reviewed API can be adopted; the explicit prompt guard overrides that launch advice.
