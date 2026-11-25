@@ -59,6 +59,46 @@ they are not local execution journals. Unpushed work remains on its host.
 Writer display names are task-first and may collide or change. Verify the full nonce
 in kickoff/metadata and the registered native ID; titles are not writer identity.
 
+### SQLite contention and request threads
+
+The store keeps DELETE journaling, `synchronous=EXTRA`, short transactions and SQLite's
+two-second busy timeout. Its process-local gate alternates writers with waiting read
+starts. Admission now has a separate four-second bound (one SQLite begin/commit turn),
+including time spent behind other in-process requests. Expired waiters remove their
+queue counts and raise a busy `sqlite3.OperationalError`; the API's existing contention
+handler returns **503**, `Retry-After: 1`, and an instruction to retry the same request.
+This is an admission bound, not a deadline that interrupts an admitted transaction or
+a claim that arbitrary application work/IO completes within four seconds. SQLite
+still owns cross-process locking, commit durability and rollback on connection close.
+Writer/result fencing and idempotency are unchanged; preserve the original retry key.
+
+An isolated comparison of deployed `6cf538ed84a96f407ab1f4fd1f5ae2f239bd84a4`
+and main `629788a` (unchanged through `fca085a`) found identical **unbounded**
+`Condition.wait_for` calls before
+SQLite was reached. Holding one gate turn, then queuing a read and write on a
+two-thread executor, kept both workers occupied and a database-free status job queued
+beyond SQLite's two-second timeout. The bounded gate frees those workers with busy
+errors while the original holder remains held. This demonstrates a starvation path,
+not proof that it was the sole cause of any particular live outage. The already-merged
+request-local query reductions in #263 reduce load but do not bound gate admission.
+
+`tests/test_contention.py` exercises timeout cleanup and reuse, logged dependency
+refresh retry from its retained durable audit, and real HTTP writer progress, capacity,
+result and reconciler heartbeat requests with a deliberately reduced two-thread pool.
+It checks health/auth responsiveness while a gate turn remains held, retryable failures,
+concurrent recovery without restart, exact result replay/stale-result rejection,
+integrity, DELETE/EXTRA and preserved configured 10-Building/20-Total settings.
+The HTTP fixture fills those actual allocations, refuses a 21st writer and resumes
+progress for all 20 retained writers after contention clears.
+No larger thread pool, database reset, new journal mode or watchdog is involved.
+
+**Adoption boundary:** deployments at `6cf538e` or `629788a` do not contain this
+bounded-admission change. It takes effect only when the service owner adopts the reviewed
+API/store revision containing it through the existing safe deployment procedure.
+It adds no schema change and does not authorize service restarts, live database access,
+concurrency-setting changes or deployment by an item writer. Any separately required
+store-format adoption must follow its own record-preserving operator procedure.
+
 ## Intake and supported commands
 
 The [CLI dispatcher](../phalanx/__main__.py) exposes `register`, `intake`, `ingest-issue`,

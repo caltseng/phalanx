@@ -28,6 +28,8 @@ APPLICATION_ID = 0x50484C58  # PHLX
 # Older stores needed row rewrites that were removed (decision 67), so they are refused.
 OLDEST_SUPPORTED_VERSION = 12
 BUSY_TIMEOUT = 2  # seconds
+# A write can spend one SQLite busy timeout starting and another committing.
+ADMISSION_TIMEOUT = 2 * BUSY_TIMEOUT
 
 
 class _Gate:
@@ -38,7 +40,8 @@ class _Gate:
     polling reader can miss every gap and time out. Readers instead wait here: those that
     arrive during a write start right after it, before the next writer, and those that arrive
     while a writer waits go after that writer. Each side waits at most one turn of the other,
-    however deep the write queue gets, and neither adds a timeout of its own.
+    however deep the write queue gets. Admission itself is bounded too: SQLite's busy
+    timeout cannot release request threads waiting on this process-local condition.
     """
 
     def __init__(self):
@@ -53,8 +56,13 @@ class _Gate:
     def write(self):
         with self.condition:
             self.writers += 1
-            self.condition.wait_for(lambda: not self.writing and not self.admitted)
-            self.writers -= 1
+            try:
+                if not self.condition.wait_for(
+                    lambda: not self.writing and not self.admitted, timeout=ADMISSION_TIMEOUT,
+                ):
+                    raise sqlite3.OperationalError("SQLite store busy waiting for write admission")
+            finally:
+                self.writers -= 1
             self.writing = True
         try:
             yield
@@ -72,9 +80,11 @@ class _Gate:
             if self.writing or self.writers:
                 self.queued += 1
                 writes = self.writes
-                # One write turn is already bounded by SQLite's busy timeout on BEGIN and COMMIT
-                # but can outlast it in total, so a wall-clock bound here would fail healthy reads.
-                self.condition.wait_for(lambda: self.writes != writes)
+                if not self.condition.wait_for(
+                    lambda: self.writes != writes, timeout=ADMISSION_TIMEOUT,
+                ):
+                    self.queued -= 1
+                    raise sqlite3.OperationalError("SQLite store busy waiting for read admission")
             else:
                 self.admitted += 1
         try:
