@@ -63,8 +63,11 @@ def initialize(home=None, *, api_url=None, port=8000):
     (root / "charter.toml").write_text(
         '# Normal owner intake in these repositories is eligible without listing item IDs.\n'
         '# Notes may order or constrain work; they are not an intake allow-list.\n'
+        '# PR intake defaults to checked_in (merged on the owner\'s behalf).\n'
+        '# Preserve explicit ready_for_check_in/report targets and draft ceilings.\n'
         'goal = "SET_GOAL"\nrepositories = []\n'
-        'allowed_actions = ["Implement scoped work and publish PRs under repository rules"]\n'
+        'allowed_actions = ["Deliver scoped work through its current target, including merging '
+        'checked_in PRs under repository rules"]\n'
         'escalate = ["Missing authority or credentials"]\nstop_when = ["Owner stops the muster"]\n'
         '[shift]\n' + "".join(f"{key} = {value}\n" for key, value in SHIFT_DEFAULTS.items()),
         encoding="utf-8")

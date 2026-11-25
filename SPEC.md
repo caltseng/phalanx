@@ -38,6 +38,10 @@ See [deployment tooling and migration](docs/deployment.md).
   preserved. Writers enable GitHub auto-merge only for checked-in work. Owner/Captain
   steering can change an open PR target, including delivery, but cannot switch PR/report.
   The writer reconciles GitHub auto-merge with the latest target on each delivery pass.
+  Newer explicit owner instructions supersede contradictory older charter prose or historical
+  notes; Captains surface stale policy for operator correction, not an extra owner-merge gate.
+  This does not retarget explicit ready-only/report work, lift draft ceilings or waive required
+  review, checks, dependency integration, credentials or trust.
 - A completed ready execution stays completed when its primary PR later merges into the
   target at the verified head or a proven descendant. Reconciliation enriches its final
   output once with final revision, merge commit and `merged_at`, and releases check-in
