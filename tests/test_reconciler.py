@@ -325,6 +325,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                         db.execute("UPDATE transition_history SET state_json=? WHERE execution_id=?",
                                    (json.dumps(raw), item["execution"]["id"]))
                         # Undo later columns before replaying closed-stage normalization.
+                        db.execute("DROP TABLE item_titles")
                         db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
                         db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_writers")
                         db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")
@@ -379,6 +380,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                     db.execute("UPDATE executions SET state_json=? WHERE id=?",
                                (json.dumps({**asdict(ready), "stage": "pr_reconciliation"}),
                                 item["execution"]["id"]))
+                    db.execute("DROP TABLE item_titles")
                     db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
                     db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_writers")
                     db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")

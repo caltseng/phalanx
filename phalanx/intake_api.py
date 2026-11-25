@@ -12,7 +12,7 @@ from .auth import (
 from .store import read_transaction, write_transaction
 from .transitions import PublicationMode
 from .intake_models import (
-    AttemptEvent, Cancel, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
+    AttemptEvent, Cancel, DisplayTitle, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
 )
 
@@ -67,6 +67,18 @@ def create(request: Request, body: Intake, key: Key = None):
 @router.get("/items/{item_id}")
 def inspect(request: Request, item_id: Identifier):
     return run(request, intake.inspect, item_id)
+
+
+@router.get("/items/{item_id}/title", dependencies=[Depends(require_owner)])
+def display_title(request: Request, item_id: Identifier):
+    return run(request, intake.display_title, item_id)
+
+
+@router.put("/items/{item_id}/title",
+            dependencies=[Depends(require_owner), Depends(require_same_origin)])
+def set_display_title(request: Request, item_id: Identifier, body: DisplayTitle, key: RequiredKey):
+    return run(request, intake.set_display_title, item_id, body, write=True,
+               scope=f"display-title:{item_id}", key=key, payload=body.model_dump(mode="json"))
 
 
 @router.patch("/items/{item_id}/executions/{execution_id}", dependencies=[Depends(require_owner)])

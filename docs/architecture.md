@@ -212,6 +212,17 @@ Writers do not restart services or patch retained/live configuration to activate
 
 ### Shipped code is not installation state
 
+Scribe briefs are allowlisted from the existing request only on current-item/execution
+detail reads. Owner-only display titles use the separate append-only `item_titles` table,
+with their own revision fence and audit identity/time. They do not mutate work scope,
+execution state/version, attempts or outputs. The insert invalidates board ETags, so
+unchanged polls remain no-ops while actual title changes refresh normally. This source
+change needs a service-owner deployment of the API, schema step and static assets before
+the route is available. It does not itself restart a service or alter the live database.
+Only after that deployment may an owner read the title revision, PUT the requested title
+with a stable idempotency key and read back both metadata and the Scribe caption. Never
+use queued-only goal Steering, stage interruption or direct database edits as a substitute.
+
 The two writer limits are persisted in `dispatch_settings`: `max_building_writers` (Building,
 initially five) and `max_writers` (Total, initially ten on new installs), editable as an atomic
 pair by the owner. `writers.building` is the authoritative allocation; `building_requested_at`
