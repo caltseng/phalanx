@@ -196,7 +196,44 @@ class CharterTest(unittest.TestCase):
         self.assertIn("If none requires independent review", decision)
         self.assertIn("current exact head has applicable independent final-head approval", decision)
         self.assertIn("record the missing approval/reviewer with `phx work progress`", decision)
-        self.assertIn("if no reviewer is assigned or reachable, use `phx work question`", decision)
+        self.assertIn("seek another qualified independent reviewer", decision)
+        self.assertIn("Captain assignment is not a prerequisite", decision)
+        self.assertIn("Record reviewer identity, verdict, scope and exact final SHA", decision)
+        self.assertIn("Any qualified reviewer independent of the author", decision)
+        self.assertIn("no particular native session or person is a universal dependency", decision)
+        self.assertIn("Reuse valid recorded approval for the current exact head", decision)
+        self.assertIn("Genuine GitHub required reviewers, CODEOWNERS and branch protections", decision)
+        self.assertIn("Use `phx work question` only when required review cannot be obtained", decision)
+
+    def test_autonomy_policy_survives_kickoff_wake_and_keeper_handoff(self):
+        worker = shift.kickoff(
+            {"id": "item", "repository_id": "repo", "goal": "Deliver",
+             "execution": {"id": "execution", "state": {"target": "checked_in"}}},
+            "worktree", "nonce", "phx work", "main")
+        for name, prompt in (("worker", worker),):
+            text = " ".join(prompt.split())
+            with self.subTest(prompt=name):
+                self.assertIn("qualified reviewer independent of the author", text)
+                self.assertIn("two-round optimization budget", text)
+                self.assertIn("safety/SLO/resource-contract gates stay hard", text)
+                self.assertIn("Building", text)
+                self.assertIn("Total", text)
+                self.assertIn("sole-writer", text)
+        captain = " ".join(shift.prompt("captain").split())
+        for requirement in (
+                "qualified reviewer independent of the author", "two optimization rounds",
+                "Safety/SLO/resource contracts remain hard", "Building/Total",
+                "one native writer per item",
+                "On scheduled wakes and material native/stage/result/question",
+                "merge/deployment or owner-reply events",
+                "Standing authority permits routine compatible reviewed/checks-green upgrades",
+                "source merge is not live adoption"):
+            with self.subTest(prompt="captain", requirement=requirement):
+                self.assertIn(requirement, captain)
+        for name in ("wake", "keeper"):
+            text = " ".join(shift.prompt(name).split())
+            with self.subTest(prompt=name):
+                self.assertIn("phx shift prompt captain", text)
 
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (

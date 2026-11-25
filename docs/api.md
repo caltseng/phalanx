@@ -150,6 +150,15 @@ and its GitHub wait. Switching to or from `report` is refused. A completed ready
 `rerun`. A target change does not itself call GitHub; the writer reconciles auto-merge with the
 latest target on its next delivery pass.
 
+An acceptance-criteria-only patch is also allowed during `delivery`/`waiting_for_external`
+when no attempt is open, including a retained writer's GitHub wait. It uses the same owner
+authentication, `expected_version`, optional `Idempotency-Key` and `steered_by` audit attribution.
+The timeline records complete before/after criteria. Mixed goal/target/dependency edits, active
+attempts, stopping/finalizing and terminal work remain refused outside queued steering.
+The edit does not advance state, replace the writer, alter capacity or authorize merge. It supports
+explicit owner-approved performance-target classification, not a silent waiver of safety/SLO/
+resource contracts. See [bounded performance work](writer-operations.md#bounded-performance-work).
+
 A successful claim includes a `dependencies` snapshot with each upstream execution ID, output reference and exact revision. For a reviewed PR it includes the reviewed head and base; for a check-in it also identifies the verified merge commit. Use these revisions in the work packet. The snapshot is recorded on the attempt's claim event and returned on claim replay even if an upstream execution is rerun.
 
 Milestone changes refresh up to 32 dependents in the upstream transaction. Larger fan-outs and restart audits are processed in indexed batches across short transactions, so queued dependents in later batches may become eligible after the upstream transaction commits. The claim transaction always checks current durable evidence before assigning work.
