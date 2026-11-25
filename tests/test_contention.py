@@ -22,6 +22,7 @@ from threading import Event, Thread
 import anyio.to_thread
 from phalanx import api, store
 
+normal_admission_timeout = store.ADMISSION_TIMEOUT
 store.ADMISSION_TIMEOUT = 0.2
 original_lifespan = api.app.router.lifespan_context
 
@@ -49,6 +50,7 @@ async def hold():
 
 @api.app.post("/fixture/release")
 async def unlock():
+    store.ADMISSION_TIMEOUT = normal_admission_timeout
     release.set()
     return {"released": True}
 """ + SERVER_PROCESS
@@ -206,7 +208,8 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                     for index in range(20)
                 ]
                 for future in resumed:
-                    self.assertEqual(future.result(timeout=10)[0], 200)
+                    response = future.result(timeout=10)
+                    self.assertEqual(response[0], 200, response)
             self.assertEqual(self.request("/v1/reconcilers/fixture/heartbeat", RUNNER, {})[0], 200)
             self.assertEqual(self.request("/v1/writer/progress", token, {"note": "Recovered"})[0], 200)
             capacity = self.request("/v1/writer/capacity", token, {
