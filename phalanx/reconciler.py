@@ -23,7 +23,7 @@ from .github import GitHubClient, GitHubError, github_repository, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
 from .pr_models import DEPLOYMENT_WINDOW
-from .server_admin import foreground_priority
+from .priority import foreground_priority
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy

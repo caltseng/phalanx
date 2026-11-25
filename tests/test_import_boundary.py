@@ -1,4 +1,4 @@
-"""The server and direct clients share only contracts and stateless display helpers."""
+"""The server and direct clients share only contracts and storage-free helpers."""
 
 import ast
 from pathlib import Path
@@ -15,9 +15,9 @@ SERVER = {
     "operator_web", "pickup", "reconciliation", "schema", "server_admin", "store", "waits", "writers", "usage",
     "issue_scout",
 }
-# Contracts and display helpers both sides import. They depend only on each other.
+# Contracts and storage-free helpers both sides import. They depend only on each other.
 SHARED = {"display_text", "intake_models", "pr_models", "session_links", "transitions", "validation",
-          "usage_models"}
+          "usage_models", "priority"}
 SERVER_PACKAGES = {"fastapi", "starlette", "uvicorn"}
 MODULES = sorted(path.stem for path in PACKAGE.glob("*.py") if path.stem != "__init__")
 CLIENT = [name for name in MODULES if name not in SERVER | SHARED]
