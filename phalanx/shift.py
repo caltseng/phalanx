@@ -297,8 +297,10 @@ def kickoff(item, worktree, nonce, work_command, base, checks_environment=None):
         publication = (
             f"open one ready (not draft) PR with an explicit base (`gh pr create --base {base}`). "
             "Reuse the branch's open PR instead of creating another: mark it ready if it is a draft "
-            f"(`gh pr ready`) and retarget it to `{base}` if needed. For a `checked_in` target, "
-            "enable GitHub auto-merge with any method the repository allows."
+            f"(`gh pr ready`) and retarget it to `{base}` if needed. "
+            "Publication does not require enabling auto-merge: submit the PR URL and retain "
+            "this writer in delivery while gates remain outstanding. Before merging or enabling "
+            "auto-merge, satisfy the Merge decision section above."
         )
     template = Template(resources.files("phalanx").joinpath("prompts", "worker.md").read_text(encoding="utf-8"))
     return template.substitute(

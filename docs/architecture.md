@@ -139,7 +139,13 @@ Writer bindings have no timed expiry. Nonce replay, expected versions and stoppe
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
 
 The writer self-review stage is not a second independent PR reviewer. GitHub reviews,
-checks and repository rules still apply. The reconciler's trusted local-check failures
+checks and repository rules still apply. The generated writer instructions require
+applicable independent final exact-head approval, green required CI, required GitHub reviews
+and repository/dependency/actual-main gates **before** merge or auto-merge activation.
+Publication can finish first with auto-merge off and the same writer waiting in delivery.
+This prompt boundary adds no engine approval predicate, review agent or lifecycle stage.
+Self-review and previous-head/content-only approval cannot satisfy independent final review.
+The reconciler's observations do not certify that review. Trusted local-check failures
 are flags, not another Phalanx delivery gate. Required ready checks come from trusted
 policy; missing policy is not success. A verified merge into the target by anyone
 completes either PR target, with `merge` or combined `squash_or_rebase` provenance.

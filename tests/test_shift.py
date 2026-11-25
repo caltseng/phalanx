@@ -149,6 +149,48 @@ class CharterTest(unittest.TestCase):
         self.assertNotIn("open one ready", prompt)
         self.assertNotIn("mark it ready", prompt)
 
+    def test_ready_publication_retains_writer_before_merge_gates_pass(self):
+        for original, current in (("checked_in", "checked_in"),
+                                  ("checked_in", "ready_for_check_in"),
+                                  ("ready_for_check_in", "checked_in")):
+            with self.subTest(original=original, current=current):
+                item = {"id": "item", "repository_id": "repo", "target": original, "goal": "Deliver",
+                        "execution": {"id": "execution", "state": {"target": current}}}
+                prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "release")
+                publication = prompt.split("- `publication`:", 1)[1].split("- `delivery`:", 1)[0]
+                delivery = prompt.split("- `delivery`:", 1)[1]
+                self.assertIn(f"Target: {current}", prompt)
+                self.assertIn("gh pr create --base release", publication)
+                self.assertIn("submit the PR URL and retain this writer in delivery", publication)
+                self.assertIn('{"outcome": "succeeded", "pr_url":', publication)
+                self.assertIn("satisfy the Merge decision section", publication)
+                self.assertIn("Apply the Merge\n    decision section on every pass", delivery)
+                self.assertNotIn("enable GitHub auto-merge with any method", prompt)
+                self.assertNotIn("enable GitHub auto-merge only for `checked_in`", delivery)
+
+    def test_generated_merge_decision_requires_current_independent_head_and_checks_before_activation(self):
+        item = {"id": "item", "repository_id": "repo", "goal": "Deliver",
+                "execution": {"id": "execution", "state": {"target": "checked_in"}}}
+        prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
+        decision = prompt.split("## Merge decision (publication and delivery)", 1)[1].split(
+            "## PR title convention", 1)[0]
+        for requirement in (
+                "Before **either** merging or enabling auto-merge, re-read `phx work status`",
+                "actual current execution target is `checked_in`",
+                "repository-specific merge-owner restrictions",
+                "current exact head has applicable independent final-head approval",
+                "all required CI\n  is green on that head", "required GitHub reviews are satisfied",
+                "dependency/actual-main integration gates", "Self-review is not independent approval",
+                "previous-head or content-only PASS is not final",
+                "Missing GitHub required reviews are not approval",
+                "empty required\n  review configuration does not waive",
+                "outstanding or unknown, leave auto-merge off",
+                "Disable auto-merge before\npushing rework",
+                "exact-head guard", "actual merge without asking routine permission",
+                "not a new engine-enforced approval gate"):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, decision)
+
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
                 ("Fix writer recovery", "Fix writer recovery"),

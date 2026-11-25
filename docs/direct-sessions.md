@@ -101,8 +101,12 @@ PR stages are `development` -> `self_review` -> `publication` -> `delivery`.
 
 The writer commits and reviews the candidate, then pushes the deterministic item branch
 `phalanx/<sha256 of item ID>`. It opens one PR with the explicit target base or reuses the
-branch's open PR. For ready publication it marks a draft ready; it enables GitHub auto-merge
-only for `checked_in`. For `ready_for_check_in` it leaves merging to the owner. Every PR
+branch's open PR. For ready publication it marks a draft ready; publication may complete
+before merge gates pass, with auto-merge off and the same writer retained in delivery.
+It merges or enables GitHub auto-merge only for the current `checked_in` target after
+applicable independent final exact-head approval, green required CI, required GitHub reviews,
+repository rules and dependency/actual-main gates pass. For `ready_for_check_in` it leaves
+merging to the owner. Every PR
 description ends with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`.
 The successful publication result supplies `pr_url`; it must belong to the registered repo
 and not have been merged by an earlier execution. The server records one primary PR.
@@ -112,12 +116,14 @@ unchanged. An owner or Captain can steer an open PR item's target, including in 
 `delivery`, between `ready_for_check_in` and `checked_in`. Only queued work accepts other edits
 alongside the target change. The timeline records the actor
 and before/after targets. The writer reads the latest target on each delivery pass and enables
-GitHub auto-merge only for `checked_in`, disabling it if retargeted to `ready_for_check_in`.
+GitHub auto-merge only for `checked_in` after those gates pass, disabling it if any is
+outstanding or the item is retargeted to `ready_for_check_in`.
 GitHub's required reviews, checks and rulesets still gate a merge (D2); no new setting is needed.
 Steering never changes to or from `report`. Completed ready items cannot be steered, but the
 reconciler records a later owner merge of their verified head or a descendant without a rerun.
 Delivery waits for reconciler observations without an open attempt. The writer remains
 registered and fixes failing checks, feedback and conflicts on that PR.
+See [merge evidence, reproduction and retained-session activation](writer-operations.md#merge-decision-before-auto-merge).
 
 **Draft-only publication:** intake `publication_mode: "draft"` is a ceiling for either PR
 target. The writer opens a draft with the explicit base, disables auto-merge and converts a
@@ -367,7 +373,7 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | # | Decision |
 | --- | --- |
 | D1 | Writers push and open their own PRs. Repository rules apply; Phalanx reconciles one primary PR. |
-| D2 | Writers enable GitHub auto-merge only for checked-in targets. Accept any merge method. |
+| D2 | Writers merge or enable GitHub auto-merge only for current checked-in targets after applicable independent final-head review, required CI/reviews, repository and dependency/actual-main gates pass. Accept any permitted merge method. |
 | D3 | Trusted local checks are reconciler flags, not a Phalanx gate. Repository CI gates merging. |
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
