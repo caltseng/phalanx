@@ -83,6 +83,8 @@ class DeploymentTest(unittest.TestCase):
                 "Preserve current-execution targets, explicit report/ready/draft ceilings",
                 "no new access or bypass",
                 "keep auto-merge off until independent final exact-head approval",
+                "Queued wake prompts do not refresh liveness during long turns",
+                "heartbeats between bounded coordination batches before staleness",
                 "five-minute reconciliation, 90-minute reinforcement and 24-hour handoff"):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, notes)

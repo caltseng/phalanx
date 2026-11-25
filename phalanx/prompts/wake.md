@@ -26,6 +26,10 @@ sole-writer ownership and creator-owned cleanup; this policy grants no new acces
 Follow the canonical Captain workflow: reconcile `shift status --captain <your id>`,
 inspect native writer sessions and trust, recover uncertain launches before new dispatch,
 act on at most five items and record focus/session observations without `--wake`.
+Queued wake prompts do not refresh liveness during a lengthy turn. Use the existing non-wake
+`shift heartbeat --captain <your id>` between bounded coordination batches before the heartbeat
+becomes stale; do not rely on the queued five-minute wake, add a scheduler/watchdog or fabricate
+telemetry. Heartbeat freshness is liveness, not delivery progress.
 Keep the current registration, existing writers, owner stop/safety rules and creator-owned
 cleanup. Continue eligible work under current-execution target authority and repository
 checks, independent exact-head review and protections; never invent merge permission.

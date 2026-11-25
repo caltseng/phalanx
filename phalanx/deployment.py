@@ -84,6 +84,8 @@ def initialize(home=None, *, api_url=None, port=8000):
         'or bypass. For checked_in, keep auto-merge off until independent final exact-head approval and\n'
         'applicable required gates; verify required CI, actual-main integration where applicable and merge.\n'
         'Use existing five-minute reconciliation, 90-minute reinforcement and 24-hour handoff.\n'
+        'Queued wake prompts do not refresh liveness during long turns; use existing non-wake\n'
+        'heartbeats between bounded coordination batches before staleness, not another scheduler.\n'
         '"""\n'
         'allowed_actions = ["Deliver scoped work through its current target, including merging '
         'checked_in PRs under repository rules"]\n'

@@ -396,6 +396,11 @@ reinforcement is not due. The existing five-minute reconciliation, 90-minute rei
 and 24-hour handoff suffice: there is no new scheduler, watchdog, arbitrary stall-age SLA,
 accounting subsystem or lifecycle/dispatch gate. These are delivered operating instructions,
 not a claim that prose mechanically guarantees delivery outcomes.
+Queued five-minute wake prompts do not refresh Captain liveness while a lengthy turn is still
+running. Break long coordination into bounded batches and post the existing non-wake
+`shift heartbeat --captain ID` between them before staleness. A current heartbeat is necessary
+for coordination ownership but is not evidence that an item advanced. No new scheduler,
+watchdog, compaction trigger or invented telemetry is needed.
 
 **Adoption boundary:** changing tracked prompts or `deploy init`'s default charter does not
 rewrite a live operator charter or an already-running session's context. The operator owns
@@ -414,7 +419,12 @@ canonical workflow was PR #250, commit `b981351b6f9e652f592aafcaa2b8b2f8db426964
 with reinforcement interval 1 read and acknowledged. The live charter accountability policy
 was active, but this change's tracked briefing/template was not yet installed or adopted.
 This is a historical adoption boundary, not the current revision for every deployment:
-re-read live state at rollout. No live charter edits or service restarts are part of this PR.
+re-read live state at rollout. At the subsequent retained-session handoff, the coordinating
+Captain reported current live charter policy revision
+`6ecf52b3b9822e6238735ca0f852b283bbf4bd626dae6b7338ffef24c6efdbee`, adding explicit
+non-wake heartbeats/bounded coordination during long turns after a real heartbeat gap.
+This source update does not itself install or adopt that tracked wording in retained sessions.
+No live charter edits or service restarts are part of this PR.
 Publication-gate item `dc5ddb6acaf24726874ad9dca2cfa353` (PR #255) changes the writer kickoff
 and worker merge instructions, not these Captain/default-charter hunks. Coordinate those
 instructions at integration/rollout without treating unrelated work as a blanket dependency.

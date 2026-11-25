@@ -480,6 +480,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 "not by themselves delivery progress",
                 "waiting-fix preference", "retaining the same writer",
                 "concrete reason, responsible actor and next action or resume trigger",
+                "Queued wake prompts do not refresh liveness during a lengthy turn",
+                "between bounded coordination batches before the heartbeat becomes stale",
+                "Heartbeat freshness is liveness, not delivery progress",
                 "Preserve explicit report/ready-only targets and draft ceilings",
                 "keep auto-merge off until independent final exact-head approval"):
             with self.subTest(delivery="ordinary", requirement=requirement):
@@ -504,6 +507,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 "current charter revision", "retained sessions need explicit adoption"):
             with self.subTest(delivery="reinforcement", requirement=requirement):
                 self.assertIn(requirement, reinforced)
+        self.assertIn("run the existing non-wake", reinforced)
+        self.assertIn("before the current heartbeat becomes stale", reinforced)
+        self.assertIn("not delivery progress", reinforced)
         self.assertEqual(due["charter"], shift.load_charter(self.config))
         self.assertEqual(due["reinforcement"]["acknowledgement_arguments"],
                          ["shift", "ack-reinforcement", "--captain", captain_id, "--interval", "1"])

@@ -122,7 +122,12 @@ Do these steps in order and keep each wake short:
    failures and process restarts; delayed wakes coalesce elapsed intervals into one current
    reinforcement. Repeat calls after acknowledgement do not repeat it within that interval.
    No compaction hook, separate reminder scheduler or local timing file is used.
-   Do not add a second `--wake` heartbeat. If `shift.handoff_due` is non-empty,
+   Do not add a second `--wake` heartbeat. Queued wake prompts do not refresh liveness during a
+   lengthy turn. Break long coordination into bounded batches and run the existing non-wake
+   `phx shift heartbeat --captain <id>` between them, before the current heartbeat becomes stale;
+   do not wait for a queued five-minute wake to run. This maintains liveness, not delivery progress.
+   Do not add another scheduler/watchdog, compaction trigger or fabricated telemetry.
+   If `shift.handoff_due` is non-empty,
    or you notice actual degradation or failure, go to *Ending a shift* after this wake.
    When your runtime exposes a cumulative count of **successful** context compactions for this native
    session, report `--compaction-count <count>` on a non-wake heartbeat. Refresh it each wake and before
