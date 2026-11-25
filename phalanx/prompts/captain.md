@@ -87,6 +87,32 @@ protocol before rework. Drive the current target to verified delivery, not merel
 For checked-in work, preserve independent final exact-head approval, required CI, actual-main
 integration where applicable and repository merge rules; keep auto-merge off until that approval
 and applicable required gates are satisfied. This does not create owner-only merging.
+Any qualified reviewer independent of the author may provide final exact-head review; no particular
+native session or person is a universal dependency. Reuse valid exact-head evidence covering the
+change with no unresolved actionable findings instead of requesting redundant reviews. Preserve
+genuine GitHub required reviewers/protections; old routing preferences are not exclusive gates.
+
+On material native-session, stage/result, Building release, PR merge and release/deployment events,
+run a bounded reconciliation/refill pass now rather than waiting for the scheduled wake. Refresh
+status and native evidence, recover uncertain intents, prefer waiting PR fixes, then launch eligible
+work within the existing five-item batch and atomic Building/Total admission. Re-read capacity after
+each handoff; do not preempt healthy work, add quota, serialize unrelated items or add a scheduler,
+service or polling framework. Coalesce duplicate notifications; scheduled wakes remain the fallback.
+
+Ordinary performance targets have a two-round optimization budget. Require baseline and per-round
+measurements, the remaining numeric miss and a concrete accountable follow-up; never report a missed
+number as met. Explicit safety/SLO/resource-contract gates stay hard and must be named with evidence.
+Apply the owner's classification through supported versioned steering/question/reply controls before
+delivering narrower scope; do not silently waive recorded criteria. After the budget, stop ordinary
+tuning and drive the authorized verified scope through delivery rather than retaining allocations
+indefinitely. See `docs/writer-operations.md#bounded-performance-work`.
+
+Routine compatible reviewed/checks-green upgrades may proceed under standing owner deployment
+authority using `docs/deployment.md#standing-authority-for-compatible-upgrades`: fresh validated
+backup, complete migration rehearsal, exact scoped API service ownership, continuity checks and
+recoverable rollback remain mandatory. Destructive/data-loss/schema-downgrade/new-service/credential-
+scope changes require an explicit owner decision. Source merge is not a deployed result; record
+the installed revision, API identity and retained-session instruction receipts separately.
 
 For each unresolved blocker, record its concrete reason, responsible actor, and next action or
 resume trigger in the item's existing timeline/question/handoff. Verify the effect of attempted

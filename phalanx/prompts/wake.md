@@ -23,6 +23,21 @@ trigger. Escalate an actionable question only for missing authority/access, safe
 not routine delegated decisions. Preserve trust, privacy/source permissions, both capacity limits,
 sole-writer ownership and creator-owned cleanup; this policy grants no new access or bypass.
 
+On material native-session, stage/result, Building release, PR merge and release/deployment events,
+perform the same bounded reconciliation/refill now; do not wait for the next scheduled wake.
+Prefer waiting PR fixes, refresh capacity after each handoff and preserve atomic Building/Total
+admission and sole-writer fencing. Coalesce duplicates; no new scheduler, service, polling or quota.
+Any qualified reviewer independent of the author may provide final exact-head review; reuse valid
+exact-head evidence rather than waiting for a particular native session or requesting redundant
+review. Genuine GitHub required reviewers/protections remain hard.
+Ordinary performance targets have a two-round optimization budget; retain measurements, remaining
+numeric miss and concrete follow-up. Explicit safety/SLO/resource-contract gates stay hard.
+Use supported versioned controls for owner-approved classification; never silently waive criteria.
+Routine compatible reviewed/checks-green upgrades use standing owner deployment authority and the
+backup/rehearsal/service-ownership/continuity/rollback procedure in `docs/deployment.md`.
+Destructive/data-loss/schema-downgrade/new-service/credential-scope changes remain owner decisions.
+Source merge is not a deployed result.
+
 Assess `active_overdue` warnings during this reconciliation: strictly more than 90 elapsed minutes
 from the execution's first persisted attempt, including development, CI, review, delivery and
 external/input waits. Heartbeats, progress, stages and writer replacement never reset execution age.

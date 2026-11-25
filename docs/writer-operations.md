@@ -62,11 +62,20 @@ extra Phalanx gate. See [publication and delivery](direct-sessions.md#pr-publica
 ### Merge decision before auto-merge
 
 Independent review is required by the target repository's instructions, the charter, or
-Captain/owner steering on the item; use the reviewer designated by that policy or steering.
+Captain/owner steering on the item. Any qualified reviewer independent of the author may provide
+final exact-head review; no particular native session or person is a universal dependency.
+Preserve genuine GitHub required reviewers, CODEOWNERS and protections. Old routing preferences
+do not make a reviewer exclusive. Reuse recorded approval when it covers the current exact head
+and change scope and has no unresolved actionable findings; do not demand a redundant review.
 If none requires independent review, required CI, GitHub reviews and repository rules remain
 the gates, not an invented independent-review wait. If required approval is pending, record
-the missing approval/reviewer with `work progress`; if no reviewer is assigned or reachable,
-use `work question` with that blocker and handoff context.
+the missing approval/reviewer with `work progress` and route to another qualified independent
+reviewer directly if needed. An authorized writer may choose and reach a qualified independent
+peer or read-only review agent with no authorship; Captain assignment is not a prerequisite.
+Record reviewer identity, verdict, effective scope and exact final SHA in the review evidence.
+The Captain may help route a request but cannot substitute self-review for independent approval.
+Use `work question` when required review cannot be
+obtained or authority/access is genuinely missing, not just because a preferred session is busy.
 
 Before either direct merge or auto-merge activation, read fresh `work status` and GitHub facts.
 Require the current execution's `checked_in` target, ready publication, no pending stop,
@@ -95,6 +104,93 @@ agent, watchdog, scheduler, state field, API/CLI contract or lifecycle system.
 The [PR #251 reproduction and validation narrative](https://github.com/caltseng/phalanx/pull/255)
 records the incident behind this ordering. The focused `test_shift.py` regressions verify the
 generated instructions and current-target routing, not mathematical enforcement of agent behavior.
+
+## Bounded performance work
+
+Ordinary performance targets have a **two-round optimization budget**, not an indefinite right to
+retain Building or Total for tuning. Record the baseline, each round's change and measured result
+under the same workload/environment, the remaining numeric miss, and a concrete follow-up with an
+accountable actor and next action. Reuse existing measurements rather than resetting the budget
+after a stage transition or reviewer change. Never claim a missed number was met.
+Explicit safety/SLO/resource-contract gates stay hard: name the exact gate and measurement/evidence,
+and fix it or raise the specific owner decision; two rounds cannot waive it. Independent exact-head
+review, required CI, trust, dependency integration and ready/report/draft ceilings also remain hard.
+
+After two ordinary tuning rounds, deliver the verified scope through the authorized current target
+and track the remaining miss as follow-up. If recorded criteria still require that number, first
+record the owner-approved classification/change through supported versioned controls; a progress
+note, this policy or elapsed time alone cannot silently weaken acceptance. Release Building after
+reviewed work as usual; release Total only through verified completion or safe stop, never by
+abandoning a live writer.
+
+### Applying classification to current timing work
+
+The owner classified the timing work on Phalanx #252 (envelope), #253 (API) and #258 (CLI) as ordinary
+optimization targets, not implicit safety/SLO/resource contracts. Keep their original numeric targets
+and all measured misses visible; any separately explicit safety/SLO/resource-contract requirement
+remains a hard gate. This classification does not assert that any number was achieved.
+
+Measurements already published when preparing this policy remain historical evidence, not proof
+for a later integrated head. Preserve the PR bodies, CI runs and diagnostic manifests:
+
+| Work | Recorded miss | Concrete follow-up after the budget |
+| --- | --- | --- |
+| [#252](https://github.com/caltseng/phalanx/pull/252), head `4852183e` | Slowest unit 10.549 s against strict under-10 s; [CI 45646662719](https://github.com/caltseng/phalanx/actions/runs/45646662719). One probe and all 313 expected unit IDs were verified. | Captain coordinates the remaining shift-CLI case with the existing CLI writer; retain the exact duration rather than asserting the threshold passed. |
+| [#253](https://github.com/caltseng/phalanx/pull/253), head `7e231933` | Five of six Windows reductions passed 40%; Python 3.14/shard 3 was 128 s versus a 125.4 s maximum (38.76%); [CI 45652410596](https://github.com/caltseng/phalanx/actions/runs/45652410596). | API writer preserves the 321-ID matched comparison; Captain tracks the 2.6 s remaining miss and phase-level diagnosis as follow-up, not a blocking forced tuning round. |
+| [#258](https://github.com/caltseng/phalanx/pull/258), earlier CLI-only evidence | Windows shift/writer durations 3.482/3.234 s (3.12), 2.919/3.423 s (3.14) against under-2 s; [CI 45649550659](https://github.com/caltseng/phalanx/actions/runs/45649550659). | CLI writer finishes the already-running frozen 326-ID combined diagnostic and reports actual numbers; Captain tracks residual CLI latency separately. Pending combined evidence is not a passed target or authority to merge other items. |
+
+The Captain/service operator, not another item's writer credential, reads fresh authenticated item
+state and uses these existing owner controls:
+
+- For queued work, `PATCH /v1/items/{item}/executions/{execution}` with `expected_version`,
+  `acceptance_criteria` and `steered_by` records before/after values.
+- For an attempt-free `delivery`/`waiting_for_external` execution, the same owner-authenticated
+  route permits **only** `acceptance_criteria` edits (plus attribution/version). This narrow
+  extension preserves lifecycle state, primary PR, candidate, writer, Total/Building, target and
+  publication mode. It is not a general active-scope/goal/dependency editor.
+- For an existing question, use the normal versioned `reply` and record classification plus the
+  concrete follow-up in its answer. An owner reply is not proof of checks or review.
+
+Retain every unrelated criterion verbatim. Annotate the ordinary target with baseline/round evidence,
+the measured remaining miss, the two-round stopping point and concrete follow-up; explicitly retain
+named hard gates. Use `Idempotency-Key` for retries. On HTTP 409, reread state/timeline before retrying,
+not a direct SQLite edit, fake result, cancellation or rerun. `work question --attempt` cannot create
+a question during a delivery wait with no attempt; do not invent an attempt or CLI option.
+If the execution already completed, preserve it and attach the classification/follow-up through
+existing audit/action records rather than pretending to edit the closed scope.
+
+For example, the authorized operator can use PowerShell with the existing private environment.
+Set `$item` to the verified item ID. Prepare `$approvedCriteria` as the **complete** approved criteria
+list from the exact `$view` read below, preserving every unrelated criterion and measured miss.
+Do not print the headers or credential environment:
+
+```powershell
+$api = $env:PHALANX_API_URL.TrimEnd('/')
+$headers = @{ Authorization = "Bearer $env:PHALANX_OWNER_TOKEN" }
+$view = Invoke-RestMethod "$api/v1/items/$item" -Headers $headers
+# Prepare $approvedCriteria from this exact $view.acceptance_criteria before continuing.
+$execution = $view.execution.id
+$route = "$api/v1/items/$item/executions/$execution"
+$body = @{ expected_version = $view.execution.version
+           acceptance_criteria = $approvedCriteria
+           steered_by = "captain" } | ConvertTo-Json -Depth 8
+$headers["Idempotency-Key"] = "ordinary-timing-$execution-$($view.execution.version)"
+$receipt = Invoke-RestMethod $route -Method Patch -Headers $headers `
+    -ContentType "application/json" -Body $body
+$timeline = Invoke-RestMethod "$route/timeline" -Headers $headers
+```
+
+Verify the inspected execution is still the intended attempt-free delivery wait before the PATCH.
+An uncertain response is not a new edit: retry the exact body/key or read the timeline first.
+Never refresh only the version while reusing criteria prepared from an older view.
+The existing queued-only rule applies on older APIs; HTTP 409 is not permission to modify storage.
+
+Verify the receipt's version and timeline before/after criteria and unchanged writer/allocations.
+Relay accepted classification and next action to that same retained writer through supported
+messaging. Fresh independent review must cover the effective scope at the current exact head;
+reuse existing exact-head approval only when it already covers that scope without unresolved
+findings. Re-read GitHub required checks/protections before merge. The tracked route requires API
+deployment before use; see [the exact adoption boundary](deployment.md#coordination-policy-adoption-boundary).
 
 ### Retained-session activation
 
