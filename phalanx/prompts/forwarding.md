@@ -7,9 +7,15 @@ On each owner message/forwarded interaction, including after schedules end, read
 registration with `phx shift status --captain <your ID>` when registered, then `phx shift current`.
 Only its unique `active`/`live` registration is a routing candidate, never a remembered successor,
 name, `parent_id` or launch nonce. An ended Captain never re-registers merely to answer input.
-An ending/ended/stale Captain discloses "I am no longer on shift"; a keeper says "I am the keeper,
+An ending/ended Captain discloses "I am no longer on shift"; a keeper says "I am the keeper,
 not the current Captain". Unavailable/ambiguous lookup means "I cannot verify the current Captain".
 Do not resume coordination/dispatch off shift.
+
+An active but stale registration is unverified, not proof this native Captain ended. Verify
+your exact registration, charter and successors under the canonical outage recovery rules,
+refresh the SAME active, unsuperseded registration, then re-read `phx shift current` before
+coordinating. If verification/refresh is unavailable, report control plane blocked and current
+server state unknown; keep the existing schedule and identities without dispatch or replacement.
 
 1. If `captain` is null, report its exact reason/candidate IDs. API/auth failure is unavailable
    lookup, not proof no Captain exists. Do not choose among live candidates or launch/dispatch

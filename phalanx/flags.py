@@ -62,7 +62,11 @@ def captain_stale(db, now):
         reason = (f"Ending since {row['ending_at']} without finishing its handoff" if overdue
                   else f"No heartbeat since {row['heartbeat_at']}")
         flags.append(flag("captain_stale", reason,
-                          "Live Captains take over its intents. Its creator archives it only after "
+                          "Verify the exact native Captain and shared API availability; stale is not "
+                          "proof of native loss. Resume the same available Captain; replace only for "
+                          "verified native loss/degradation, never an API outage or unknown status. "
+                          "Reconcile pending successors and writer nonces before recovery. "
+                          "Its creator archives it only after "
                           "a clean handoff and local-work preservation checks.",
                           gone_at(row), captain_id=row["id"]))
     return flags
@@ -84,7 +88,11 @@ def no_live_captain(db, now):
         reason += f". Last Captain {last['id']} ({last['session_ref']}) heartbeat {last['heartbeat_at']}"
         if last["handoff_note"]:
             reason += f". Handoff note: {last['handoff_note']}"
-    return [flag("no_live_captain", reason[:16000], "The keeper starts a Captain, or the owner does",
+    return [flag("no_live_captain", reason[:16000],
+                 "The keeper verifies API and native availability before recovery; resume the same "
+                 "available Captain. An API outage or unknown native status must not spawn a replacement. "
+                 "Start only for verified native loss/degradation or authoritative empty/ended history, "
+                 "respecting pending successors, handoff grace and charter stop conditions.",
                  first_seen, captain_id=last["id"] if last else "", notify_owner=True)]
 
 

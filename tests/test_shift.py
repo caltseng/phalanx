@@ -673,6 +673,81 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 shift.wake(api, self.charter, "captain", config=self.config)
             api.assert_not_called()
 
+    def test_outage_and_lost_heartbeat_reply_resume_same_stale_captain_and_writer(self):
+        started = shift.start(self.api, self.charter, "outage-captain", config=self.config)["captain"]
+        captain = started["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        writer = launched["writer"]
+        # Repeated failed wakes neither register successors nor abandon the writer.
+        unavailable = mock.Mock(side_effect=ConnectionError("shared API unavailable"))
+        for _ in range(4):
+            with self.assertRaisesRegex(ConnectionError, "shared API unavailable"):
+                shift.wake(unavailable, self.charter, captain, config=self.config)
+        self.assertTrue(all(call.args == (f"/v1/captains/{captain}",)
+                            for call in unavailable.call_args_list))
+        with write_transaction(self.database) as db:
+            db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                       ((datetime.now(UTC) - timedelta(minutes=20)).isoformat(), captain))
+        stale = shift.status(self.api, self.charter, captain)
+        self.assertTrue(stale["captain"]["stale"])
+        self.assertIsNone(self.api("/v1/captains/current")["captain"])
+        for kind in ("captain_stale", "no_live_captain"):
+            (warning,) = [flag for flag in stale["flags"] if flag["kind"] == kind]
+            self.assertIn("same available Captain", warning["recovery"])
+            self.assertIn("native", warning["recovery"])
+
+        def lose_reply(route, **options):
+            result = self.api(route, **options)
+            if options.get("method") == "PUT":
+                raise ConnectionError("heartbeat saved but reply lost")
+            return result
+
+        with self.assertRaisesRegex(ConnectionError, "reply lost"):
+            shift.wake(lose_reply, self.charter, captain, config=self.config)
+        recovered = shift.wake(self.api, self.charter, captain, config=self.config)
+        self.assertEqual(recovered["captain"]["id"], captain)
+        self.assertEqual(recovered["captain"]["session_ref"], started["session_ref"])
+        self.assertEqual(recovered["captain"]["created_at"], started["created_at"])
+        self.assertEqual(recovered["captain"]["state"], "active")
+        self.assertTrue(recovered["captain"]["live"])
+        self.assertEqual(recovered["captain"]["successors"], [])
+        self.assertEqual(self.api("/v1/captains/current")["captain"]["id"], captain)
+        replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        self.assertEqual(replay["writer"]["id"], writer["id"])
+        self.assertEqual(replay["writer"]["nonce"], writer["nonce"])
+        self.assertEqual(replay["writer"]["attempt_id"], writer["attempt_id"])
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM captains").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
+
+    def test_outage_policy_reaches_wakes_handoffs_keeper_and_retained_routing(self):
+        for name in ("captain", "keeper"):
+            text = " ".join(shift.prompt(name).split())
+            with self.subTest(prompt=name):
+                self.assertIn("control plane blocked", text)
+                self.assertIn("current server state unknown", text)
+                self.assertIn("same", text.lower())
+        wake = shift.prompt("wake")
+        self.assertIn("*Shared API/control-plane outages*", wake)
+        self.assertIn("phx shift prompt captain", wake)
+        self.assertIn("five-minute", shift.prompt("captain"))
+        self.assertIn("*Shared API/control-plane outages*", shift.prompt("keeper"))
+        captain = shift.start(self.api, self.charter, "handoff-policy")["captain"]["id"]
+        handoff = shift.handoff(self.api, self.charter, captain, "Normal age rotation", "phx shift")
+        self.assertIn("Shared API/control-plane outages", handoff["kickoff"])
+        self.assertIn("never trigger a safety handoff", " ".join(handoff["kickoff"].split()))
+        keeper = " ".join(shift.prompt("keeper").split())
+        self.assertIn("Apply this check to all non-ended stale registrations", keeper)
+        self.assertIn("fresh native evidence confirms the exact Captain is stopped", keeper)
+        self.assertIn("including after an ended Captain", keeper)
+        self.assertIn("never duplicate it", keeper)
+        forwarding = " ".join(shift.prompt("forwarding").split())
+        self.assertIn("An active but stale registration is unverified", forwarding)
+        self.assertIn("refresh the SAME active, unsuperseded registration", forwarding)
+        self.assertNotIn("An ending/ended/stale Captain discloses", forwarding)
+
     def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
         captain = " ".join(shift.prompt("captain").split())
         keeper = " ".join(shift.prompt("keeper").split())
@@ -688,7 +763,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn("dependency/external waits", captain)
         for signal in ("three failed actions in a row", "self-raised deviation flag",
                        "missed heartbeat noticed on waking"):
-            self.assertIn(signal, captain)
+            self.assertIn(signal, captain.lower())
 
     def test_keeper_preserves_accountability_and_adoption_without_replacing_live_work(self):
         keeper = " ".join(shift.prompt("keeper").split())
