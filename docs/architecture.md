@@ -140,9 +140,9 @@ Writer bindings have no timed expiry. Nonce replay, expected versions and stoppe
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
 
 The writer self-review stage is not a second independent PR reviewer. GitHub reviews,
-checks and repository rules still apply. The generated writer instructions require
-applicable independent final exact-head approval, green required CI, required GitHub reviews
-and repository/dependency/actual-main gates **before** merge or auto-merge activation.
+checks and repository rules still apply. The generated writer instructions require the
+[merge decision gates](writer-operations.md#merge-decision-before-auto-merge) **before**
+merge or auto-merge activation.
 Publication can finish first with auto-merge off and the same writer waiting in delivery.
 This prompt boundary adds no engine approval predicate, review agent or lifecycle stage.
 Self-review and previous-head/content-only approval cannot satisfy independent final review.

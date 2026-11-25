@@ -71,9 +71,9 @@
   <details open>
     <summary>Publication and delivery</summary>
     <p>Publish one primary PR with an explicit target base. Ready-only work is never merged
-      by its writer. Current checked-in work may merge or enable GitHub auto-merge only after
-      applicable independent final exact-head approval, green required CI, required GitHub
-      reviews, repository rules and dependency/actual-main gates pass. Publication may finish
+      by its writer. Current checked-in work may merge or enable GitHub auto-merge only after the
+      <a href="docs/writer-operations.md#merge-decision-before-auto-merge">merge decision gates</a>
+      pass. Publication may finish
       first, with auto-merge off and the same writer retained in delivery. These writer
       instructions are not an engine-enforced approval gate.
       Trusted local checks are flags, not a Phalanx gate.</p>

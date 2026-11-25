@@ -61,6 +61,13 @@ extra Phalanx gate. See [publication and delivery](direct-sessions.md#pr-publica
 
 ### Merge decision before auto-merge
 
+Independent review is required by the target repository's instructions, the charter, or
+Captain/owner steering on the item; use the reviewer designated by that policy or steering.
+If none requires independent review, required CI, GitHub reviews and repository rules remain
+the gates, not an invented independent-review wait. If required approval is pending, record
+the missing approval/reviewer with `work progress`; if no reviewer is assigned or reachable,
+use `work question` with that blocker and handoff context.
+
 Before either direct merge or auto-merge activation, read fresh `work status` and GitHub facts.
 Require the current execution's `checked_in` target, ready publication, no pending stop,
 repository-specific merge-owner authority, applicable independent final approval of the
@@ -85,29 +92,9 @@ predicate**. The reconciler still observes GitHub; its ready milestone or a GitH
 without required reviews does not certify independent final-head review. There is no new review
 agent, watchdog, scheduler, state field, API/CLI contract or lifecycle system.
 
-### PR #251 reproduction and validation
-
-On 2026-11-25 the [PR #251](https://github.com/caltseng/phalanx/pull/251) GitHub timeline recorded
-`auto_merge_enabled` at **14:01:17 UTC**, then `auto_merge_disabled` at **14:05:07 UTC**.
-The original commit was `8d95d3c6f9afeaf3df588b88f1a709d6c9f4c1f1`; later commits
-`4e298106af2a70d6903fcbc7178f8774e8a8f2a4` (14:06:41 UTC) and
-`50c190dd79fbb0ae2554977177bb2156ad47cfc1` (14:11:57 UTC) changed the head.
-At inspection, GitHub listed no reviews and the PR description still named the original
-reviewed head. That is not evidence of independent final approval of the later head; GitHub
-review absence alone also cannot establish whether an out-of-band review happened.
-The observed enable/disable order and later rework explain why publication cannot be the
-instruction to activate auto-merge, even if an earlier content review passed.
-
-The local reproduction needs no GitHub mutation: call `shift.kickoff` for ready-mode
-`checked_in` work. Previously its publication clause said to enable auto-merge immediately,
-and its delivery clause repeated target-only activation. `tests/test_shift.py` now checks that
-publication can return `pr_url` and retain delivery waiting, both clauses route through the
-same pre-activation decision, and that decision distinguishes independent exact-head approval,
-required CI/reviews, authority and integration from self-review/stale PASS. Target-steering
-cases exercise the execution target rather than the original intake target; draft regressions
-retain their ceiling. Run `python -m unittest discover -s tests -p test_shift.py`.
-These tests verify the generated instruction boundary, not mathematical enforcement of agent
-behavior or an unimplemented engine gate.
+The [PR #251 reproduction and validation narrative](https://github.com/caltseng/phalanx/pull/255)
+records the incident behind this ordering. The focused `test_shift.py` regressions verify the
+generated instructions and current-target routing, not mathematical enforcement of agent behavior.
 
 ### Retained-session activation
 

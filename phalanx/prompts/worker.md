@@ -90,6 +90,13 @@ to enable auto-merge immediately. Publication may create/update the PR and submi
 before independent final-head review or required checks finish. Keep this same writer and Total
 allocation while waiting; no extra reviewer agent, watchdog or lifecycle is required.
 
+Independent review is required by the target repository's instructions, the charter, or
+Captain/owner steering on the item; use the reviewer designated by that policy or steering.
+If none requires independent review, required CI, GitHub reviews and repository rules remain
+the gates, not an invented independent-review wait. If required approval is pending, record
+the missing approval/reviewer with `$work progress`; if no reviewer is assigned or reachable,
+use `$work question` with that blocker and handoff context.
+
 Before **either** merging or enabling auto-merge, re-read `$work status` and fresh GitHub facts.
 Proceed only when all of these conditions hold:
 

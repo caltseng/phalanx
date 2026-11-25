@@ -103,9 +103,8 @@ The writer commits and reviews the candidate, then pushes the deterministic item
 `phalanx/<sha256 of item ID>`. It opens one PR with the explicit target base or reuses the
 branch's open PR. For ready publication it marks a draft ready; publication may complete
 before merge gates pass, with auto-merge off and the same writer retained in delivery.
-It merges or enables GitHub auto-merge only for the current `checked_in` target after
-applicable independent final exact-head approval, green required CI, required GitHub reviews,
-repository rules and dependency/actual-main gates pass. For `ready_for_check_in` it leaves
+It merges or enables GitHub auto-merge only for the current `checked_in` target after the
+[merge decision gates](writer-operations.md#merge-decision-before-auto-merge) pass. For `ready_for_check_in` it leaves
 merging to the owner. Every PR
 description ends with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`.
 The successful publication result supplies `pr_url`; it must belong to the registered repo
@@ -373,7 +372,7 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | # | Decision |
 | --- | --- |
 | D1 | Writers push and open their own PRs. Repository rules apply; Phalanx reconciles one primary PR. |
-| D2 | Writers merge or enable GitHub auto-merge only for current checked-in targets after applicable independent final-head review, required CI/reviews, repository and dependency/actual-main gates pass. Accept any permitted merge method. |
+| D2 | Writers merge or enable GitHub auto-merge only for current checked-in targets after the [merge decision gates](writer-operations.md#merge-decision-before-auto-merge) pass. Accept any permitted merge method. |
 | D3 | Trusted local checks are reconciler flags, not a Phalanx gate. Repository CI gates merging. |
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |

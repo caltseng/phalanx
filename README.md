@@ -96,9 +96,8 @@ Publication records one primary PR. **Publishing a PR or releasing a writer is d
 from verified delivery**: during normal delivery waits the writer stays registered,
 fixes actionable problems on that PR and follows its current target.
 
-- **`checked_in` (default):** the writer merges or enables GitHub auto-merge only after
-  applicable independent final exact-head approval, green required CI, required GitHub reviews,
-  repository rules and dependency/actual-main gates pass.
+- **`checked_in` (default):** the writer merges or enables GitHub auto-merge only after the
+  [merge decision gates](docs/writer-operations.md#merge-decision-before-auto-merge) pass.
   Completion requires the reconciler to observe a verified merge into the target branch.
 - **`ready_for_check_in`:** completion requires a ready PR on the target base with the
   policy's required checks satisfied, actionable feedback addressed and conflicts resolved.

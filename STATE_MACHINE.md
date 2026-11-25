@@ -58,9 +58,9 @@ flowchart TD
 
 For ready publication the writer marks a reused draft ready and may report its URL before
 merge gates pass, retaining the same writer in delivery with auto-merge off. Merge or enable
-auto-merge **only** for the current `checked_in` target after applicable independent final
-exact-head approval, green required CI, required GitHub reviews, repository rules and
-dependency/actual-main gates pass. This is a writer instruction, not an engine approval gate;
+auto-merge **only** for the current `checked_in` target after the
+[merge decision gates](docs/writer-operations.md#merge-decision-before-auto-merge) pass.
+This is a writer instruction, not an engine approval gate;
 self-review or an observed ready milestone is not independent final approval.
 A `ready_for_check_in` item is never merged by its writer. Steering
 between PR targets is allowed while open, including delivery; the writer re-reads the target
