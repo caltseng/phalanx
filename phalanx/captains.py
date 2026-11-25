@@ -20,6 +20,7 @@ STALE = timedelta(minutes=15)
 # A Captain still ending this long after it started its handoff is treated as dead.
 ENDING_LIMIT = timedelta(minutes=30)
 IDLE_WITH_WORK = timedelta(minutes=30)
+REINFORCEMENT = timedelta(minutes=90)
 Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 CaptainState = Literal["active", "ending", "ended"]
 # A Captain moves only forward: active, then ending, then ended.
@@ -64,6 +65,10 @@ class Action(Payload):
     captain_id: Identifier
     action: Short
     reason: Text
+
+
+class ReinforcementAcknowledgement(Payload):
+    interval: Annotated[int, Field(strict=True, ge=1)]
 
 
 class SessionArchive(Payload):
@@ -195,6 +200,7 @@ def view(db, row, now=None, session_reports=None):
             session_key(row["session_ref"]), "unverified"),
         "parent_id": row["parent_id"], "state": row["state"], "wake_count": row["wake_count"],
         "compaction_count": row["compaction_count"],
+        "reinforcement": reinforcement(row, now),
         "focus": json.loads(row["focus_json"]), "sessions": json.loads(row["sessions_json"]),
         "handoff_note": row["handoff_note"], "created_at": row["created_at"],
         "heartbeat_at": row["heartbeat_at"], "ending_at": row["ending_at"], "live": is_live(row, now),
@@ -212,6 +218,24 @@ def view(db, row, now=None, session_reports=None):
                  AND (a.outcome IS NULL OR a.outcome='blocked')
                ORDER BY a.updated_at, w.ended_at, w.id LIMIT 100""", (row["id"],))],
     }
+
+
+def reinforcement(row, now):
+    interval = max(0, (now - datetime.fromisoformat(row["created_at"])) // REINFORCEMENT)
+    return {"interval_minutes": 90, "interval": interval,
+            "acknowledged_interval": row["reinforced_interval"],
+            "due": row["state"] == "active" and interval > row["reinforced_interval"]}
+
+
+def acknowledge_reinforcement(db, captain_id, payload):
+    row = captain_row(db, captain_id)
+    now = datetime.now(UTC)
+    current = reinforcement(row, now)
+    if payload.interval > max(current["interval"], current["acknowledged_interval"]):
+        raise intake.Conflict("Cannot acknowledge a future reinforcement interval")
+    db.execute("UPDATE captains SET reinforced_interval=max(reinforced_interval, ?) WHERE id=?",
+               (payload.interval, captain_id))
+    return reinforcement(captain_row(db, captain_id), now)
 
 
 def successor_name(captain_id):
@@ -317,6 +341,11 @@ def create(request: Request, body: CaptainRegistration, key: Key = None):
 @router.put("/captains/{captain_id}", dependencies=[Depends(require_coordinator)])
 def update(request: Request, captain_id: Identifier, body: Heartbeat):
     return run(request, heartbeat, captain_id, body, write=True)
+
+
+@router.put("/captains/{captain_id}/reinforcement", dependencies=[Depends(require_coordinator)])
+def reinforce(request: Request, captain_id: Identifier, body: ReinforcementAcknowledgement):
+    return run(request, acknowledge_reinforcement, captain_id, body, write=True)
 
 
 @router.post("/items/{item_id}/captain-actions", status_code=201, dependencies=[Depends(require_coordinator)])

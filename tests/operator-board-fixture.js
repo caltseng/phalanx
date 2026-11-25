@@ -71,6 +71,7 @@
   let pending;
   let pendingSignal;
   const calls = [];
+  const openedReports = [];
   const detailData = (item, cursor) => ({
     item, attempt: "att2",
     question: item.id === "wait" ? { prompt: "Which target?", options: ["staging", "prod"], proposedDefault: "staging" } : null,
@@ -86,6 +87,7 @@
   let openReady = false;
 
   const source = {
+    openReport(output) { openedReports.push(output); },
     concurrencyControl: document.querySelector("#operator-settings"),
     async list({ kind, cursor, limit }) {
       calls.push([kind, cursor, limit]);
@@ -208,6 +210,20 @@
     if (priorTheme) document.documentElement.dataset.theme = priorTheme;
     else delete document.documentElement.dataset.theme;
   }
+  const addListener = EventTarget.prototype.addEventListener;
+  const removeListener = EventTarget.prototype.removeEventListener;
+  let rowClickRegistrations = 0;
+  let rowClickRemovals = 0;
+  let perRowRegistrations = 0;
+  EventTarget.prototype.addEventListener = function(type, listener, options) {
+    if (this === root && type === "click") rowClickRegistrations++;
+    if (type === "click" && this.matches?.(".line, button.title, button[data-report]")) perRowRegistrations++;
+    return addListener.call(this, type, listener, options);
+  };
+  EventTarget.prototype.removeEventListener = function(type, listener, options) {
+    if (this === root && type === "click") rowClickRemovals++;
+    return removeListener.call(this, type, listener, options);
+  };
   let unmount = window.PhalanxOperatorBoard.mount(root, source);
 
   try {
@@ -324,6 +340,8 @@
     await tick();
     assert(item("draft").closest("li").textContent.includes("draft published"), "Draft delivery is not labeled ready");
     assert(item("run").closest("li").textContent.includes("head drift"), "Row carries its flag chip");
+    assert(rowClickRegistrations === 1 && perRowRegistrations === 0,
+      "Row clicks use one mount listener, not new listeners on rebuilt rows");
     assert(item("run").closest("li").textContent.includes("unconfirmed"), "Launching writer reads as unconfirmed");
     const captainLine = () => section("captains").querySelector(".captains li");
     assert(captainLine().textContent.includes("wakes 3") && captainLine().textContent.includes("compactions 0") &&
@@ -464,6 +482,20 @@
     item("run").focus();
     item("run").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert(!detail() && document.activeElement === item("run"), "Escape collapses and keeps focus");
+    item("run").closest(".line").querySelector(".stage").click();
+    await tick();
+    assert(detail(), "Nested non-control row cells delegate to the row toggle");
+    item("run").closest(".line").querySelector(".stage").click();
+    assert(!detail(), "Delegated row cells toggle exactly once");
+    const linkClick = new MouseEvent("click", { bubbles: true, cancelable: true });
+    const prLink = item("run").closest(".line").querySelector("a.pr");
+    prLink.addEventListener("click", event => event.preventDefault(), { once: true });
+    prLink.dispatchEvent(linkClick);
+    assert(!detail(), "Native row links do not toggle details");
+    item("fail").closest("li").querySelector("[data-report]").click();
+    assert(openedReports.length === 1 && openedReports[0] === failure.output &&
+      item("fail").getAttribute("aria-expanded") === "false",
+    "Delegated report button opens the current output without toggling its row");
     item("done").click();
     await tick();
     const done = root.querySelector("#detail-done")?.textContent || "";
@@ -487,18 +519,28 @@
     refresh();
     await tick();
     assert(status() === "Connected." && !root.textContent.includes("Disconnected"), "Refresh recovers");
+    assert(rowClickRegistrations === 1 && perRowRegistrations === 0,
+      "Renders and refreshes never register row listeners");
     unmount();
+    assert(rowClickRemovals === 1, "Unmount removes the delegated row listener");
     unmount = window.PhalanxOperatorBoard.mount(root, source);
+    assert(rowClickRegistrations === 2, "Remount registers one fresh row listener");
     settingsSummary.click();
     await tick();
     assert(concurrency.open, "Reusing canonical settings after unmount does not duplicate toggle handlers");
     concurrency.open = false;
+    item("run").click();
+    await tick();
+    assert(item("run").getAttribute("aria-expanded") === "true",
+      "Remounted row toggles once without an old delegated listener");
     result.textContent = "PASS";
     result.dataset.status = "passed";
   } catch (error) {
     result.textContent = "FAIL – " + error.message;
     result.dataset.status = "failed";
   } finally {
+    EventTarget.prototype.addEventListener = addListener;
+    EventTarget.prototype.removeEventListener = removeListener;
     const preview = new URLSearchParams(location.search);
     if (!preview.has("preview")) unmount();
     else {

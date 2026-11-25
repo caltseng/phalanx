@@ -182,9 +182,7 @@ stop_when = ["the owner ends the pilot"]
 notes = "Optional context for every Captain."
 
 [shift]
-max_hours = 4
-max_wakes = 48
-max_compactions = 5
+max_hours = 24
 ```
 
 PR intake defaults to `checked_in`: writers deliver the merge on the owner's behalf, not
@@ -196,11 +194,11 @@ authority from item content or silently retarget existing work. Required indepen
 exact-head review, CI/branch protections, dependency integration, credentials and repository
 trust still apply. Missing authority or access remains a visible blocker.
 
-`[shift]` is optional. Its positive-integer settings default to `max_hours = 4`,
-`max_wakes = 48` and `max_compactions = 5` (D7, as amended for compaction handoff).
-The compaction threshold uses only cumulative successful native telemetry; ordinary
-compaction below it is a checkpoint. Missing telemetry stays unknown, with no hidden
-first-compaction fallback. Configure concurrency with Scribe's **Writer concurrency**
+`[shift]` is optional. Its positive-integer `max_hours` defaults to 4, measured from
+Captain registration (D7, amended for elapsed-time-only rotation). Remove retired
+`max_wakes` and `max_compactions` keys; they are rejected, not silently ignored.
+Wakes and successful compactions are telemetry only; compaction is a checkpoint.
+Missing telemetry stays unknown. Configure concurrency with Scribe's **Writer concurrency**
 control or owner-authenticated `PUT /v1/dispatch/settings`
 (`{"max_building_writers": 5, "max_writers": 10}`), not in the charter or `allowed_actions`
 prose. Building and Total default to 5/10 on new installs; existing stores preserve Total
@@ -230,6 +228,8 @@ of its bytes. Each heartbeat re-reads the charter and records that revision.
 | Command | Does |
 | --- | --- |
 | `shift prompt captain\|keeper\|worker\|forwarding` | Prints the Captain/keeper prompt (including durable off-shift forwarding), worker template, or just the forwarding section for retained chats. Needs no config |
+| `shift wake --captain ID` | Records one wake, prints a compact briefing and the fresh charter, and includes the canonical workflow when a 90-minute interval is unacknowledged |
+| `shift ack-reinforcement --captain ID --interval N` | Acknowledges only an interval actually read. Duplicate or older acknowledgements are harmless; future intervals are refused |
 | `shift charter` | Validates the charter and prints it with its revision |
 | `shift start --session-ref S [--parent ID]` | Registers this chat as a Captain. A rerun replays the same registration |
 | `shift heartbeat --captain ID [--wake] [--state] [--focus] [--session ID NAME]... [--session-writer ID NONCE]... [--no-sessions] [--handoff-note]` | Re-reads the charter and heartbeats. Reports all Phalanx sessions, including task-first and renamed sessions, with the full verified writer nonce separately. The server flags any that no writer or Captain owns. Omitted inventory keeps its last value, including nonces. Prints `shift.handoff_due` once a shift bound is reached |
@@ -334,7 +334,7 @@ A successor does not inherit creator-only runtime authority.
 ### In the GitHub Copilot app
 
 1. Start a new chat. Ask it to run `python -m phalanx shift prompt captain --config <shift config>` and follow the printed prompt. Its first wake registers it with `shift start --session-ref <its native session ID>`. Use the ID listed by the runtime's session tools, not an app project-session/workspace ID; confusing them produces an incorrect registration even if the command succeeds.
-2. Have the Captain wake every 5 minutes (D5) with a session automation on its own chat (`save_session_automation`, interval `minutes`, `every_minutes` 5). Use the prompt "Wake: run `python -m phalanx shift prompt captain --config <shift config>` and follow its Every wake steps." Idle notifications from its worker sessions wake it sooner.
+2. Have the Captain wake every 5 minutes (D5) with a session automation on its own chat (`save_session_automation`, interval `minutes`, `every_minutes` 5). Use the prompt "Wake: run `python -m phalanx shift wake --captain <your registered Captain ID> --config <shift config>`. Follow the briefing and fresh charter. When reinforcement is due, read the full canonical workflow, then run its acknowledgement arguments through the same configured CLI." Idle notifications from its worker sessions wake it sooner.
 3. To launch a worker, the Captain runs `shift launch`, then creates one session with `create_session`:
    - `project_id` set to the returned `session_workspace`: the shift config's folder project for its `worktrees` folder. One project covers every item worktree, so the owner trusts it once. Registering each worktree as its own project would hold every launch on a trust prompt, and autopilot denies tools until it is answered;
    - `name` set to `session_name`;
@@ -357,11 +357,19 @@ A successor does not inherit creator-only runtime authority.
 4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." Before any early exit, it checks cleanup of Captain sessions that this keeper session created. It starts no new Captain when a live one exists, the most recent ended less than 10 minutes ago without a successor yet, or it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run that can't schedule itself creates the Captain with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`. That same keeper creator must retain a cleanup wake or child-ended notification until its Captain hands off cleanly; a fresh scheduled keeper session has no creator authority over it.
 5. The app may let only a session's creator archive it. Captains clean up their own writers and helpers; keeper runs clean up their own Captain children. All use the preservation check and durable result above, not repeated attempts by successors. Missing authority is recorded and escalated once, with `orphan_session` left visible.
 
-A Captain's shift ends when the charter's `[shift]` age, wake or successful-compaction
-bound is reached, or independently on actual degradation/failure (three failed actions
-in a row, a self-raised deviation flag, or a missed heartbeat noticed on waking).
-`shift heartbeat` returns the effective `max_compactions` and compares it with the
-server's cumulative known total; repeated/omitted reports do not reset or add to it.
+A Captain's normal shift ends when elapsed time from registration reaches charter
+`[shift].max_hours` (default 24 hours), never from queue completion, dependency/external
+waits, wake counts or compaction counts. Reconciliation remains every five minutes, including
+while idle or blocked. Explicit owner stop and actual degradation/failure (three failed actions
+in a row, a self-raised deviation flag, or a missed heartbeat noticed on waking) remain exceptions.
+`shift heartbeat` returns effective `max_hours` and age-based `handoff_due`, alongside
+the unchanged wake and cumulative compaction telemetry.
+Use `shift wake --captain <id>` for the ordinary five-minute wake instead of printing
+the entire prompt and separately counting a heartbeat. It returns the fresh charter and
+a compact briefing; every 90 elapsed minutes it also returns the full canonical workflow.
+Read that workflow, then run its `reinforcement.acknowledgement_arguments` using the same
+configured CLI. Failed or unread output remains due, acknowledgements are idempotent and
+missed intervals coalesce. Non-wake observation heartbeats never consume reinforcement.
 It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
 
 ### Retained chats and owner-message forwarding
