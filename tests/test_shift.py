@@ -240,9 +240,9 @@ class CharterTest(unittest.TestCase):
              "acceptance_criteria": ["Aspirational 40% improvement; two rounds, report misses"],
              "execution": {"id": "execution", "state": {"target": "checked_in"}}},
             "worktree", "nonce", "phx work", "main")
+        review_policy = Path(__file__).resolve().parents[1] / ".agents" / "skills" / "pr-review" / "SKILL.md"
         for name, prompt in (("writer", worker), ("captain", shift.prompt("captain")),
-                             ("review", (ROOT / ".agents" / "skills" / "pr-review" / "SKILL.md").read_text(
-                                 encoding="utf-8"))):
+                             ("review", review_policy.read_text(encoding="utf-8"))):
             text = " ".join(prompt.split())
             with self.subTest(protocol=name):
                 for clause in ("test-set identity", "remaining numeric miss", "no redundant approval",
