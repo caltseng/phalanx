@@ -64,6 +64,10 @@ Local credential/pending-intent files and OS locks support launch replay and exc
 they are not local execution journals. Unpushed work remains on its host.
 Writer display names are task-first and may collide or change. Verify the full nonce
 in kickoff/metadata and the registered native ID; titles are not writer identity.
+API transport loss does not gate physical work under that same live writer's verified held
+allocation and authorization. The [outage protocol](writer-operations.md#control-plane-outages)
+defers bookkeeping through existing fenced results and GitHub observations; it adds no local
+queue, offline transitions or admission bypass.
 
 ## Intake and supported commands
 

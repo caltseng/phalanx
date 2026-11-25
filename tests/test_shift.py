@@ -224,6 +224,39 @@ class CharterTest(unittest.TestCase):
                 self.assertIn("standing owner deployment authority", text)
                 self.assertIn("Source merge is not a deployed result", text)
 
+    def test_outage_continuity_preserves_confirmed_capacity_and_explicit_ceilings(self):
+        for target, mode in (("checked_in", "ready"), ("ready_for_check_in", "ready"),
+                             ("checked_in", "draft"), ("report", "ready")):
+            with self.subTest(target=target, mode=mode):
+                prompt = shift.kickoff(
+                    {"id": "item", "repository_id": "repo", "goal": "Deliver",
+                     "execution": {"id": "execution",
+                                   "state": {"target": target, "publication_mode": mode}}},
+                    "worktree", "nonce", "phx work", "main")
+                text = " ".join(prompt.split())
+                self.assertIn(f"Target: {target}", text)
+                self.assertIn(f"Publication mode: {mode}", text)
+                for clause in (
+                    "same live writer's last confirmed held allocation",
+                    "continue development, local validation, review, publication and authorized check-in",
+                    "New/unconfirmed registration or Building acquisition still requires server confirmation",
+                    "uncertain result/release could have relinquished Building or ended the writer",
+                    "Honor every known stop/cancel instruction, `state.stopping`, ended writer and HTTP 401",
+                    "HTTP 403 is an authorization denial",
+                    "Preserve explicit ready-only/report targets and draft ceilings",
+                    "never blindly replay with a fresh version/key",
+                    "let the reconciler record the actual merge",
+                    "Do not claim a report stored or an execution complete without a receipt",
+                ):
+                    self.assertIn(clause, text)
+                self.assertNotIn("re-read `phx work status` and fresh GitHub facts", text)
+                self.assertIn("a fresh status or progress receipt is not itself a merge gate", text)
+                self.assertIn("current exact head has applicable independent final-head approval", text)
+                self.assertIn("exact-head guard", text)
+        captain = " ".join(shift.prompt("captain").split())
+        self.assertIn("must not gate already-authorized work under verified held allocations", captain)
+        self.assertIn("Do not launch an unconfirmed admission", captain)
+
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
                 ("Fix writer recovery", "Fix writer recovery"),

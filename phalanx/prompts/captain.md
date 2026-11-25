@@ -92,6 +92,16 @@ native session or person is a universal dependency. Reuse valid exact-head evide
 change with no unresolved actionable findings instead of requesting redundant reviews. Preserve
 genuine GitHub required reviewers/protections; old routing preferences are not exclusive gates.
 
+For existing writers, follow `docs/writer-operations.md#control-plane-outages`: best-effort API
+status, heartbeat, progress, handoff and result transport must not gate already-authorized work
+under verified held allocations. Use native/session and fresh GitHub evidence to coordinate
+continued development, validation, publication and check-in; distinguish actual effects from
+unpersisted API updates. Do not launch an unconfirmed admission, infer Building headroom,
+replace a healthy writer or revive an ended credential. Known stop/cancel/401 and explicit
+ready-only/report/draft ceilings remain binding. Surface genuine authority/capacity uncertainty,
+then reconcile accepted versions, pinned attempts and actual GitHub merges when transport returns;
+never fabricate persistence or blindly replay a different mutation.
+
 On material native-session, stage/result, Building release, PR merge and release/deployment events,
 run a bounded reconciliation/refill pass now rather than waiting for the scheduled wake. Refresh
 status and native evidence, recover uncertain intents, prefer waiting PR fixes, then launch eligible

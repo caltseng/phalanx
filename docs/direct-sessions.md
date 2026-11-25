@@ -79,6 +79,10 @@ merging. Config, credentials, worktrees, result artifacts and logs stay on the h
 One writer retains the item across stages, with a new fenced attempt per stage. A result
 that leaves runnable work opens the next attempt under that writer. Input waits, external
 waits, retry delays and dependency waits retain the writer; `phx work next` resumes when ready.
+An API outage alone does not stop authorized physical work under that same writer's confirmed
+held allocation. Deferred stage bookkeeping is not an offline transition or a fresh admission;
+follow [control-plane outage recovery](writer-operations.md#control-plane-outages), preserving
+known stops, credential revocation, capacity and publication ceilings.
 
 ## Evidence submission
 
