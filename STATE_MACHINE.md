@@ -144,7 +144,8 @@ stateDiagram-v2
 | Finalize report | Persist terminal intent, then store/reuse exact artifact and close atomically. Retry independently of pause. |
 | Rerun | New linked execution with explicit target; preserve old history and reconcile existing outputs before repeating effects. |
 
-Delivery retains a live writer even without an open attempt. Cancellation and forced failure
+Delivery retains a live writer even without an open attempt, including while awaiting an owner
+answer in `waiting_for_input` and queued after its reply. Cancellation and forced failure
 therefore wait for its Captain to reconcile effects, stop the exact session and withdraw it
 with `stopped=true`; withdrawal confirms the stop even when no attempt is open. An external
 wait with neither an active attempt nor an open writer can finalize immediately. A verified

@@ -1045,6 +1045,37 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(route + "/result", token, {**body, "expected_version": stopped["version"]}, 409)
         self.assertEqual(self.ok("/v1/writer", token)["state"], stopped["state"])
 
+    def test_delivery_input_wait_cancel_and_failure_retain_writer_until_stop_or_verified_merge(self):
+        for action, disposition in (("cancel", "cancelled"), ("close-failure", "failed")):
+            with self.subTest(action=action):
+                publication, token = self.publish("checked_in")
+                delivery = self.submit(token, publication, pr_url=PR_URL)
+                asked = self.submit(token, delivery, outcome="needs_input", question={
+                    "prompt": "Owner authority missing: choose grant or defer",
+                    "options": ["Grant scoped authority", "Defer"],
+                    "handoff": "Resume this same writer after the owner reply"})
+                route = f"/v1/items/{asked['item_id']}/executions/{asked['id']}"
+                stopped = self.ok(route + "/" + action, OWNER,
+                                  {"expected_version": asked["version"], "reason": "Owner stop"})
+                self.assertEqual((stopped["state"]["status"], stopped["state"]["stopping"],
+                                  stopped["state"]["pending_output"]),
+                                 ("waiting_for_external", disposition, None))
+                current = self.ok("/v1/writer", token)
+                self.assertEqual(current["writer"], asked["writer"])
+                self.register(asked["item_id"], asked["id"], code=409)
+                if action == "cancel":
+                    withdrawn = self.ok(route + "/writer/withdraw", RUNNER, {
+                        "captain_id": self.captain["id"], "writer_id": asked["writer"]["id"],
+                        "stopped": True, "reason": "Exact native writer stopped; effects reconciled"})
+                    self.assertEqual(withdrawn["state"]["pending_output"], "cancelled")
+                    self.assertIsNotNone(withdrawn["writer"]["ended_at"])
+                    self.ok("/v1/writer", token, code=401)
+                else:
+                    merged = self.observe(delivery, state="closed", merged=True, merge_commit=MERGE)
+                    self.assertEqual(merged["state"]["status"], "completed")
+                    self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+                    self.ok("/v1/writer", token, code=401)
+
     def test_delivery_criteria_steering_refuses_mixed_active_stopping_and_terminal_work(self):
         publication, token = self.publish("ready_for_check_in")
         route = f"/v1/items/{publication['item_id']}/executions/{publication['id']}"

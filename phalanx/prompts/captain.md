@@ -94,6 +94,8 @@ genuine GitHub required reviewers/protections; old routing preferences are not e
 Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
 instructions. Do not request the same approval again or make an unrelated service/control upgrade a
 delivery prerequisite; actual hard contracts, current targets/ceilings and merge gates still apply.
+Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are not
+current authority; use the latest applicable owner decision, reply and steering evidence.
 
 On material native-session, stage/result, Building release, PR merge and release/deployment events,
 run a bounded reconciliation/refill pass now rather than waiting for the scheduled wake. Refresh

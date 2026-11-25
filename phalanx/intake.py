@@ -465,7 +465,7 @@ def request_stop(db, item_id, execution_id, payload, event):
     details = {"reason": payload.reason}
     updated = apply(db, row, state, event, details=details)
     # Delivery writers can still push or merge without an open attempt.
-    if state.status == Status.WAITING_FOR_EXTERNAL:
+    if updated["state"]["stopping"] is not None and state.status != Status.RUNNING:
         active = db.execute(
             "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
         ).fetchone()

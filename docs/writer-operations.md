@@ -132,6 +132,9 @@ Explicit current owner direction to check in ordinary improvements supersedes co
 historical instructions; preserve its attribution in the existing timeline/reply evidence and
 deliver once the actual gates pass. Do not silently restore an obsolete owner-only merge rule,
 ask for the same approval again, or make an unrelated service/control upgrade a delivery prerequisite.
+Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are
+historical context, not current authority: prefer the latest applicable owner decision, reply
+and steering evidence rather than renewing an obsolete wait.
 This does not reclassify explicit hard contracts or waive correctness, exact-head independent
 review, required CI, branch protections, sole-writer ownership or current target/publication ceilings.
 

@@ -348,7 +348,7 @@ def decide(
         return _pr_observed(state, evidence)
     if event in {Event.CANCEL, Event.CLOSE_FAILURE}:
         status = Status.CANCELLED if event is Event.CANCEL else Status.FAILED
-        if state.status in {Status.RUNNING, Status.WAITING_FOR_EXTERNAL}:
+        if state.status in {Status.RUNNING, Status.WAITING_FOR_EXTERNAL} or state.stage is Stage.DELIVERY:
             return _wait(state, Status.WAITING_FOR_EXTERNAL,
                          Wait("Reconcile the worker and outstanding effects", "stop confirmed"),
                          stopping=status)

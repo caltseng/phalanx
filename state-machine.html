@@ -86,7 +86,9 @@
       Persist reason, options, responsible actor and resume trigger in Needs-you, retaining
       writer and allocations. Stale versions, stops/finalization, open attempts and other
       attempt-free outcomes are refused. Do not renew an unchanged open question.
-      A reply queues delivery; the same writer opens its next attempt and acts on the answer.</p>
+      A reply queues delivery; the same writer opens its next attempt and acts on the answer.
+      Cancellation or forced failure during this input wait or queued reply still requires confirmed native
+      stop and effect reconciliation; a verified merge before confirmation remains authoritative.</p>
     <p>Successful self-review releases Building capacity at publication handoff; the same writer
       retains Total. Publication and external CI/review alone need no Building allocation.
       Before delivery/publication code changes or substantial tests, request

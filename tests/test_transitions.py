@@ -36,6 +36,11 @@ class TransitionTests(unittest.TestCase):
         stopping = decide(state, Event.CANCEL)
         with self.assertRaises(ValueError):
             decide(stopping, Event.RESULT, outcome=Outcome.NEEDS_INPUT, wait=wait)
+        for event, disposition in ((Event.CANCEL, Status.CANCELLED), (Event.CLOSE_FAILURE, Status.FAILED)):
+            for waiting in (asked, decide(asked, Event.REPLY)):
+                stopped = decide(waiting, event)
+                self.assertEqual((stopped.status, stopped.stopping, stopped.pending_output),
+                                 (Status.WAITING_FOR_EXTERNAL, disposition, None))
         resumed = decide(asked, Event.REPLY)
         self.assertEqual((resumed.stage, resumed.status, resumed.target, resumed.candidate),
                          (Stage.DELIVERY, Status.QUEUED, Target.MERGED, REV.head))

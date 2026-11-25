@@ -137,6 +137,8 @@ blanket owner-only merging. Surface genuinely missing authority/access through `
 Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
 instructions; do not request the same approval again or make an unrelated service/control upgrade a
 delivery prerequisite. This never waives an actual hard contract, current target/ceiling or merge gate.
+Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are not
+current authority; use the latest applicable owner decision, reply and steering evidence.
 
 These are writer instructions, not a new engine-enforced approval gate. The reconciler observes
 GitHub and verifies delivery; it does not certify independent final-head approval for the writer.
