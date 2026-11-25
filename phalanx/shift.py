@@ -340,7 +340,9 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
             raise ShiftError(decision["reason"])
         if decision and captain_id not in decision["captain_ids"]:
             raise ShiftError("This Captain's scope, runner affinity or repository readiness excludes pickup")
-    mapping = config["repositories"][repository]
+    mapping = config["repositories"].get(repository)
+    if not mapping:
+        raise ShiftError(f"Repository {repository} has no checkout mapping")
     remote = next((entry["remote"] for entry in api("/v1/repositories") if entry["id"] == repository), None)
     if remote is None:
         raise ShiftError(f"Repository {repository} is not registered")
