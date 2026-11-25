@@ -139,8 +139,9 @@ The `Tests` aggregate remains the required check. Shards use deterministic longe
 assignment with platform-specific runtime estimates in `tests/shard_timings.json`, not
 test-count round-robin. New tests inherit their module's estimate (one second for a new
 module), so discovery never drops unmeasured tests. Each shard still runs in test-ID order.
-The timing file links its source CI run; initial estimates use elapsed time between verbose
-test-completion timestamps. Values are seconds, with a module mean for ordinary tests and
+The timing file links each platform's source CI run. Initial estimates use elapsed time
+between verbose test-completion timestamps; refreshed profiles use complete duration logs.
+Values are seconds, with a module mean for ordinary tests and
 exact-ID overrides for outliers above both one second and twice the module mean.
 Module means exclude those outliers. When balance drifts, refresh estimates from a green
 run's complete duration log on each target, then compare actual slowest/fastest shard
