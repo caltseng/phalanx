@@ -226,3 +226,21 @@ Report adoption as partial until code/schema, external configuration and retaine
 receipts are verified. No engine independent-review predicate, native event bus or new
 scheduler is implied: material notifications use existing messaging and bounded reconciliation,
 with scheduled wakes as fallback.
+
+For Captain outage-continuity instruction-only adoption, relay the canonical outage section and
+keeper native-verification rules to the current verified Captain and existing keeper. Add the
+guard to their existing automation prompts without changing cadence, bindings or authority;
+record readback/receipts, including any in-flight keeper that captured the old prompt.
+Do not start a Captain for policy adoption.
+
+When an unrelated schema upgrade prevents package deployment, an authorized operator may apply
+an independently reviewed **outage-only prompt patch** to the exact installed baseline: back up
+affected prompts, verify baseline/no conflicting edits, apply only reviewed hunks and verify
+installed `shift prompt captain|keeper|forwarding` output plus packaged `wake` through the same
+prompt loader (`wake` is not a CLI prompt choice). Privately record baseline revision, patch digest,
+file hashes and recipient receipts separately from source merge. Keep API Python code,
+database/schema/config/credentials, services, writers, capacity and schedules unchanged.
+Old server stale/no-live recovery text remains undeployed until compatible API adoption;
+the explicit prompt guard overrides that launch advice. Preserve the direct owner guard in
+automations/conversations if backup prompts must be restored; do not silently restore rejected
+outage-handoff behavior.

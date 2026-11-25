@@ -38,6 +38,10 @@ flowchart LR
 The arrows name the initiating caller, not an API push channel. Scribe polls the API;
 Captains inspect native sessions themselves; writers submit their own results.
 The reconciler also reads registered repositories and execution pages from the API.
+Execution pages supply each execution's current target, publication mode and requested
+target branch, so a pass does not fetch individual item details. Writer preparation
+verifies the mapped checkout once before fetching and pinning the origin base; the
+resulting item worktree still receives its own identity and dirty-state inspection.
 It does not launch sessions, write GitHub, or merge PRs.
 
 | Boundary | Authoritative state / responsibility | Implementation |

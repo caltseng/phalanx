@@ -254,15 +254,6 @@ def status(api, charter, captain_id=None):
     }
 
 
-def _fetch(checkout, branch):
-    for args in (["check-ref-format", f"refs/heads/{branch}"],
-                 ["fetch", "--quiet", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}"]):
-        result = run_git(checkout, *args, check=False, error=ShiftError)
-        if result.returncode:
-            detail = result.stderr.decode("utf-8", errors="replace").strip()
-            raise ShiftError(f"git {args[0]} failed for {branch} in {checkout}: {detail}")
-
-
 def credential_path(worktree):
     result = run_git(worktree, "rev-parse", "--git-path", CREDENTIAL, check=False, error=ShiftError)
     if result.returncode:
@@ -348,10 +339,8 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
     if remote is None:
         raise ShiftError(f"Repository {repository} is not registered")
     manager = WorkspaceManager(Path(mapping["checkout"]), remote, Path(config["worktrees"]))
-    manager.verify_checkout()
     base = item.get("target_branch") or mapping["base_branch"]
-    _fetch(mapping["checkout"], base)
-    workspace = manager.prepare(item_id, base=manager.resolve_origin_base(base))
+    workspace = manager.prepare_from_origin(item_id, branch=base)
     path = credential_path(workspace.path)
     pending = path.with_name(PENDING)
     intent = {"item_id": item_id, "execution_id": item["execution"]["id"], "captain_id": captain_id,

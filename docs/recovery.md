@@ -15,7 +15,7 @@ to recover. Read the API, GitHub and native session state before repeating an ex
 | `launch_unconfirmed` | Native create/confirm has not been verified for ten minutes. The wait is visible immediately; recover each wake, not only after this alert. Search fresh full native inventory for the full nonce, confirm a match, or safely replay the same reservation as below. A timeout does not prove no launch. |
 | `writer_stopped`, `writer_error`, `no_progress`, `worker_overdue` | Inspect the exact native session and worktree. Resume it or safely replace it; silence alone never authorizes stopping. |
 | Runtime repository trust pending | Notify the owner and retain the same writer/session until the owner approves. |
-| `no_live_captain` | The keeper or owner starts a Captain. Existing writers and the reconciler continue. |
+| `no_live_captain` | Verify API/native availability first: resume the same available Captain; wait visibly during shared outage/unknown state. Replace only verified native loss/degradation, respecting handoff grace and charter stop. Existing writers and the reconciler continue. |
 | `reconciler_stale`, `observation_stale` | Resume the intended reconciler and inspect its GitHub/API errors. |
 | Owner question | Answer through `reply`; see [Work items](work-items.md#answer-a-waiting-item). |
 

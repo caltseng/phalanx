@@ -211,9 +211,23 @@ Runtime prompts implement it; pilot reports and the decision log preserve histor
   never end a shift early, including under older stop prose. Retired `max_wakes` and
   `max_compactions` are rejected. Compaction is a checkpoint and cumulative native telemetry;
   report only known successful counts, never infer missing totals. Explicit owner stop,
-  missing/invalid authority and genuine degradation remain exceptions: three consecutive
-  failed actions, a self-raised deviation (`captain_idle_with_work` or a created
-  `orphan_session`), or a missed heartbeat noticed on waking. Keep reasons/recovery visible.
+  missing/invalid authority and genuine native degradation remain exceptions. Three consecutive
+  failed actions, a self-raised deviation (`captain_idle_with_work` or a created `orphan_session`),
+  or a missed heartbeat require diagnosis, not automatic handoff.
+- **Shared control-plane outages.** Repeated API/transport/authentication-service failures and
+  unpersisted heartbeats are blocked/unknown state, not evidence of native Captain failure.
+  Preserve the same Captain registration/native session, writers and five-minute schedule;
+  never start a successor, re-register or replace identities to repair connectivity.
+  Report the failed operation/error, last verified state and next scheduled retry in the
+  conversation, and through existing timeline controls when reachable; never claim an unsaved
+  status was persisted. Do not loop failed requests, create a local queue or bypass unavailable
+  authority. Continue only already-authorized work with verifiable ownership/prerequisites
+  under [writer continuity](writer-operations.md#control-plane-outages).
+  After recovery verify charter, exact registration, successors and native bindings, then
+  refresh the same active unsuperseded registration even if stale and reconcile uncertain writes.
+  Never revive ended Captains; ending/superseded ones follow existing handoff/routing rules.
+  Keep the original 24-hour age clock, deferring due handoff until authority/outcome is verifiable.
+  Missing/revoked access needs owner repair, not another Captain or authentication bypass.
 - **Hand off.** Run `shift handoff` with open decisions, owned unconfirmed intents, last
   meaningful evidence, holds, unresolved actors/actions and pending verification. It sets
   `ending` and returns a successor kickoff and `phx captain <parent ID prefix>` launch
@@ -225,11 +239,19 @@ Runtime prompts implement it; pilot reports and the decision log preserve histor
   by another Captain. An ended Captain coordinates no more, retaining only necessary
   [creator cleanup](#creator-owned-session-cleanup).
 - **Recover safely.** No heartbeat for 15 minutes or `ending` beyond 30 minutes is stale,
-  not proof that local work can be discarded/archived. Any live Captain takes over uncertain
+  not proof of native loss or that local work can be discarded/archived. Any live Captain reconciles uncertain
   intents using full-nonce discovery. A runtime keeper checks every 30 minutes for absence
   of a live Captain, allowing a ten-minute recent-handoff grace and respecting a
   `Stop condition met:` note under the current charter revision. It checks its own pending
-  child cleanup before a live-Captain early exit. Otherwise it starts/registers a Captain.
+  child cleanup before a live-Captain early exit. Before recovery launch it needs a successful
+  authoritative API read and exact native inspection of all potentially coordinating stale
+  Captains, including overdue ending handoffs. Resume the same available active registration
+  or existing ending handoff; blocked/unknown inspection or heartbeat persistence must not
+  spawn a replacement. Only confirmed native stopped/missing/deleted/local-degradation evidence,
+  or authoritative empty/ended history subject to grace/stop rules, permits recovery.
+  Before any launch, including after ended history, reconcile pending successors by full
+  identity using fresh complete native inventory. Reuse an existing successor; uncertain
+  inspection/creation remains a visible wait on the existing schedule, never a duplicate.
   Existing writers and the reconciler continue without one; `no_live_captain` notifies the
   owner. Verify runtime schedules after reboot.
 

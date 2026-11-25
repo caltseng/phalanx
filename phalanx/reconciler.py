@@ -180,11 +180,10 @@ class Reconciler:
     def observe(self, execution, remote, fetched, policies):
         """Post what GitHub and git show for one execution. Return (posted, local check job or None)."""
         item_id, repo = execution["item_id"], execution["repository_id"]
-        item = self.api.call(f"/items/{quote(item_id, safe='')}")
-        if item["target"] == "report":
+        if execution["target"] == "report":
             return 0, None
         mapping = self.config["repositories"][repo]
-        base = item.get("target_branch") or mapping["base_branch"]
+        base = execution.get("target_branch") or mapping["base_branch"]
         if execution.get("outcome") == "checked_in" and base != mapping["base_branch"]:
             return 0, None
         repository = github_repository(remote)
@@ -232,7 +231,7 @@ class Reconciler:
                 # Deployment outages must not delay recording the merge itself.
                 if check and execution.get("outcome") == "checked_in":
                     body["deployment"] = self.deployment(github, pull.merge_commit_sha, check)
-            draft_only = item.get("execution", {}).get("state", {}).get("publication_mode") == "draft"
+            draft_only = execution["publication_mode"] == "draft"
             if pull.state == "open" and not draft_only and execution.get("outcome") != "ready_for_check_in":
                 policy = self.policy(repo, policies)
                 required = policy and (policy.draft_checks if pull.draft else policy.ready.required)
