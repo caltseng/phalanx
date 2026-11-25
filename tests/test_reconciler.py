@@ -244,7 +244,7 @@ class FakeAPI:
         if path.endswith("/local-checks"):
             self.local_checks.append(body)
             return {"recorded": True}
-        return {"target": "ready_for_check_in", "target_branch": None}
+        raise AssertionError(f"Unexpected API call: {path}")
 
 
 class FakeGitHub:
@@ -279,6 +279,7 @@ class FakeGitHub:
 
 def execution(item_id, repo="repo", primary=None):
     return {"id": uuid4().hex, "item_id": item_id, "repository_id": repo, "primary_pr_url": primary,
+            "target": "ready_for_check_in", "target_branch": None, "publication_mode": "ready",
             "closed_at": datetime.now(UTC).isoformat()}
 
 
@@ -288,6 +289,33 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         self.path = self.root / "queue.sqlite3"
         migrate(self.path)
         self.start_server(self.path)
+
+    def test_pass_uses_execution_pages_for_report_target_branch_and_draft_mode(self):
+        api = API(self.url, RUNNER)
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Draft on release", "target": "checked_in",
+            "target_branch": "release", "publication_mode": "draft"})
+        self.assertEqual(status, 201, item)
+        self.assertEqual(self.request("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Report", "target": "report"})[0], 201)
+        github = FakeGitHub([replace(pull_request(HEAD, item_branch(item["id"]), draft=True),
+                                    base_ref="release")],
+                            feedback_error=GitHubError("graphql", "must not read draft feedback"))
+        config = {"reconciler_id": "local", "validation_policy": "missing-policy.json",
+                  "repositories": {"repo": {"base_branch": "main"}}}
+        reconciler = Reconciler(config, self.root / "state", api, github_token="token",
+                                github_client=lambda *args, **kwargs: github)
+        with patch.object(api, "call", wraps=api.call) as calls:
+            self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
+        paths = [call.args[0] for call in calls.call_args_list]
+        self.assertFalse(any(path.startswith("/items/") and path.count("/") == 2 for path in paths), paths)
+        observation, = [call.args[1] for call in calls.call_args_list
+                        if call.args[0].endswith("/github-observation")]
+        self.assertEqual(observation["target_base"], "release")
+        self.assertNotIn("feedback", observation)
+        self.assertNotIn("checks", observation)
 
     def test_each_retired_closed_stage_migrates_loads_lists_and_reconciles(self):
         api = API(self.url, RUNNER)
@@ -482,17 +510,10 @@ class ReconcilerPassTest(unittest.TestCase):
         self.config["validation_policy"] = "missing-policy.json"
         self.github["repo"] = FakeGitHub([pull_request(HEAD, item_branch("one"), draft=True)],
                                          feedback_error=GitHubError("graphql", "unavailable"))
-        api = FakeAPI([execution("one", primary="https://github.com/example/repo/pull/7")],
+        api = FakeAPI([dict(execution("one", primary="https://github.com/example/repo/pull/7"),
+                            publication_mode="draft")],
                       {"repo": "https://github.com/example/repo"})
-        original_call = api.call
-
-        def call(path, body=None):
-            if path == "/items/one":
-                return {"target": "checked_in", "execution": {"state": {"publication_mode": "draft"}}}
-            return original_call(path, body)
-
-        with patch.object(api, "call", side_effect=call):
-            result = self.reconciler(api).run_pass()
+        result = self.reconciler(api).run_pass()
         self.assertEqual(result, {"observed": 1, "checked": 0, "errors": []})
         self.assertTrue(api.posts[0][1]["pr"]["draft"])
         self.assertNotIn("checks", api.posts[0][1])
@@ -603,15 +624,7 @@ class ReconcilerPassTest(unittest.TestCase):
     def test_a_merge_into_a_non_deploying_branch_has_no_deployment_signal(self):
         self.config["repositories"] = {"repo": {"base_branch": "main", "post_merge_check": "deploy"}}
         api = FakeAPI([], {"repo": "https://github.com/example/repo"}, closed=[
-            dict(execution("done"), outcome="checked_in")])
-        original_call = api.call
-
-        def call(path, body=None):
-            if path == "/items/done":
-                return {"target": "checked_in", "target_branch": "release"}
-            return original_call(path, body)
-
-        api.call = call
+            dict(execution("done"), outcome="checked_in", target_branch="release")])
         result = self.reconciler(api).run_pass()
         self.assertEqual((result["observed"], result["errors"], api.posts), (0, [], []))
 
