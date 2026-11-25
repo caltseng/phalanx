@@ -150,6 +150,8 @@ def _pass(db, pass_id, claim_id):
     if (row is None or row["completed_at"] or row["claim_id"] != claim_id
             or row["lease_until"] <= intake.timestamp()):
         raise intake.Conflict("Scout claim ended or expired; resume through the next Captain wake")
+    if captains.captain_row(db, row["captain_id"])["state"] != "active":
+        raise intake.Conflict("The claiming Captain is ending; its successor resumes the durable cursor")
     return row
 
 
@@ -165,7 +167,8 @@ def claim(db, payload):
     if not configuration["enabled"]:
         return {"claim": None, **status(db)}
     row = db.execute("SELECT * FROM issue_scout_passes WHERE completed_at IS NULL").fetchone()
-    if row and row["claim_id"] and row["lease_until"] > now:
+    if (row and row["claim_id"] and row["lease_until"] > now
+            and captains.captain_row(db, row["captain_id"])["state"] == "active"):
         return {"claim": None, **status(db)}
     if row is None:
         if configuration["due_at"] > now:
@@ -179,7 +182,7 @@ def claim(db, payload):
         if row["retry_at"] and row["retry_at"] > now:
             return {"claim": None, **status(db)}
         pass_id = row["id"]
-        if row["claim_id"]:
+        if row["claim_id"] and row["lease_until"] <= now:
             db.execute(
                 "UPDATE issue_scout_passes SET failure_kind='api', failures=failures+1 WHERE id=?", (pass_id,))
     claim_id = uuid4().hex

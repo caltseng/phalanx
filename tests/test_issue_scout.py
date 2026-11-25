@@ -208,6 +208,21 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
         self.submit(retried, [self.issue()])
         self.assertEqual(len(self.items()), 1)
 
+    def test_explicit_captain_handoff_fences_old_effects_without_resetting_progress(self):
+        first = self.claim()
+        self.submit(first, [self.issue()], has_more=True)
+        old = self.claim()
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE captains SET state='ending', ending_at=? WHERE id=?",
+                       (intake.timestamp(), self.captain))
+        with self.assertRaisesRegex(ValueError, "409"):
+            self.submit(old, [self.issue(2)])
+        successor = self.register_captain("successor")
+        resumed = self.claim(successor)
+        self.assertEqual((resumed["id"], resumed["page"]), (old["id"], 2))
+        self.submit(resumed, [self.issue(2)])
+        self.assertEqual(len(self.items()), 2)
+
     def test_configuration_scope_identity_and_generation_fence(self):
         code, _ = self.request("/v1/issue-scout/settings", RUNNER, {
             "expected_revision": 1, "author_login": "configured-owner", "author_id": 42,
