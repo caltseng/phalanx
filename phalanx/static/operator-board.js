@@ -16,20 +16,7 @@
   const DISPLAY_LABEL = { checked_in: "Merged", queue_backlogged: "Queue backlogged",
     captain_idle_with_work: "Dispatch overdue" };
   const absolute = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
-
-  function h(tag, props = {}, ...children) {
-    const node = document.createElement(tag);
-    for (const [key, value] of Object.entries(props)) {
-      if (value == null || value === false) continue;
-      if (key === "text") node.textContent = value;
-      else if (key === "class") node.className = value;
-      else node.setAttribute(key, value === true ? "" : value);
-    }
-    for (const child of children.flat()) {
-      if (child != null && child !== false) node.append(child);
-    }
-    return node;
-  }
+  const { h, safeUrl } = window.PhalanxOperatorHelpers;
 
   function label(value) {
     return DISPLAY_LABEL[value] || (value ? String(value).replaceAll("_", " ") : "unknown");
@@ -77,17 +64,6 @@
       "aria-label": [context, text, stamp(time)].filter(Boolean).join(" · "), text });
   }
 
-  function safeUrl(value) {
-    if (!value) return null;
-    try {
-      const url = new URL(value, document.baseURI);
-      if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
-    } catch {
-      // Missing or invalid link.
-    }
-    return null;
-  }
-
   function sessionTarget(record = {}) {
     if (["missing", "deleted"].includes(record.sessionAvailability)) {
       return { url: null, reason: "session " + record.sessionAvailability };
@@ -103,12 +79,7 @@
           (!record.sessionId || record.sessionId.toLowerCase() === native[2].toLowerCase())) {
         url = reference;
       } else if (typeof reference === "string" && /^https:\/\/[^\s\\]+$/.test(reference)) {
-        try {
-          const parsed = new URL(reference);
-          if (!parsed.username && !parsed.password) url = parsed.href;
-        } catch {
-          // A malformed recorded URL is unavailable, not a reason to guess another app.
-        }
+        url = safeUrl(reference, { httpsOnly: true });
       } else if (!record.sessionUrl && prefix && new RegExp("^" + uuid + "$").test(reference) &&
           (!record.sessionId || record.sessionId.toLowerCase() === reference.toLowerCase())) {
         url = prefix + reference;
@@ -251,8 +222,9 @@
    * source.list({kind, cursor, limit, signal}) resolves to {items, nextCursor}. kind is "open" or "closed".
    * Cursors are opaque strings or null. Closed items come newest first; open work puts input waits first.
    * Items contain string id, itemId?, version?, title (one line), goal?, target?, publicationMode?, repo, stage, status,
-   * createdAt?, lastAdvancedAt, lastProgressAt?, waitSince?, waitReason?, nextAction?, resumeTrigger?, retryAt? and
-   * (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
+   * createdAt?, activeStartedAt?, stageStartedAt?, lastAdvancedAt, lastProgressAt?, waitSince?,
+   * waitReason?, nextAction?, resumeTrigger?, retryAt? (epoch ms), primaryPrUrl?, closedAt?,
+   * outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
    * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?}.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
@@ -770,7 +742,9 @@
       ] : [
         h("span", { class: "stage", title: "Stage " + label(item.stage) + " · " + label(item.status),
           text: label(item.stage) + (item.publicationMode === "draft" ? " · draft only" : "") }),
-        ago(item.lastAdvancedAt, now, { class: "age", "aria-label": "In stage" }),
+        h("span", { class: "age" }, item.activeStartedAt ? "active " : "queued ",
+          ago(item.activeStartedAt || item.createdAt, now,
+            { "aria-label": item.activeStartedAt ? "Active since" : "Queued since" })),
         prCell(item),
         writerCell(item),
         h("span", { class: "reason", title: rowReason(item, flags), text: rowReason(item, flags) })
@@ -898,11 +872,13 @@
       box.append(observedUsage(data.usage, item.id));
       box.append(facts([
         ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],
-        ["Stage", h("span", {}, label(item.stage), " · ", ago(item.lastAdvancedAt, now))],
+        ["Stage", h("span", {}, label(item.stage),
+          item.stageStartedAt ? h("span", {}, " · ", ago(item.stageStartedAt, now)) : null)],
         ["Target", item.target && label(item.target)],
         ["Publication", item.publicationMode === "draft" ? "Draft only; no promotion or merge" : "Ready"],
         ["Version", item.version != null && "v" + item.version],
-        ["Age", ago(item.createdAt, now)],
+        ["Execution created", ago(item.createdAt, now)],
+        ["Active since", item.activeStartedAt && ago(item.activeStartedAt, now)],
         ["Last progress", epoch(item.lastProgressAt) && ago(item.lastProgressAt, now)],
         ["Waiting", epoch(item.waitSince) && ago(item.waitSince, now)],
         ["Retry", item.retryAt && stamp(item.retryAt)],

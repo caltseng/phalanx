@@ -16,7 +16,7 @@ from .auth import authenticate_board_read, require_coordinator
 from .captains import IDLE_WITH_WORK, STALE, gone_at, live_captains, successor_name
 from .intake_api import run
 from .intake_models import Payload, Text
-from .operator_schema import OPEN
+from .operator_schema import ACTIVE_STARTED_AT, OPEN
 from .session_links import session_id
 
 
@@ -294,8 +294,7 @@ def active_overdue(db, now, known_flags, *, execution_id=None):
     result = []
     for row in db.execute(
         f"""SELECT execution.*,
-                   (SELECT min(started_at) FROM attempts
-                    WHERE execution_id=execution.id) AS started_at,
+                   {ACTIVE_STARTED_AT} AS started_at,
                    writer.id AS writer_id, writer.captain_id, writer.session_id,
                    writer.last_progress_at, writer.progress_note
             FROM executions AS execution

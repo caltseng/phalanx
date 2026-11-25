@@ -9,6 +9,7 @@ from pydantic import Field, StringConstraints, TypeAdapter, ValidationError, fie
 
 from .local_checks import LocalCheck
 from .intake_models import Identifier, Payload
+from .json_utils import unique_object
 from .pr_models import RequiredCheck as CheckConfig
 from .validation import CheckKind, PreCheck, RequiredCheck
 
@@ -102,15 +103,6 @@ def _exact_name(value: str) -> str:
     return value
 
 
-def _unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValidationPolicyError(f"Duplicate configuration key: {key}")
-        result[key] = value
-    return result
-
-
 def _invalid_constant(value):
     raise ValidationPolicyError(f"Non-JSON numeric constant: {value}")
 
@@ -133,7 +125,7 @@ def load_validation_policy(config_path: Path, repository_id: str) -> RepositoryV
         if len(raw) > _MAX_BYTES:
             raise ValidationPolicyError("Validation policy exceeds the 1 MiB limit")
         config = _Config.model_validate(json.loads(
-            raw.decode("utf-8"), object_pairs_hook=_unique_object, parse_constant=_invalid_constant,
+            raw.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=_invalid_constant,
         ))
     except (OSError, UnicodeError, ValueError, RecursionError) as error:
         if isinstance(error, ValidationPolicyError):

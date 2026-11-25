@@ -252,8 +252,10 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                 for asset, marker in (
                     ("operator-board.css", ".phalanx-board"),
                     ("operator-board.js", "PhalanxOperatorBoard"),
+                    ("operator-helpers.js", "PhalanxOperatorHelpers"),
                     ("operator-markdown.js", "PhalanxMarkdown"),
-                    ("operator-http.js", "/v1/operator/executions"),
+                    ("operator-http.js", "PhalanxOperatorHttp"),
+                    ("operator-shell.js", "/v1/operator/executions"),
                 ):
                     path = f"/operator/assets/{asset}"
                     self.assertIn(path, shell)
