@@ -41,6 +41,7 @@
   const waitingRow = () => ({ ...row, status: "waiting_for_input", outcome: null, output: null,
     stage: "development", version: 3, wait_reason: approval, resume_trigger: approval });
   let calls = [];
+  let conditionalReads = 0;
   let fail = false;
   let shell;
   const errors = [];
@@ -63,7 +64,22 @@
       const json = (body, status = 200) => new win.Response(JSON.stringify(body), {
         status, headers: { "content-type": "application/json" }
       });
-      if (path === "/v1/flags") return json({ flags: [] });
+      if (path === "/v1/operator/overview" || path.startsWith("/v1/operator/executions?")) {
+        if (options.headers["If-None-Match"] === 'W/"fixture"') {
+          conditionalReads++;
+          return new win.Response(null, { status: 304, headers: { ETag: 'W/"fixture"' } });
+        }
+      }
+      const snapshot = body => new win.Response(JSON.stringify(body), {
+        headers: { "content-type": "application/json", ETag: 'W/"fixture"' }
+      });
+      if (path === "/v1/operator/overview") return snapshot({
+        sections: { needs_you: 10, running: 200, queued: 9390, blocked: 0, waiting_on_checks: 400 }
+      });
+      if (path === "/v1/flags") return json({ flags: [
+        { kind: "head_drift", reason: "Head moved", recovery: "Reconcile the current head",
+          first_seen: now, notify_owner: false }
+      ] });
       if (path.startsWith("/v1/captains?")) return json({ captains: [
         { id: "cap-live", session_ref: captainUrl, state: "active", live: true, stale: false, heartbeat_at: now,
           wake_count: 7, compaction_count: 4, charter_revision: "opaque-hash", focus: [id] },
@@ -83,11 +99,12 @@
       if (path.startsWith("/v1/operator/executions?")) {
         const params = new URL(path, location.origin).searchParams;
         const cursor = params.get("cursor");
-        return json({ items: params.get("q") === "no matches" && !cursor ? [] : params.get("kind") === "closed" ?
+        return snapshot({ items: params.get("q") === "no matches" && !cursor ? [] : params.get("kind") === "closed" ?
           (readingLayout ? [9, 12, 180, 2880].map((minutes, index) => ({ ...row,
             id: String(index + 1).repeat(32), closed_at: new Date(Date.parse(now) - minutes * 60000).toISOString()
           })) : [row]) : [
-          readingLayout ? waitingRow() : { ...row, status: "running", outcome: null, output: null, stage: "development" }
+          readingLayout ? waitingRow() : { ...row, status: "running", outcome: null, output: null,
+            stage: "development", next_action: "A worker is running the development stage" }
         ], next_cursor: cursor ? null : "next_cursor" });
       }
       if (path.endsWith("/report")) return new win.Response(report, { headers: { "content-type": "text/plain" } });
@@ -318,6 +335,18 @@
     app = await load("/operator/");
     await until(() => app.doc.querySelector("[data-item]"));
     await until(() => app.doc.querySelector(".sec-captains")?.textContent.includes("compactions 4"));
+    await until(() => app.doc.querySelector(".h-live"));
+    assert(app.doc.querySelector(".counts").textContent.includes("200 running") &&
+      app.doc.querySelector(".counts").textContent.includes("9790 queued and waiting"),
+    "Real adapter reads global totals from overview");
+    assert(app.doc.querySelector(".sec-active .reason").textContent === "A worker is running the development stage",
+      "Real adapter retains next_action on list rows");
+    const beforeConditional = conditionalReads;
+    app.doc.querySelector('[data-action="refresh"]').click();
+    await until(() => conditionalReads >= beforeConditional + 3);
+    assert(app.doc.querySelector(".sec-active .reason").textContent === "A worker is running the development stage" &&
+      app.doc.querySelector(".counts").textContent.includes("9790 queued and waiting"),
+    "Polling sends If-None-Match and retains snapshots after bodyless 304 responses");
     const captainRows = app.doc.querySelector(".sec-captains");
     const captainLinks = captainRows.querySelectorAll('a[href="' + captainUrl + '"]');
     assert(captainLinks.length === 2 && [...captainLinks].every(link => link.tabIndex === 0) &&
@@ -328,6 +357,13 @@
     for (const [width, maxHeight] of [[1280, 100], [600, 200], [390, 210], [320, 210]]) {
       frame.style.width = width + "px";
       await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+      if (width <= 600) {
+        assert([...app.doc.querySelectorAll("button.title, .writer[href], .captains a, .pager button, .fgroup > summary")]
+          .filter(node => node.getClientRects().length).every(node => {
+            const box = node.getBoundingClientRect();
+            return box.width >= 44 && box.height >= 44;
+          }), "Phone row, session, disclosure and pager touch targets are at least 44px");
+      }
       const headerHeight = app.doc.querySelector(".sections").getBoundingClientRect().top -
         app.doc.querySelector("#operator-board").getBoundingClientRect().top;
       heights.push({ width, height: headerHeight });

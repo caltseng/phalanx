@@ -260,7 +260,7 @@
    * source.list({kind, cursor, limit, signal}) resolves to {items, nextCursor}. kind is "open" or "closed".
    * Cursors are opaque strings or null. Closed items come newest first; open work puts input waits first.
    * Items contain string id, itemId?, version?, title (one line), goal?, target?, publicationMode?, repo, stage, status,
-   * createdAt?, lastAdvancedAt, lastProgressAt?, waitSince?, waitReason?, resumeTrigger?, retryAt? and
+   * createdAt?, lastAdvancedAt, lastProgressAt?, waitSince?, waitReason?, nextAction?, resumeTrigger?, retryAt? and
    * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
    * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?} and
@@ -282,7 +282,7 @@
     const routed = page === "detail";
     const slot = () => ({ rows: [], cursors: [null], next: null, updated: 0, failed: false, request: null });
     const state = {
-      open: slot(), closed: slot(), flags: slot(), captains: slot(),
+      open: slot(), closed: slot(), flags: slot(), captains: slot(), overview: { ...slot(), data: null },
       route: { ...slot(), data: null },
       expanded: null, expandedAt: 0, endedOpen: false, details: new Map(), flagGroups: new Set(), seen: new Map(), changed: new Map()
     };
@@ -293,11 +293,13 @@
         !options.filters?.outcome && !options.filters?.closed_after && !closedStatus)),
       closed: !routed && (page === "history" || (page === "home" &&
         (options.filters?.outcome || options.filters?.closed_after || !filterStatus || closedStatus))),
-      route: routed, flags: Boolean(source.flags), captains: Boolean(source.captains) };
+      route: routed, flags: Boolean(source.flags), captains: Boolean(source.captains),
+      overview: page === "home" && Boolean(source.overview) };
     for (const kind of ["open", "closed"]) {
       if (options.cursors?.[kind]) state[kind].cursors = [options.cursors[kind]];
     }
     let disposed = false;
+    let readFrame = null;
     let clearConcurrency;
 
     const announce = h("p", { class: "sr-only", role: "status" });
@@ -551,19 +553,25 @@
         target.next = data.nextCursor ?? null;
         noteChanges(data.items);
       }
-      render();
+      renderRead();
     }
 
     async function loadFlags() {
       const data = await guarded(state.flags, signal => source.flags({ signal }));
       if (data) state.flags.rows = data.flags;
-      render();
+      renderRead();
     }
 
     async function loadCaptains() {
       const data = await guarded(state.captains, signal => source.captains({ signal }));
       if (data) state.captains.rows = data.captains;
-      render();
+      renderRead();
+    }
+
+    async function loadOverview() {
+      const data = await guarded(state.overview, signal => source.overview({ signal }));
+      if (data) state.overview.data = data.sections;
+      renderRead();
     }
 
     function detailState(id) {
@@ -583,7 +591,7 @@
         detail.data = data;
         detail.next = data.nextCursor ?? null;
       }
-      if (state.expanded === id) render();
+      if (state.expanded === id) renderRead();
     }
 
     async function loadRoute() {
@@ -597,7 +605,7 @@
         target.data = data;
         target.next = data.nextCursor ?? null;
       }
-      render();
+      renderRead();
     }
 
     function noteChanges(items) {
@@ -685,7 +693,7 @@
 
     function rowReason(item, flags) {
       return firstLine(item.waitReason) ||
-        firstLine(item.writer?.progressNote) || firstLine(flags[0]?.reason) ||
+        firstLine(item.nextAction) || firstLine(item.writer?.progressNote) || firstLine(flags[0]?.reason) ||
         firstLine(item.resumeTrigger) || label(item.status);
     }
 
@@ -776,7 +784,7 @@
         ago(item.lastAdvancedAt, now, { class: "age", "aria-label": "In stage" }),
         prCell(item),
         writerCell(item),
-        h("span", { class: "reason", title: item.waitReason || "", text: rowReason(item, flags) })
+        h("span", { class: "reason", title: rowReason(item, flags), text: rowReason(item, flags) })
       ];
       const line = h("div", { class: "line" },
         glyph(itemTone, stateText),
@@ -1031,7 +1039,7 @@
     }
 
     function freshness() {
-      const visible = ["open", "closed", "route", "flags", "captains"].filter(kind => enabled[kind]).map(kind => state[kind]);
+      const visible = ["open", "closed", "route", "flags", "captains", "overview"].filter(kind => enabled[kind]).map(kind => state[kind]);
       const dated = visible.map(target => target.updated).filter(Boolean);
       const failed = visible.filter(target => target.failed).length;
       const oldest = dated.length ? Math.min(...dated) : 0;
@@ -1041,6 +1049,7 @@
       const note = "updated " + span(Date.now() - oldest) + " ago";
       if (failed === visible.length) return { kind: "down", text: "Disconnected", note: "showing data from " + absolute.format(oldest), oldest };
       if (failed) return { kind: "stale", text: "Partial", note: "some reads failed · " + note, oldest };
+      if (dated.length !== visible.length) return { kind: "wait", text: "Connecting…", note: "waiting for initial reads", oldest };
       if (Date.now() - oldest >= STALE_MS) return { kind: "stale", text: "Stale", note, oldest };
       return { kind: "live", text: "Live", note, oldest };
     }
@@ -1059,6 +1068,14 @@
         lastAnnounced = message;
         announce.textContent = message;
       }
+    }
+
+    function renderRead() {
+      if (disposed || readFrame !== null) return;
+      readFrame = requestAnimationFrame(() => {
+        readFrame = null;
+        render();
+      });
     }
 
     function render() {
@@ -1088,7 +1105,8 @@
       const looseNotify = state.flags.rows.filter(flag => flag.notifyOwner && !shown.has(flag));
       for (const flag of looseNotify) shown.add(flag);
       const otherFlags = state.flags.rows.filter(flag => !shown.has(flag));
-      const more = state.open.next ? "+" : "";
+      const totals = state.overview.data;
+      const pageCount = count => count + " on this page";
 
       const sections = [];
       if (routed) {
@@ -1105,8 +1123,8 @@
       const needContent = h("div", {});
       if (looseNotify.length) needContent.append(h("div", { class: "rows flags" }, flagGroups(looseNotify, titles, now)));
       needContent.append(needRows.length || !looseNotify.length
-        ? list(needRows, state.open.updated ? "Nothing needs you." : "Loading…", "items") : "");
-      sections.push(section("needs", "Needs you", needs.length + looseNotify.length,
+        ? list(needRows, state.open.updated ? "No work needing you on this page." : "Loading…", "items") : "");
+      sections.push(section("needs", "Needs you", pageCount(needs.length + looseNotify.length),
         needs.length + looseNotify.length ? "attn" : "", needContent));
       if (enabled.flags) {
         sections.push(section("flags", "Flags", otherFlags.length,
@@ -1131,13 +1149,13 @@
         sections.push(section("captains", "Captains", live + "/" + state.captains.rows.length, live ? "" : "attn",
           content));
       }
-      sections.push(section("active", "Active", active.length + (active.length ? more : ""), "",
-        list(active.map(item => itemRow(item, "open", index, now)), "Nothing running.", "items")));
+      sections.push(section("active", "Active", pageCount(active.length), "",
+        list(active.map(item => itemRow(item, "open", index, now)), "No active work on this page.", "items")));
       const queueRows = page === "queue" ? state.open.rows : queued;
       const queuedSection = section("queued", page === "queue" ? "Queue" : "Queued and waiting",
-        queueRows.length + (queueRows.length ? more : ""), "",
+        pageCount(queueRows.length), "",
         list(queueRows.map(item => itemRow(item, "open", index, now)),
-          page === "queue" ? (state.open.updated ? "No open work on this page." : "Loading...") : "Nothing queued.", "items"));
+          state.open.updated ? "No queued work on this page." : "Loading...", "items"));
       const openPager = pager("open", state.open, "open work");
       if (openPager) queuedSection.append(openPager);
       if (state.open.failed) queuedSection.append(h("p", { class: "warn", text: state.open.updated
@@ -1162,13 +1180,15 @@
         if (section.classList.contains("sec-closed")) return enabled.closed;
         return true;
       }));
+      counts.setAttribute("aria-label", "Global workspace summary");
       counts.replaceChildren(
-        h("li", { class: needs.length + looseNotify.length ? "t-attn" : "" }, h("strong", { text: String(needs.length + looseNotify.length) }), " needs you"),
-        h("li", {}, h("strong", { text: active.length + (active.length ? more : "") }), " active"),
-        h("li", {}, h("strong", { text: queued.length + (queued.length ? more : "") }), " queued"),
+        h("li", { class: totals?.needs_you ? "t-attn" : "" }, h("strong", { text: totals ? String(totals.needs_you) : "—" }), " needs you"),
+        h("li", {}, h("strong", { text: totals ? String(totals.running) : "—" }), " running"),
+        h("li", {}, h("strong", { text: totals ? String(totals.queued + totals.blocked + totals.waiting_on_checks) : "—" }), " queued and waiting"),
         enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || !["queue_backlogged", "deployed"].includes(flag.kind)) ? "t-wait" : "" },
           h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
         enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
+      if (state.overview.failed) counts.append(h("li", { class: "warn", text: "Global counts unavailable. Refresh to retry." }));
       renderHealth();
       if (page !== "home") counts.replaceChildren();
       if (focused) {
@@ -1184,6 +1204,7 @@
       if (routed) loadRoute();
       if (enabled.flags) loadFlags();
       if (enabled.captains) loadCaptains();
+      if (enabled.overview) loadOverview();
       if (state.expanded) loadDetail(state.expanded);
     }
 
@@ -1216,12 +1237,13 @@
 
     return () => {
       disposed = true;
+      if (readFrame !== null) cancelAnimationFrame(readFrame);
       clearConcurrency?.();
       clearInterval(interval);
       clearInterval(ticker);
       document.removeEventListener("visibilitychange", refreshAll);
       root.removeEventListener("keydown", onKey);
-      for (const target of [state.open, state.closed, state.route, state.flags, state.captains, ...state.details.values()]) target.request?.abort();
+      for (const target of [state.open, state.closed, state.route, state.flags, state.captains, state.overview, ...state.details.values()]) target.request?.abort();
       root.replaceChildren();
     };
   }
