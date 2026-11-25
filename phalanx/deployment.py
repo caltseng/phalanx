@@ -7,9 +7,10 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from urllib.parse import urlsplit
 
-from .muster import _unique, read_environment, resolve_home
+from .api_client import validate_api_url
+from .json_utils import unique_object
+from .muster import read_environment, resolve_home
 from .shift import SHIFT_DEFAULTS
 from .workspaces import any_file_lock
 
@@ -26,11 +27,7 @@ def initialize(home=None, *, api_url=None, port=8000):
     if not 1 <= port <= 65535:
         raise ValueError("Server port must be between 1 and 65535")
     api_url = api_url if api_url is not None else f"http://127.0.0.1:{port}"
-    url = urlsplit(api_url)
-    if (not url.hostname or url.username or url.password or url.query or url.fragment
-            or (url.scheme != "https" and not (
-                url.scheme == "http" and url.hostname in {"localhost", "127.0.0.1", "::1"}))):
-        raise ValueError("Use HTTPS or a loopback HTTP API URL without credentials")
+    validate_api_url(api_url)
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
     files = {
         "deployment.json": {
@@ -98,7 +95,7 @@ def initialize(home=None, *, api_url=None, port=8000):
 def configuration(path):
     """Read config and environment into a child environment, leaving this process unchanged."""
     try:
-        config = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=_unique)
+        config = json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=unique_object)
     except (ValueError, UnicodeError):
         raise ValueError("Invalid deployment configuration JSON") from None
     expected = {"environment_file", "server", "shift_config", "reconciler_config", "reconciler_state"}

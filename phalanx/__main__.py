@@ -3,9 +3,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
 
 from .api_client import APIError
 from .deployment import add_deploy_command, run_deploy
@@ -15,28 +13,14 @@ from .muster import add_muster_command, run_muster
 from .reconciler import ReconcilerError, add_reconcile_command, run_reconcile
 from .shift import add_shift_command, run_shift
 from .workspaces import WorkspaceError
-from .work_cli import add_work_command, run_work
+from .work_cli import add_work_command, request, run_work
 
 
 def api_request(base_url, route, *, body=None, key=None):
     token = os.environ.get("PHALANX_OWNER_TOKEN", "")
     if not token:
         raise ValueError("PHALANX_OWNER_TOKEN is required for this command")
-    headers = {"Authorization": f"Bearer {token}"}
-    data = None
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    if key:
-        headers["Idempotency-Key"] = key
-    request = Request(base_url.rstrip("/") + route, data=data, headers=headers)
-    try:
-        with urlopen(request, timeout=10) as response:
-            return json.load(response)
-    except HTTPError as error:
-        with error:
-            detail = error.read().decode("utf-8", errors="replace")
-        raise ValueError(f"HTTP {error.code}: {detail}") from error
+    return request(base_url, token, route, body=body, key=key, timeout=10)
 
 
 TARGET_HELP = ("checked_in (default) merges the PR once GitHub's required reviews and checks pass, "

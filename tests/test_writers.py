@@ -701,10 +701,9 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.submit(token, publication, pr_url=PR_URL)
         with patch.object(work_cli, "credential", return_value=(self.url, token)), patch("builtins.print"):
             work_cli.run_work(Namespace(work_command="capacity", phase="building"))
-            with patch.object(work_cli.subprocess, "run",
-                              return_value=subprocess.CompletedProcess([], 0, stdout=OTHER + "\n")) as git:
+            with patch.object(work_cli, "git_text", return_value=OTHER + "\n") as git:
                 work_cli.run_work(Namespace(work_command="capacity", phase="delivering"))
-            git.assert_called_once()
+            git.assert_called_once_with(None, "rev-parse", "HEAD", error=ValueError)
         current = self.ok("/v1/writer", token)
         self.assertFalse(current["writer"]["building"])
         self.assertEqual(current["writer"]["handoff_head"], OTHER)
