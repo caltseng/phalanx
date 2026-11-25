@@ -212,7 +212,13 @@ than relaunching it. Use one shared trusted worktrees workspace where the runtim
 Long chats degrade as context is compacted. Each Captain works a bounded **shift** and then starts a fresh successor. Shifts can overlap, because safety is per item.
 
 - **Registration.** A new Captain calls `POST /v1/captains` with its native session reference, charter revision and the Captain that spawned it, if any, and receives a Captain ID. Each wake heartbeats `PUT /v1/captains/{id}` with the charter revision, wake count, the items it is acting on and its state (`active`, `ending`, `ended`). The board lists every live Captain, its session link, shift age, last heartbeat and current focus.
-- **Shift end.** Normal rotation is elapsed-time only, four hours from registration by
+- **Reinforcement.** The same five-minute wake calls `shift wake`. Every 90 elapsed minutes
+  from registration it includes the fresh canonical workflow beside the fresh charter and
+  compact briefing. The Captain reads it before explicitly acknowledging that interval.
+  The server stores only the greatest acknowledged interval; non-wake heartbeats, missing
+  wakes and failed output cannot consume it. Delayed wakes coalesce intervals. No separate
+  scheduler, local timing file or compaction hook is required.
+- **Shift end.** Normal rotation is elapsed-time only, 24 hours from registration by
   default (`[shift].max_hours`, a positive integer). Queue completion, empty queues,
   dependency/external waits, wake counts and compaction counts never end a shift early,
   including under older charter stop prose. Continue five-minute reconciliation while idle
@@ -366,5 +372,5 @@ Caleb accepted these defaults on 2026-11-23 (decision 71).
 | D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
 | D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
 | D6 | Enforce dispatch pause and persisted workspace Building (`max_building_writers`, initially 5) and Total (`max_writers`, initially 10 on new installs) atomically. Publication handoff releases Building, not Total; publication/delivery fixes must reacquire Building before editing or substantial tests. Eligible waiting PR fixes precede new builds. Owner edits persist through reload/restart; existing installations activate separately. |
-| D7 | Normal shifts rotate only on elapsed registration age: four hours by default, configured by charter `max_hours`. Five-minute reconciliation continues through empty or blocked queues; wakes and compactions are telemetry only. Explicit owner stop and genuine authority/safety failure remain exceptions. Supersedes earlier wake/compaction bounds and queue-completion stops. |
+| D7 | Normal shifts rotate only on elapsed registration age: 24 hours by default, configured by charter `max_hours`, with canonical charter/workflow reinforcement every 90 elapsed minutes through the same five-minute wake. Five-minute reconciliation continues through empty or blocked queues; wakes and compactions are telemetry only. Explicit owner stop and genuine authority/safety failure remain exceptions. Supersedes earlier wake/compaction bounds and queue-completion stops. |
 | D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |

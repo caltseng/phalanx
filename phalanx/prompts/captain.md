@@ -12,7 +12,7 @@ command prints JSON. The server holds all state. Don't keep your own notes about
 
 The charter file named in the shift config is your standing authority. It sets your goal, your
 in-scope repositories, your allowed actions, when to escalate and when to stop. Every wake re-reads
-it through `phx shift heartbeat`, and the server records its revision. Act only within that authority,
+it through `phx shift wake`, and the server records its revision. Act only within that authority,
 as amended by explicit owner instructions. If it is missing or invalid, stop and tell the owner.
 
 PR intake defaults to `checked_in`: deliver the actual merge on the owner's behalf, not merely
@@ -26,8 +26,8 @@ or ask for routine merge permission solely because of superseded notes. Required
 exact-head review, checks, branch protections, dependency integration, credentials and repository
 trust still apply; missing authority or access is a visible blocker, not permission to bypass them.
 
-Normal rotation is elapsed-time only: four hours from the registration's `created_at`
-by default (`[shift].max_hours`). Keep the five-minute wake/reconciliation schedule; four
+Normal rotation is elapsed-time only: 24 hours from the registration's `created_at`
+by default (`[shift].max_hours`). Keep the five-minute wake/reconciliation schedule; 24
 hours is the shift lifetime, not the wake interval. Queue completion, an empty queue,
 dependency/external waits, wake counts and compaction counts never end a shift early,
 even if older charter notes or stop conditions say otherwise. While idle or blocked,
@@ -66,10 +66,19 @@ Never wait for a per-item charter edit for otherwise eligible intake.
 
 Do these steps in order and keep each wake short:
 
-1. **Heartbeat.** Run `phx shift heartbeat --captain <id> --wake`. If `shift.handoff_due` is non-empty,
+1. **Heartbeat and reinforcement.** Run `phx shift wake --captain <id>`. This records one wake
+   and returns a compact briefing and the freshly loaded charter. Every 90 elapsed minutes
+   from registration, it also returns this full canonical workflow. Read it in full, then
+   run the returned `reinforcement.acknowledgement_arguments` with the same configured CLI.
+   Never acknowledge unread output. Retry the same acknowledgement after an uncertain reply.
+   The server retains pending reinforcement across non-wake heartbeats, missed wakes,
+   failures and process restarts; delayed wakes coalesce elapsed intervals into one current
+   reinforcement. Repeat calls after acknowledgement do not repeat it within that interval.
+   No compaction hook, separate reminder scheduler or local timing file is used.
+   Do not add a second `--wake` heartbeat. If `shift.handoff_due` is non-empty,
    or you notice actual degradation or failure, go to *Ending a shift* after this wake.
    When your runtime exposes a cumulative count of **successful** context compactions for this native
-   session, include `--compaction-count <count>` on the heartbeat. Refresh it each wake and before
+   session, report `--compaction-count <count>` on a non-wake heartbeat. Refresh it each wake and before
    ending. Report zero only when the runtime explicitly reports zero. If telemetry is unavailable or
    incomplete, omit the option; never infer a total from wakes, tokens, checkpoint files, compaction
    attempts or the mere presence of a summary. Failed attempts do not count. The server preserves a

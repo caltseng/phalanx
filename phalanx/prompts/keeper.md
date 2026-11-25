@@ -28,7 +28,7 @@ config and environment that printed this prompt: for example
    resolve `phx shift current`, and link/forward only through the verified native binding.
    A live `ending` Captain prevents recovery launch here but is not an active forwarding destination.
    Do not replace a live Captain because its queue completed, work is dependency/external-blocked,
-   or it reached a wake or compaction count. Normal rotation is elapsed-time only, four hours
+   or it reached a wake or compaction count. Normal rotation is elapsed-time only, 24 hours
    from registration by default (`[shift].max_hours`), with five-minute Captain reconciliation.
    Compaction is a checkpoint, not a mandatory handoff; unavailable telemetry stays unknown,
    with no first-compaction fallback. Explicit owner stop and actual degradation/failure

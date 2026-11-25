@@ -223,12 +223,19 @@ authoritative; ending/withdrawing/replacing the writer clears the handoff for re
 Counts, board waits and dispatch-overdue/backlog reporting use `dispatch`'s same state/helpers,
 not stage-derived guesses or a second budget. Intents and waiting writers retain Total.
 `shift launch` supplies no limit, and charters reject concurrency keys; `deploy init` writes
-only `max_hours = 4` for elapsed-time rotation. Existing stores retain their saved Total, all live writers and
+only `max_hours = 24` for elapsed-time rotation. Existing stores retain their saved Total, all live writers and
 conservative Building allocations. Shipped code does not prove installation state: follow
 [separate deployment and activation](deployment.md#two-limit-writer-activation); do not treat
 approval or an open PR as deployment.
 `shift heartbeat` compares the Captain's registration age with freshly loaded charter
-`max_hours` (default four). Wake and compaction counts remain monotone telemetry, not
+`max_hours` (default 24). `shift wake` uses the returned server heartbeat timestamp for age,
+prints a compact briefing and adds the fresh canonical workflow every 90 elapsed minutes.
+The Captain row's `reinforced_interval` is the last acknowledged registration-relative
+90-minute interval. `PUT /v1/captains/{id}/reinforcement` advances it monotonically only
+after the Captain reads that output. Non-wake heartbeats never touch it; retries reprint
+unacknowledged workflow, and delayed wakes coalesce intervals without another scheduler.
+The explicit additive column and API rollout are described in the deployment guide.
+Wake and compaction counts remain monotone telemetry, not
 rotation triggers. Packaged Captain/keeper instructions retain five-minute reconciliation
 through queue completion and dependency/external waits, with explicit owner stop and genuine
 safety exceptions. The client rejects retired count-limit keys rather than silently ignoring

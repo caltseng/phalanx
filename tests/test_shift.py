@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
-from phalanx import shift
+from phalanx import captains, shift
 from phalanx.store import migrate, write_transaction
 from phalanx.work_cli import credential, request
 
@@ -77,7 +77,7 @@ class CharterTest(unittest.TestCase):
                     shift.ShiftError, "rotation is elapsed-time only; remove"):
                 self.charter(CHARTER + f"[shift]\n{field} = 5\n")
 
-    def test_rotation_is_due_at_four_elapsed_hours_regardless_of_counts_or_queue_stop_prose(self):
+    def test_rotation_is_due_at_24_elapsed_hours_regardless_of_counts_or_queue_stop_prose(self):
         charter = self.charter(CHARTER)
         old_charter = self.charter(CHARTER.replace("the owner ends the run", "the queue is empty"))
         now = datetime.now(UTC)
@@ -85,14 +85,14 @@ class CharterTest(unittest.TestCase):
         for policy in (charter, old_charter):
             for count in (None, 0, 5, 100):
                 for wakes in (0, 48, 1000):
-                    for seconds in (21 * 60, 4 * 3600 - 1, 4 * 3600, 4 * 3600 + 1):
+                    for seconds in (21 * 60, 4 * 3600, 24 * 3600 - 1, 24 * 3600, 24 * 3600 + 1):
                         with self.subTest(count=count, wakes=wakes, seconds=seconds, policy=policy["stop_when"]):
                             current = dict(captain, wake_count=wakes, compaction_count=count)
                             bounds = shift.shift_bounds(current, policy, now + timedelta(seconds=seconds))
                             self.assertEqual(bounds["compaction_count"], count)
                             self.assertEqual(bounds["wakes"], wakes)
                             self.assertEqual(bounds["handoff_due"],
-                                             ["shift age reached 4 h"] if seconds >= 4 * 3600 else [])
+                                             ["shift age reached 24 h"] if seconds >= 24 * 3600 else [])
         self.assertIsNone(shift.shift_bounds(captain, charter, now)["compaction_count"])
 
     def test_charter_must_live_outside_checkouts_and_worktrees(self):
@@ -100,6 +100,20 @@ class CharterTest(unittest.TestCase):
             path.parent.mkdir(exist_ok=True)
             with self.subTest(path=path), self.assertRaisesRegex(shift.ShiftError, "outside every checkout"):
                 self.charter(CHARTER, path)
+
+    def test_reinforcement_boundaries_and_clock_rollback(self):
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        row = {"created_at": created.isoformat(), "state": "active", "reinforced_interval": 0}
+        for seconds, interval in ((-60, 0), (0, 0), (5399, 0), (5400, 1), (5401, 1),
+                                  (10799, 1), (10800, 2), (21601, 4)):
+            with self.subTest(seconds=seconds):
+                result = captains.reinforcement(row, created + timedelta(seconds=seconds))
+                self.assertEqual(result["interval"], interval)
+                self.assertEqual(result["due"], interval > 0)
+        acknowledged = dict(row, reinforced_interval=4)
+        self.assertFalse(captains.reinforcement(acknowledged, created + timedelta(hours=3))["due"])
+        for state in ("ending", "ended"):
+            self.assertFalse(captains.reinforcement(dict(row, state=state), created + timedelta(days=2))["due"])
 
     def test_checks_environment_config_requires_non_empty_text_when_present(self):
         path = self.root / "shift.json"
@@ -175,6 +189,17 @@ class CharterTest(unittest.TestCase):
             shift.run_shift(Namespace(shift_command="status", config="shift.json", captain=None))
         self.assertEqual(json.loads(output.call_args.args[0]),
                          {"items": [], "dashboard_url": "https://muster.example.test:8443/team/operator/"})
+
+    def test_wake_uses_server_elapsed_age_not_the_client_clock(self):
+        created = datetime(2026, 1, 1, tzinfo=UTC)
+        charter = self.charter(CHARTER)
+        captain = {"id": "captain", "created_at": created.isoformat(), "wake_count": 1,
+                   "heartbeat_at": (created + timedelta(hours=24)).isoformat(),
+                   "reinforcement": {"due": False}}
+        api = mock.Mock(return_value=captain)
+        with mock.patch.object(shift, "heartbeat", return_value={"captain": captain, "charter": charter}):
+            result = shift.wake(api, charter, "captain", config=self.config)
+        self.assertEqual(result["shift"]["handoff_due"], ["shift age reached 24 h"])
 
 
 class ShiftTest(ServerFixture, unittest.TestCase):
@@ -438,6 +463,65 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertEqual(beat["captain"]["created_at"], created_at)
         self.assertEqual(beat["captain"]["charter_revision"], changed["revision"])
         self.assertEqual(beat["shift"]["handoff_due"], ["shift age reached 1 h"])
+
+    def test_wake_reinforces_at_90_minutes_until_acknowledged_and_coalesces_missed_intervals(self):
+        captain = shift.start(self.api, self.charter, "reinforced-session", config=self.config)["captain"]
+        captain_id = captain["id"]
+        first = shift.wake(self.api, self.charter, captain_id, config=self.config)
+        self.assertFalse(first["reinforcement"]["due"])
+        self.assertNotIn("workflow", first["reinforcement"])
+        with write_transaction(self.database) as db:
+            db.execute("UPDATE captains SET created_at=? WHERE id=?",
+                       ((datetime.now(UTC) - timedelta(minutes=91)).isoformat(), captain_id))
+        # A non-wake heartbeat must not consume the reminder.
+        shift.heartbeat(self.api, self.charter, captain_id, config=self.config)
+        due = shift.wake(self.api, self.charter, captain_id, config=self.config)
+        self.assertTrue(due["reinforcement"]["due"])
+        self.assertEqual(due["reinforcement"]["workflow"], shift.prompt("captain"))
+        self.assertEqual(due["charter"], shift.load_charter(self.config))
+        self.assertEqual(due["reinforcement"]["acknowledgement_arguments"],
+                         ["shift", "ack-reinforcement", "--captain", captain_id, "--interval", "1"])
+        # Output lost after the heartbeat: replay still contains the workflow.
+        again = shift.wake(self.api, self.charter, captain_id, config=self.config)
+        self.assertEqual(again["reinforcement"], due["reinforcement"])
+        route = f"/v1/captains/{captain_id}/reinforcement"
+        self.assertEqual(self.request(route, RUNNER, {"interval": 2}, method="PUT")[0], 409)
+        self.assertEqual(self.request(route, body={"interval": 1}, method="PUT")[0], 401)
+        for invalid in (0, -1, True):
+            self.assertEqual(self.request(route, RUNNER, {"interval": invalid}, method="PUT")[0], 422)
+        ack = self.api(route, method="PUT", body={"interval": 1})
+        self.assertFalse(ack["due"])
+        self.assertEqual(self.api(route, method="PUT", body={"interval": 1}), ack)
+        self.assertNotIn("workflow", shift.wake(self.api, self.charter, captain_id,
+                                               config=self.config)["reinforcement"])
+        with write_transaction(self.database) as db:
+            db.execute("UPDATE captains SET created_at=? WHERE id=?",
+                       ((datetime.now(UTC) - timedelta(minutes=361)).isoformat(), captain_id))
+        pending = shift.wake(self.api, self.charter, captain_id, config=self.config)["reinforcement"]
+        self.assertEqual((pending["interval"], pending["acknowledged_interval"], pending["due"]), (4, 1, True))
+        self.assertTrue(self.api(route, method="PUT", body={"interval": 1})["due"])
+        self.assertFalse(self.api(route, method="PUT", body={"interval": 4})["due"])
+        # A late acknowledgement remains idempotent even if the server clock rolls back.
+        with write_transaction(self.database) as db:
+            row = captains.captain_row(db, captain_id)
+            self.assertEqual(row["reinforced_interval"], 4)
+            with mock.patch.object(captains, "datetime", wraps=datetime) as clock:
+                clock.now.return_value = datetime.fromisoformat(row["created_at"]) + timedelta(minutes=180)
+                result = captains.acknowledge_reinforcement(
+                    db, captain_id, captains.ReinforcementAcknowledgement(interval=4))
+                self.assertEqual(result["acknowledged_interval"], 4)
+                self.assertFalse(result["due"])
+
+    def test_wake_fails_without_consuming_reinforcement_when_prerequisites_fail(self):
+        api = mock.Mock(return_value={"id": "captain"})
+        with self.assertRaisesRegex(shift.ShiftError, "API needs"):
+            shift.wake(api, self.charter, "captain", config=self.config)
+        api.assert_called_once_with("/v1/captains/captain")
+        with mock.patch.object(shift, "prompt", side_effect=OSError("cannot read workflow")):
+            api.reset_mock()
+            with self.assertRaisesRegex(OSError, "cannot read workflow"):
+                shift.wake(api, self.charter, "captain", config=self.config)
+            api.assert_not_called()
 
     def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
         captain = " ".join(shift.prompt("captain").split())

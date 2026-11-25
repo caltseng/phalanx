@@ -176,7 +176,16 @@ review and storage always reference the exact immutable draft revision.
 
 An operator-owned charter defines goal, repo scope, authority, escalation and
 stop conditions. Captain wakes every five minutes. Normal rotation is purely elapsed-time:
-four hours from registration by default, using positive-integer charter `[shift].max_hours`.
+24 hours from registration by default, using positive-integer charter `[shift].max_hours`.
+`shift wake` records a heartbeat and returns a compact briefing and the fresh charter.
+Every 90 elapsed minutes from registration it also returns the current canonical Captain
+workflow. The API owns the last acknowledged interval; only an explicit acknowledgement
+after reading the workflow advances it. Non-wake heartbeats and failed output cannot
+consume reinforcement. Missed intervals coalesce on the next wake, unacknowledged output
+repeats, and duplicate or late acknowledgements cannot erase newer pending intervals.
+Server UTC determines intervals, clamped at zero on clock rollback; acknowledged intervals
+never regress. Reinforcement uses the existing five-minute wake, not another scheduler,
+local timing file or compaction hook.
 Queue completion, empty queues, dependency/external waits, wake counts and compaction counts
 never end a shift early, including under older charter stop prose. Idle Captains retain
 ownership and reconcile on schedule. Compaction is a checkpoint, not a rotation trigger;
