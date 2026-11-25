@@ -34,6 +34,10 @@ service entrypoints preserve explicitly configured existing paths and require an
 database unless new-database initialization is explicitly requested. Adoption never moves
 live state or restarts services; the service owner coordinates rollout after review.
 See [deployment tooling and migration](docs/deployment.md).
+On Windows the API entrypoint normalizes its own inherited Idle/BelowNormal CPU priority
+to Normal, preserving explicitly higher priorities; supervisor tasks should also use Normal.
+This prevents routine host load from starving API control and writer traffic without changing
+writer capacity, database semantics, other processes or scheduling on other platforms.
 
 ## Work items and repositories
 
