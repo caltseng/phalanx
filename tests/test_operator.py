@@ -1,12 +1,15 @@
 from dataclasses import asdict, replace
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from urllib.request import Request, urlopen
 
-from phalanx import intake
+from phalanx import dispatch, intake, operator_api
 from phalanx.intake import record, steer
 from phalanx.intake_models import Intake, Steering
 from phalanx.intake_schema import INTAKE_SCHEMA
@@ -523,7 +526,8 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         self.assertEqual(group["items"][0]["outcome"], "draft_published")
 
     def test_conditional_reads_are_authenticated_scoped_and_invalidated_by_writes(self):
-        routes = (BOARD, "/v1/operator/overview", "/v1/operator/groups/wave-1")
+        routes = (BOARD, "/v1/operator/overview", "/v1/operator/groups/wave-1",
+                  f"/v1/operator/items/{self.row(BOARD)['item_id']}")
         for route in routes:
             with self.subTest(route=route):
                 with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {OWNER}"})) as response:
@@ -540,6 +544,28 @@ class DashboardTest(ServerFixture, unittest.TestCase):
                                       headers={"If-None-Match": "*"})[0], 400)
         self.assertEqual(self.request("/v1/operator/groups/missing", OWNER,
                                       headers={"If-None-Match": "*"})[0], 404)
+
+    def test_read_context_is_shared_with_validators_and_304_skips_summary(self):
+        from fastapi import Response
+        item_id = self.row(BOARD)["item_id"]
+        handlers = ((operator_api.list_executions, ()), (operator_api.overview, ()),
+                    (operator_api.group, ("wave-1",)), (operator_api.current_item, (item_id,)))
+        for handler, args in handlers:
+            with self.subTest(handler=handler.__name__), ExitStack() as stack:
+                reads = [stack.enter_context(patch.object(module, name, wraps=getattr(module, name)))
+                         for module, name in ((dispatch, "settings"), (dispatch, "first_rework"),
+                                              (operator_api, "availability_reports"), (operator_api.pickup, "active_holds"))]
+                request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(database_path=self.path)),
+                                          url=SimpleNamespace(path=handler.__name__, query=""), headers={})
+                response = Response()
+                handler(request, response, *args)
+                self.assertEqual([read.call_count for read in reads], [1, 1, 1, 1])
+                for read in reads:
+                    read.reset_mock()
+                request.headers["if-none-match"] = response.headers["ETag"]
+                stack.enter_context(patch.object(operator_api, "SUMMARY", "INVALID SUMMARY"))
+                self.assertEqual(handler(request, Response(), *args).status_code, 304)
+                self.assertEqual([read.call_count for read in reads], [1, 1, 1, 1])
 
     def test_retry_expiry_changes_token_and_queue_reason_without_a_write(self):
         from fastapi import Response

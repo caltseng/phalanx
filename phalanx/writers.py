@@ -15,7 +15,7 @@ from pydantic import Field, StringConstraints
 
 from . import captains, dispatch, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
-from .flags import all_flags
+from .flags import execution_flags
 from .intake_models import Identifier, Payload, Text, Versioned
 from .pr_models import SHA
 from .transitions import TERMINAL, Event, Stage, Status
@@ -83,7 +83,7 @@ def open_writer(db, execution_id):
                       (execution_id,)).fetchone()
 
 
-def binding(db, writer):
+def binding(db, writer, *, current=None):
     from .usage import latest
     execution = intake.execution_row(db, writer["item_id"], writer["execution_id"])
     return {
@@ -104,7 +104,7 @@ def binding(db, writer):
             "building_requested_at": writer["building_requested_at"],
             "capacity_revision": writer["capacity_revision"],
             "handoff_head": execution["handoff_head"],
-            "capacity_wait": (dispatch.building_wait(db, writer["id"]) or
+            "capacity_wait": (dispatch.building_wait(db, writer["id"], **(current or {})) or
                               "Building capacity available; retry acquisition"
                               if writer["building_requested_at"] and not writer["building"] else None),
         },
@@ -353,8 +353,9 @@ def progress(db, writer_id, payload):
 
 def current(db, writer_id):
     """The writer's binding plus its execution's open flags, so the writer sees what it must fix."""
-    view = binding(db, writer_row(db, writer_id))
-    view["flags"] = [flag for flag in all_flags(db)["flags"] if flag["execution_id"] == view["id"]]
+    context = {"capacity": dispatch.settings(db), "rework": dispatch.first_rework(db)}
+    view = binding(db, writer_row(db, writer_id), current=context)
+    view.update(execution_flags(db, view["id"], current=context))
     return view
 
 

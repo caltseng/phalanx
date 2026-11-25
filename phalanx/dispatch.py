@@ -44,25 +44,25 @@ def first_rework(db):
     ).fetchone()
 
 
-def building_wait(db, writer_id=None, *, capacity=None):
+def building_wait(db, writer_id=None, *, capacity=None, rework=...):
     capacity = settings(db) if capacity is None else capacity
     if capacity["paused"]:
         return "Dispatch is paused"
     if capacity["building_writers"] >= capacity["max_building_writers"]:
         return f"Building capacity exhausted: {capacity['building_writers']}/{capacity['max_building_writers']}"
-    first = first_rework(db)
+    first = first_rework(db) if rework is ... else rework
     if first is not None and first["id"] != writer_id:
         return f"Building capacity reserved for waiting PR rework writer {first['id']}"
     return None
 
 
-def admission_wait(db, stage, *, capacity=None):
+def admission_wait(db, stage, *, capacity=None, rework=...):
     capacity = settings(db) if capacity is None else capacity
     if capacity["paused"]:
         return "Dispatch is paused"
     if capacity["active_writers"] >= capacity["max_writers"]:
         return f"Total capacity exhausted: max_writers={capacity['max_writers']}"
-    return building_wait(db, capacity=capacity) if needs_building(stage) else None
+    return building_wait(db, capacity=capacity, rework=rework) if needs_building(stage) else None
 
 
 def set_dispatch(db, payload):
