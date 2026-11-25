@@ -803,6 +803,8 @@ class Probe:
         started = time.monotonic()
         status, body = client.call("health", "GET", "/health", retry=False)
         health = status
+        if health != 503:
+            self.violation(f"Storage outage health returned {health}, expected 503: {body}")
         self.pause(max(0.0, started + self.config.outage_seconds - time.monotonic()))
         db.execute("ROLLBACK")
         db.close()
@@ -865,6 +867,8 @@ class Probe:
             "kill_to_all_dependents_released_seconds": unblocked and round(unblocked - killed, 2),
             **self.results.pop("drain", {}),
         }
+        if self.results["restart"].get("due_rechecks_admitted") != self.config.due_waits:
+            self.violation(f"Restart did not admit all {self.config.due_waits} due rechecks")
         if unblocked is None:
             self.violation("Fan-out dependents were still blocked 300 s after the restart")
 
