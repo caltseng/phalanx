@@ -454,6 +454,77 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                        "missed heartbeat noticed on waking", "Elapsed-time/wake bounds still apply"):
             self.assertIn(signal, captain)
 
+    def test_interrupted_registration_reply_replays_the_pending_reservation(self):
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        item = self.item()
+        committed = []
+
+        def lose_reply(route, **options):
+            response = self.api(route, **options)
+            if route.endswith("/writer") and "body" in options:
+                committed.append(response)
+                raise ConnectionError("Registration committed, reply lost")
+            return response
+
+        with self.assertRaisesRegex(ConnectionError, "reply lost"):
+            shift.launch(lose_reply, self.config, self.charter, captain, item["id"])
+        original = committed[0]["writer"]
+        pending = shift.status(self.api, self.charter)["items"][0]
+        self.assertEqual(pending["writer"]["state"], "launching")
+        self.assertEqual(pending["writer"]["nonce"], original["nonce"])
+        self.assertIn("handoff pending", pending["wait_reason"])
+        self.assertIn("fresh full native inventory", pending["resume_trigger"])
+        self.assertEqual((pending["writer"]["created_at"], pending["writer"]["confirmed_at"]),
+                         (original["created_at"], None))
+        replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        self.assertEqual(replay["writer"], original)
+        worktree = Path(replay["worktree"])
+        self.assertFalse(shift.credential_path(worktree).with_name(shift.PENDING).exists())
+        base_url, token = credential(worktree)
+        self.assertEqual(request(base_url, token, "/v1/writer")["writer"], original)
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
+
+    def test_native_creation_before_confirmation_recovers_the_same_full_nonce_at_capacity(self):
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        original = launched["writer"]
+        # Native creation succeeded but the Captain was interrupted before confirmation.
+        shift.heartbeat(self.api, self.charter, captain, sessions=[
+            {"id": "unrelated", "name": launched["session_name"], "writer_nonce": "other_nonce_123456"},
+            {"id": "created", "name": "Renamed task", "writer_nonce": original["nonce"]},
+        ])
+        self.request("/v1/dispatch/settings", OWNER, {"paused": True}, method="PUT")
+        replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        self.assertEqual(replay["writer"], original)
+        inventory = self.api(f"/v1/captains/{captain}")["sessions"]
+        (native,) = [session for session in inventory if session["writer_nonce"] == original["nonce"]]
+        route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
+        body = {"captain_id": captain, "writer_id": original["id"], "session_id": native["id"]}
+
+        def lose_confirmation_reply():
+            self.api(route, body=body, method="PATCH")
+            raise ConnectionError("Confirmation committed, reply lost")
+
+        with self.assertRaisesRegex(ConnectionError, "reply lost"):
+            lose_confirmation_reply()
+        recovered = self.api(route, body=body, method="PATCH")["writer"]
+        self.assertEqual((recovered["id"], recovered["nonce"], recovered["attempt_id"]),
+                         (original["id"], original["nonce"], original["attempt_id"]))
+        self.assertEqual(recovered["session_id"], "created")
+        self.assertIsNotNone(recovered["confirmed_at"])
+        with self.assertRaisesRegex(ValueError, "already confirmed"):
+            self.api(route, body=dict(body, session_id="unrelated"), method="PATCH")
+        status = shift.status(self.api, self.charter)
+        self.assertEqual((status["active_writers"], status["building_writers"]), (1, 1))
+        self.assertIsNone(status["items"][0]["wait_reason"])
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
+
     def test_writer_cap_counts_intents_and_confirmed_writers_across_captains(self):
         self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]

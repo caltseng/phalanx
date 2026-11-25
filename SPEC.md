@@ -137,7 +137,12 @@ so existing reports, board pages and later owner-merge reconciliation remain rea
   queues the same stage. Captains answer routine questions from scope/repo evidence and
   record `answered_by: captain`; owner is the default.
 - Lost launch response: discover the nonce through complete native session inventory
-  before repeating. Confirm native ID/link in the registration. Stale/unknown session
+  before repeating. Reserve/create/confirm one item before reserving another. Recover
+  each wake: confirm a full-nonce match, or replay the same reservation only after fresh
+  full inventory proves absence and no create is in flight. Otherwise retain the intent
+  and report the exact blocker. The unconfirmed wait and age are visible immediately,
+  distinct from native execution; the existing ten-minute alert notifies the owner.
+  Confirm native ID/link in the registration. Stale/unknown session
   status is a flag, never proof it stopped.
 - Replacement names the current writer and attests the exact session stopped after
   preserving local changes, checkpoints and external effects. Revocation and replacement

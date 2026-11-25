@@ -338,6 +338,13 @@ A successor does not inherit creator-only runtime authority.
    inspect candidate kickoffs/metadata for the exact `session_identity.writer_nonce`. Names and
    goals may collide and titles may change; neither is identity. If inspection is unavailable or
    inconclusive, retain the intent and report the blocker instead of launching twice.
+   Finish this reserve/create/confirm handoff before reserving the next item. On an
+   interruption, recover on the next wake rather than waiting for the ten-minute alert:
+   confirm a full-nonce match from fresh full inventory. If none exists and no create is
+   in flight, replay `shift launch`, verify the same writer ID/full nonce, then create
+   and confirm once. Do not withdraw/re-reserve just to recover the interruption.
+   Missing replay credentials or incomplete inventory are explicit recovery blockers,
+   never permission to create another writer.
 4. Run the keeper (D8) as an app automation that starts a new session every 30 minutes (`save_workflow`, `cron_expression` `*/30 * * * *`, mode `autopilot`) with the prompt "Run `python -m phalanx shift prompt keeper` and follow it. `phx shift` means `python -m phalanx shift --config <shift config>`. Create the Captain session in project `<session_workspace>`." Before any early exit, it checks cleanup of Captain sessions that this keeper session created. It starts no new Captain when a live one exists, the most recent ended less than 10 minutes ago without a successor yet, or it stopped with `Stop condition met:` under the current charter revision. Otherwise it starts a Captain. An automation run that can't schedule itself creates the Captain with `project_id` set to the shift config's `session_workspace`, the name `phx captain keeper` and a 5-minute `schedule`. That same keeper creator must retain a cleanup wake or child-ended notification until its Captain hands off cleanly; a fresh scheduled keeper session has no creator authority over it.
 5. The app may let only a session's creator archive it. Captains clean up their own writers and helpers; keeper runs clean up their own Captain children. All use the preservation check and durable result above, not repeated attempts by successors. Missing authority is recorded and escalated once, with `orphan_session` left visible.
 

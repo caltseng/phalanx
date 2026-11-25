@@ -189,13 +189,25 @@ or restart another owner's services from a writer.
 
 After an API restart, bindings, attempts, replies and outputs survive in SQLite.
 After a Captain loss, existing writers and the reconciler continue; a keeper/fresh
-Captain reconciles API, GitHub and native inventory. After a lost launch response,
-search the full inventory and verify the nonce in kickoff/metadata before launching.
+Captain reconciles API, GitHub and native inventory. `shift.launch` prepares the worktree
+and persists/replays a reservation; the Captain's native create and writer confirmation
+are separate effects, not a transaction. Complete those three steps per item before
+reserving another. After interruption, search fresh full inventory and verify the full
+nonce in kickoff/metadata. Confirm a match, or replay the same reservation only after
+proving absence and no in-flight native create. Inconclusive inventory/replay is an
+explicit blocker. Scribe and Captain status show reservation age and the recovery
+action without claiming native execution; the existing ten-minute alert notifies the
+owner. No background launcher or timeout-based release is introduced.
 Replace only the exact stopped
 writer after preserving local work and accounting for external effects. An API HTTP 401
 ends that writer's control access; inspect terminal state through an authorized
 Captain/owner, not by manufacturing a new credential. Stale heartbeat/progress flags
 alone never prove a process stopped. Follow [resume](resume.md) and [recovery](recovery.md).
+
+Activation requires the service owner to deploy the API/CLI projection and flag changes
+and refresh retained Captain instructions from the packaged prompt verbatim. Existing
+reservations and allocations remain in place; there is no schema/configuration change.
+Writers do not restart services or patch retained/live configuration to activate this.
 
 ### Shipped code is not installation state
 

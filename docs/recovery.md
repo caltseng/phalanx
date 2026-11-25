@@ -12,7 +12,7 @@ to recover. Read the API, GitHub and native session state before repeating an ex
 | HTTP 503 with `Retry-After: 1` | Retry the identical idempotent request after the storage outage clears. |
 | Queued intake has no writer | Read its shared `pickup` decision in `shift status` or Scribe. In-scope authorized intake needs no per-item charter edit. Launch eligible work; resolve the concrete dependency, hold, affinity, readiness, pause or capacity reason for excluded work. |
 | Captain pickup scope/readiness is uninitialized | An updated current Captain heartbeat must publish real charter scope and local readiness. Do not infer permanent exclusion or readiness from an empty rollout snapshot. |
-| `launch_unconfirmed` | Find the launch nonce in the runtime's full session list before confirming or withdrawing it. A timeout does not prove no launch. |
+| `launch_unconfirmed` | Native create/confirm has not been verified for ten minutes. The wait is visible immediately; recover each wake, not only after this alert. Search fresh full native inventory for the full nonce, confirm a match, or safely replay the same reservation as below. A timeout does not prove no launch. |
 | `writer_stopped`, `writer_error`, `no_progress`, `worker_overdue` | Inspect the exact native session and worktree. Resume it or safely replace it; silence alone never authorizes stopping. |
 | Runtime repository trust pending | Notify the owner and retain the same writer/session until the owner approves. |
 | `no_live_captain` | The keeper or owner starts a Captain. Existing writers and the reconciler continue. |
@@ -33,6 +33,15 @@ For an unconfirmed intent, only its owning Captain acts until it ends, goes stal
 the intent. First search the full native inventory and verify the exact full nonce in
 kickoff/metadata; task-first or renamed display titles are not identity. Confirm only
 the exact matching session.
+If fresh full inventory proves no matching session exists and no native create is in
+flight, the owning Captain reruns `shift launch --captain ID --item ITEM`, verifies
+the same writer ID and full nonce, then creates/confirms once. A lost registration
+reply replays the staged credential; a lost confirmation reply replays the same native
+ID. Do not discard/re-reserve an intent simply because its handoff was interrupted.
+Incomplete inventory, unavailable kickoff metadata, an uncertain in-flight create or
+missing replay credentials means retain the reservation and report the exact blocker.
+Reserve/create/confirm one item before reserving another; no second launcher, capacity
+bypass or service restart is needed.
 Withdraw an intent only after proving launch never happened, or its session stopped.
 See [registration and fencing](direct-sessions.md#writer-registration-and-fencing).
 

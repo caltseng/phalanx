@@ -14,6 +14,7 @@ from . import dispatch, pickup
 from .auth import authenticate_board_read
 from .captains import active_holds, availability_reports
 from .display_text import reason_text, short_title
+from .flags import LAUNCH_UNCONFIRMED, launch_wait
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
@@ -54,6 +55,8 @@ SUMMARY = """
            writer.captain_id AS writer_captain_id, writer.session_id AS writer_session_id,
            writer.session_url AS writer_session_url, writer.last_progress_at AS writer_progress_at,
            writer.progress_note AS writer_progress_note, writer.ended_at AS writer_ended_at,
+           writer.nonce AS writer_nonce, writer.created_at AS writer_created_at,
+           writer.confirmed_at AS writer_confirmed_at, writer.abandoned_at AS writer_abandoned_at,
            writer.building AS writer_building, writer.building_requested_at,
            (SELECT json_extract(observation.observation_json, '$.deployment')
             FROM github_observations AS observation WHERE observation.execution_id = execution.id
@@ -187,9 +190,11 @@ def conditional_read(request, response, db, now):
             (SELECT max(retry_at) FROM executions WHERE {OPEN} AND retry_at <= ?),
             (SELECT max(ready_since) FROM executions WHERE {OPEN} AND ready_since <= ?),
             (SELECT max(lease_expires_at) FROM attempts WHERE ended_at IS NULL AND lease_expires_at <= ?),
+            (SELECT max(created_at) FROM writers
+             WHERE ended_at IS NULL AND confirmed_at IS NULL AND created_at <= ?),
             (SELECT max(updated_at) FROM executions WHERE {CLOSED} AND updated_at < ?)""",
         (int(now.timestamp() * 1000), int(now.timestamp() * 1000), now.timestamp(),
-         stamp(now - timedelta(days=1))),
+         stamp(now - LAUNCH_UNCONFIRMED), stamp(now - timedelta(days=1))),
     ).fetchone())
     holds = tuple(sorted(active_holds(db, now)))
     sessions = tuple(sorted(availability_reports(db).items(), key=repr))
@@ -294,6 +299,10 @@ def summary(row, now, context):
         pickup_state = pickup.decision(row, now, context["pickup"])
         wait = ({} if pickup_state["eligible"] else
                 {"reason": pickup_state["reason"], "trigger": pickup_state["trigger"]})
+    if (status == Status.RUNNING and not wait and not state.get("stopping")
+            and row["writer_id"] and row["writer_ended_at"] is None and row["writer_confirmed_at"] is None):
+        wait = launch_wait(row["writer_id"], row["writer_nonce"], row["writer_created_at"], now)
+        wait_since = row["writer_created_at"]
     next_action = None
     if output is None and not wait:
         if status == Status.QUEUED:
@@ -351,6 +360,8 @@ def summary(row, now, context):
             "captain_id": row["writer_captain_id"], "session_id": row["writer_session_id"],
             "session_url": row["writer_session_url"], "last_progress_at": row["writer_progress_at"],
             "progress_note": row["writer_progress_note"],
+            "nonce": row["writer_nonce"], "created_at": row["writer_created_at"],
+            "confirmed_at": row["writer_confirmed_at"], "abandoned_at": row["writer_abandoned_at"],
             "building": bool(row["writer_building"]),
             "building_requested_at": row["building_requested_at"],
             "session_availability": context.get("session_reports", {}).get(
