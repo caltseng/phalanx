@@ -15,11 +15,13 @@ def live_captains(db, now):
 
 def context(db, now, *, capacity=None):
     capacity = dispatch.settings(db) if capacity is None else capacity
+    rework = dispatch.first_rework(db)
     return {
         "captains": live_captains(db, now),
         "holds": active_holds(db, now),
         "capacity": capacity,
-        "admission": {stage: dispatch.admission_wait(db, stage, capacity=capacity)
+        "rework": rework,
+        "admission": {stage: dispatch.admission_wait(db, stage, capacity=capacity, rework=rework)
                       for stage in Stage},
     }
 

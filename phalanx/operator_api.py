@@ -12,7 +12,7 @@ from fastapi.responses import PlainTextResponse, Response
 
 from . import dispatch, pickup
 from .auth import authenticate_board_read
-from .captains import active_holds, availability_reports
+from .captains import availability_reports
 from .display_text import reason_text, short_title
 from .flags import LAUNCH_UNCONFIRMED, launch_wait
 from .intake import report as stored_report
@@ -162,20 +162,10 @@ def stamp(moment):
 
 
 def dispatch_context(db, now):
-    capacity = dispatch.settings(db)
-    pickup_context = pickup.context(db, now, capacity=capacity)
-    return {"pickup": pickup_context, "paused": capacity["paused"],
-            "holds": pickup_context["holds"],
-            "session_reports": availability_reports(db),
-            "admission_waits": pickup_context["admission"],
-            "building_waits": {row["id"]: dispatch.building_wait(db, row["id"], capacity=capacity) or
-                              "Building capacity available; retry acquisition"
-                              for row in db.execute(
-                                  "SELECT id FROM writers WHERE ended_at IS NULL AND building=0 "
-                                  "AND building_requested_at IS NOT NULL")}}
+    return {"pickup": pickup.context(db, now), "session_reports": availability_reports(db)}
 
 
-def conditional_read(request, response, db, now):
+def conditional_read(request, response, db, now, context=None):
     # Weak validators ignore ticking display ages, but not deadlines that change row meaning.
     token = db.execute("SELECT token FROM operator_change").fetchone()[0]
     deadlines = tuple(db.execute(
@@ -188,9 +178,10 @@ def conditional_read(request, response, db, now):
         (int(now.timestamp() * 1000), int(now.timestamp() * 1000),
          stamp(now - LAUNCH_UNCONFIRMED), stamp(now - timedelta(days=1))),
     ).fetchone())
-    holds = tuple(sorted(active_holds(db, now)))
-    sessions = tuple(sorted(availability_reports(db).items(), key=repr))
-    live_pickup = pickup.live_captains(db, now)
+    context = dispatch_context(db, now) if context is None else context
+    holds = tuple(sorted(context["pickup"]["holds"]))
+    sessions = tuple(sorted(context["session_reports"].items(), key=repr))
+    live_pickup = context["pickup"]["captains"]
     key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}:{live_pickup}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
     response.headers["ETag"] = etag
@@ -204,7 +195,7 @@ def conditional_read(request, response, db, now):
 
 def queued_wait(row, now_ms, context):
     retry_at = row["retry_at"]
-    if context["paused"]:
+    if context["capacity"]["paused"]:
         return {"reason": "Dispatch is paused", "trigger": "The owner resumes dispatch"}
     if retry_at is not None and retry_at > now_ms:
         at = datetime.fromtimestamp(retry_at / 1000, UTC).isoformat()
@@ -212,12 +203,6 @@ def queued_wait(row, now_ms, context):
     hold = context.get("holds", {}).get(row["id"])
     if hold:
         return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}
-    if row["writer_id"] is None or row["writer_ended_at"] is not None:
-        capacity_wait = context.get("admission_waits", {}).get(row["stage"])
-        if capacity_wait:
-            return {"reason": capacity_wait, "trigger": "Capacity becomes available; a Captain retries admission"}
-        return {"reason": "Awaiting a direct Captain",
-                "trigger": "A Captain registers and launches this item's writer"}
     return {}
 
 
@@ -275,10 +260,13 @@ def summary(row, now, context):
                     "trigger": "Publish the reviewed head, review a superseding head, or stop and withdraw the writer"}
     if (row["building_requested_at"] and not row["writer_building"] and not blocked_count
             and status in (Status.RUNNING, Status.QUEUED, Status.WAITING_FOR_EXTERNAL)):
-        wait = {"reason": context.get("building_waits", {}).get(row["writer_id"]),
+        current = context["pickup"]
+        wait = {"reason": dispatch.building_wait(
+                    None, row["writer_id"], capacity=current["capacity"], rework=current["rework"])
+                or "Building capacity available; retry acquisition",
                 "trigger": "The same writer retries `work capacity building` before any rework"}
     if status == Status.QUEUED and not wait:
-        wait = queued_wait(row, int(now.timestamp() * 1000), context)
+        wait = queued_wait(row, int(now.timestamp() * 1000), context["pickup"])
     pickup_state = None
     if status == Status.QUEUED and (row["writer_id"] is None or row["writer_ended_at"] is not None):
         pickup_state = pickup.decision(row, now, context["pickup"])
@@ -487,7 +475,8 @@ def list_executions(
     where, params = filter_clause(filters)
     now = datetime.now(UTC)
     with read_transaction(request.app.state.database_path) as db:
-        unchanged = conditional_read(request, response, db, now)
+        context = dispatch_context(db, now)
+        unchanged = conditional_read(request, response, db, now, context)
         if unchanged is not None:
             return unchanged
         if kind == "open":
@@ -504,7 +493,6 @@ def list_executions(
                 rows = closed_page(db, after, limit + 1)
                 next_key = closed_key(rows[limit - 1]) if len(rows) > limit else None
                 rows = rows[:limit]
-        context = dispatch_context(db, now)
     return {
         "items": [summary(row, now, context) for row in rows],
         "next_cursor": encode_cursor(scope, next_key) if next_key else None,
@@ -516,10 +504,10 @@ def overview(request: Request, response: Response):
     now = datetime.now(UTC)
     now_ms = int(now.timestamp() * 1000)
     with read_transaction(request.app.state.database_path) as db:
-        unchanged = conditional_read(request, response, db, now)
+        context = dispatch_context(db, now)
+        unchanged = conditional_read(request, response, db, now, context)
         if unchanged is not None:
             return unchanged
-        context = dispatch_context(db, now)
         open_counts = db.execute(
             f"""SELECT status, dependency_wait_json IS NOT NULL AS blocked, count(*) AS count
                 FROM executions WHERE {OPEN} GROUP BY status, blocked"""
@@ -549,7 +537,7 @@ def overview(request: Request, response: Response):
         "generated_at": stamp(now),
         "sections": sections,
         "closed_24h": closed,
-        "dispatch": {"paused": context["paused"]},
+        "dispatch": {"paused": context["pickup"]["capacity"]["paused"]},
         "oldest_queued_since": (
             stamp(datetime.fromtimestamp(oldest / 1000, UTC)) if oldest is not None else None
         ),
@@ -574,15 +562,13 @@ def brief(db, item_id):
 def current_item(request: Request, response: Response, item_id: Identifier):
     now = datetime.now(UTC)
     with read_transaction(request.app.state.database_path) as db:
-        row = db.execute(
-            f"{SUMMARY} WHERE execution.item_id = ? AND {CURRENT}", (item_id,),
-        ).fetchone()
-        if row is None:
+        if db.execute("SELECT 1 FROM work_items WHERE id=?", (item_id,)).fetchone() is None:
             raise HTTPException(404, "Item not found")
-        unchanged = conditional_read(request, response, db, now)
+        context = dispatch_context(db, now)
+        unchanged = conditional_read(request, response, db, now, context)
         if unchanged is not None:
             return unchanged
-        context = dispatch_context(db, now)
+        row = db.execute(f"{SUMMARY} WHERE execution.item_id = ? AND {CURRENT}", (item_id,)).fetchone()
         work_brief = brief(db, item_id)
     return {"item": {**summary(row, now, context), **work_brief}}
 
@@ -596,7 +582,8 @@ def group(request: Request, response: Response, label: Annotated[str, Path(patte
     with read_transaction(request.app.state.database_path) as db:
         if db.execute("SELECT 1 FROM work_items WHERE label=? LIMIT 1", (label,)).fetchone() is None:
             raise HTTPException(404, "No work items have this label")
-        unchanged = conditional_read(request, response, db, now)
+        context = dispatch_context(db, now)
+        unchanged = conditional_read(request, response, db, now, context)
         if unchanged is not None:
             return unchanged
         boundary = "AND (item.created_at, item.id) > (?, ?)" if after else ""
@@ -609,7 +596,6 @@ def group(request: Request, response: Response, label: Annotated[str, Path(patte
                 ORDER BY item.created_at, item.id""",
             (label, *(after or ()), limit + 1),
         ).fetchall()
-        context = dispatch_context(db, now)
     closed = {name: 0 for name in Outcome.__args__}
     page = rows[:limit]
     items = [summary(row, now, context) for row in page]

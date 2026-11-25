@@ -1,4 +1,5 @@
 from argparse import Namespace
+from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -8,6 +9,7 @@ from secrets import token_urlsafe
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -50,6 +52,36 @@ class WriterTest(ServerFixture, unittest.TestCase):
     def item(self):
         item = self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "Write it", "target": "report"}, 201)
         return item["id"], item["execution"]["id"]
+
+    def test_writer_flags_are_scoped_and_capacity_is_read_once(self):
+        registered = [self.register(*self.item())[:2] for _ in range(3)]
+        now = datetime.now(UTC)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE writers SET building=0, building_requested_at=?", (intake.timestamp(),))
+            db.execute("UPDATE attempts SET started_at=?", ((now - timedelta(hours=2)).isoformat(),))
+            flags.raise_flag(db, flags.Flag(kind="review_wait", execution_id=registered[-1][0]["id"],
+                                           reason="Exact-head review pending", recovery="Reviewer approves"))
+            expected = flags.all_flags(db, now)["flags"]
+        binding, _ = registered[-1]
+        with ExitStack() as stack:
+            stack.enter_context(patch("phalanx.writers.all_flags", create=True, side_effect=AssertionError))
+            stack.enter_context(patch("phalanx.flags.datetime", wraps=datetime)).now.return_value = now
+            reads = [stack.enter_context(patch.object(dispatch, name, wraps=getattr(dispatch, name)))
+                     for name in ("settings", "first_rework")]
+            current = writers.get_current(SimpleNamespace(
+                app=SimpleNamespace(state=SimpleNamespace(database_path=self.path)),
+                state=SimpleNamespace(writer=binding["writer"])))
+            self.assertEqual([read.call_count for read in reads], [1, 1])
+        self.assertEqual(current["flags"], [entry for entry in expected if entry["execution_id"] == binding["id"]])
+        self.assertIn("review_wait", {entry["kind"] for entry in current["flags"]})
+        self.assertIsNotNone(current["writer"]["capacity_wait"])
+        with patch.object(flags, "DERIVED_LIMIT", 1), connect(self.path, mode="ro") as db:
+            scoped = flags.execution_flags(db, binding["id"], now=now)["flags"]
+            self.assertIn("active_overdue", {entry["kind"] for entry in scoped})
+        with patch.object(dispatch, "first_rework", wraps=dispatch.first_rework) as rework:
+            with connect(self.path, mode="ro") as db:
+                flags.all_flags(db)
+            self.assertEqual(rework.call_count, 1)
 
     def version(self, item_id):
         return self.ok(f"/v1/items/{item_id}", OWNER)["execution"]["version"]

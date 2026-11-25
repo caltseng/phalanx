@@ -282,12 +282,8 @@ def _flag(kind, row, reason, recovery, first_seen, notify_owner=False):
             "notify_owner": notify_owner, "source": "server"}
 
 
-def observation_flags(db, now):
-    """Flag the latest observation of each open execution, so flags clear when GitHub does.
-
-    An observation older than RECONCILER_STALE may no longer hold, so its flags say when it
-    was seen and an observation_stale flag asks for the reconciler's error on that item.
-    """
+def observation_flags(db, now, *, execution_id=None):
+    """Flag latest observations in scope, annotating stale evidence until GitHub refreshes it."""
     flags = []
     for row in db.execute(
         f"""WITH latest AS (
@@ -297,15 +293,16 @@ def observation_flags(db, now):
                            ORDER BY observation.last_observed_at DESC, observation.observed_at DESC) AS rank
                 FROM github_observations AS observation
                 JOIN executions AS execution ON execution.id = observation.execution_id
-                WHERE ({OPEN}) OR (execution.status = 'completed'
+                WHERE (({OPEN}) OR (execution.status = 'completed'
                     AND json_extract(execution.state_json, '$.final_output.merge_commit') IS NOT NULL
-                    AND json_type(observation.observation_json, '$.deployment') = 'object')
+                    AND json_type(observation.observation_json, '$.deployment') = 'object'))
+                    {"AND execution.id=?" if execution_id else ""}
             )
             SELECT latest.*, checked.checked_at, checked.failures_json
             FROM latest
             LEFT JOIN local_check_results AS checked
                 ON checked.execution_id = latest.execution_id AND checked.head_sha = latest.head_sha
-            WHERE rank = 1 ORDER BY latest.execution_id"""
+            WHERE rank = 1 ORDER BY latest.execution_id""", (execution_id,) if execution_id else ()
     ):
         observation = json.loads(row["observation_json"])
         closed = json.loads(row["state_json"])["final_output"] is not None
