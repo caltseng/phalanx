@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -16,10 +15,10 @@ from phalanx import captains, shift
 from phalanx.store import migrate, write_transaction
 from phalanx.work_cli import credential, request
 
+from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
-ROOT = Path(__file__).resolve().parents[1]
 CHARTER = """goal = "Deliver the pilot's queued work"
 repositories = ["repo"]
 allowed_actions = ["launch and replace writer sessions"]
@@ -887,9 +886,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
 
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
-            result = subprocess.run([sys.executable, "-m", "phalanx", "shift", *arguments],
-                                    env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True,
-                                    text=True, timeout=30)
+            result = run_cli(["shift", *arguments])
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
 
@@ -925,10 +922,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                           ("--no-sessions", "--session-writer", "s-task", "nonce"),
                           ("--session-availability", "missing", "deleted"),
                           ("--session", "s-task", "Task", "--session-availability", "s-task", "unknown")):
-            result = subprocess.run(
-                [sys.executable, "-m", "phalanx", "shift", "--config", str(config),
-                 "heartbeat", "--captain", captain, *arguments],
-                env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True, text=True, timeout=30)
+            result = run_cli(
+                ["shift", "--config", str(config),
+                 "heartbeat", "--captain", captain, *arguments])
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--session", result.stderr)
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain, "--no-sessions"))

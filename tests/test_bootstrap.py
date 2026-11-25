@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from phalanx import store
 from phalanx.store import APPLICATION_ID, connect, migrate, read_transaction, write_transaction
+from cli_runner import run_cli
 from timing import WAIT_SECONDS
 
 
@@ -182,10 +183,9 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                         self.stop_server(server)
 
     def run_cli(self, database, command, argument, *, success=True):
-        result = subprocess.run(
-            [sys.executable, "-m", "phalanx", "server", command, str(argument)],
-            env=dict(os.environ, PHALANX_DB=str(database)),
-            capture_output=True, text=True, timeout=10,
+        result = run_cli(
+            ["server", command, str(argument)],
+            env={"PHALANX_DB": str(database)},
         )
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
