@@ -98,7 +98,7 @@ and this probe. Its JSON measurements are saved in the `envelope` workflow artif
 Run the same CI configuration locally with:
 
 ```powershell
-python tests\envelope_probe.py --executions 1000 --due-waits 200 --fanout 60 --throttled 2 --captains 2 --max-writers 2 --duration 20 --throttle-seconds 4 --outage-seconds 3 --aging-seconds 10 --json-out envelope.json
+python tests\envelope_probe.py --executions 1000 --fanout 60 --throttled 2 --captains 2 --max-writers 2 --duration 20 --throttle-seconds 4 --outage-seconds 3 --aging-seconds 10 --json-out envelope.json
 ```
 
 [#209](https://github.com/caltseng/phalanx/pull/209) records the first part-1 direct default-scale
@@ -106,9 +106,11 @@ comparison and decision 87's authenticated timing exception: invariant/fault che
 but PH-19a latency, free-writer delay and due-event-drain timing targets remain missed and
 tracked under PH-26. Its exit 0 must not be described as passing those timing targets.
 
-The direct workload retains 100,000 seed executions, 10,000 due waits, 2,000 dependents, four
+The direct workload retains 100,000 seed executions, 2,000 dependents, four
 Captains with a combined budget of 24 writers, one extra polling actor per Captain, and the
 same intake/read/fault timing. `--captains` and `--max-writers` control the synthetic budget.
+The external-recheck drain and its options were retired with the runner HTTP API; the
+due-wait measurements below remain historical, not checks performed by the current probe.
 Interrupted review now exercises explicit stopped-writer replacement, preserved draft and
 revoked-token rejection, not clock mutation. Report stages continue under the same writer.
 If restart loses the last storage reply, the owner read APIs must confirm that exact

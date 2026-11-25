@@ -6,7 +6,7 @@ from synthetic workers under several Captains, owner intake with urgent arrivals
 board and inbox reads, and rejected credentials. While that load runs it injects the
 PH-19 fault cases: a provider throttle, a storage outage, an interrupted worker while a
 dependent waits on a blocked prerequisite, and a hard server kill during a dependent
-wakeup batch followed by a drain of due external waits.
+wakeup batch.
 
 The synthetic workers only work for a short sleep. They measure the server's
 latency, fairness and recovery, not live worker capacity.
@@ -42,7 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from phalanx import dispatch, intake, waits  # noqa: E402
+from phalanx import dispatch, intake  # noqa: E402
 from phalanx.dispatch_api import DispatchSettings  # noqa: E402
 from phalanx.intake_models import Intake  # noqa: E402
 from phalanx.store import connect, migrate, write_transaction  # noqa: E402
@@ -52,7 +52,7 @@ from phalanx.transitions import Event, Outcome, Wait  # noqa: E402
 OWNER = "o" * 32
 RUNNER = "r" * 32
 GENERAL = [f"repo-{index}" for index in range(8)]
-LANES = ["urgent-lane", "waits", "fanout-source", "fanout", "prereq", "dependent", "throttle",
+LANES = ["urgent-lane", "fanout-source", "fanout", "prereq", "dependent", "throttle",
          "interrupt"]
 PRIORITY_NAMES = ("low", "normal", "urgent")
 REQUEST_TIMEOUT = 60
@@ -267,21 +267,6 @@ class Probe:
                        '$.final_output', json_object('reference', 'seed://report', 'draft_revision', NULL))
                    WHERE id=?""", ((execution,) for execution in closed))
 
-        lease = intake.digest(token_urlsafe(32))
-        for start in range(0, config.due_waits, 2000):
-            with write_transaction(self.path) as db:
-                for index in range(start, min(config.due_waits, start + 2000)):
-                    item = intake.create(db, Intake(repository_id="waits", goal=f"External gate {index}",
-                                                    target="report"))
-                    row, state = self.current(db, item)
-                    claim = intake.claim_attempt(db, row, state, runner_id="seed-waits", lease_digest=lease,
-                                                 lease_expires_at=int(time.time()) + 90)
-                    row, state = intake.check_current(db, item["id"], row["id"], row["version"] + 1)
-                    waits.schedule(db, row, state, claim["attempt_id"], "Seeded provider gate", 0,
-                                   {"gate": "ci", "revision": {"head": "a" * 40, "base": "b" * 40}})
-        with write_transaction(self.path) as db:
-            db.execute("UPDATE external_rechecks SET due_at_ms = ? - (rowid % 60000)", (now_ms,))
-
         with write_transaction(self.path) as db:
             upstream = intake.create(db, Intake(repository_id="fanout-source", goal="Shared prerequisite",
                                                 target="report"))
@@ -294,8 +279,7 @@ class Probe:
             prerequisite = intake.create(db, Intake(repository_id="prereq", goal="Blocked prerequisite",
                                                     target="report"))
             row, state = self.current(db, prerequisite)
-            claim = intake.claim_attempt(db, row, state, runner_id="seed-prereq", lease_digest=lease,
-                                         lease_expires_at=int(time.time()) + 90)
+            claim = intake.claim_attempt(db, row, state, writer_id="seed-prereq")
             row, state = intake.check_current(db, prerequisite["id"], row["id"], row["version"] + 1)
             question = {"prompt": "Which source should the report cite?", "handoff": "Seeded question"}
             intake.apply(db, row, state, Event.RESULT, details={"question": question},
@@ -843,8 +827,6 @@ class Probe:
         healthy = time.monotonic()
         self.window("restart", killed, healthy + self.config.fault_grace)
         self.restarted = healthy
-        drain = threading.Thread(target=self.guard, args=(self.drain,), name="drain")
-        drain.start()
         unblocked = None
         while unblocked is None and time.monotonic() < healthy + 300:
             with read_store(self.path) as db:
@@ -856,7 +838,6 @@ class Probe:
                 unblocked = time.monotonic()
             else:
                 self.pause(0.1)
-        drain.join()
         with self.metrics.lock:
             first_claim = next((stamp for stamp in self.metrics.claims if stamp > healthy), None)
         self.results["restart"] = {
@@ -865,44 +846,9 @@ class Probe:
             "kill_to_healthy_seconds": round(healthy - killed, 2),
             "kill_to_first_unrelated_claim_seconds": first_claim and round(first_claim - killed, 2),
             "kill_to_all_dependents_released_seconds": unblocked and round(unblocked - killed, 2),
-            **self.results.pop("drain", {}),
         }
-        if self.results["restart"].get("due_rechecks_admitted") != self.config.due_waits:
-            self.violation(f"Restart did not admit all {self.config.due_waits} due rechecks")
         if unblocked is None:
             self.violation("Fan-out dependents were still blocked 300 s after the restart")
-
-    def drain(self):
-        """Admit every due external recheck after restart while writer traffic continues."""
-        started = time.monotonic()
-        local = threading.local()
-
-        def recheck(entry):
-            if not hasattr(local, "client"):
-                local.client = Client(self)
-            status, body = local.client.call(
-                "recheck", "POST", f"/v1/items/{entry['item_id']}/executions/{entry['execution_id']}/recheck",
-                RUNNER, {"expected_version": entry["version"]},
-                {"Idempotency-Key": f"{entry['execution_id']}-{entry['version']}-recheck"},
-            )
-            if status != 200:
-                self.violation(f"Recheck of {entry['execution_id']} returned {status}: {body}")
-            return status
-
-        client = Client(self)
-        admitted = 0
-        with ThreadPoolExecutor(self.config.drain_threads) as pool:
-            while True:
-                status, due = client.call("due_rechecks", "GET", "/v1/runner/due-rechecks?limit=100", RUNNER)
-                if status != 200:
-                    self.violation(f"Due rechecks returned {status}: {due}")
-                    return
-                if not due:
-                    break
-                admitted += sum(status == 200 for status in pool.map(recheck, due))
-        self.drain_span = (started, time.monotonic())
-        self.results["drain"] = {"due_rechecks_admitted": admitted,
-                                 "healthy_to_rechecks_drained_seconds": round(time.monotonic() - started, 2)}
 
     # Orchestration ---------------------------------------------------------------------------
 
@@ -969,14 +915,6 @@ class Probe:
             steady = [elapsed for stamp, elapsed, status in samples
                       if status < 500 and not self.faulted(stamp)]
             routes[label] = {"latency_ms": spread(steady, 1000), "statuses": dict(sorted(statuses.items()))}
-            if hasattr(self, "drain_span"):
-                start, end = self.drain_span
-                with_stamps = [(stamp, elapsed) for stamp, elapsed, status in samples
-                               if status < 500 and not self.faulted(stamp)]
-                routes[label]["latency_ms_before_drain"] = spread(
-                    [elapsed for stamp, elapsed in with_stamps if stamp < start], 1000)
-                routes[label]["latency_ms_during_drain"] = spread(
-                    [elapsed for stamp, elapsed in with_stamps if start <= stamp <= end], 1000)
             offered += len(samples)
             completed += sum(status < 500 for _, _, status in samples)
             unexpected[label] += sum(status >= 500 and not self.faulted(stamp) for stamp, _, status in samples)
@@ -1121,12 +1059,6 @@ class Probe:
                 """SELECT count(*) FROM executions AS e WHERE status = 'running' AND NOT EXISTS (
                        SELECT 1 FROM attempts WHERE execution_id = e.id AND ended_at IS NULL)"""
             ).fetchone()[0]
-            checks["due_rechecks_left"] = db.execute(
-                """SELECT count(*) FROM external_rechecks AS r JOIN executions AS e
-                   ON e.id = r.execution_id AND e.version = r.version
-                   WHERE e.status = 'waiting_for_external' AND r.due_at_ms <= ?""",
-                (int(time.time() * 1000),),
-            ).fetchone()[0]
             checks["fanout_still_blocked"] = db.execute(
                 """SELECT count(*) FROM executions WHERE queue_repository = 'fanout'
                    AND dependency_wait_json IS NOT NULL"""
@@ -1134,7 +1066,7 @@ class Probe:
         for name, expected in (("quick_check", "ok"), ("overbooked_writer_groups", []),
                                ("executions_with_two_open_attempts", 0), ("waits_without_reason", 0),
                                ("dependency_waits_without_reason", 0), ("queued_without_next_action", 0),
-                               ("running_without_attempt", 0), ("due_rechecks_left", 0),
+                               ("running_without_attempt", 0),
                                ("fanout_still_blocked", 0)):
             if checks[name] != expected:
                 self.violation(f"Invariant {name} is {checks[name]!r}, expected {expected!r}")
@@ -1145,7 +1077,6 @@ def parse(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     add = parser.add_argument
     add("--executions", type=int, default=100_000, help="seeded backlog: 1%% ready, 29%% input wait, 70%% closed")
-    add("--due-waits", type=int, default=10_000, help="external waits already due at restart")
     add("--fanout", type=int, default=2_000, help="dependents of one report prerequisite")
     add("--throttled", type=int, default=8, help="items failed with a provider throttle")
     add("--captains", type=int, default=4)
@@ -1166,7 +1097,6 @@ def parse(argv=None):
     add("--throttle-seconds", type=int, default=20)
     add("--outage-seconds", type=float, default=5.0)
     add("--fault-grace", type=float, default=5.0, help="seconds after a fault where 5xx are expected")
-    add("--drain-threads", type=int, default=4)
     add("--interrupt-at", type=float, default=0.1, help="fraction of duration")
     add("--outage-at", type=float, default=0.3)
     add("--restart-at", type=float, default=0.5)

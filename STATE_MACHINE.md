@@ -105,7 +105,7 @@ merges under the same terminal enrichment rules.
 ```mermaid
 stateDiagram-v2
     accTitle: Execution status, separate from lifecycle stage
-    accDescr: Queued work starts a fenced attempt. Questions wait for replies and external waits resume on observations or rechecks. Completed, failed and cancelled executions retain exactly one output.
+    accDescr: Queued work starts a fenced attempt. Questions wait for replies and delivery waits advance on GitHub observations. Completed, failed and cancelled executions retain exactly one output.
     [*] --> queued
     queued --> running: Named writer attempt
     running --> running: Next runnable stage, new attempt
@@ -115,7 +115,7 @@ stateDiagram-v2
     running --> waiting_for_external: External result or finalization
     running --> completed: Output verified
     waiting_for_input --> queued: Reply
-    waiting_for_external --> queued: Event or recheck
+    waiting_for_external --> queued: GitHub observation requires self-review
     waiting_for_external --> waiting_for_input: Owner action
     waiting_for_external --> completed: Output verified
     queued --> waiting_for_external: Cancellation finalization
@@ -137,7 +137,7 @@ stateDiagram-v2
 | Paused dispatch | Refuse new registrations and attempts. Existing attempts can post progress/results. Resume makes runnable work available again. |
 | Prerequisite satisfied | Re-evaluate durable milestones in bounded batches and at claim time. Unrelated items remain runnable. Failed/cancelled upstream work never qualifies through its disposition report. |
 | Human judgment | Save question/options/default/handoff and notify. Captain replies record `answered_by: captain`; owner is the default. Reply queues the same stage, retaining its writer and context. |
-| External wait | Store reason, gate, expected revision and due recheck. Events or bounded jittered polling resume it. Delivery observations can complete directly without another attempt. |
+| External wait | Store the delivery or finalization reason and resume trigger. Reconciler observations advance delivery without another attempt; report finalization retries independently. No runner-scheduled recheck path exists. |
 | Interrupted writer | No timed expiry. Verify native state, exact session and preserved local work. Discover uncertain launch by nonce before launching. Replacement must name the current writer and attest it stopped; atomically transfer allocations/pending requests and revoke the old credential. Ended writers consume neither limit. |
 | Repeated lack of progress | Bound retries/repeated findings and ask for a decision with prior attempts and next action. Silence and stale-progress flags alone do not authorize replacing a writer. |
 | Cancel requested | Stop new work and reconcile in-flight effects; confirm the exact worker stopped. If a merge succeeded, record it rather than claiming cancellation. Store a disposition report when needed. |
@@ -146,8 +146,8 @@ stateDiagram-v2
 
 Delivery retains a live writer even without an open attempt. Cancellation and forced failure
 therefore wait for its Captain to reconcile effects, stop the exact session and withdraw it
-with `stopped=true`; withdrawal confirms the stop even when no attempt is open. An explicitly
-scheduled external wait with no active attempt can still finalize immediately. A verified
+with `stopped=true`; withdrawal confirms the stop even when no attempt is open. An external
+wait with neither an active attempt nor an open writer can finalize immediately. A verified
 primary-PR merge into the target observed before stop confirmation completes delivery instead
 of producing a cancellation/failure report; open, unmerged and wrong-base observations do not.
 

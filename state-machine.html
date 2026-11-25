@@ -109,7 +109,7 @@
       <tr><td>Running</td><td>Submit current attempt evidence; next runnable stage opens a new
         attempt for the same writer. Otherwise wait, retry, ask, or finalize.</td></tr>
       <tr><td>Waiting for input</td><td>Saved question and handoff; versioned reply queues the same stage.</td></tr>
-      <tr><td>Waiting for external</td><td>Observation/recheck resumes work or verifies delivery;
+      <tr><td>Waiting for external</td><td>GitHub observation advances delivery; finalization retries storage;
         report finalization retries independently.</td></tr>
       <tr><td>Completed / failed / cancelled</td><td>Exactly one verified PR or stored Markdown
         report. A rerun creates a linked execution for new work; a completed ready PR can

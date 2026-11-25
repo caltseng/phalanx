@@ -12,7 +12,7 @@ from .auth import (
 from .store import read_transaction, write_transaction
 from .transitions import PublicationMode
 from .intake_models import (
-    AttemptEvent, Cancel, DisplayTitle, ExternalWait, Identifier, Intake, Registration, Reply, Rerun, Result,
+    AttemptEvent, Cancel, DisplayTitle, Identifier, Intake, Registration, Reply, Rerun, Result,
     RevisionID, Steering, Versioned,
 )
 
@@ -143,9 +143,7 @@ def attempt_event(request, operation, item_id, execution_id, body, key):
     from . import writers  # writers' routes import this module
 
     writer = request.state.writer
-    lease_digest = writer["token_digest"]
     payload = body.model_dump(mode="json")
-    # Preserve receipt digests for results written before these optional fields existed.
     if isinstance(body, Result):
         for field in (
             "failure_reason", "question", "retry_after_seconds", "review_notes",
@@ -153,15 +151,13 @@ def attempt_event(request, operation, item_id, execution_id, body, key):
         ):
             if payload[field] is None:
                 payload.pop(field)
-    if isinstance(body, ExternalWait) and body.wait_limit_seconds is None:
-        payload.pop("wait_limit_seconds")
-    receipt = {"body": payload, "lease_digest": lease_digest}
+    receipt = {"body": payload, "writer_id": writer["id"]}
     def perform(db, *args):
         view = operation(db, *args)
         return writers.advance(db, writer["id"], body.attempt_id, view)
 
     return run(
-        request, perform, item_id, execution_id, body, lease_digest, write=True, finish=True,
+        request, perform, item_id, execution_id, body, writer["id"], write=True, finish=True,
         scope=f"{operation.__name__}:{item_id}:{execution_id}", key=key, payload=receipt,
     )
 
@@ -195,31 +191,11 @@ def reply(request: Request, item_id: Identifier, execution_id: Identifier,
                scope=f"reply:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
 
 
-@router.post("/items/{item_id}/executions/{execution_id}/external-wait",
-             dependencies=[Depends(require_writer)])
-def external_wait(request: Request, item_id: Identifier, execution_id: Identifier,
-                  body: ExternalWait, key: RequiredKey):
-    return attempt_event(request, waits.external_wait, item_id, execution_id, body, key)
-
-
-@router.get("/runner/due-rechecks", dependencies=[Depends(require_runner)])
-def due_rechecks(request: Request, limit: BatchLimit = 50):
-    return run(request, waits.due_rechecks, limit)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/recheck",
-             dependencies=[Depends(require_runner)])
-def recheck(request: Request, item_id: Identifier, execution_id: Identifier,
-            body: Versioned, key: RequiredKey):
-    return run(request, waits.recheck, item_id, execution_id, body, write=True,
-               scope=f"recheck:{item_id}:{execution_id}", key=key, payload=body.model_dump(mode="json"))
-
-
 @router.post("/items/{item_id}/executions/{execution_id}/github-observation",
              dependencies=[Depends(require_runner)])
 def github_observation(request: Request, item_id: Identifier, execution_id: Identifier,
                        body: reconciliation.Observation):
-    """Record what the reconciler saw on GitHub; no lease. It advances only a writer's PR stages."""
+    """Record what the reconciler saw on GitHub; it advances only a writer's PR stages."""
     return run(request, reconciliation.record, item_id, execution_id, body, write=True)
 
 

@@ -110,7 +110,7 @@ End each created PR description with
    credential in the item's Git directory. Never expose it in chat or commits.
 4. Accepted results end one attempt and open the next runnable stage for the same writer.
    The writer remains registered across input, external, retry and dependency waits.
-   After a reply or recheck, `work next` resumes when eligible. Keep working until a real
+   After a reply or satisfied prerequisite, `work next` resumes when eligible. Keep working until a real
    blocker or verified completion, not merely a stage boundary.
 5. The reconciler independently observes GitHub and posts timestamped facts/flags. It
    does not launch/stop sessions, mutate GitHub, or require a worker attempt.
@@ -151,7 +151,7 @@ so existing reports, board pages and later owner-merge reconciliation remain rea
 
 - Status is `queued`, `running`, `waiting_for_input`, `waiting_for_external`, `completed`,
   `failed` or `cancelled`, separate from stage. Every open state has an action, resume
-  trigger or recovery path. Persist wait reasons and recheck due external waits with jitter.
+  trigger or recovery path. Persist wait reasons; reconciler observations advance delivery waits.
 - `active_overdue` is a read-time warning in existing flags, visible in Scribe, writer status
   and Captain reconciliation, strictly after 90 elapsed minutes from the execution's first
   persisted attempt (`min(attempts.started_at)`). Unclaimed queued work and terminal executions

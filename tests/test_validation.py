@@ -92,21 +92,21 @@ class PublishedValidationTests(unittest.TestCase):
                     GateState.FAILED,
                 )
 
-    def test_draft_preview_is_separate_from_ready_ci(self):
+    def test_draft_check_is_separate_from_ready_ci(self):
         draft = replace(self.current, draft=True)
-        requirement = (RequiredCheck("smoke", CheckKind.PREVIEW),)
-        preview = replace(self.evidence, phase=Phase.DRAFT, name="smoke", kind=CheckKind.PREVIEW)
+        requirement = (RequiredCheck("smoke", CheckKind.CHECK_RUN),)
+        result = replace(self.evidence, phase=Phase.DRAFT, name="smoke")
         self.assertEqual(
-            evaluate_published_checks(draft, Phase.DRAFT, requirement, (preview,)).state, GateState.SATISFIED,
+            evaluate_published_checks(draft, Phase.DRAFT, requirement, (result,)).state, GateState.SATISFIED,
         )
         self.assertEqual(
             evaluate_published_checks(draft, Phase.READY, (self.check,), (self.evidence,)).state, GateState.WAITING,
         )
         self.assertEqual(
-            evaluate_published_checks(self.current, Phase.DRAFT, requirement, (preview,)).state, GateState.SATISFIED,
+            evaluate_published_checks(self.current, Phase.DRAFT, requirement, (result,)).state, GateState.SATISFIED,
         )
         self.assertEqual(
             evaluate_published_checks(self.current, Phase.DRAFT, requirement, ()),
-            GateResult(GateState.SATISFIED, skipped=("smoke (preview)",)),
+            GateResult(GateState.SATISFIED, skipped=("smoke (check_run)",)),
         )
-        self.assertEqual(self.evaluate((self.check,), preview).state, GateState.WAITING)
+        self.assertEqual(self.evaluate((self.check,), result).state, GateState.WAITING)

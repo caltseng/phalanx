@@ -22,21 +22,12 @@ an item, repository content or writer result. An absolute path alone does not es
           "name": "unit-tests",
           "argv": ["C:\\tools\\python.exe", "-I", "-m", "unittest", "discover", "-s", "tests"],
           "timeout_seconds": 600
-        },
-        {
-          "name": "platform-tests",
-          "allow_inapplicable": true,
-          "bypass": {
-            "outcome": "inapplicable",
-            "reason": "This check requires the other platform",
-            "authorization": "Operator-approved repository policy section 3"
-          }
         }
       ],
       "draft_checks": [],
       "ready_checks": [
         {"name": "ci", "kind": "check_run", "app_id": 42},
-        {"name": "deployment-smoke", "kind": "preview", "require_execution": true}
+        {"name": "deployment-smoke", "kind": "check_run", "require_execution": true}
       ]
     }
   }
@@ -63,23 +54,19 @@ list, an absolute executable (`.exe` on Windows), no shell, and no expansion.
 process tree and records whether output identified failures. The reconciler checks the
 PR head in a private scratch worktree and posts results bound to that head.
 
-`allow_skip` and `allow_inapplicable` default to false and must be booleans. A `bypass`
-replaces the command, cannot include `argv` or `timeout_seconds`, and needs the matching
-permission, an outcome of `skipped` or `inapplicable`, and nonblank `reason` and
-`authorization` (each at most 16000 characters). The reconciler does not execute bypassed
-commands. Permission is per check, never authority to bypass repository CI or merging rules.
-Remove temporary bypasses when their authority expires.
+Every configured local check requires `argv`; bypass and skip settings are unsupported.
+Remove checks that do not apply rather than configuring a non-executable entry.
 
 ## GitHub checks
 
 Each phase allows at most 100 requirements. A requirement has an exact nonblank `name`
-(at most 255 characters, no surrounding whitespace), `kind` (`check_run`, `status`,
-`preview`), optional positive `app_id`, and boolean `use_merge_sha` and
+(at most 255 characters, no surrounding whitespace), `kind` (`check_run` or `status`),
+optional positive `app_id`, and boolean `use_merge_sha` and
 `require_execution` (both default false). Duplicate or overlapping identities are rejected.
 App-bound statuses are unsupported because their source cannot be verified.
 
-Head/test-merge revision and execution requirements remain exact. A required preview
-without a trusted preview reader is blocked, never silently passed. Incomplete GitHub
-reads post no new snapshot; earlier flags remain until a complete observation replaces them.
+Head/test-merge revision and execution requirements remain exact. Deployment smoke tests
+must publish a GitHub check run or status; preview readers are unsupported. Incomplete
+GitHub reads post no new snapshot; earlier flags remain until a complete observation replaces them.
 
 See the [acceptance repository policies](pilots/validation-policies.md) for examples.

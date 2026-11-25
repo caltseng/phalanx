@@ -3,11 +3,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from .transitions import Outcome, PublicationMode, Stage, Target
-from .validation import CHECK_WAIT_LIMIT_RANGE
 
 
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16000)]
-WaitLimit = Annotated[int, Field(strict=True, ge=CHECK_WAIT_LIMIT_RANGE[0], le=CHECK_WAIT_LIMIT_RANGE[1])]
 Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,100}$")]
 RevisionID = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 Markdown = Annotated[str, StringConstraints(min_length=1, max_length=256000, pattern=r"\S")]
@@ -102,20 +100,6 @@ class Question(Payload):
 class Reply(Versioned):
     answer: Text
     answered_by: Literal["owner", "captain"] = "owner"
-
-
-class GateRevision(Payload):
-    head: Text
-    base: Text
-
-
-class ExternalWait(AttemptEvent):
-    reason: Text
-    gate: Identifier
-    revision: GateRevision
-    retry_after_seconds: Annotated[int, Field(strict=True, ge=0, le=86400)] = 0
-    # When set, ask the owner once this gate has waited this long on one revision.
-    wait_limit_seconds: WaitLimit | None = None
 
 
 class Result(AttemptEvent):

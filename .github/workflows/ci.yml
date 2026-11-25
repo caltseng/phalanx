@@ -76,7 +76,7 @@ jobs:
       - name: Run envelope probe once
         run: >-
           python tests/envelope_probe.py
-          --executions 1000 --due-waits 200 --fanout 60 --throttled 2
+          --executions 1000 --fanout 60 --throttled 2
           --captains 2 --max-writers 2 --duration 20 --throttle-seconds 4
           --outage-seconds 3 --aging-seconds 10 --json-out envelope.json
 

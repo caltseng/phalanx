@@ -112,7 +112,7 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual((state.status, state.final_output), (Status.WAITING_FOR_EXTERNAL, None))
         self.assertEqual(decide(state, Event.FINALIZE), state)
         with self.assertRaises(ValueError):
-            decide(state, Event.RECHECK)
+            decide(state, Event.CLAIM)
         report = StoredReport("disposition")
         state = decide(state, Event.FINALIZE, evidence=Evidence(stored_report=report))
         self.assertEqual((state.status, state.final_output), (Status.CANCELLED, report))

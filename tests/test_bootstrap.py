@@ -49,10 +49,9 @@ def claim_stage(path, item_id, token, session_ref="fixture"):
             (binding["writer"]["attempt_id"],)).fetchone()[0])
         resume = db.execute(
             """SELECT event, details_json FROM transition_history
-               WHERE execution_id=? AND version=? AND event IN ('reply', 'recheck')""",
+               WHERE execution_id=? AND version=? AND event='reply'""",
             (row["id"], binding["version"] - 1)).fetchone()
-        resumed = ({("input_reply" if resume["event"] == "reply" else "external_recheck"):
-                    json.loads(resume["details_json"])} if resume else {})
+        resumed = ({"input_reply": json.loads(resume["details_json"])} if resume else {})
         return {"execution": {key: value for key, value in binding.items()
                               if key not in {"writer", "item_id"}},
                 "attempt_id": binding["writer"]["attempt_id"],
@@ -300,8 +299,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 db.execute("INSERT INTO runner_limits VALUES ('old', 4)")
                 row = intake.current_execution(db, item["id"])
                 intake.claim_attempt(db, row, intake.STATE.validate_json(row["state_json"]),
-                                     runner_id="old", lease_digest=intake.digest("x" * 32),
-                                     lease_expires_at=253402300799)
+                                     writer_id="fixture")
             with connect(path) as db:
                 saved = {table: ([column[0] for column in db.execute(f"SELECT * FROM {table} LIMIT 0").description],
                                  [tuple(row) for row in db.execute(f"SELECT * FROM {table}")])

@@ -3,7 +3,6 @@
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from hashlib import sha256
-from hmac import compare_digest
 import json
 from time import time
 from uuid import uuid4
@@ -369,8 +368,6 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         (version, state_json, now, ready_since, retry_at, retry_count, row["id"]),
     )
     record(db, row["id"], version, event, details, state_json, now, attempt_id)
-    if state.status == Status.WAITING_FOR_EXTERNAL:
-        db.execute("DELETE FROM external_rechecks WHERE execution_id=?", (row["id"],))
     if state.pending_output is None and next_state.pending_output is not None:
         enqueue(db, row["id"], version)
     if attempt_id and event != Event.CLAIM:
@@ -392,12 +389,11 @@ def end_writers(db, execution_id, status):
                (timestamp(), f"closed as {status}", execution_id))
 
 
-def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, now=None,
-                  continued_from=None):
-    """Persist a claim after PH-06 selects and admits it in this same write transaction."""
+def claim_attempt(db, row, state, *, writer_id, now=None, continued_from=None):
+    """Persist the writer's stage claim in the admission transaction."""
     now = time() if now is None else now
-    if state.status != Status.QUEUED or lease_expires_at <= now:
-        raise Conflict("Claim requires a queued execution and a live lease")
+    if state.status != Status.QUEUED:
+        raise Conflict("Claim requires a queued execution")
     resolved, unmet = dependencies.resolve_dependencies(db, row["item_id"])
     if unmet:
         dependencies.update_wait(db, row["id"], unmet, int(now * 1000))
@@ -406,35 +402,35 @@ def claim_attempt(db, row, state, *, runner_id, lease_digest, lease_expires_at, 
     attempt_id = uuid4().hex
     db.execute(
         """INSERT INTO attempts
-           (id, execution_id, stage, runner_id, lease_digest, lease_expires_at, started_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (attempt_id, row["id"], state.stage, runner_id, lease_digest, lease_expires_at, timestamp()),
+           (id, execution_id, stage, started_at) VALUES (?, ?, ?, ?)""",
+        (attempt_id, row["id"], state.stage, timestamp()),
     )
     resume = db.execute(
         """SELECT event, details_json FROM transition_history
-           WHERE execution_id=? AND version=? AND event IN (?, ?)""",
-        (row["id"], row["version"], Event.REPLY, Event.RECHECK),
+           WHERE execution_id=? AND version=? AND event=?""",
+        (row["id"], row["version"], Event.REPLY),
     ).fetchone()
-    details = {"runner_id": runner_id, "ready_since_ms": row["ready_since"], "dependencies": snapshot}
+    details = {"writer_id": writer_id, "ready_since_ms": row["ready_since"], "dependencies": snapshot}
     if continued_from is not None:
         details["continued_from"] = continued_from
     execution = apply(db, row, state, Event.CLAIM, attempt_id=attempt_id, details=details)
     claim = {"attempt_id": attempt_id, "execution": execution, "dependencies": snapshot}
     if resume is not None:
-        field = "input_reply" if resume["event"] == Event.REPLY else "external_recheck"
-        claim[field] = json.loads(resume["details_json"])
+        claim["input_reply"] = json.loads(resume["details_json"])
     return claim
 
 
-def check_attempt(db, execution_id, state, payload, lease_digest):
+def check_attempt(db, execution_id, state, payload, writer_id):
     attempt = db.execute(
-        """SELECT * FROM attempts WHERE id=? AND execution_id=? AND ended_at IS NULL""",
-        (payload.attempt_id, execution_id),
+        """SELECT attempt.* FROM attempts AS attempt
+           JOIN writers AS writer ON writer.attempt_id=attempt.id
+               AND writer.execution_id=attempt.execution_id
+           WHERE attempt.id=? AND attempt.execution_id=? AND attempt.ended_at IS NULL
+               AND writer.id=? AND writer.ended_at IS NULL""",
+        (payload.attempt_id, execution_id, writer_id),
     ).fetchone()
-    if (attempt is None or payload.stage != state.stage or attempt["stage"] != state.stage
-            or attempt["lease_expires_at"] <= int(time())
-            or not compare_digest(attempt["lease_digest"], lease_digest)):
-        raise Conflict("Attempt, stage, or lease is no longer current")
+    if attempt is None or payload.stage != state.stage or attempt["stage"] != state.stage:
+        raise Conflict("Writer, attempt, or stage is no longer current")
     return attempt
 
 
@@ -459,13 +455,8 @@ def close_failure(db, item_id, execution_id, payload):
 def request_stop(db, item_id, execution_id, payload, event):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
     details = {"reason": payload.reason}
-    scheduled = db.execute(
-        "SELECT 1 FROM external_rechecks WHERE execution_id=? AND version=?",
-        (execution_id, row["version"]),
-    ).fetchone()
     updated = apply(db, row, state, event, details=details)
-    # Delivery writers can still push or merge without an open attempt. Only an explicit
-    # scheduled wait, or the absence of both attempt and writer, proves an effect-free wait.
+    # Delivery writers can still push or merge without an open attempt.
     if state.status == Status.WAITING_FOR_EXTERNAL:
         active = db.execute(
             "SELECT 1 FROM attempts WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
@@ -473,15 +464,15 @@ def request_stop(db, item_id, execution_id, payload, event):
         writer = db.execute(
             "SELECT 1 FROM writers WHERE execution_id=? AND ended_at IS NULL", (execution_id,),
         ).fetchone()
-        if active is None and (scheduled is not None or writer is None):
+        if active is None and writer is None:
             row, state = check_current(db, item_id, execution_id, updated["version"])
             return apply(db, row, state, Event.STOP_CONFIRMED, details=details)
     return updated
 
 
-def stop_confirmed(db, item_id, execution_id, payload, lease_digest):
+def stop_confirmed(db, item_id, execution_id, payload, writer_id):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    check_attempt(db, execution_id, state, payload, lease_digest)
+    check_attempt(db, execution_id, state, payload, writer_id)
     return confirm_stop(db, row, state, payload.attempt_id, details={})
 
 
@@ -497,15 +488,15 @@ def confirm_stop(db, row, state, attempt_id, *, details):
 
 
 def stopped_retry_at(row, now):
-    """Use the same budget and delay for returned failures and expired attempts."""
+    """Bound retries after technical failures or stopped attempts."""
     if row["retry_count"] >= 4:
         return None
     return int(now * 1000) + (5 * 2 ** row["retry_count"]) * 1000
 
 
-def result(db, item_id, execution_id, payload, lease_digest):
+def result(db, item_id, execution_id, payload, writer_id):
     row, state = check_current(db, item_id, execution_id, payload.expected_version)
-    check_attempt(db, execution_id, state, payload, lease_digest)
+    check_attempt(db, execution_id, state, payload, writer_id)
     if payload.review_notes is not None and (
         state.stage != Stage.SELF_REVIEW
         or state.candidate is None

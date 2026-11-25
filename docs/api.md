@@ -156,7 +156,10 @@ Milestone changes refresh up to 32 dependents in the upstream transaction. Large
 
 ### Questions and external waits
 
-See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the question and reply flow. Writers can post `/external-wait` under an execution with their scoped credential, current attempt, expected version and an idempotency key. Include the stage, a reason, a gate ID, the expected head and base, and an optional provider retry delay in seconds. Trusted clients poll `GET /v1/runner/due-rechecks?limit=50` for due waits and post `/recheck` under each execution with its listed version and a stable idempotency key. Those two recheck operations use the trusted service token. A recheck queues the same stage for verification.
+See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the question and reply flow.
+Delivery waits retain the writer without an open attempt. The reconciler posts GitHub
+observations; the writer follows checks and feedback on its primary PR. There is no separate
+runner-scheduled wait or recheck API.
 
 ## Direct writers and dispatch
 
@@ -232,19 +235,18 @@ The [local-board setup](work-items.md#operator-work-board) covers the service-ow
 | `GET /v1/operator/items/{item_id}` | The current execution summary in `item`, or 404. Uses the same conditional-read contract as execution lists. |
 | `GET /v1/operator/overview` | Section counts, 24-hour outcomes, dispatch paused/on, oldest eligible queued age and `generated_at` for data age. |
 | `GET /v1/operator/groups/{label}` | Current executions with the label, a paginated item list and an outcome/size/time rollup of that page only (`scope: "page"`). Follow `next_cursor` to continue; no unbounded label aggregate is computed. |
-| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include their attempt's `worker_reference`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`. |
+| `GET /v1/operator/executions/{execution_id}/timeline` | The execution summary in `item`, the current attempt ID in `attempt`, newest-first transition `events`, and `next_cursor`. Events include `attempt_id`, recorded `pr_url` and full applied `candidate` SHA when available. A result without a persisted `reason` derives a credential-redacted cause from its details, bounded to 400 characters; see the [correlated timeline example](#read-one-items-correlated-timeline). A `reply` event carries `answered_by`. |
 
 Paginated routes default to 25 entries and accept `limit` from 1 through 100. Pass the returned `next_cursor` as `cursor` on the same route and list kind until it is null. Pages read live state: an open execution entering or leaving the input-wait group can cross the cursor between requests, so refresh from the first page to see the current order. New timeline events and closures normally precede the current cursor. The timestamp and version fields describe the persisted state.
 
-Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. Outcome and closure-time filters apply only to closed lists. Filtered pages inspect at most 2,000 indexed candidates and may return an empty page with a continuation cursor. Lists, overview and groups support weak `ETag`/`If-None-Match` conditional reads (`private, no-cache`); unchanged state returns 304. Display ages alone do not invalidate the token: calculate elapsed time from the retained snapshot's timestamps. State changes and retry, lease and 24-hour closure boundaries invalidate it.
+Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. Outcome and closure-time filters apply only to closed lists. Filtered pages inspect at most 2,000 indexed candidates and may return an empty page with a continuation cursor. Lists, overview and groups support weak `ETag`/`If-None-Match` conditional reads (`private, no-cache`); unchanged state returns 304. Display ages alone do not invalidate the token: calculate elapsed time from the retained snapshot's timestamps. State changes, retry/queue deadlines, unconfirmed-launch deadlines and 24-hour closure boundaries invalidate it.
 
 Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
 
 `last_advanced_at` records entry into the current stage, and `last_progress_at` the latest
 execution transition. Wait details include the reason, resume trigger and age. Scheduled
-retries and external rechecks appear as `retry_at_ms` and `recheck_at_ms`. `primary_pr_url`
-identifies the primary PR. Writer fields expose its native session and progress, while
-`worker_reference` and `worker_url` retain historical attempt evidence.
+retries appear as `retry_at_ms`. `primary_pr_url` identifies the primary PR. Writer fields
+expose its native session and progress.
 `version` is the version a reply must name. Timelines list blocking `prerequisites` and the
 current `question`. Report output URLs use the authenticated report route.
 Timelines also include nullable `previous_execution_id` and `next_execution_id` for rerun
@@ -266,14 +268,14 @@ $item = Invoke-RestMethod "$base/v1/items/ITEM_ID" -Headers $headers
 $route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100"
 do {
     $page = Invoke-RestMethod $route -Headers $headers
-    $page.events | Select-Object version, attempt_id, worker_reference, from_stage, stage, reason, pr_url, candidate
+    $page.events | Select-Object version, attempt_id, from_stage, stage, reason, pr_url, candidate
     $route = "$base/v1/operator/executions/$($item.execution.id)/timeline?limit=100&cursor=$($page.next_cursor)"
 } while ($page.next_cursor)
 ```
 
 The response's `item.item_id` and `item.id` correlate the work item and execution.
-Events are newest first; `attempt_id` and that attempt's `worker_reference` identify
-the worker when recorded (otherwise null). `from_stage` and `stage` show a stage change.
+Events are newest first; `attempt_id` identifies the fenced stage attempt when recorded
+(otherwise null). `from_stage` and `stage` show a stage change.
 `pr_url` is the PR recorded on that event, and `candidate` is its full applied
 candidate/head SHA, not the execution's possibly newer revision.
 
@@ -285,7 +287,6 @@ includes this event (other response fields omitted):
 {
   "version": 4,
   "attempt_id": "result-attempt-1",
-  "worker_reference": "worker-1",
   "from_stage": "self_review",
   "stage": "development",
   "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",

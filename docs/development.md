@@ -47,6 +47,11 @@ execution snapshots once, preserving immutable history and outputs. They are not
 general invitation to rewrite live data. Stores older than `OLDEST_SUPPORTED_VERSION`
 are refused.
 
+The runner-attempt retirement changes the fresh-store schema directly; it does not
+convert existing deployed stores. Deploying over an existing store requires a separately
+authorized, record-preserving conversion before activation. Never reset or replace live
+queue data to adopt the new schema.
+
 ## Queue storage
 
 Execution snapshots are JSON with indexed stage/status columns, one open execution per item
@@ -55,7 +60,9 @@ eligibility, pause and the persisted workspace writer budget. The server stores 
 the plaintext credential stays in the worktree's Git directory. `writer/attempt` calls
 `intake.claim_attempt` transactionally for that writer's own queued execution, recording the
 new attempt, pinned dependency evidence, running state and incremented version. Direct writer
-bindings have no timed expiry. A committed result ends the attempt and, when immediately
+bindings have no timed expiry. Results verify the current open writer's attempt binding in
+the write transaction, not a copied credential or synthetic expiry on the attempt.
+A committed result ends the attempt and, when immediately
 runnable, claims the next stage for the same writer in that transaction.
 
 Questions and waits retain the writer; stopped-writer replacement requires native-session
