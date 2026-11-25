@@ -217,15 +217,18 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
             with self.subTest("in-process servers isolate state and restore the environment"):
                 before = dict(os.environ)
-                with patch("test_bootstrap.subprocess.Popen",
-                           side_effect=AssertionError("In-process fixtures must not spawn")):
+                with patch("test_bootstrap.subprocess.Popen", wraps=subprocess.Popen) as spawn:
                     first = self.start_server(Path(directory) / "first.sqlite3",
                                               PHALANX_LOCAL_BOARD="1")
                     first_url = self.url
                     second = self.start_server(Path(directory) / "second.sqlite3")
                 second_url = self.url
-                self.assertEqual(dict(os.environ), before)
                 try:
+                    self.assertEqual(dict(os.environ), before)
+                    self.assertFalse(any(
+                        call.args[0][:3] == [sys.executable, "-c", SERVER_PROCESS]
+                        for call in spawn.call_args_list
+                    ), "In-process fixtures must not launch an API server process")
                     self.assertEqual(self.get("/operator/api/repositories")[0], 401)
                     self.url = first_url
                     self.assertEqual(self.get("/operator/api/repositories"), (200, []))
