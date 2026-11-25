@@ -53,6 +53,17 @@ again, and continue from step 1.
 
 If something technical keeps you from finishing a stage, post `{"outcome": "failed", "failure_reason": "<why>"}`.
 
+## Optional observed usage
+
+Usage is display-only and never delays results or delivery. When your runtime exposes a supported
+read-only usage source for this exact confirmed native session, transport only the allowlisted
+cumulative snapshot with `$work usage --file <snapshot.json>` during an ordinary progress pass.
+Follow `docs/usage.md` in the Phalanx source for the contract and Copilot App metadata query.
+Never read private prompt/history files, use an unrelated CLI session, infer credits from tokens,
+or report missing data as zero. Collection failure is a visible coverage gap, not a work blocker.
+The final native turn cannot meter itself: leave `pending_final`/partial coverage and let an authorized
+Captain observe a bounded refresh later. Never retain capacity or revive an ended credential to meter.
+
 ## Building and publication handoff
 
 The server releases Building capacity at the successful self-review handoff into publication.

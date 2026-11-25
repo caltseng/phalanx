@@ -144,6 +144,12 @@ See [Answer a waiting item](work-items.md#answer-a-waiting-item) for the questio
 
 ## Direct writers and dispatch
 
+Optional [observed usage](usage.md) uses `POST /writer/usage` with the current writer token
+or `POST /items/{item}/executions/{execution}/writers/{writer}/usage` with a live in-scope
+Captain's trusted owner/runner transport, including bounded late observations. These routes
+never advance work or affect capacity. The existing operator timeline response includes
+`usage.execution`, `usage.item`, per-session provenance/gaps and provider capabilities.
+
 | Method and path | Request and behavior |
 | --- | --- |
 | `GET /v1/dispatch/settings` | Board-authenticated read of `paused`, `aging_seconds`, canonical `max_building_writers` (Building, initially 5), `max_writers` (Total, initially 10 on new installs), `building_writers`, `delivering_writers` and `active_writers` (Total usage). Existing stores retain their approved Total until activation. Local read-only board access also permits this read. |

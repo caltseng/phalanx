@@ -84,11 +84,13 @@ def open_writer(db, execution_id):
 
 
 def binding(db, writer):
+    from .usage import latest
     execution = intake.execution_row(db, writer["item_id"], writer["execution_id"])
     return {
         **intake.execution_view(execution),
         "item_id": writer["item_id"],
         "last_reply": intake.latest_reply(db, execution["id"]),
+        "usage": latest(db, writer["id"]),
         "writer": {
             "id": writer["id"], "captain_id": writer["captain_id"], "runtime": writer["runtime"],
             "nonce": writer["nonce"], "state": "ended" if writer["ended_at"] else writer["state"],
