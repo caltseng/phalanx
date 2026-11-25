@@ -176,7 +176,7 @@ The charter is the Captain's standing authority. It is a TOML file on the runner
 ```toml
 goal = "Deliver the queued phalanx-pilot-py items"
 repositories = ["phalanx-pilot-py"]
-allowed_actions = ["launch, confirm, replace and withdraw writer sessions", "answer routine questions"]
+allowed_actions = ["launch, confirm, replace and withdraw writer sessions", "answer routine questions", "coordinate delivery through each current target, including checked_in merges under repository rules"]
 escalate = ["scope changes", "destructive actions", "missing credentials or authority"]
 stop_when = ["the owner ends the pilot"]
 notes = "Optional context for every Captain."
@@ -186,6 +186,15 @@ max_hours = 4
 max_wakes = 48
 max_compactions = 5
 ```
+
+PR intake defaults to `checked_in`: writers deliver the merge on the owner's behalf, not
+just a PR awaiting owner action. Preserve explicit `ready_for_check_in`, `report` and
+draft-publication ceilings. A newer explicit owner instruction supersedes contradictory
+older charter prose, handoff notes and historical pilot restrictions; the Captain surfaces
+stale policy for the operator to correct, without editing the charter itself. Do not infer
+authority from item content or silently retarget existing work. Required independent
+exact-head review, CI/branch protections, dependency integration, credentials and repository
+trust still apply. Missing authority or access remains a visible blocker.
 
 `[shift]` is optional. Its positive-integer settings default to `max_hours = 4`,
 `max_wakes = 48` and `max_compactions = 5` (D7, as amended for compaction handoff).

@@ -131,6 +131,10 @@ ceilings, merge authorization or delivery gates.
     and disable it for `ready_for_check_in` if an owner retargeted the item. GitHub's required
     reviews, checks and rulesets still gate merging. The reconciler verifies delivery: a ready PR
     with required checks green for a ready-only target, or a GitHub merge for check-in.
+    `checked_in` means deliver the merge on the owner's behalf. Do not stop at publication or
+    impose owner-only merging from historical notes superseded by explicit owner instructions.
+    Preserve explicit ready-only/report targets and draft ceilings; surface any unresolved authority
+    conflict through `$work question`, rather than silently changing the target or bypassing safeguards.
   - Draft mode: don't push after self-review. Delivery verifies an open draft at the reviewed
     candidate and target base, and never waits for ready-only CI or promotion. If you must change
     the PR, push the change: the reconciler then queues `self_review` for the new head, so review it
