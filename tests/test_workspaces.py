@@ -10,6 +10,8 @@ from unittest.mock import patch
 from phalanx import workspaces
 from phalanx.workspaces import WorkspaceError, WorkspaceManager
 
+from test_bootstrap import git
+
 
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
@@ -19,25 +21,18 @@ class WorkspaceTests(unittest.TestCase):
         self.checkout = self.directory / "checkout"
         self.root = self.directory / "workspaces"
         self.checkout.mkdir()
-        self.git(self.checkout, "init", "--initial-branch=main")
-        self.git(self.checkout, "config", "user.name", "Phalanx tests")
-        self.git(self.checkout, "config", "user.email", "tests@example.invalid")
-        self.git(self.checkout, "config", "core.hooksPath", str(self.directory / "no-hooks"))
-        self.git(self.checkout, "config", "commit.gpgSign", "false")
-        self.git(self.checkout, "remote", "add", "origin", "https://github.com/Owner/Repo.git")
+        git(self.checkout, "init", "--initial-branch=main")
+        git(self.checkout, "config", "user.name", "Phalanx tests")
+        git(self.checkout, "config", "user.email", "tests@example.invalid")
+        git(self.checkout, "config", "core.hooksPath", str(self.directory / "no-hooks"))
+        git(self.checkout, "config", "commit.gpgSign", "false")
+        git(self.checkout, "remote", "add", "origin", "https://github.com/Owner/Repo.git")
         (self.checkout / "source").write_text("original\n")
         (self.checkout / ".gitignore").write_text("ignored/\n")
-        self.git(self.checkout, "add", ".")
-        self.git(self.checkout, "commit", "-m", "base")
-        self.base = self.git(self.checkout, "rev-parse", "HEAD")
+        git(self.checkout, "add", ".")
+        git(self.checkout, "commit", "-m", "base")
+        self.base = git(self.checkout, "rev-parse", "HEAD")
         self.manager = WorkspaceManager(self.checkout, "git@github.com:owner/repo", self.root)
-
-    def git(self, path, *args):
-        result = subprocess.run(
-            ["git", *args], cwd=path, capture_output=True, text=True, encoding="utf-8",
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        return result.stdout.strip()
 
     def prepare(self, item="item"):
         return self.manager.prepare(item, base="refs/heads/main")
@@ -53,26 +48,26 @@ class WorkspaceTests(unittest.TestCase):
         self.assertRegex(first.branch, r"^phalanx/[0-9a-f]{64}$")
 
         (first.path / "source").write_text("committed\n")
-        self.git(first.path, "commit", "-am", "worker checkpoint")
-        head = self.git(first.path, "rev-parse", "HEAD")
+        git(first.path, "commit", "-am", "worker checkpoint")
+        head = git(first.path, "rev-parse", "HEAD")
         (first.path / "source").write_text("staged\n")
-        self.git(first.path, "add", "source")
+        git(first.path, "add", "source")
         (first.path / "source").write_text("unstaged\n")
         (first.path / "untracked").write_text("untracked\n")
-        status = self.git(first.path, "status", "--porcelain")
+        status = git(first.path, "status", "--porcelain")
         new_manager = WorkspaceManager(self.checkout, "https://github.com/owner/repo", self.root)
         recovered = new_manager.prepare("../item:α", base="missing-base")
         self.assertEqual((recovered.path, recovered.branch, recovered.head),
                          (first.path, first.branch, head))
         self.assertTrue(recovered.dirty)
-        self.assertEqual(self.git(first.path, "status", "--porcelain"), status)
+        self.assertEqual(git(first.path, "status", "--porcelain"), status)
         self.assertEqual((first.path / "source").read_text(), "unstaged\n")
         self.assertEqual((first.path / "untracked").read_text(), "untracked\n")
         self.assertEqual((second.path / "source").read_text(), "original\n")
-        self.assertEqual(self.git(self.checkout, "status", "--porcelain"), "")
+        self.assertEqual(git(self.checkout, "status", "--porcelain"), "")
 
     def test_rejects_mismatched_remote_and_nested_checkout(self):
-        self.git(self.checkout, "remote", "set-url", "origin", "https://github.com/owner/other")
+        git(self.checkout, "remote", "set-url", "origin", "https://github.com/owner/other")
         with self.assertRaisesRegex(WorkspaceError, "does not match"):
             self.prepare()
         nested = self.checkout / "nested"
@@ -85,9 +80,9 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_origin_preparation_verifies_checkout_once_and_preserves_existing_work(self):
         remote = self.directory / "origin.git"
-        self.git(self.directory, "init", "--bare", str(remote))
-        self.git(self.checkout, "remote", "set-url", "origin", remote.as_uri())
-        self.git(self.checkout, "push", "origin", "main")
+        git(self.directory, "init", "--bare", str(remote))
+        git(self.checkout, "remote", "set-url", "origin", remote.as_uri())
+        git(self.checkout, "push", "origin", "main")
         manager = WorkspaceManager(self.checkout, remote.as_uri(), self.root)
         for existing in (False, True):
             with self.subTest(existing=existing), patch("phalanx.workspaces._git", wraps=workspaces._git) as calls:
@@ -99,15 +94,15 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(workspace.head, self.base)
             self.assertEqual(workspace.dirty, existing)
             (workspace.path / "source").write_text("uncommitted work\n")
-            self.git(self.checkout, "commit", "--allow-empty", "-m", "origin advanced")
-            self.git(self.checkout, "push", "origin", "main")
-        self.assertEqual(self.git(self.checkout, "rev-parse", "origin/main"),
-                         self.git(self.checkout, "rev-parse", "main"))
+            git(self.checkout, "commit", "--allow-empty", "-m", "origin advanced")
+            git(self.checkout, "push", "origin", "main")
+        self.assertEqual(git(self.checkout, "rev-parse", "origin/main"),
+                         git(self.checkout, "rev-parse", "main"))
         self.assertEqual((workspace.path / "source").read_text(), "uncommitted work\n")
 
     def test_origin_preparation_reverifies_each_operation_before_fetch(self):
         self.prepare()
-        self.git(self.checkout, "remote", "set-url", "origin", "https://github.com/owner/other")
+        git(self.checkout, "remote", "set-url", "origin", "https://github.com/owner/other")
         with patch("phalanx.workspaces._git", wraps=workspaces._git) as calls, \
                 self.assertRaisesRegex(WorkspaceError, "does not match"):
             self.manager.prepare_from_origin("item", branch="main")
@@ -115,7 +110,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_rejects_workspace_root_inside_checkout_or_git_metadata(self):
         linked = self.directory / "linked"
-        self.git(self.checkout, "worktree", "add", "--detach", str(linked))
+        git(self.checkout, "worktree", "add", "--detach", str(linked))
         for checkout, root, message in (
             (self.checkout, self.checkout / "workspaces", "mapped checkout"),
             (linked, self.checkout / ".git" / "workspaces", "Git metadata"),
@@ -153,18 +148,18 @@ class WorkspaceTests(unittest.TestCase):
             snapshot(copy, workspace.branch, common)
 
         # A branch without a commit cannot produce a candidate head.
-        self.git(self.checkout, "update-ref", "-d", f"refs/heads/{workspace.branch}")
+        git(self.checkout, "update-ref", "-d", f"refs/heads/{workspace.branch}")
         with self.assertRaisesRegex(WorkspaceError, "rev-parse failed"):
             snapshot(workspace.path, workspace.branch, common)
 
     def test_rejects_unowned_registration_and_occupied_path(self):
         workspace = self.prepare()
-        refs = self.git(self.checkout, "for-each-ref", "--format=%(refname)",
-                        "refs/phalanx/workspaces")
-        self.git(self.checkout, "update-ref", "-d", refs)
+        refs = git(self.checkout, "for-each-ref", "--format=%(refname)",
+                   "refs/phalanx/workspaces")
+        git(self.checkout, "update-ref", "-d", refs)
         with self.assertRaisesRegex(WorkspaceError, "ownership"):
             self.prepare()
-        self.git(self.checkout, "worktree", "remove", str(workspace.path))
+        git(self.checkout, "worktree", "remove", str(workspace.path))
         workspace.path.mkdir()
         (workspace.path / "keep").touch()
         with self.assertRaisesRegex(WorkspaceError, "occupied"):
@@ -173,31 +168,31 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_rejects_branch_changed_or_registered_elsewhere(self):
         workspace = self.prepare()
-        self.git(workspace.path, "switch", "--detach")
+        git(workspace.path, "switch", "--detach")
         with self.assertRaisesRegex(WorkspaceError, "registration conflicts"):
             self.prepare()
-        self.git(self.checkout, "worktree", "remove", str(workspace.path))
+        git(self.checkout, "worktree", "remove", str(workspace.path))
         elsewhere = self.directory / "elsewhere"
-        self.git(self.checkout, "worktree", "add", str(elsewhere), workspace.branch)
+        git(self.checkout, "worktree", "add", str(elsewhere), workspace.branch)
         with self.assertRaisesRegex(WorkspaceError, "registration conflicts"):
             self.prepare()
 
     def test_reattaches_reserved_branch_without_resetting_tip(self):
         workspace = self.prepare()
-        self.git(workspace.path, "commit", "--allow-empty", "-m", "checkpoint")
-        head = self.git(workspace.path, "rev-parse", "HEAD")
-        self.git(self.checkout, "worktree", "remove", str(workspace.path))
+        git(workspace.path, "commit", "--allow-empty", "-m", "checkpoint")
+        head = git(workspace.path, "rev-parse", "HEAD")
+        git(self.checkout, "worktree", "remove", str(workspace.path))
         self.assertEqual(self.manager.prepare("item", base="missing-base").head, head)
 
     def test_setup_bypasses_checkout_and_reference_hooks_and_git_env_overrides(self):
         hooks = self.directory / "hooks"
         hooks.mkdir()
-        self.git(self.checkout, "config", "core.hooksPath", hooks.as_posix())
+        git(self.checkout, "config", "core.hooksPath", hooks.as_posix())
         for name in ("post-checkout", "reference-transaction"):
             hook = hooks / name
             hook.write_bytes(b"#!/bin/sh\nprintf 'hook ran\\n' >> hook-ran\n")
             hook.chmod(0o755)
-        self.git(self.checkout, "branch", "control")
+        git(self.checkout, "branch", "control")
         self.assertTrue((self.checkout / "hook-ran").is_file())
         (self.checkout / "hook-ran").unlink()
         with patch.dict(os.environ, {"GIT_DIR": str(self.directory / "bad")}):

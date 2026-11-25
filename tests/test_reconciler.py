@@ -2,9 +2,7 @@ from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead, RemoteDisconnected
 import json
-import os
 from pathlib import Path
-import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -25,7 +23,7 @@ from phalanx.workspaces import any_file_lock
 from phalanx.store import connect, initialize, read_transaction, write_transaction
 from phalanx.transitions import Execution, PullRequest as OutputPR, Revision, Stage, Status, Target, item_branch
 
-from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
+from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage, git
 
 HEAD, BASE, OTHER = "a" * 40, "b" * 40, "c" * 40
 
@@ -196,12 +194,6 @@ class APITest(unittest.TestCase):
             with self.subTest(error=error), patch.object(api.opener, "open", side_effect=error), \
                     self.assertRaisesRegex(ReconcilerError, "Phalanx API unavailable"):
                 api.call("/flags")
-
-
-def git(path, *args):
-    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
-    return subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
-                          cwd=path, env=env, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def pull_request(head, branch, *, state="open", draft=False, merged=False, mergeable=True):

@@ -144,6 +144,9 @@ so urllib and CLI subprocesses still exercise HTTP, authentication and backgroun
 Each fixture start runs a fresh application lifespan; explicit restart tests still stop
 and start it against the same database. The bootstrap backup/restore test also retains
 real server-process launches to cover process boundaries and durable recovery.
+Shared Git and HTTP fixtures live in `tests/test_bootstrap.py`. Register temporary
+directories with `self.enterContext(TemporaryDirectory())` before starting a server
+so fixture cleanup stops the server before deleting its database.
 
 ## Quickstart: new install
 

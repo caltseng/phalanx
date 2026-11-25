@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import sqlite3
-import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -16,7 +15,7 @@ from phalanx.store import initialize, write_transaction
 from phalanx.work_cli import credential, request
 
 from cli_runner import run_cli
-from test_bootstrap import OWNER, RUNNER, ServerFixture
+from test_bootstrap import OWNER, RUNNER, ServerFixture, git
 
 
 CHARTER = """goal = "Deliver the pilot's queued work"
@@ -25,11 +24,6 @@ allowed_actions = ["launch and replace writer sessions"]
 escalate = ["anything outside the goal"]
 stop_when = ["the owner ends the run"]
 """
-
-
-def git(cwd, *args):
-    subprocess.run(["git", "-c", "user.name=T", "-c", "user.email=t@example.test", *args], cwd=cwd,
-                   check=True, capture_output=True, text=True)
 
 
 class CharterTest(unittest.TestCase):
@@ -1350,7 +1344,7 @@ class ShiftArchiveTest(ShiftFixture, unittest.TestCase):
         (worktree / "README.md").write_text("Only on the deleted topic\n", encoding="utf-8")
         git(worktree, "commit", "-qam", "Published topic work")
         git(worktree, "push", "-q", "origin", "HEAD")
-        branch = subprocess.check_output(["git", "branch", "--show-current"], cwd=worktree, text=True).strip()
+        branch = git(worktree, "branch", "--show-current")
         git(Path(self.config["repositories"]["repo"]["checkout"]), "push", "-q", "origin", "--delete", branch)
         checked = self.check_archive(item)
         self.assertFalse(checked["can_archive"])

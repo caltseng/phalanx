@@ -1,7 +1,6 @@
 import io
 import json
 from pathlib import Path
-import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -11,14 +10,7 @@ from phalanx.github import CommitChecks, GitHubClient
 from phalanx.onboarding import discover_ready_checks, onboard
 from phalanx.reconciler import API, ReconcilerError
 from phalanx.work_cli import request
-from test_bootstrap import OWNER, RUNNER, ServerFixture
-
-
-def git(*args, cwd=None):
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
-    if result.returncode:
-        raise AssertionError(result.stderr)
-    return result.stdout.strip()
+from test_bootstrap import OWNER, RUNNER, ServerFixture, git
 
 
 class OnboardingTests(ServerFixture, unittest.TestCase):
@@ -29,15 +21,15 @@ class OnboardingTests(ServerFixture, unittest.TestCase):
         self.start_server(self.directory / "server.sqlite3")
         self.remote = self.directory / "remote.git"
         source = self.directory / "source"
-        git("init", "--bare", "--initial-branch=trunk", str(self.remote))
-        git("init", "--initial-branch=trunk", str(source))
+        git(self.directory, "init", "--bare", "--initial-branch=trunk", str(self.remote))
+        git(self.directory, "init", "--initial-branch=trunk", str(source))
         for key, value in (("user.name", "Phalanx tests"), ("user.email", "tests@example.invalid"),
                            ("commit.gpgSign", "false"), ("core.hooksPath", str(self.directory / "no-hooks"))):
-            git("config", key, value, cwd=source)
+            git(source, "config", key, value)
         (source / "README").write_text("hello\n")
-        git("add", ".", cwd=source)
-        git("commit", "-m", "base", cwd=source)
-        git("push", str(self.remote), "trunk", cwd=source)
+        git(source, "add", ".")
+        git(source, "commit", "-m", "base")
+        git(source, "push", str(self.remote), "trunk")
         self.config = self.directory / "captain.json"
         self.policy = self.directory / "validation.json"
         self.config.write_text(json.dumps({
