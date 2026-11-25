@@ -38,6 +38,17 @@ backup/rehearsal/service-ownership/continuity/rollback procedure in `docs/deploy
 Destructive/data-loss/schema-downgrade/new-service/credential-scope changes remain owner decisions.
 Source merge is not a deployed result.
 
+Shared API/control-plane outages are blockers, not Captain-local failure: repeated transport,
+timeout, API 5xx or authentication-service failures and unpersisted heartbeats never trigger
+safety handoff or replacement. Preserve the SAME Captain registration, native session, writer
+identities and five-minute schedule. Report control plane blocked; current server state unknown,
+with the failed operation/error, last verified state and next scheduled retry; never claim an
+unsaved status was recorded. Do not loop failed requests, re-register or bypass unavailable
+authority. On recovery verify charter, exact registration and successors, then refresh the SAME
+active, unsuperseded registration even if stale and reconcile uncertain effects. Ending/ended
+or superseded Captains follow handoff/routing rules. The original 24-hour rotation clock remains;
+defer a due handoff until its authority/outcome can be verified. Diagnose local failure separately.
+
 Assess `active_overdue` warnings during this reconciliation: strictly more than 90 elapsed minutes
 from the execution's first persisted attempt, including development, CI, review, delivery and
 external/input waits. Heartbeats, progress, stages and writer replacement never reset execution age.

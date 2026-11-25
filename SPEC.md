@@ -240,13 +240,26 @@ never end a shift early, including under older charter stop prose. Idle Captains
 ownership and reconcile on schedule. Compaction is a checkpoint, not a rotation trigger;
 unknown telemetry stays unknown. Explicit owner stop, missing/invalid authority and actual
 degradation/failure remain safety exceptions with visible reasons and recovery.
+Shared transport/API/authentication-service outages, repeated dependency failures and unpersisted
+heartbeats are not Captain-local failure. Preserve the same Captain/writer identities and schedules,
+report blocked/unknown with error, last verified state and next retry, and defer mutations whose
+authority cannot be verified. Resume the same active, unsuperseded registration when connectivity
+returns; never revive an ended Captain. The original 24-hour rotation remains due, with handoff
+deferred until its authority/outcome can be verified. Missing/revoked access requires repair, not
+replacement or bypass.
 Overlap is bounded to thirty minutes. The
 predecessor finishes/abandons uncertain intents and performs creator-owned cleanup before
 ending, without waiting forever for a successor. Only the owner grants repository trust.
 
 A runtime keeper wakes every thirty minutes to start a Captain if none is live, respecting
-recent handoff and charter stop conditions. Existing writers and the reconciler continue
-without a Captain. Stale Captain/reconciler, no progress, unconfirmed launches, stopped
+recent handoff and charter stop conditions. Shared outages retain existing identities.
+Stale heartbeat flags are freshness warnings,
+not proof of native loss. Before recovery launch, verify all potentially coordinating stale native
+sessions and pending successors: resume available sessions, retain blocked/unknown state when
+inspection is unavailable, and replace only on confirmed native loss/local degradation. Fresh
+authoritative empty/ended history can still bootstrap subject to handoff grace and stop conditions.
+Existing writers and the reconciler continue without a Captain. Stale Captain/reconciler,
+no progress, unconfirmed launches, stopped
 writers and orphan sessions are visible flags with recovery actions. Archival requires
 preserved local work and runtime creator authority; server records do not perform archival.
 

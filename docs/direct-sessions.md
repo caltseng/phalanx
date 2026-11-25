@@ -229,9 +229,15 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   including under older charter stop prose. Continue five-minute reconciliation while idle
   or blocked. Compaction is a checkpoint; cumulative native counts remain idempotent
   telemetry, with unknown totals left unknown. Explicit owner stop, missing/invalid authority
-  and genuine degradation/failure remain exceptions: three failed actions in a row, a
-  deviation flag it raised against itself (`captain_idle_with_work`, `orphan_session` it
-  created), or a missed heartbeat it notices on waking. Preserve visible reasons and recovery.
+  and genuine native degradation/failure remain exceptions. Three failed actions, a self-raised
+  deviation flag or a missed heartbeat require diagnosis, not automatic handoff. Repeated shared
+  API/transport/authentication-service failures and unpersisted heartbeats are blocked/unknown
+  control-plane state, not native failure. Preserve the same Captain, writers and schedules;
+  show the operation/error, last verified state and next scheduled retry. Do not loop requests,
+  bypass unavailable authority, re-register or replace identities to repair access. After recovery,
+  verify charter, exact registration and successors, refresh the same active unsuperseded registration,
+  then reconcile uncertain writes. Defer any due 24-hour handoff until authority/outcome is verifiable;
+  never reset its age or revive an ended registration.
 - **Handoff.**
   1. The outgoing Captain sets `ending` and posts a handoff note: open decisions, its unconfirmed intents and anything it was midway through. The note is a hint. The successor verifies every point against the server, GitHub and session status and never trusts it as state.
   2. It launches the successor with the charter, the parent Captain ID and a nonce, using the same at-most-once launch rule as writers.
@@ -298,12 +304,22 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
   - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, legacy `phx …` names, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` by registered session ID and full nonce, falling back to legacy item-prefix/nonce name words only when structured identity is absent. Titles never establish ownership for task-first sessions. A pending successor's name is exempt while its parent is `ending`.
   - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
   - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
-- **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`. Its unconfirmed intents become actionable by any live Captain, which resolves them by nonce. If it had already launched a successor, that successor continues. If not, [No live Captain](#no-live-captain) applies.
+- **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`, a freshness
+  warning rather than proof of native loss. A live Captain can reconcile unconfirmed intents by
+  full nonce, never duplicate them or replace writers merely for an API outage. An existing
+  successor continues; otherwise [No live Captain](#no-live-captain) applies.
 
 ### No live Captain
 
 The keeper starts a new Captain every thirty minutes only when none is live, respecting
 recent handoffs and charter stop conditions. Captain wakes occur every five minutes.
+Before launch it needs a successful authoritative API read and exact native inspection of every
+potentially coordinating stale Captain and pending successor. Resume the same available active
+registration (or an ending Captain's existing handoff); blocked/unknown inspection or heartbeat
+persistence is a visible wait, not permission to replace it. Confirmed stopped/missing/deleted
+sessions or genuine native-local degradation can recover normally. Empty/ended history can still
+bootstrap after the existing grace/stop checks. Access failures require owner repair, not a new
+Captain. No new watchdog or schedule is added.
 Existing writers and the reconciler continue without a Captain; `no_live_captain` notifies
 the owner. Runtime schedules must be checked after a reboot.
 
@@ -313,8 +329,8 @@ A flag names an item or a Captain and carries a reason, `first_seen`, a recovery
 
 | Flag | Condition | Recovery |
 | --- | --- | --- |
-| `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
-| `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
+| `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Verify native/API availability; resume the same available Captain. Replace only for verified native loss/degradation, not outage/unknown state. Preserve nonce recovery and creator cleanup. |
+| `no_live_captain` | No fresh live registration while open work exists | Keeper verifies native/API state before recovery; resume available Captains, wait on outage/unknown state, and preserve handoff grace/stop conditions. |
 | `captain_idle_with_work` | **Dispatch overdue**: live Captains, dispatch enabled, both admission limits permit the work, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
 | `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while Building or Total admission is exhausted, eligible waiting PR fixes take preference, or dispatch is paused. Counts and precise affected limit included; informational even with a Captain hold, never a stopped/failed Captain signal | Wait for affected capacity, service eligible PR fixes or resume dispatch. Existing writer-health flags remain independent |
 | `pickup_blocked` | Unassigned work waiting 30 min on scope/uninitialized authority, affinity or repository/trust readiness; not a Captain failure or handoff signal | The shared pickup decision supplies the concrete reason and recovery; notify the owner |

@@ -411,8 +411,13 @@ A successor does not inherit creator-only runtime authority.
 A Captain's normal shift ends when elapsed time from registration reaches charter
 `[shift].max_hours` (default 24 hours), never from queue completion, dependency/external
 waits, wake counts or compaction counts. Reconciliation remains every five minutes, including
-while idle or blocked. Explicit owner stop and actual degradation/failure (three failed actions
-in a row, a self-raised deviation flag, or a missed heartbeat noticed on waking) remain exceptions.
+while idle or blocked. Explicit owner stop and genuine Captain-local degradation/failure remain
+exceptions. Repeated shared API/transport/authentication-service failures or missed heartbeat
+persistence never trigger safety handoff. Report control plane blocked/current server state unknown
+with the error, last verified state and next scheduled retry; retain the same Captain, writers and
+schedules. Diagnose counts/flags rather than treating them as proof of native failure. On recovery
+verify charter, exact registration and successors, then refresh the same active unsuperseded
+registration. Defer a due 24-hour handoff until authority/outcome is verifiable; do not reset its age.
 `shift heartbeat` returns effective `max_hours` and age-based `handoff_due`, alongside
 the unchanged wake and cumulative compaction telemetry.
 Use `shift wake --captain <id>` for the ordinary five-minute wake instead of printing
@@ -459,7 +464,7 @@ Publication-gate item `dc5ddb6acaf24726874ad9dca2cfa353` (PR #255) changes the w
 and worker merge instructions, not these Captain/default-charter hunks. Coordinate those
 instructions at integration/rollout without treating unrelated work as a blanket dependency.
 
-It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
+It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale. Native/API verification precedes keeper replacement: resume an available Captain or its pending successor, wait visibly on unknown/shared outages, and recover only confirmed native loss/degradation. Full-nonce intent recovery and creator-owned preservation checks remain mandatory; staleness never authorizes archival of unfinished work.
 
 ### Retained chats and owner-message forwarding
 

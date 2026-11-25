@@ -408,6 +408,25 @@ changed sections to retained Captains, keepers and writers using supported messa
 recipient/revision/receipt; normal 90-minute reinforcement also refreshes Captain instructions.
 Do not revive ended sessions or launch replacement writers for policy adoption.
 
+### Outage-continuity instruction activation
+
+Source delivery does not update retained chats or an installed template. Relay the canonical
+Captain outage section and keeper native-verification rules to the current verified Captain
+and existing keeper, and add the guard to their existing automation prompts without changing
+cadence, bindings or authority. Require a readback/receipt; an already-running keeper may have
+captured the old prompt and needs the same supported message. Do not start a Captain for adoption.
+
+When an unrelated schema upgrade prevents package deployment, an authorized operator may apply
+an independently reviewed **outage-only prompt patch** to the exact installed baseline: back up
+the affected prompt files, verify the baseline and absence of conflicting edits, apply only the
+reviewed hunks and verify the actual installed `shift prompt captain|keeper|wake|forwarding`
+output. Record baseline revision, patch digest, file hashes and recipient receipts separately
+from source merge. Keep API Python code, database/schema/config/credentials, services, writers,
+capacity and schedules unchanged. Old server stale/no-live recovery text remains undeployed
+until the reviewed API can be adopted; the explicit prompt guard overrides that launch advice.
+Restoring backup prompts must not silently restore the rejected outage-handoff policy: retain
+the direct owner guard in existing automations/conversations while repairing activation.
+
 For the owner's ordinary-target classification of Phalanx [#252](https://github.com/caltseng/phalanx/pull/252),
 [#253](https://github.com/caltseng/phalanx/pull/253) and
 [#258](https://github.com/caltseng/phalanx/pull/258), follow

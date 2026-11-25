@@ -280,6 +280,11 @@ rotation triggers. Packaged Captain/keeper instructions retain five-minute recon
 through queue completion and dependency/external waits, with explicit owner stop and genuine
 safety exceptions. The client rejects retired count-limit keys rather than silently ignoring
 them. See the [retained-conversation rollout boundary](deployment.md#elapsed-time-shift-activation).
+Captain/keeper prompts are the native-session launch control path. Shared API outages retain
+identities and schedules with visible blocked/unknown status; stale/no-live server flags retain
+their freshness semantics but direct recovery to exact native verification, not automatic launch.
+Available Captains refresh the same registration after recovery; unknown state cannot authorize
+replacement. No schema, election service or scheduler is added.
 Likewise tokenless local-board actions require both shipped code and verified deployment:
 explicit `PHALANX_LOCAL_BOARD=1`, a loopback-only listener, direct loopback peer and local
 Host, with exact same-origin writes and no forwarding headers. Narrow `/operator/api/`

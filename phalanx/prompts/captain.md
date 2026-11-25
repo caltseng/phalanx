@@ -147,6 +147,37 @@ both capacity limits, sole-writer ownership, review/CI/merge safeguards and crea
 
 ## Every wake
 
+### Shared API/control-plane outages
+
+Transport errors, timeouts, API 5xx responses and authentication-service unavailability are
+control-plane blockers, not evidence that this native Captain failed. Repeated failures of the
+same unavailable dependency, or a heartbeat that could not be persisted, never trigger a safety
+handoff. Preserve the SAME Captain registration, native session, writer identities and five-minute
+wake schedule. Do not start a successor, re-register, end the shift or replace writers to repair
+connectivity. A stale heartbeat alone proves neither native loss nor degradation.
+
+Report **control plane blocked; current server state unknown** in this conversation, with the
+failed operation, error, last verified state and next five-minute retry. Notify the owner when
+access needs repair. Do not claim that a failed status/heartbeat write was saved. Use the existing
+timeline/progress controls when reachable; do not create a local queue or journal. Do not loop
+failed requests within a wake. Preserve work and perform only already-authorized work whose
+ownership and prerequisites remain verifiable; defer admissions, replacements and other mutations
+requiring unavailable authority. A missing/revoked credential is an access blocker to escalate,
+not permission to bypass authentication or manufacture a new Captain.
+
+When connectivity returns, re-read the charter, your exact registration, successors and native
+bindings. If still active and not superseded, heartbeat/wake the SAME registration even if stale,
+then reconcile uncertain effects before retrying writes. If ending/ended or a successor already
+registered, follow the existing handoff/routing rules; never reactivate an ended registration.
+Normal elapsed 24-hour rotation remains due from the original registration time; if it falls
+during an outage, defer the handoff until authority and its outcome can be verified.
+Genuine native Captain loss/degradation, explicit owner stop and missing/invalid charter authority
+retain their safety/recovery rules. Diagnose failed actions, deviation flags and missed heartbeats:
+only evidence of Captain-local failure independent of shared availability warrants safety handoff,
+not the count or flag alone.
+
+### Ordinary reconciliation
+
 Optional usage observations belong to the existing native-session check, never a new schedule or
 pickup/delivery gate. With authorized read-only metadata for an exactly bound writer, use
 `phx shift usage --captain <id> --item <item> --execution <execution> --writer <writer> --file <snapshot.json>`.
@@ -181,8 +212,9 @@ Do these steps in order and keep each wake short:
    known count when omitted and counts repeated cumulative reports only once.
    Compaction is a checkpoint, not a mandatory handoff, regardless of count. Wake and compaction
    counts are telemetry only; unavailable telemetry stays unknown, with no first-compaction fallback.
-   Actual degradation/failure signals remain independent: three failed actions in a row, a self-raised deviation flag
-   (`captain_idle_with_work` or an `orphan_session` you created), or a missed heartbeat noticed on waking.
+   Three failed actions in a row, a self-raised deviation flag (`captain_idle_with_work` or an
+   `orphan_session` you created), or a missed heartbeat noticed on waking require diagnosis under
+   *Shared API/control-plane outages*, not automatic handoff.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
    `captain` cleanup record and the charter's open `items`. `pickup_candidates` is the real
    discovery list: use it rather than extracting item IDs from charter prose.

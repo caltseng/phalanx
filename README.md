@@ -55,6 +55,9 @@ Normal Captain rotation is elapsed-time only: 24 hours from registration, with f
 reconciliation retained even when the queue is empty or dependency-blocked. Wake and compaction
 counts are telemetry, not early handoff triggers. Explicit owner stop and genuine safety
 failures remain exceptions.
+Shared API/control-plane outages are visible blocked/unknown states, not Captain failures:
+retain the same Captain, writers and schedules, then refresh that registration on recovery.
+Keeper recovery verifies native loss rather than treating stale heartbeats as proof of failure.
 The same wake provides fresh charter/workflow reinforcement every 90 elapsed minutes;
 server-owned acknowledgements keep missed or failed reminders pending without another scheduler.
 The owner's persisted Building (`max_building_writers`, initially 5) and Total (`max_writers`,

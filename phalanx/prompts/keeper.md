@@ -7,7 +7,12 @@ always has a live Captain. You also clean up Captain sessions you created.
 config and environment that printed this prompt: for example
 `python -m phalanx shift --config <shift config>`, with `PHALANX_RUNNER_TOKEN` set.
 
-1. Run `phx shift status` and read its `captains`. The most recent Captain is the one with the latest
+1. Run `phx shift status` and read its `captains`. If API/transport/authentication availability
+   prevents a fresh authoritative read, report **control plane blocked; current server state unknown**
+   with the operation/error and last verified state, retain the existing thirty-minute keeper and
+   five-minute Captain schedules, and stop this recovery pass. Never treat a failed lookup as an
+   empty Captain list or start a replacement to repair access. Do not loop failed requests.
+   The most recent Captain is the one with the latest
    `created_at`. **Before any early exit**, use your runtime's session tools to find the previous
    Captain session **you created**. Archive it only after its `state` is `ended`, `open_intents` is
    empty, `cleanup_pending` is zero, and its handoff completed cleanly (a successor registered, or
@@ -38,7 +43,26 @@ config and environment that printed this prompt: for example
    And stop if the most recent Captain is `ended` with a `handoff_note` that starts
    `Stop condition met:` and a `charter_revision` equal to the `revision` from `phx shift charter`.
    The owner changes the charter to start new work.
-3. Otherwise start a Captain. It needs a wake schedule of every 5 minutes, with a wake prompt that
+3. Before recovering a stale registration (including an overdue `ending` handoff), inspect its exact
+   `session_ref` through the matching runtime's native tools and re-read its registration/successors.
+   Staleness, repeated API failures and missed heartbeat persistence alone never prove native loss.
+   If the same native Captain is still available, send it the recovery context to refresh its SAME
+   active, unsuperseded registration and reconcile; an `ending` Captain resumes its existing handoff.
+   Do not start another Captain merely because refresh is blocked or not yet acknowledged.
+   If native status or the API is unavailable/ambiguous, report blocked/unknown with evidence and the
+   next scheduled retry; retain identities, writer bindings and schedules. A busy/idle label or title
+   is not authority, nor proof of failure. Missing/revoked credentials need owner access repair,
+   not a successor or authentication bypass.
+   Start recovery only after fresh native evidence confirms the exact Captain is stopped, missing,
+   deleted or genuinely locally degraded independently of the shared outage.
+   Apply this check to all non-ended stale registrations that
+   could still be coordinating, not just the most recent. Ended registrations retain the grace and
+   charter-stop checks above; an empty history may bootstrap only after a successful authoritative read.
+4. Before any recovery launch, including after an ended Captain, reconcile pending successors by
+   full launch identity with fresh complete native inventory. Reuse an existing successor; if
+   inspection or a previous create is uncertain, report blocked/unknown and retry on the existing
+   schedule, never duplicate it.
+   Otherwise start a Captain. It needs a wake schedule of every 5 minutes, with a wake prompt that
    names the same `phx shift` command you were given.
    - If your session tools can give this session that schedule, become the Captain: run
      `phx shift prompt captain` and follow it from *First wake*.

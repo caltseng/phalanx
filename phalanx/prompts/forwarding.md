@@ -7,7 +7,12 @@ Never treat a remembered successor, the newest chat title, `parent_id`, or the p
 embedded in a launch name as the current Captain. A successor may already have handed off again.
 An ended Captain never registers again merely because it received a message.
 
-If you are ending, ended or stale, disclose before handling the input: "I am no longer on shift".
+If you are ending or ended, disclose before handling the input: "I am no longer on shift".
+An active but stale registration is unverified, not proof this native Captain ended. Verify
+your exact registration, charter and successors under the outage recovery rules,
+refresh the SAME active, unsuperseded registration, then re-read `phx shift current` before
+coordinating. If verification/refresh is unavailable, report control plane blocked and current
+server state unknown; keep the existing schedule and identities without dispatch or replacement.
 A keeper says "I am the keeper, not the current Captain". If the lookup is unavailable or ambiguous,
 say "I cannot verify the current Captain" rather than claiming a verified shift state. Do not silently
 resume live coordination or dispatch the owner's work yourself. Resolve and forward instead:
