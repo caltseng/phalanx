@@ -1,11 +1,7 @@
 (() => {
   "use strict";
 
-  function node(tag, text) {
-    const element = document.createElement(tag);
-    if (text !== undefined) element.textContent = text;
-    return element;
-  }
+  const { h, safeUrl } = window.PhalanxOperatorHelpers;
 
   // Only generated elements enter the live DOM. Report HTML is never parsed as HTML.
   function inline(parent, text, depth = 0) {
@@ -17,14 +13,10 @@
     let start = 0;
     for (const match of text.matchAll(tokens)) {
       parent.append(document.createTextNode(text.slice(start, match.index)));
-      if (match[1]) parent.append(node("code", match[2]));
+      if (match[1]) parent.append(h("code", { text: match[2] }));
       else if (match[4] !== undefined) {
-        let url;
-        try {
-          const parsed = new URL(match[5], document.baseURI);
-          if (["http:", "https:"].includes(parsed.protocol) && !parsed.username && !parsed.password) url = parsed.href;
-        } catch { /* Invalid links remain plain text. */ }
-        const link = node(url && !match[3] ? "a" : "span");
+        const url = safeUrl(match[5] || document.baseURI);
+        const link = h(url && !match[3] ? "a" : "span");
         if (link.tagName === "A") {
           link.href = url;
           link.rel = "noreferrer";
@@ -32,7 +24,7 @@
         inline(link, match[4], depth + 1);
         parent.append(link);
       } else if (match[6] || match[8]) {
-        const emphasis = node(match[6] ? "strong" : "em");
+        const emphasis = h(match[6] ? "strong" : "em");
         inline(emphasis, match[7] || match[9], depth + 1);
         parent.append(emphasis);
       }
@@ -55,39 +47,39 @@
         const end = new RegExp("^ {0,3}" + fence[1][0] + "{" + fence[1].length + ",}\\s*$");
         while (i < lines.length && !end.test(lines[i])) code.push(lines[i++]);
         if (i < lines.length) i++;
-        const pre = node("pre");
-        pre.append(node("code", code.join("\n")));
+        const pre = h("pre");
+        pre.append(h("code", { text: code.join("\n") }));
         fragment.append(pre);
         continue;
       }
       const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
       if (heading) {
-        const title = node("h" + heading[1].length);
+        const title = h("h" + heading[1].length);
         inline(title, heading[2]);
         fragment.append(title);
         continue;
       }
       if (/^ {0,3}(?:-\s*){3,}$|^ {0,3}(?:\*\s*){3,}$/.test(line)) {
-        fragment.append(node("hr"));
+        fragment.append(h("hr"));
         continue;
       }
       if (line.includes("|") && i < lines.length && /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[i])) {
         i++;
-        const table = node("table");
-        const head = node("thead");
-        const row = node("tr");
+        const table = h("table");
+        const head = h("thead");
+        const row = h("tr");
         for (const cell of cells(line)) {
-          const th = node("th");
+          const th = h("th");
           inline(th, cell);
           row.append(th);
         }
         head.append(row);
         table.append(head);
-        const body = node("tbody");
+        const body = h("tbody");
         while (i < lines.length && lines[i].includes("|") && lines[i].trim()) {
-          const tr = node("tr");
+          const tr = h("tr");
           for (const cell of cells(lines[i++])) {
-            const td = node("td");
+            const td = h("td");
             inline(td, cell);
             tr.append(td);
           }
@@ -100,11 +92,11 @@
       const bullet = /^ {0,3}([-+*]|\d+\.)\s+(.+)$/.exec(line);
       if (bullet) {
         const ordered = /\d/.test(bullet[1]);
-        const list = node(ordered ? "ol" : "ul");
+        const list = h(ordered ? "ol" : "ul");
         if (ordered) list.start = parseInt(bullet[1], 10);
         let entry = bullet;
         while (entry) {
-          const li = node("li");
+          const li = h("li");
           inline(li, entry[2]);
           list.append(li);
           entry = i < lines.length ? /^ {0,3}([-+*]|\d+\.)\s+(.+)$/.exec(lines[i]) : null;
@@ -116,7 +108,7 @@
       }
       const quote = /^ {0,3}>\s?(.*)$/.exec(line);
       if (quote) {
-        const element = node("blockquote");
+        const element = h("blockquote");
         inline(element, quote[1]);
         fragment.append(element);
         continue;
@@ -124,7 +116,7 @@
       const paragraph = [line];
       while (i < lines.length && !block(lines[i]) &&
           !(lines[i].includes("|") && /^\s*\|?\s*:?-{3,}/.test(lines[i + 1] || ""))) paragraph.push(lines[i++]);
-      const p = node("p");
+      const p = h("p");
       inline(p, paragraph.join("\n"));
       fragment.append(p);
     }

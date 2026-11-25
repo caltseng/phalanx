@@ -18,7 +18,7 @@ from .flags import LAUNCH_UNCONFIRMED, launch_wait
 from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
-from .operator_schema import CLOSED, INPUT_RANK, OPEN
+from .operator_schema import ACTIVE_STARTED_AT, CLOSED, INPUT_RANK, OPEN
 from .session_links import session_key
 from .store import read_transaction
 from .transitions import Stage, Status
@@ -37,7 +37,7 @@ SCAN_LIMIT = 2000
 REASON_LIMIT = 400
 SHA = re.compile(r"[0-9a-f]{7,64}")
 
-SUMMARY = """
+SUMMARY = f"""
     SELECT execution.id, execution.item_id, execution.version, execution.created_at, execution.updated_at,
            execution.stage, execution.status, execution.state_json, execution.retry_at, execution.handoff_head,
            execution.ready_since, item.created_at AS item_created_at, item.label,
@@ -46,6 +46,7 @@ SUMMARY = """
            execution.queue_affinity AS runner_affinity, execution.dependency_wait_json,
            json_extract(item.request_json, '$.target') AS target,
            progress.last_advanced_at, progress.wait_since, progress.revision_round,
+           {ACTIVE_STARTED_AT} AS active_started_at,
            pr.url AS pr_url, pr.number AS pr_number, pr.state AS pr_state, pr.draft AS pr_draft,
            pr.merged AS pr_merged, pr.head_sha AS pr_head_sha, pr.additions AS pr_additions,
            pr.deletions AS pr_deletions, pr.ci AS pr_ci, pr.ci_head_sha AS pr_ci_head_sha,
@@ -193,17 +194,59 @@ def conditional_read(request, response, db, now, context=None):
     return None
 
 
-def queued_wait(row, now_ms, context):
-    retry_at = row["retry_at"]
-    if context["capacity"]["paused"]:
-        return {"reason": "Dispatch is paused", "trigger": "The owner resumes dispatch"}
-    if retry_at is not None and retry_at > now_ms:
-        at = datetime.fromtimestamp(retry_at / 1000, UTC).isoformat()
-        return {"reason": f"Retry scheduled for {at}", "trigger": "The retry delay elapses"}
-    hold = context.get("holds", {}).get(row["id"])
-    if hold:
-        return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}
-    return {}
+def summary_wait(row, state, now, context):
+    """Select pickup, Building, handoff, persisted, dependency, queue, then launch waits."""
+    status = row["status"]
+    wait_since = row["wait_since"]
+    current = context["pickup"]
+    if status == Status.QUEUED and (row["writer_id"] is None or row["writer_ended_at"] is not None):
+        pickup_state = pickup.decision(row, now, current)
+        wait = ({} if pickup_state["eligible"] else
+                {"reason": pickup_state["reason"], "trigger": pickup_state["trigger"]})
+        return wait, wait_since, pickup_state
+    if (row["building_requested_at"] and not row["writer_building"] and not row["blocked_count"]
+            and status in (Status.RUNNING, Status.QUEUED, Status.WAITING_FOR_EXTERNAL)):
+        return {
+            "reason": dispatch.building_wait(
+                None, row["writer_id"], capacity=current["capacity"], rework=current["rework"])
+            or "Building capacity available; retry acquisition",
+            "trigger": "The same writer retries `work capacity building` before any rework",
+        }, wait_since, None
+    if row["stage"] == Stage.DELIVERY and status == Status.WAITING_FOR_EXTERNAL:
+        if row["writer_building"]:
+            return {
+                "reason": "Writer is building or reviewing PR rework",
+                "trigger": "The writer commits reviewed work and releases Building for publication",
+            }, wait_since, None
+        if row["handoff_head"] and row["pr_head_sha"] != row["handoff_head"]:
+            return {
+                "reason": f"Awaiting publication handoff {row['handoff_head']}",
+                "trigger": "Publish the reviewed head, review a superseding head, or stop and withdraw the writer",
+            }, wait_since, None
+    if state.get("wait"):
+        return state["wait"], wait_since, None
+    if row["blocked_count"]:
+        noun = "prerequisite" if row["blocked_count"] == 1 else "prerequisites"
+        return {
+            "reason": f"Waiting for {row['blocked_count']} {noun}", "trigger": "Prerequisite milestone",
+        }, wait_since, None
+    if status == Status.QUEUED:
+        if current["capacity"]["paused"]:
+            return {"reason": "Dispatch is paused", "trigger": "The owner resumes dispatch"}, wait_since, None
+        retry_at = row["retry_at"]
+        if retry_at is not None and retry_at > int(now.timestamp() * 1000):
+            at = datetime.fromtimestamp(retry_at / 1000, UTC).isoformat()
+            return {
+                "reason": f"Retry scheduled for {at}", "trigger": "The retry delay elapses",
+            }, wait_since, None
+        hold = current["holds"].get(row["id"])
+        if hold:
+            return {"reason": hold, "trigger": "A Captain launches it or the hold expires"}, wait_since, None
+    if (status == Status.RUNNING and not state.get("stopping") and row["writer_id"]
+            and row["writer_ended_at"] is None and row["writer_confirmed_at"] is None):
+        return (launch_wait(row["writer_id"], row["writer_nonce"], row["writer_created_at"], now),
+                row["writer_created_at"], None)
+    return {}, wait_since, None
 
 
 def pull_request(row):
@@ -224,7 +267,7 @@ def pull_request(row):
 
 def summary(row, now, context):
     state = json.loads(row["state_json"])
-    wait = state.get("wait") or {}
+    wait, wait_since, pickup_state = summary_wait(row, state, now, context)
     output = state["final_output"]
     output_revision = output.get("revision") if output is not None else None
     outcome = None
@@ -245,37 +288,8 @@ def summary(row, now, context):
             {"kind": "report", "url": output["reference"]} if "reference" in output
             else {"kind": "pr", "url": output["url"]}
         )
-    wait_since = row["wait_since"]
     blocked_count = row["blocked_count"]
-    if blocked_count and not wait:
-        noun = "prerequisite" if blocked_count == 1 else "prerequisites"
-        wait = {"reason": f"Waiting for {blocked_count} {noun}", "trigger": "Prerequisite milestone"}
     status = row["status"]
-    if row["stage"] == Stage.DELIVERY and status == Status.WAITING_FOR_EXTERNAL:
-        if row["writer_building"]:
-            wait = {"reason": "Writer is building or reviewing PR rework",
-                    "trigger": "The writer commits reviewed work and releases Building for publication"}
-        elif row["handoff_head"] and row["pr_head_sha"] != row["handoff_head"]:
-            wait = {"reason": f"Awaiting publication handoff {row['handoff_head']}",
-                    "trigger": "Publish the reviewed head, review a superseding head, or stop and withdraw the writer"}
-    if (row["building_requested_at"] and not row["writer_building"] and not blocked_count
-            and status in (Status.RUNNING, Status.QUEUED, Status.WAITING_FOR_EXTERNAL)):
-        current = context["pickup"]
-        wait = {"reason": dispatch.building_wait(
-                    None, row["writer_id"], capacity=current["capacity"], rework=current["rework"])
-                or "Building capacity available; retry acquisition",
-                "trigger": "The same writer retries `work capacity building` before any rework"}
-    if status == Status.QUEUED and not wait:
-        wait = queued_wait(row, int(now.timestamp() * 1000), context["pickup"])
-    pickup_state = None
-    if status == Status.QUEUED and (row["writer_id"] is None or row["writer_ended_at"] is not None):
-        pickup_state = pickup.decision(row, now, context["pickup"])
-        wait = ({} if pickup_state["eligible"] else
-                {"reason": pickup_state["reason"], "trigger": pickup_state["trigger"]})
-    if (status == Status.RUNNING and not wait and not state.get("stopping")
-            and row["writer_id"] and row["writer_ended_at"] is None and row["writer_confirmed_at"] is None):
-        wait = launch_wait(row["writer_id"], row["writer_nonce"], row["writer_created_at"], now)
-        wait_since = row["writer_created_at"]
     next_action = None
     if output is None and not wait:
         if status == Status.QUEUED:
@@ -296,6 +310,16 @@ def summary(row, now, context):
         "publication_mode": state.get("publication_mode", "ready"),
         "repository_id": row["repository_id"],
         "created_at": row["created_at"],
+        "active_started_at": row["active_started_at"],
+        "active_age_seconds": (
+            max(0, int(((datetime.fromisoformat(row["updated_at"]) if output is not None else now)
+                        - datetime.fromisoformat(row["active_started_at"])).total_seconds()))
+            if row["active_started_at"] else None
+        ),
+        "stage_started_at": (
+            max(row["last_advanced_at"], row["active_started_at"])
+            if row["active_started_at"] else None
+        ),
         "stage": row["stage"],
         "status": status,
         "revision_round": row["revision_round"],

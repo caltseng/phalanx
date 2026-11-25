@@ -5,20 +5,12 @@ import json
 import os
 from pathlib import Path
 
+from .json_utils import unique_object
 from .reconciler import API, ReconcilerError
 
 
 class MusterError(ValueError):
     pass
-
-
-def _unique(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise MusterError("Ambiguous muster locator: duplicate fields")
-        result[key] = value
-    return result
 
 
 def resolve_home(home=None):
@@ -30,7 +22,7 @@ def resolve_home(home=None):
     else:
         locator = Path.home() / ".phalanx" / "muster.json"
         try:
-            data = json.loads(locator.read_text(encoding="utf-8-sig"), object_pairs_hook=_unique)
+            data = json.loads(locator.read_text(encoding="utf-8-sig"), object_pairs_hook=unique_object)
         except OSError:
             raise MusterError(f"Cannot read muster locator {locator}; create it with one absolute "
                               "'home' path or set PHALANX_HOME") from None
@@ -68,7 +60,7 @@ def read_environment(path):
         raise MusterError(f"Cannot read private environment {path}") from None
     if path.suffix.lower() == ".json":
         try:
-            values = json.loads(text, object_pairs_hook=_unique)
+            values = json.loads(text, object_pairs_hook=unique_object)
         except ValueError:
             raise MusterError(f"Invalid private environment {path}") from None
         if (not isinstance(values, dict) or set(values) - allowed

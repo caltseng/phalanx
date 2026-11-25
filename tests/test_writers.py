@@ -12,13 +12,10 @@ import unittest
 from unittest.mock import patch
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store, work_cli, writers
-from phalanx.direct_schema import (
-    CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA,
-)
 from phalanx.dispatch_api import DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.pr_models import DEPLOYMENT_WINDOW
-from phalanx.store import connect, migrate, write_transaction
+from phalanx.store import connect, initialize, write_transaction
 from phalanx.transitions import item_branch
 
 from cli_runner import run_cli
@@ -35,7 +32,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
         self.start_server(self.path)
         self.assertEqual(self.request("/v1/repositories", OWNER, {"id": "repo", "remote": "https://github.com/e/r.git"})[0], 200)
         self.captain = self.ok("/v1/captains", RUNNER, {
@@ -98,6 +95,62 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 "expected_version": binding["version"], "outcome": "succeeded", **fields}
         return self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/result", token, body)
 
+    def test_result_receipt_fingerprints_complete_validated_body_and_writer(self):
+        from phalanx.intake_models import Result
+
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        body = {"attempt_id": binding["writer"]["attempt_id"], "stage": "report_drafting",
+                "expected_version": binding["version"], "outcome": "succeeded", "report_markdown": "Report"}
+        route = f"/v1/items/{item_id}/executions/{execution_id}/result"
+        headers = {"Idempotency-Key": "result"}
+        status, response = self.request(route, token, body, headers)
+        self.assertEqual(status, 200, response)
+        self.assertEqual(self.request(route, token, {**body, "review_notes": None}, headers),
+                         (status, response))
+        with connect(self.path) as db:
+            stored = db.execute("SELECT request_digest FROM request_receipts WHERE idempotency_key='result'").fetchone()[0]
+        self.assertEqual(stored, intake.digest(intake.encode({
+            "body": Result(**body).model_dump(mode="json"), "writer_id": binding["writer"]["id"]})))
+
+    def test_long_queue_new_writer_has_fresh_active_and_stage_age_without_overdue_warning(self):
+        queued_at = (datetime.now(UTC) - timedelta(days=3)).isoformat(timespec="microseconds")
+        with patch("phalanx.intake.datetime", wraps=datetime) as clock:
+            clock.now.return_value = datetime.fromisoformat(queued_at)
+            with write_transaction(self.path) as db:
+                item = intake.create(db, Intake(repository_id="repo", goal="Long queued work", target="report"))
+        item_id, execution_id = item["id"], item["execution"]["id"]
+        board = f"/v1/operator/items/{item_id}"
+        queued = self.ok(board, OWNER)["item"]
+        self.assertIsNone(queued["active_started_at"])
+        self.assertIsNone(queued["active_age_seconds"])
+        self.assertIsNone(queued["stage_started_at"])
+        binding, token, _ = self.register(item_id, execution_id)
+        with connect(self.path) as db:
+            started = db.execute("SELECT started_at FROM attempts WHERE id=?",
+                                 (binding["writer"]["attempt_id"],)).fetchone()[0]
+        for route in (board, f"/v1/operator/executions/{execution_id}/timeline",
+                      "/v1/operator/executions"):
+            result = self.ok(route, OWNER)
+            active = result["item"] if "item" in result else result["items"][0]
+            self.assertEqual(active["created_at"], queued_at)
+            self.assertEqual(active["last_advanced_at"], queued_at)
+            self.assertEqual(active["active_started_at"], started)
+            self.assertEqual(active["stage_started_at"], started)
+            self.assertLess(active["active_age_seconds"], 60)
+        self.assertNotIn("active_overdue", [
+            flag["kind"] for flag in self.ok("/v1/writer", token)["flags"]])
+        review = self.submit(token, binding, report_markdown="# Report\n")
+        rework = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/result", token, {
+            "attempt_id": review["writer"]["attempt_id"], "stage": "report_review",
+            "expected_version": review["version"], "outcome": "changes_required",
+            "report_revision": intake.digest("# Report\n"), "report_review_notes": "Clarify evidence"})
+        self.assertEqual(rework["state"]["stage"], "report_drafting")
+        current = self.ok(board, OWNER)["item"]
+        self.assertEqual(current["active_started_at"], started)
+        self.assertEqual(current["stage_started_at"], current["last_advanced_at"])
+        self.assertGreater(current["stage_started_at"], started)
+
     def test_overdue_age_survives_progress_stages_replacement_but_not_completion_or_rerun(self):
         item_id, execution_id = self.item()
         binding, token, _ = self.register(item_id, execution_id)
@@ -124,14 +177,25 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         if flag["kind"] == "active_overdue")
         self.assertEqual(replaced["first_seen"], first["first_seen"])
         self.assertIn(replacement["writer"]["id"], replaced["recovery"])
+        board = f"/v1/operator/items/{item_id}"
+        active = self.ok(board, OWNER)["item"]
+        self.assertEqual(active["active_started_at"], started.isoformat(timespec="microseconds"))
+        self.assertGreaterEqual(active["active_age_seconds"], 91 * 60)
         binding = self.submit(replacement_token, replacement, report_revision=intake.digest("# Report\n"))
         done = self.submit(replacement_token, binding, report_revision=intake.digest("# Report\n"))
         self.assertEqual(done["state"]["status"], "completed")
+        closed = self.ok(board, OWNER)["item"]
+        self.assertEqual(closed["active_started_at"], active["active_started_at"])
+        self.assertEqual(closed["active_age_seconds"], max(0, int((
+            datetime.fromisoformat(closed["closed_at"]) - started).total_seconds())))
         self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
         rerun = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/rerun", OWNER,
                        {"expected_version": done["version"], "target": "report"})
         fresh, _, _ = self.register(item_id, rerun["id"])
         self.assertEqual(fresh["id"], rerun["id"])
+        current = self.ok(board, OWNER)["item"]
+        self.assertNotEqual(current["active_started_at"], active["active_started_at"])
+        self.assertLess(current["active_age_seconds"], 60)
         self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
 
     def test_overdue_delivery_surfaces_known_blocker_actor_and_trigger_through_existing_reads(self):
@@ -586,7 +650,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertFalse(waiting["writer"]["building"])
         self.assertIn("Building capacity exhausted", waiting["writer"]["capacity_wait"])
         self.assertEqual(waiting["state"]["stage"], "delivery")
-        migrate(self.path)
+        initialize(self.path)
         self.withdraw_binding(builds[0])
         refused, _, _ = self.register(*self.item(), code=409)
         self.assertIn("waiting PR rework", refused["detail"])
@@ -656,7 +720,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok("/v1/writer/capacity", token, {
             "phase": "delivering", "expected_revision": current["writer"]["capacity_revision"]}, 409)
         self.capacity(token, "delivering", head=OTHER)
-        migrate(self.path)
+        initialize(self.path)
         self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_external")
         drift = next(flag for flag in self.ok("/v1/writer", token)["flags"] if flag["kind"] == "head_drift")
         self.assertIn(f"publication handoff {OTHER}", drift["reason"])
@@ -697,10 +761,9 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.submit(token, publication, pr_url=PR_URL)
         with patch.object(work_cli, "credential", return_value=(self.url, token)), patch("builtins.print"):
             work_cli.run_work(Namespace(work_command="capacity", phase="building"))
-            with patch.object(work_cli.subprocess, "run",
-                              return_value=subprocess.CompletedProcess([], 0, stdout=OTHER + "\n")) as git:
+            with patch.object(work_cli, "git_text", return_value=OTHER + "\n") as git:
                 work_cli.run_work(Namespace(work_command="capacity", phase="delivering"))
-            git.assert_called_once()
+            git.assert_called_once_with(None, "rev-parse", "HEAD", error=ValueError)
         current = self.ok("/v1/writer", token)
         self.assertFalse(current["writer"]["building"])
         self.assertEqual(current["writer"]["handoff_head"], OTHER)
@@ -762,27 +825,6 @@ class WriterTest(ServerFixture, unittest.TestCase):
         published = self.submit(token, reviewed, reviewed_candidate=OTHER)
         self.assertFalse(published["writer"]["building"])
 
-    def test_upgrade_preserves_live_writer_and_charges_conservatively_until_protocol_handoff(self):
-        publication, token = self.publish("ready_for_check_in")
-        delivery = self.submit(token, publication, pr_url=PR_URL)
-        with write_transaction(self.path) as db:
-            db.execute("UPDATE dispatch_settings SET max_writers=5")
-            db.execute("DROP TABLE item_titles")
-            db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")
-            db.execute("DROP INDEX waiting_writer_builds")
-            db.execute("ALTER TABLE executions DROP COLUMN handoff_head")
-            for column in ("building", "building_requested_at", "capacity_revision"):
-                db.execute(f"ALTER TABLE writers DROP COLUMN {column}")
-            db.execute(f"PRAGMA user_version={store.MIGRATIONS.index(store.WRITER_CAPACITY_SCHEMA)}")
-        migrate(self.path)
-        migrate(self.path)
-        current = self.ok("/v1/writer", token)
-        self.assertEqual(current["writer"]["id"], delivery["writer"]["id"])
-        self.assertTrue(current["writer"]["building"])
-        status = self.ok("/v1/dispatch/settings", OWNER)
-        self.assertEqual((status["building_writers"], status["max_writers"]), (1, 5))
-        self.capacity(token, "delivering")
-        self.assertEqual(self.ok("/v1/dispatch/settings", OWNER)["building_writers"], 0)
 
     def publish(self, target, **fields):
         """Carry a writer-bound PR item through development and self-review to publication."""
@@ -856,6 +898,64 @@ class WriterTest(ServerFixture, unittest.TestCase):
                         {"expected_version": done["version"], "target": "checked_in"})
         self.assertNotEqual(rerun["id"], done["id"])
         self.assertEqual(rerun["state"]["target"], "checked_in")
+
+    def test_delivery_criteria_steering_is_owner_versioned_audited_and_preserves_writer(self):
+        original = ["Timing target: 5 seconds", "No data loss"]
+        criteria = ["Ordinary timing target: 5 seconds; measured 7 seconds after two rounds; "
+                    "Captain tracks follow-up profiling", "No data loss"]
+        for mode in ("ready", "draft"):
+            with self.subTest(mode=mode):
+                publication, token = self.publish(
+                    "checked_in", acceptance_criteria=original, publication_mode=mode)
+                delivery = self.submit(token, publication, pr_url=PR_URL)
+                if mode == "ready":
+                    self.capacity(token, "building")
+                    delivery = self.ok("/v1/writer", token)
+                route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+                payload = {"expected_version": delivery["version"],
+                           "acceptance_criteria": criteria, "steered_by": "captain"}
+                key = f"criteria-{mode}"
+                headers = {"Idempotency-Key": key}
+                for forbidden in (RUNNER, token):
+                    self.ok(route, forbidden, payload, 403, method="PATCH", headers=headers)
+                changed = self.ok(route, OWNER, payload, method="PATCH", headers=headers)
+                self.assertEqual(self.ok(route, OWNER, payload, method="PATCH", headers=headers), changed)
+                self.ok(route, OWNER, payload, 409, method="PATCH",
+                        headers={"Idempotency-Key": f"{key}-stale"})
+                self.assertEqual(changed["acceptance_criteria"], criteria)
+                self.assertEqual(changed["execution"]["version"], delivery["version"] + 1)
+                self.assertEqual(changed["execution"]["state"], delivery["state"])
+                current = self.ok("/v1/writer", token)
+                self.assertEqual(current["writer"], delivery["writer"])
+                self.assertEqual(current["state"], delivery["state"])
+                timeline = self.ok(route + "/timeline", OWNER)
+                self.assertEqual(timeline[-1]["event"], "steer")
+                self.assertEqual(timeline[-1]["details"], {
+                    "before": {"acceptance_criteria": original},
+                    "after": {"acceptance_criteria": criteria}, "steered_by": "captain"})
+
+    def test_delivery_criteria_steering_refuses_mixed_active_stopping_and_terminal_work(self):
+        publication, token = self.publish("ready_for_check_in")
+        route = f"/v1/items/{publication['item_id']}/executions/{publication['id']}"
+        payload = {"expected_version": publication["version"], "acceptance_criteria": ["Updated"]}
+        self.ok(route, OWNER, payload, 409, method="PATCH")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        payload["expected_version"] = delivery["version"]
+        for fields in ({"goal": "Different work"}, {"target": "checked_in"},
+                       {"dependencies": []}, {"acceptance_criteria": None}):
+            self.ok(route, OWNER, {**payload, **fields}, 409, method="PATCH")
+        self.assertEqual(self.ok("/v1/writer", token)["version"], delivery["version"])
+        completed = self.observe(delivery)
+        payload["expected_version"] = completed["version"]
+        self.ok(route, OWNER, payload, 409, method="PATCH")
+
+        publication, token = self.publish("checked_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        route = f"/v1/items/{delivery['item_id']}/executions/{delivery['id']}"
+        stopping = self.ok(route + "/cancel", OWNER,
+                           {"expected_version": delivery["version"], "reason": "Owner stop"})
+        self.ok(route, OWNER, {"expected_version": stopping["version"],
+                              "acceptance_criteria": ["Updated"]}, 409, method="PATCH")
 
     def test_steered_check_in_waits_for_required_checks_and_records_the_merge(self):
         binding, token = self.publish("ready_for_check_in")
@@ -1328,7 +1428,9 @@ class WriterTest(ServerFixture, unittest.TestCase):
 
         def beat(*sessions, state="active", **fields):
             return self.ok(captain, RUNNER, {"charter_revision": "c1", "wake_count": 1, "state": state,
-                                             "sessions": [{"id": s, "name": n} for s, n in sessions], **fields},
+                                             "sessions": [{"id": s, "name": n, "writer_nonce": body["nonce"]}
+                                                          if s in ("s-1", "s-old") else {"id": s, "name": n}
+                                                          for s, n in sessions], **fields},
                            method="PUT")
 
         def session_flags():
@@ -1397,6 +1499,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
             {"id": "second", "name": name, "writer_nonce": second["writer"]["nonce"]},
             {"id": "unknown", "name": name},
             {"id": "title-only", "name": f"phx {first_item[:8]} {first['writer']['nonce']} [phx]"},
+            {"id": "old-title-only", "name": f"phx {first_item[:8]} {first['writer']['nonce']}"},
             {"id": "ended", "name": f"phx {first_item[:8]} {first['writer']['nonce']}",
              "writer_nonce": "abcdef" + "3" * 16},
         ]
@@ -1414,7 +1517,8 @@ class WriterTest(ServerFixture, unittest.TestCase):
         reported = beat()["sessions"]
         self.assertEqual(reported[0]["writer_nonce"], first["writer"]["nonce"])
         self.assertEqual(set(found()), {
-            ("orphan_session", "unknown"), ("orphan_session", "ended"), ("orphan_session", "title-only")})
+            ("orphan_session", "unknown"), ("orphan_session", "ended"), ("orphan_session", "title-only"),
+            ("orphan_session", "old-title-only")})
         self.ok(f"/v1/items/{first_item}/executions/{first_execution}/writer", RUNNER, {
             "captain_id": self.captain["id"], "writer_id": first["writer"]["id"], "session_id": "first"},
             method="PATCH")
@@ -1426,7 +1530,8 @@ class WriterTest(ServerFixture, unittest.TestCase):
         result = found()
         self.assertEqual(set(result), {
             ("orphan_session", "unknown"), ("orphan_session", "ended"),
-            ("orphan_session", "title-only"), ("duplicate_writer", "duplicate")})
+            ("orphan_session", "title-only"), ("orphan_session", "old-title-only"),
+            ("duplicate_writer", "duplicate")})
         self.assertEqual(result["duplicate_writer", "duplicate"]["item_id"], first_item)
         self.assertEqual(result["duplicate_writer", "duplicate"]["execution_id"], first_execution)
         self.assertEqual(beat()["sessions"][0]["first_seen"], reported[0]["first_seen"])
@@ -1483,7 +1588,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
 
     def kinds(self, now):
         with connect(self.path) as db:
@@ -1807,91 +1912,10 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             conditional_read(request, second, db, now + timedelta(seconds=1))
             self.assertNotEqual(first.headers["ETag"], second.headers["ETag"])
 
-    def previous_store(self, migration):
-        """A store upgraded up to, but not including, the given migration."""
-        path = self.path.with_name("previous.sqlite3")
-        with write_transaction(path, create=True) as db:
-            for version, statements in enumerate(store.MIGRATIONS[:store.MIGRATIONS.index(migration)], start=1):
-                for statement in statements:
-                    db.execute(statement)
-                db.execute(f"PRAGMA user_version = {version}")
-        return path
 
-    def test_upgrade_keeps_historical_compaction_counts_unknown(self):
-        path = self.previous_store(CAPTAIN_COMPACTION_SCHEMA)
-        with write_transaction(path) as db:
-            now = intake.timestamp()
-            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, wake_count,
-                              created_at, heartbeat_at) VALUES ('c', 'chat', 'c1', 'ended', 12, ?, ?)""",
-                       (now, now))
-        migrate(path)
-        with connect(path) as db:
-            captain = captains.view(db, captains.captain_row(db, "c"))
-        self.assertIsNone(captain["compaction_count"])
-        self.assertEqual((captain["state"], captain["wake_count"], captain["charter_revision"]),
-                         ("ended", 12, "c1"))
 
-    def test_upgrade_resets_sessions_stored_as_bare_ids(self):
-        path = self.previous_store(CAPTAIN_SHIFT_SCHEMA)
-        with write_transaction(path) as db:
-            now = intake.timestamp()
-            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, sessions_json, created_at,
-                              heartbeat_at) VALUES ('c', 'chat', 'c1', 'active', '["s-1"]', ?, ?)""", (now, now))
-        migrate(path)
-        with write_transaction(path) as db:
-            captain = captains.heartbeat(db, "c", captains.Heartbeat(
-                charter_revision="c1", wake_count=1, state="active", sessions=[captains.Session(id="s-1", name="phx x")]))
-            self.assertEqual([session["id"] for session in captain["sessions"]], ["s-1"])
-            flags.all_flags(db)
 
-    def test_upgrade_ends_writers_of_closed_executions(self):
-        path = self.previous_store(CLOSED_WRITER_MIGRATION)
-        with write_transaction(path) as db:
-            intake.register(db, "repo", "https://github.com/e/r.git")
-            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, created_at, heartbeat_at)
-                          VALUES ('c', 'chat', 'c1', 'active', ?, ?)""",
-                       (intake.timestamp(), intake.timestamp()))
-            for name in ("closed", "open"):
-                item = intake.create(db, Intake(repository_id="repo", goal=name, target="report"))
-                db.execute("""INSERT INTO writers (id, execution_id, item_id, captain_id, runtime, nonce,
-                                  token_digest, state, created_at) VALUES (?, ?, ?, ?, 'r', ?, ?, 'busy', ?)""",
-                           (name, item["execution"]["id"], item["id"], "c", name, intake.digest(name),
-                            intake.timestamp()))
-            db.execute("""UPDATE executions SET state_json = json_set(state_json, '$.status', 'cancelled',
-                              '$.final_output', json('{}'))
-                          WHERE id = (SELECT execution_id FROM writers WHERE id = 'closed')""")
-        migrate(path)
-        with connect(path, mode="ro") as db:
-            writers = {row["id"]: row for row in db.execute("SELECT * FROM writers")}
-        self.assertIsNotNone(writers["closed"]["ended_at"])
-        self.assertEqual(writers["closed"]["end_reason"], "closed as cancelled")
-        self.assertEqual((writers["open"]["ended_at"], writers["open"]["end_reason"]), (None, None))
 
-    def test_upgrade_from_version_17_supports_archive_flags_and_shift_status(self):
-        path = self.previous_store(SESSION_ARCHIVE_SCHEMA)
-        with write_transaction(path) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], 17)
-            self.assertIsNone(db.execute(
-                "SELECT 1 FROM sqlite_schema WHERE name='session_archives'").fetchone())
-            now = intake.timestamp()
-            db.execute("""INSERT INTO captains (id, session_ref, charter_revision, state, created_at, heartbeat_at)
-                          VALUES ('c', 'chat', 'c1', 'active', ?, ?)""", (now, now))
-        migrate(path)
-        with connect(path) as db:
-            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], len(store.MIGRATIONS))
-            self.assertEqual(db.execute("SELECT count(*) FROM session_archives").fetchone()[0], 0)
-        self.start_server(path)
-
-        def api(route):
-            status, response = self.request(route, RUNNER)
-            self.assertEqual(status, 200, response)
-            return response
-
-        self.assertEqual(api("/v1/flags")["flags"], [])
-        status = shift.status(api, {"repositories": ["repo"], "shift": shift.SHIFT_DEFAULTS}, "c")
-        self.assertEqual(status["flags"], [])
-        self.assertEqual(status["captain"]["cleanup_pending"], 0)
-        self.assertEqual(status["captain"]["ended_writers"], [])
 
     def test_stored_flags_are_idempotent_and_cleared_by_their_raiser(self):
         self.start_server(self.path)

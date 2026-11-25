@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from phalanx.store import migrate
+from phalanx.store import initialize
 
 from cli_runner import run_cli
 
@@ -38,7 +38,7 @@ class CLIRunnerTest(unittest.TestCase):
     def test_relative_paths_use_temporary_cwd_and_restore_it_after_failure(self):
         cwd = Path.cwd()
         with TemporaryDirectory() as temporary:
-            migrate(Path(temporary) / "queue.sqlite3")
+            initialize(Path(temporary) / "queue.sqlite3")
             arguments = ["server", "backup", "backup.sqlite3"]
             environment = {"PHALANX_DB": "queue.sqlite3"}
             result = run_cli(arguments, env=environment, cwd=temporary)

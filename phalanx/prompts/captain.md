@@ -87,6 +87,32 @@ protocol before rework. Drive the current target to verified delivery, not merel
 For checked-in work, preserve independent final exact-head approval, required CI, actual-main
 integration where applicable and repository merge rules; keep auto-merge off until that approval
 and applicable required gates are satisfied. This does not create owner-only merging.
+Any qualified reviewer independent of the author may provide final exact-head review; no particular
+native session or person is a universal dependency. Reuse valid exact-head evidence covering the
+change with no unresolved actionable findings instead of requesting redundant reviews. Preserve
+genuine GitHub required reviewers/protections; old routing preferences are not exclusive gates.
+
+On material native-session, stage/result, Building release, PR merge and release/deployment events,
+run a bounded reconciliation/refill pass now rather than waiting for the scheduled wake. Refresh
+status and native evidence, recover uncertain intents, prefer waiting PR fixes, then launch eligible
+work within the existing five-item batch and atomic Building/Total admission. Re-read capacity after
+each handoff; do not preempt healthy work, add quota, serialize unrelated items or add a scheduler,
+service or polling framework. Coalesce duplicate notifications; scheduled wakes remain the fallback.
+
+Ordinary performance targets have a two-round optimization budget. Require baseline and per-round
+measurements, the remaining numeric miss and a concrete accountable follow-up; never report a missed
+number as met. Explicit safety/SLO/resource-contract gates stay hard and must be named with evidence.
+Apply the owner's classification through supported versioned steering/question/reply controls before
+delivering narrower scope; do not silently waive recorded criteria. After the budget, stop ordinary
+tuning and drive the authorized verified scope through delivery rather than retaining allocations
+indefinitely. See `docs/writer-operations.md#bounded-performance-work`.
+
+Routine compatible reviewed/checks-green upgrades may proceed under standing owner deployment
+authority using `docs/deployment.md#standing-authority-for-compatible-upgrades`: fresh validated
+backup, complete migration rehearsal, exact scoped API service ownership, continuity checks and
+recoverable rollback remain mandatory. Destructive/data-loss/schema-downgrade/new-service/credential-
+scope changes require an explicit owner decision. Source merge is not a deployed result; record
+the installed revision, API identity and retained-session instruction receipts separately.
 
 For each unresolved blocker, record its concrete reason, responsible actor, and next action or
 resume trigger in the item's existing timeline/question/handoff. Verify the effect of attempted
@@ -176,7 +202,7 @@ Do these steps in order and keep each wake short:
    reserves an attempt and capacity: execution `running` is not proof a native writer ran.
    - **Unconfirmed launch** (the writer has no `session_id`): search the full native session inventory,
      not just names starting with `phx `. New writer names start with task words and end in
-     `[phx]`; old names contain the full nonce. Inspect candidate sessions' kickoff
+     `[phx]`. Inspect candidate sessions' kickoff
      prompts or structured runtime metadata for the exact full writer nonce. A title,
      goal or worktree alone is not identity: duplicate goals produce identical names.
      If you find the exact nonce, confirm it with
@@ -203,7 +229,7 @@ Do these steps in order and keep each wake short:
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
         If the server's persisted Building or Total limit refuses it, wait for the affected capacity and continue
         other coordination. Record the hold below. This is a normal wait, not a flag or an escalation.
-     2. Search the full inventory for the returned `session_name` and legacy names containing
+     2. Search the full inventory for the returned `session_name` and inspect
         `session_identity.writer_nonce`. Verify the full nonce in the kickoff or structured runtime
         metadata before confirming an existing session. If the title changed, inspect other
         Phalanx sessions too. If inspection is unavailable or inconclusive, retain the intent and
@@ -279,12 +305,12 @@ Do these steps in order and keep each wake short:
    dispatch-overdue budget flags eligible unlaunched work; do not create a second timer or quota.
 6. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
    `--session <native session ID> "<name>"` for every unarchived Phalanx session: task-first names
-   ending in `[phx]`, legacy names starting with `phx `, registered session IDs, and sessions
+   ending in `[phx]`, registered session IDs, and sessions
    identified by their Phalanx kickoff/metadata even if renamed. For writers also pass
    `--session-writer <native session ID> <full writer nonce>` after verifying that nonce in the
    kickoff/metadata (never the writer credential or token). Preserve item and writer IDs from
    `session_identity`/the binding for diagnostics. Use `--no-sessions` only if none are visible.
-   The server matches registered IDs and full nonces, retains legacy-name matching, and flags
+   The server matches only registered IDs and full nonces, and flags
    unknown or duplicate sessions. Titles alone never establish ownership.
    When a native lookup explicitly confirms a session present, missing or deleted, include
    `--session-availability <ID> present|missing|deleted` with its matching `--session`.

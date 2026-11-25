@@ -45,7 +45,7 @@ if str(ROOT) not in sys.path:
 from phalanx import dispatch, intake  # noqa: E402
 from phalanx.dispatch_api import DispatchSettings  # noqa: E402
 from phalanx.intake_models import Intake  # noqa: E402
-from phalanx.store import connect, migrate, write_transaction  # noqa: E402
+from phalanx.store import connect, initialize, write_transaction  # noqa: E402
 from phalanx.transitions import Event, Outcome, Wait  # noqa: E402
 
 
@@ -232,7 +232,7 @@ class Probe:
     def seed(self):
         config = self.config
         started = time.perf_counter()
-        migrate(self.path)
+        initialize(self.path)
         with write_transaction(self.path) as db:
             for repository in GENERAL + LANES:
                 intake.register(db, repository, f"https://github.com/example/{repository}.git")

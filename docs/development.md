@@ -40,17 +40,56 @@ Use `phalanx.store.write_transaction(path)` for writes, including all reads that
 Connections use foreign-key enforcement, `synchronous=EXTRA` and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Current writer/attempt fencing, expected versions and idempotency keys protect retries; direct writers do not renew expiring leases. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them.
 
 Follow [AGENTS.md](../AGENTS.md) and decision 67 before adding schema changes; do not
-add migrations or compatibility machinery without authorization. Existing startup
-uses the SQL tuples in `MIGRATIONS` in `phalanx.store`, committing each step and version
-together. The authorized retirement steps drop old tables and normalize closed
-execution snapshots once, preserving immutable history and outputs. They are not a
-general invitation to rewrite live data. Stores older than `OLDEST_SUPPORTED_VERSION`
-are refused.
+add migrations or compatibility machinery without authorization. `store.initialize`
+creates the canonical SQL in `phalanx.schema` transactionally on an empty database.
+An existing database must have the current application ID and schema version (25);
+startup never replays schema history or rewrites records.
 
-The runner-attempt retirement changes the fresh-store schema directly; it does not
-convert existing deployed stores. Deploying over an existing store requires a separately
-authorized, record-preserving conversion before activation. Never reset or replace live
-queue data to adopt the new schema.
+### Existing-store conversion
+
+The service owner, not a writer or startup hook, owns activation. Do not run this
+against live state or reset a queue. Rehearse on an operator-supplied snapshot first:
+
+1. The service owner retains the reviewed schema-24 snapshot at an explicitly documented
+   archive path, makes it read-only, and retains its source revision as the rollback/archive
+   pair. The deployed shape was initialized at `b981351b6f9e652f592aafcaa2b8b2f8db426964`,
+   then received the usage/title additions from `6cf538ed84a96f407ab1f4fd1f5ae2f239bd84a4`.
+   In particular its attempts still carry retired NOT NULL lease columns.
+   Take that backup with the pinned deployed schema-24 environment and the explicit
+   existing `PHALANX_DB`: `python -P -m phalanx server backup <snapshot>`.
+   Do not use the target schema-25 admin command to open a schema-24 source.
+2. From the reviewed target checkout, use the configured checks interpreter to run
+   `python -m scripts.convert_store <snapshot> <new-database>`. Both paths must be
+   operator-selected; the destination must not exist. This explicit one-off tool uses
+   SQLite backup for a consistent input, builds the canonical schema, disables triggers
+   only while copying, and copies every retained table/column without changing values.
+   It rejects unexpected tables/columns and never writes to the source.
+3. Keep the JSON result with the owner-controlled archive. It identifies the source's
+   absolute path/file SHA-256 and every source table's stored columns, row count and
+   SHA-256 (ordered rows encoded as compact ASCII JSON arrays with a newline; blobs
+   encoded as `{"blob_hex":"..."}`). Source changes during conversion abort publication.
+   It also verifies row counts, typed-value hashes, bidirectional value comparison,
+   foreign keys, integrity, and equality of `(type, name, tbl_name, sql)` from
+   `sqlite_master` against a fresh database. `rootpage` is physical allocation, not
+   schema, and naturally differs with data volume. Attempts, history, reports, active
+   writer bindings, versions, timestamps, capacity and board caches remain intact.
+   Retired attempt fields, `attempt_workers` and `external_rechecks` remain available in the retained source
+   archive, not runtime tables.
+4. Open the converted copy with an isolated target API and verify authenticated item,
+   writer and board reads; rehearse a writer result/next-attempt transition only on that
+   disposable copy. Do not run a reconciler or publish external effects from the rehearsal.
+5. After source review and operator approval, quiesce API/reconciler/client writes,
+   take a fresh supported backup, repeat conversion and verification, and let the owner
+   install the converted file at the existing configured database path. Preserve the
+   application identity, configuration, credentials, capacity values and reconciler.
+   Verify health and existing bindings before resuming dispatch. Retain the original
+   file in its documented immutable archive for rollback; never restore an old snapshot
+   over active writers or switch back after new writes without reconciling those writes.
+
+Receipt records are copied unchanged. New intake/results hash the complete validated
+request, including defaults and nulls; old-format keys can conflict after conversion.
+Reconcile any uncertain pre-cutover request against its stored response/current state
+before using a new key. There is no old-digest fallback.
 
 ## Queue storage
 

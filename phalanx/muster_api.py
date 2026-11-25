@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 
 from .auth import require_coordinator
-from .captains import is_live
+from .captains import live_captains
 from .reconciliation import RECONCILER_STALE
 from .store import read_transaction
 
@@ -21,7 +21,7 @@ def status(request: Request):
     with read_transaction(request.app.state.database_path) as db:
         captains = [
             {key: row[key] for key in ("id", "session_ref", "state", "heartbeat_at")}
-            for row in db.execute("SELECT * FROM captains ORDER BY id") if is_live(row, now)
+            for _, row in sorted(live_captains(db, now).items())
         ]
         writers = [dict(row) for row in db.execute(
             """SELECT writer.id, writer.item_id, writer.execution_id, writer.captain_id,

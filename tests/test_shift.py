@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from phalanx import captains, shift
-from phalanx.store import migrate, write_transaction
+from phalanx.store import initialize, write_transaction
 from phalanx.work_cli import credential, request
 
 from cli_runner import run_cli
@@ -192,7 +192,36 @@ class CharterTest(unittest.TestCase):
         self.assertIn("If none requires independent review", decision)
         self.assertIn("current exact head has applicable independent final-head approval", decision)
         self.assertIn("record the missing approval/reviewer with `phx work progress`", decision)
-        self.assertIn("if no reviewer is assigned or reachable, use `phx work question`", decision)
+        self.assertIn("seek another qualified independent reviewer", decision)
+        self.assertIn("Captain assignment is not a prerequisite", decision)
+        self.assertIn("Record reviewer identity, verdict, scope and exact final SHA", decision)
+        self.assertIn("Any qualified reviewer independent of the author", decision)
+        self.assertIn("no particular native session or person is a universal dependency", decision)
+        self.assertIn("Reuse valid recorded approval for the current exact head", decision)
+        self.assertIn("Genuine GitHub required reviewers, CODEOWNERS and branch protections", decision)
+        self.assertIn("Use `phx work question` only when required review cannot be obtained", decision)
+
+    def test_autonomy_policy_survives_kickoff_wake_and_keeper_handoff(self):
+        worker = shift.kickoff(
+            {"id": "item", "repository_id": "repo", "goal": "Deliver",
+             "execution": {"id": "execution", "state": {"target": "checked_in"}}},
+            "worktree", "nonce", "phx work", "main")
+        for name, prompt in (("worker", worker), ("captain", shift.prompt("captain")),
+                             ("wake", shift.prompt("wake")), ("keeper", shift.prompt("keeper"))):
+            text = " ".join(prompt.split())
+            with self.subTest(prompt=name):
+                self.assertIn("qualified reviewer independent of the author", text)
+                self.assertIn("two-round optimization budget", text)
+                self.assertIn("safety/SLO/resource-contract gates stay hard", text)
+                self.assertIn("Building", text)
+                self.assertIn("Total", text)
+                self.assertIn("sole-writer", text)
+        for name in ("captain", "wake"):
+            text = " ".join(shift.prompt(name).split())
+            with self.subTest(prompt=name):
+                self.assertIn("stage/result, Building release, PR merge and release/deployment events", text)
+                self.assertIn("standing owner deployment authority", text)
+                self.assertIn("Source merge is not a deployed result", text)
 
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
@@ -254,7 +283,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         root = Path(temporary.name)
         database = root / "queue.sqlite3"
         self.database = database
-        migrate(database)
+        initialize(database)
         self.start_server(database)
         bare, checkout = root / "origin.git", root / "checkout"
         git(root, "init", "-q", "--bare", str(bare))

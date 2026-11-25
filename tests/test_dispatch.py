@@ -4,8 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx.store import MIGRATIONS, connect, migrate, write_transaction
-from phalanx.dispatch_schema import CONCURRENCY_SCHEMA, WRITER_CAPACITY_SCHEMA
+from phalanx.store import connect, initialize, write_transaction
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
@@ -13,7 +12,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
     def setUp(self):
         directory = self.enterContext(TemporaryDirectory())
         self.path = Path(directory) / "queue.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
         self.start_server(self.path)
         self.request("/v1/repositories", OWNER, {"id": "repo", "remote": "https://github.com/e/r.git"})
 
@@ -47,7 +46,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
                                                "max_writers": 6, "active_writers": 0,
                                                "max_building_writers": 2, "building_writers": 0,
                                                "delivering_writers": 0}))
-        migrate(self.path)
+        initialize(self.path)
         with connect(self.path, mode="ro") as db:
             row = db.execute("SELECT * FROM dispatch_settings").fetchone()
             self.assertEqual((row["paused"], row["aging_seconds"], row["max_writers"]), (1, 42, 6))
@@ -55,38 +54,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.start_server(self.path)
         self.assertEqual(self.get(route, OWNER), (200, saved))
 
-    def test_pre_limit_upgrade_keeps_five_total_without_resetting_on_restart(self):
-        path = self.path.parent / "legacy.sqlite3"
-        with write_transaction(path, create=True) as db:
-            for version, statements in enumerate(MIGRATIONS[:MIGRATIONS.index(CONCURRENCY_SCHEMA)], 1):
-                for statement in statements:
-                    db.execute(statement)
-                db.execute(f"PRAGMA user_version={version}")
-            db.execute("UPDATE dispatch_settings SET paused=1, aging_seconds=99")
-        migrate(path)
-        with connect(path) as db:
-            self.assertEqual(tuple(db.execute(
-                "SELECT paused, aging_seconds, max_writers FROM dispatch_settings").fetchone()), (1, 99, 5))
-            db.execute("UPDATE dispatch_settings SET max_writers=8")
-        migrate(path)
-        with connect(path) as db:
-            self.assertEqual(db.execute("SELECT max_writers FROM dispatch_settings").fetchone()[0], 8)
 
-    def test_two_limit_upgrade_preserves_owner_total_and_existing_writer_allocations(self):
-        path = self.path.parent / "single-limit.sqlite3"
-        with write_transaction(path, create=True) as db:
-            for version, statements in enumerate(MIGRATIONS[:MIGRATIONS.index(WRITER_CAPACITY_SCHEMA)], 1):
-                for statement in statements:
-                    db.execute(statement)
-                db.execute(f"PRAGMA user_version={version}")
-            db.execute("UPDATE dispatch_settings SET max_writers=3, paused=1")
-        migrate(path)
-        migrate(path)
-        with connect(path) as db:
-            self.assertEqual(tuple(db.execute(
-                "SELECT max_building_writers, max_writers, paused FROM dispatch_settings").fetchone()),
-                (3, 3, 1))
-            self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
 
     def test_unpinned_intake_has_a_visible_direct_wait_and_is_launchable(self):
         status, item = self.request("/v1/items", OWNER, {

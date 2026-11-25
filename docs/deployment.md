@@ -9,9 +9,56 @@ API service, native runtime and reconciler boundaries. Tooling merged in
 [#220](https://github.com/caltseng/phalanx/pull/220); that is not evidence that an existing
 installation has adopted it. Keep installation state in the operator's private runbook.
 
+## Standing authority for compatible upgrades
+
+Routine compatible reviewed/checks-green upgrades are executable by the authorized service operator
+under standing owner deployment authority; do not ask for routine permission again or depend on a
+particular Captain, keeper or native session. This is scoped authority, not permission for an item
+writer to use a Captain token or stop services it does not own. If standing authority or exact
+service ownership cannot be verified, name that concrete blocker and responsible operator.
+Destructive operations, possible data loss, schema downgrades, new services and credential-scope
+changes remain explicit owner decisions. Repository trust/privacy and required review/CI remain hard.
+
+Use the existing supervisor and deployment tooling, not a new installer, watchdog or polling loop:
+
+1. Pin the reviewed/checks-green merge revision and previous installed revision; inventory the
+   exact API database/URL/config and supervisor identity privately. Record authenticated status,
+   active Captain/writer bindings, attempts, nonces, capacity settings/counts and reconciler identity.
+   Coordinate the concrete outage with the current Captain. Pause admissions only when the schema
+   or protocol requires it; do not stop healthy native sessions or serialize unrelated development.
+2. Take a fresh supported `server backup` to a new private destination and validate its integrity
+   and expected records. Rehearse the **complete** old-installed-to-new-pinned schema transition on
+   a disposable copy, including all intervening additive schema steps and built-in migrations, not
+   just the latest column. Start/probe the pinned candidate against that copy in isolation without
+   live credentials, GitHub writes or native launches; verify preserved rows, versions, allocations
+   and integrity. Record the rehearsed revisions and steps. Missing migration knowledge, an invalid
+   backup or an unexplained rehearsal difference blocks this upgrade; do not improvise live SQL.
+3. Keep the pinned previous package/config and a proven compatible rollback path. Stop/restart only
+   the **exact API service** through its owning supervisor (and identified child when required).
+   Preserve the original URL, database, credentials and board settings; never use process-name kills,
+   select a service merely by port, run a second API, initialize/reset live state, or replace writers.
+   Leave the existing reconciler, keeper/Captain schedules and credentials untouched for API-only
+   upgrades. A separately required reconciler upgrade uses its own exact owner and sole-instance
+   stop/start procedure, never an incidental restart.
+4. Apply only the rehearsed transition, install the complete pinned revision and restart through the
+   same supervisor. Check health and authenticated owner/runner identity, preserved bindings/attempts/
+   nonces/capacity, one intended API and the existing reconciler's fresh heartbeat. Exercise affected
+   read/control routes without fabricating live work. Verify normal writer API continuity/retries.
+   Restore admissions to the recorded owner setting if this rollout paused them.
+5. On failure, stop the candidate through that same exact owner and restore the pinned previous
+   package/config only if it can safely use the resulting schema. Never restore an older database
+   over active writers or hide a schema downgrade inside rollback. If compatibility is not proven,
+   keep the affected API safely stopped, preserve evidence and ask for an owner recovery decision.
+   An upgrade without a recoverable rollback plan must not start.
+
+Record source merge, installed package/API revision, schema/rehearsal/backup verification, continuity
+results and retained-session receipts separately. **Source merge is not a deployed result.** A
+successful rollout emits a material release event to the current Captain for bounded reconciliation
+and eligible-capacity refill; it is not permission to increase limits.
+
 ## Helper inventory and ownership
 
-The legacy deployment was inspected read-only. No private values or live state are copied
+The existing deployment was inspected read-only. No private values or live state are copied
 into the repository. Adopt these replacements **after review**, with the service owner:
 
 | External helper | Tracked replacement / disposition |
@@ -149,7 +196,7 @@ runner and GitHub tokens, `PHALANX_DB`, `PHALANX_API_URL`, `PHALANX_HOME`,
 `PHALANX_SHIFT_CONFIG` and `PHALANX_LOCAL_BOARD`. Unknown/duplicate keys and empty
 values fail without printing values. No shell is evaluated. Inherited environment settings
 take precedence; audit those on the service account before rollout. `shift_config` supplies
-`PHALANX_SHIFT_CONFIG` only when not already set. Preserve any explicit legacy value.
+`PHALANX_SHIFT_CONFIG` only when not already set. Preserve any explicit existing value.
 
 Git/GitHub credentials and noninteractive credential-helper setup remain service-account
 configuration, not hard-coded shell injection. The reconciler uses `PHALANX_GITHUB_TOKEN`
@@ -182,10 +229,10 @@ appropriate to that repository; the Windows junction helper is not a portable in
 
 ## Existing runtime: reviewed adoption, not a rename
 
-Legacy `phalanx-muster` homes, explicit `captain.json` paths and current service/worktree/
+Existing `phalanx-muster` homes, explicit `captain.json` paths and current service/worktree/
 session paths remain valid. **Do not run `deploy init` on the live home, rename it, change
 the discovery locator, or relocate the database to adopt the new spelling.** The raw API's
-legacy `.phalanx/phalanx.sqlite3` fallback remains unchanged for compatibility; supported
+default `.phalanx/phalanx.sqlite3` path remains unchanged; supported
 new setup writes an explicit absolute path under `.phalanx_muster` instead.
 
 1. Before review, inventory only: record the owning account/supervisor, exact API
@@ -209,12 +256,14 @@ new setup writes an explicit absolute path under `.phalanx_muster` instead.
    Run `python -m phalanx deploy check --config <that file>`. This is a read-only
    path/credential-presence check, **not** a connectivity, schema or GitHub validation.
    It never starts services, opens SQLite or alters configs. Do not add/change
-   `PHALANX_HOME` in a legacy API until its owner has reviewed the identity change;
+   `PHALANX_HOME` in an existing API until its owner has reviewed the identity change;
    explicit configs work without it.
-3. After the PR is reviewed, the **service owner** schedules rollout. Record authenticated
+3. After review and required checks pass, the authorized service operator executes rollout under
+   [standing authority](#standing-authority-for-compatible-upgrades). Record authenticated
    `/v1/runner/status`, `/v1/owner/status` and writer snapshots, then take a supported
    `phalanx server backup` to a new private destination with the original database path
-   and validate the backup as in [recovery](recovery.md). Keep a pinned previous package
+   and validate the backup as in [recovery](recovery.md). Rehearse the complete installed-to-candidate
+   transition on a copy. Keep a pinned previous package
    and launcher config for rollback. Never log/export tokens.
 4. Disable the old watchdog/restart owner first. Stop only the exact identified API
    and reconciler processes under that owner's control; leave all native writers,
@@ -261,7 +310,7 @@ After review/check-in, the authorized deployment owner:
    API calls during the short outage may need their normal retry. Never reset registrations,
    attempts, counters, limits or a dirty checkout. Advance the complete clean pinned deployment
    checkout to the reviewed merge commit, not a selection of runtime files. There is no new
-   migration or legacy-schema fallback. Verify health, authenticated status and existing
+   migration or old-schema fallback. Verify health, authenticated status and existing
    writer bindings after startup. A missing column/API is an activation blocker, not a
    reason to report reinforcement as active.
 
@@ -339,4 +388,31 @@ or replacing its writers. Include a stable config `runner_id` for any pinned int
 known native repository trust blocks with `--repository-blocked`. Verify `pickup_candidates`,
 specific wait reasons and unchanged writer/capacity state through status and Scribe.
 Keep deployment, schema application, external charter edits and retained-prompt activation
-with the service owner; item writers do none of these live operations.
+with their authorized operators; an item's scoped writer credential grants none of this authority.
+Routine compatible deployment does not require a fresh owner decision when the standing-authority
+procedure above applies.
+
+## Coordination-policy adoption boundary
+
+The tracked Captain/wake/keeper/worker prompts, review skill, charter template and operating guides
+define the policy. There is no engine-enforced independent-review predicate, native event bus or new
+scheduler in this change. Runtime material-event notifications use existing session messaging and
+the Captain's bounded pass; scheduled wakes remain the fallback when the runtime cannot notify.
+
+Check-in changes source only. The authorized operator must install the reviewed package/API before
+new generated prompts and attempt-free delivery criteria steering use it. Existing charter notes,
+schedules, kickoffs and retained conversations are not rewritten by a merge. Remove stale exclusive
+review-routing prose from active private charter/automation templates under their existing owner,
+preserving actual GitHub required reviewers/protections and unrelated authority. Relay the canonical
+changed sections to retained Captains, keepers and writers using supported messaging, and record
+recipient/revision/receipt; normal 90-minute reinforcement also refreshes Captain instructions.
+Do not revive ended sessions or launch replacement writers for policy adoption.
+
+For the owner's ordinary-target classification of Phalanx [#252](https://github.com/caltseng/phalanx/pull/252),
+[#253](https://github.com/caltseng/phalanx/pull/253) and
+[#258](https://github.com/caltseng/phalanx/pull/258), follow
+[the versioned timing-work procedure](writer-operations.md#bounded-performance-work). Read actual
+current state first: this document is neither a live mutation nor evidence that a timing target was
+met. Record each accepted API receipt and retained-writer acknowledgement in the existing timeline/
+operator runbook, retaining baseline/round measurements and explicit remaining misses. Until those
+receipts, API installation and instruction adoption are verified, report activation as partial.

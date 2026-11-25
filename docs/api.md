@@ -69,8 +69,8 @@ additional runtime session, local timing file or scheduler is involved.
 Captain heartbeat `sessions` entries contain native `id`, display `name` and optional
 `writer_nonce`, the full launch nonce verified from the session's kickoff/metadata, never its
 credential/token. Registered session IDs and full nonces identify writers independently of
-task-first or renamed titles. Without `writer_nonce`, legacy names still match full nonces or
-item ID prefixes. Unknown structured nonces do not fall back to potentially misleading titles.
+task-first or renamed titles. Unregistered sessions without a verified `writer_nonce` are
+orphans; names, item ID prefixes and nonce words in titles never establish writer identity.
 Captain reads preserve these fields and the server's `first_seen`.
 
 The runtime session tools perform archival. The API only records and exposes evidence:
@@ -149,6 +149,15 @@ timeline. A target-only change is also allowed on active PR work, including dire
 and its GitHub wait. Switching to or from `report` is refused. A completed ready item still requires
 `rerun`. A target change does not itself call GitHub; the writer reconciles auto-merge with the
 latest target on its next delivery pass.
+
+An acceptance-criteria-only patch is also allowed during `delivery`/`waiting_for_external`
+when no attempt is open, including a retained writer's GitHub wait. It uses the same owner
+authentication, `expected_version`, optional `Idempotency-Key` and `steered_by` audit attribution.
+The timeline records complete before/after criteria. Mixed goal/target/dependency edits, active
+attempts, stopping/finalizing and terminal work remain refused outside queued steering.
+The edit does not advance state, replace the writer, alter capacity or authorize merge. It supports
+explicit owner-approved performance-target classification, not a silent waiver of safety/SLO/
+resource contracts. See [bounded performance work](writer-operations.md#bounded-performance-work).
 
 A successful claim includes a `dependencies` snapshot with each upstream execution ID, output reference and exact revision. For a reviewed PR it includes the reviewed head and base; for a check-in it also identifies the verified merge commit. Use these revisions in the work packet. The snapshot is recorded on the attempt's claim event and returned on claim replay even if an upstream execution is rerun.
 
@@ -244,7 +253,16 @@ Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` 
 Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
 
 `last_advanced_at` records entry into the current stage, and `last_progress_at` the latest
-execution transition. Wait details include the reason, resume trigger and age. Scheduled
+execution transition. Summaries also expose nullable `active_started_at` (the execution's
+first persisted attempt start), `active_age_seconds` (elapsed since that start, ending at
+closure for closed executions), and `stage_started_at` (the later of first activation and
+current stage entry). Before any attempt these are null; queue time is not active work.
+Retained writers, replacements, rework and delivery waits keep the first activation;
+a rerun is a new execution with its own start. These are read-only projections: creation,
+queue eligibility, stage-entry, attempt and writer timestamps are not rewritten.
+The `active_overdue` flag uses the same start and still requires strictly more than
+90 elapsed minutes; queue age alone never triggers it. Session titles are not clock evidence.
+Wait details include the reason, resume trigger and age. Scheduled
 retries appear as `retry_at_ms`. `primary_pr_url` identifies the primary PR. Writer fields
 expose its native session and progress.
 `version` is the version a reply must name. Timelines list blocking `prerequisites` and the

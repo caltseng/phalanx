@@ -224,8 +224,7 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                     db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
                                ((now - captains.STALE - timedelta(seconds=1)).isoformat(), ids["stale"]))
                     db.execute("UPDATE captains SET state='ended' WHERE id=?", (ids["ended"],))
-                    expected = {row["id"]: captains.is_live(row, now)
-                                for row in db.execute("SELECT * FROM captains")}
+                    expected = {ids[kind]: kind == "live" for kind in ids}
                 status, page = self.get("/v1/captains?limit=25")
                 self.assertEqual(status, 200)
                 rows = {row["id"]: row for row in page["captains"]}
@@ -253,8 +252,10 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
                 for asset, marker in (
                     ("operator-board.css", ".phalanx-board"),
                     ("operator-board.js", "PhalanxOperatorBoard"),
+                    ("operator-helpers.js", "PhalanxOperatorHelpers"),
                     ("operator-markdown.js", "PhalanxMarkdown"),
-                    ("operator-http.js", "/v1/operator/executions"),
+                    ("operator-http.js", "PhalanxOperatorHttp"),
+                    ("operator-shell.js", "/v1/operator/executions"),
                 ):
                     path = f"/operator/assets/{asset}"
                     self.assertIn(path, shell)
