@@ -27,19 +27,12 @@ class LocalCheck:
     """One check from trusted reconciler policy for the registered repository."""
 
     policy: PreCheck
-    argv: tuple[str, ...] = ()
+    argv: tuple[str, ...]
     timeout_seconds: int = 60
-    disposition: PreOutcome | None = None
-    reason: str = ""
-    authorization: str = ""
 
     def __post_init__(self):
         if not self.policy.name.strip():
             raise ValueError("A local check needs a name")
-        if self.disposition is not None:
-            if self.argv or self.disposition not in (PreOutcome.SKIPPED, PreOutcome.INAPPLICABLE):
-                raise ValueError("A bypass must be skipped or inapplicable and cannot specify a command")
-            return
         if not self.argv or not Path(self.argv[0]).is_absolute() or self.timeout_seconds <= 0:
             raise ValueError("A check command needs an absolute executable and a positive timeout")
         if os.name == "nt" and Path(self.argv[0]).suffix.lower() != ".exe":

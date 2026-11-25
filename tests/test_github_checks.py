@@ -5,7 +5,7 @@ from dataclasses import replace
 from phalanx.github import GitHubClient
 from phalanx.github_checks import collect_github_checks
 from phalanx.validation import (
-    CheckKind, CheckOutcome, GateState, Phase, PublishedEvidence, RequiredCheck,
+    CheckKind, CheckOutcome, GateState, Phase, RequiredCheck,
 )
 
 from test_github import API, BASE, HEAD, MERGE, pull, response
@@ -15,7 +15,6 @@ ROOT = f"{API}/repos/owner/repo"
 OTHER = "d" * 40
 RUN = RequiredCheck("ci", CheckKind.CHECK_RUN, app_id=42)
 STATUS = RequiredCheck("ci", CheckKind.STATUS)
-PREVIEW = RequiredCheck("staging", CheckKind.PREVIEW)
 
 
 def run(run_id, *, sha=HEAD, app=42, status="completed", conclusion="success", prs=()):
@@ -38,7 +37,7 @@ class GitHubCollectionTests(unittest.TestCase):
         return self.responses.popleft()
 
     def collect(self, policy, *pages, phase=Phase.DRAFT, draft=True,
-                merge=None, after=None, **kwargs):
+                merge=None, after=None):
         snapshot = pull(draft=draft)
         if merge:
             snapshot.update(mergeable=True, merge_commit_sha=merge)
@@ -49,7 +48,7 @@ class GitHubCollectionTests(unittest.TestCase):
         self.responses.extend(pages)
         if after is not False:
             self.responses.append(response(after if after is not None else snapshot))
-        result = collect_github_checks(self.client, expected, phase, policy, **kwargs)
+        result = collect_github_checks(self.client, expected, phase, policy)
         self.assertFalse(self.responses)
         return result
 
@@ -106,17 +105,12 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual(result.gate.state, GateState.WAITING)
         self.assertEqual(result.observations, ())
 
-    def test_exact_test_merge_and_ready_preview(self):
-        def preview(candidate, phase, check, sha):
-            self.assertEqual(sha, MERGE)
-            return PublishedEvidence(candidate.pr_url, candidate.revision, sha,
-                                     phase, check.name, check.kind, CheckOutcome.PASSED)
-
+    def test_exact_test_merge_for_ready_check(self):
         result = self.collect(
-            (replace(RUN, use_merge_sha=True), replace(PREVIEW, use_merge_sha=True)),
+            (replace(RUN, use_merge_sha=True),),
             response({"sha": MERGE, "parents": [{"sha": BASE}, {"sha": HEAD}]}),
             response({"check_runs": [run(11, sha=MERGE)]}),
-            phase=Phase.READY, draft=False, merge=MERGE, read_preview=preview,
+            phase=Phase.READY, draft=False, merge=MERGE,
         )
         self.assertEqual(result.gate.state, GateState.SATISFIED)
         self.assertEqual(result.candidate.merge_sha, MERGE)
@@ -131,19 +125,6 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual(result.gate.state, GateState.WAITING)
         self.assertIn("test merge SHA", result.gate.reasons[0])
 
-    def test_preview_for_wrong_pr_phase_or_sha_is_missing(self):
-        for fields in ({"pr_url": "wrong"}, {"phase": Phase.DRAFT}, {"tested_sha": OTHER}):
-            with self.subTest(fields=fields):
-                def preview(candidate, phase, check, sha):
-                    evidence = PublishedEvidence(candidate.pr_url, candidate.revision, sha,
-                                                 phase, check.name, check.kind, CheckOutcome.PASSED)
-                    return replace(evidence, **fields)
-
-                result = self.collect((PREVIEW,), phase=Phase.READY, draft=False,
-                                      read_preview=preview)
-                self.assertEqual(result.gate.state, GateState.WAITING)
-                self.assertEqual(result.observations, ())
-
     def test_explicit_empty_unknown_policy_and_inaccessible_reads_are_distinct(self):
         self.assertEqual(self.collect(()).gate.state, GateState.NOT_CONFIGURED)
         self.assertEqual(self.collect(None).gate.state, GateState.BLOCKED)
@@ -151,7 +132,6 @@ class GitHubCollectionTests(unittest.TestCase):
         self.assertEqual(denied.gate.state, GateState.BLOCKED)
         self.assertIn("403", denied.gate.reasons[0])
         self.assertEqual(self.collect((STATUS,), response([])).gate.state, GateState.WAITING)
-        self.assertEqual(self.collect((PREVIEW,), after=False).gate.state, GateState.BLOCKED)
 
     def test_ready_checks_are_ignored_while_draft_and_missing_draft_check_on_ready_is_skipped(self):
         self.assertEqual(self.collect((RUN,), phase=Phase.READY).gate.state, GateState.WAITING)

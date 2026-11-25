@@ -33,7 +33,7 @@ def decision(row, now, current):
 
     state = json.loads(row["state_json"])
     if state.get("stopping") or state.get("pending_output"):
-        return blocked("closing", "Execution is stopping or finalizing", "Finish the pending disposition")
+        return blocked("closing", "Execution is stopping or finalizing", "Finish the pending finalization")
     if current["capacity"]["paused"]:
         return blocked("paused", "Dispatch is paused", "The owner resumes dispatch")
     unmet = json.loads(row["dependency_wait_json"] or "[]")

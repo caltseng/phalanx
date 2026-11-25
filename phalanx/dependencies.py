@@ -97,9 +97,9 @@ def configured_dependencies(db: sqlite3.Connection, item_id: str) -> list[dict]:
 
 def milestone_evidence(state: Execution):
     """The portions of state that can change a dependent's admission."""
-    disposition = state.stopping or state.pending_output
-    if disposition:
-        return disposition
+    closing_status = state.stopping or state.pending_output
+    if closing_status:
+        return closing_status
     if state.status in (Status.FAILED, Status.CANCELLED):
         return state.status
     if state.status == Status.COMPLETED:
@@ -145,8 +145,8 @@ def resolve_dependencies(
         if state.pending_output == Status.COMPLETED:
             reason = "Waiting for prerequisite report finalization"
         elif state.status in (Status.FAILED, Status.CANCELLED) or state.stopping or state.pending_output:
-            disposition = state.stopping or state.pending_output or state.status
-            reason = f"Prerequisite disposition is {disposition}. Rerun or replace the prerequisite."
+            closing_status = state.stopping or state.pending_output or state.status
+            reason = f"Prerequisite status is {closing_status}. Rerun or replace the prerequisite."
         elif milestone == Target.REPORT:
             if (state.status == Status.COMPLETED and state.target == Target.REPORT
                     and isinstance(output, StoredReport) and output.draft_revision and row["report_exists"]):
