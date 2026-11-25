@@ -8,7 +8,7 @@ only finds existing configuration.
 For an install already using [tracked deployment tooling](deployment.md), resume with
 `python -m phalanx deploy run --config <recorded deployment.json> server` and the matching
 `reconciler` command under the recorded single service owner. Never add
-`--initialize-database` during recovery. Do not move a legacy `phalanx-muster` directory
+`--initialize-database` during recovery. Do not move an existing `phalanx-muster` directory
 to `.phalanx_muster`; the new spelling is only the new-install default.
 
 ## Restart in order

@@ -543,7 +543,7 @@ def add_shift_command(commands):
     beat.add_argument("--state", choices=["active", "ending", "ended"])
     beat.add_argument("--focus", nargs="*", help="item IDs this wake acts on")
     beat.add_argument("--session", nargs=2, action="append", dest="sessions", metavar=("ID", "NAME"),
-                      help="a visible Phalanx session (task-first or legacy name); repeat for each")
+                      help="a visible Phalanx session; repeat for each")
     beat.add_argument("--session-writer", nargs=2, action="append", metavar=("ID", "NONCE"),
                       help="a reported session's full writer nonce, verified from its kickoff; repeat for each")
     beat.add_argument("--session-availability", nargs=2, action="append", metavar=("ID", "STATE"),

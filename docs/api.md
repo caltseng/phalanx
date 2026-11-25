@@ -69,8 +69,8 @@ additional runtime session, local timing file or scheduler is involved.
 Captain heartbeat `sessions` entries contain native `id`, display `name` and optional
 `writer_nonce`, the full launch nonce verified from the session's kickoff/metadata, never its
 credential/token. Registered session IDs and full nonces identify writers independently of
-task-first or renamed titles. Without `writer_nonce`, legacy names still match full nonces or
-item ID prefixes. Unknown structured nonces do not fall back to potentially misleading titles.
+task-first or renamed titles. Unregistered sessions without a verified `writer_nonce` are
+orphans; names, item ID prefixes and nonce words in titles never establish writer identity.
 Captain reads preserve these fields and the server's `first_seen`.
 
 The runtime session tools perform archival. The API only records and exposes evidence:

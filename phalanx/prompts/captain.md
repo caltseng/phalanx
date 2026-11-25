@@ -203,7 +203,7 @@ Do these steps in order and keep each wake short:
         a writer intent. Rerunning it after a lost reply replays the same intent, with the same nonce.
         If the server's persisted Building or Total limit refuses it, wait for the affected capacity and continue
         other coordination. Record the hold below. This is a normal wait, not a flag or an escalation.
-     2. Search the full inventory for the returned `session_name` and legacy names containing
+     2. Search the full inventory for the returned `session_name` and inspect
         `session_identity.writer_nonce`. Verify the full nonce in the kickoff or structured runtime
         metadata before confirming an existing session. If the title changed, inspect other
         Phalanx sessions too. If inspection is unavailable or inconclusive, retain the intent and
@@ -279,12 +279,12 @@ Do these steps in order and keep each wake short:
    dispatch-overdue budget flags eligible unlaunched work; do not create a second timer or quota.
 6. **Record.** Run `phx shift heartbeat --captain <id> --focus <items you acted on>` with one
    `--session <native session ID> "<name>"` for every unarchived Phalanx session: task-first names
-   ending in `[phx]`, legacy names starting with `phx `, registered session IDs, and sessions
+   ending in `[phx]`, registered session IDs, and sessions
    identified by their Phalanx kickoff/metadata even if renamed. For writers also pass
    `--session-writer <native session ID> <full writer nonce>` after verifying that nonce in the
    kickoff/metadata (never the writer credential or token). Preserve item and writer IDs from
    `session_identity`/the binding for diagnostics. Use `--no-sessions` only if none are visible.
-   The server matches registered IDs and full nonces, retains legacy-name matching, and flags
+   The server matches only registered IDs and full nonces, and flags
    unknown or duplicate sessions. Titles alone never establish ownership.
    When a native lookup explicitly confirms a session present, missing or deleted, include
    `--session-availability <ID> present|missing|deleted` with its matching `--session`.

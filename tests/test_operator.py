@@ -12,11 +12,9 @@ from urllib.request import Request, urlopen
 from phalanx import dispatch, intake, operator_api
 from phalanx.intake import record, steer
 from phalanx.intake_models import Intake, Steering
-from phalanx.intake_schema import INTAKE_SCHEMA
 from phalanx.operator_api import closed_page, conditional_read, filtered_open_page, open_page, short_title
-from phalanx.operator_schema import DASHBOARD_SCHEMA
 from phalanx.reconciliation import Observation, record as record_observation
-from phalanx.store import APPLICATION_ID, MIGRATIONS, connect, migrate, write_transaction
+from phalanx.store import APPLICATION_ID, connect, initialize, write_transaction
 from phalanx.transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target, Wait, item_branch
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -58,7 +56,7 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        migrate(self.path)
+        initialize(self.path)
         with write_transaction(self.path) as db:
             db.execute("INSERT INTO repositories VALUES ('repo', 'https://github.com/a/b', ?)", (EARLY,))
             for number in range(1, 5001):
@@ -434,12 +432,8 @@ class DashboardTest(ServerFixture, unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "queue.sqlite3"
-        # Stop before the dashboard migration so the server backfills reads from history.
-        with write_transaction(self.path, create=True) as db:
-            for version, statements in enumerate(MIGRATIONS[:MIGRATIONS.index(DASHBOARD_SCHEMA)], start=1):
-                for statement in statements:
-                    db.execute(statement)
-                db.execute(f"PRAGMA user_version = {version}")
+        initialize(self.path)
+        with write_transaction(self.path) as db:
             intake.register(db, "repo", "https://github.com/a/b.git")
             item = intake.create(db, Intake(repository_id="repo", goal="Ship it", target="ready_for_check_in", label="wave-1"))
             self.execution = item["execution"]["id"]
