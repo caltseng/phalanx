@@ -167,7 +167,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
             }
             headers = {"Idempotency-Key": "contention-result"}
             with patch("test_bootstrap.SERVER_PROCESS", CONTENTION_SERVER):
-                server = self.start_server(path)
+                server = self.start_server(path, in_process=False)
             cleanup.callback(self.stop_server, server)
             self.assertEqual(self.request("/fixture/hold", body={})[0], 200)
             try:

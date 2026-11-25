@@ -57,6 +57,16 @@ reason, responsible actor and resume trigger, next action/pending verification. 
 need different evidence-based recovery or an actionable question for missing authority/access,
 safety or owner judgment, not routine delegated decisions.
 
+For existing writers, follow `docs/writer-operations.md#control-plane-outages`: best-effort API
+status, heartbeat, progress, handoff and result transport must not gate already-authorized work
+under verified held allocations. Use native/session and fresh GitHub evidence to coordinate
+continued development, validation, publication and check-in; distinguish actual effects from
+unpersisted API updates. Do not launch an unconfirmed admission, infer Building headroom,
+replace a healthy writer or revive an ended credential. Known stop/cancel/401 and explicit
+ready-only/report/draft ceilings remain binding. Surface genuine authority/capacity uncertainty,
+then reconcile accepted versions, pinned attempts and actual GitHub merges when transport returns;
+never fabricate persistence or blindly replay a different mutation.
+
 Ordinary performance gets two optimization rounds with baseline/per-round measurements, remaining
 numeric miss and accountable follow-up; never claim an unmet number passed. Safety/SLO/resource
 contracts remain hard evidence-backed gates. Use supported versioned steering/question/reply

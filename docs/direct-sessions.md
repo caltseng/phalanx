@@ -1,380 +1,178 @@
 # Direct sessions: coordination, not a gate
 
-**Status: live.** Caleb accepted the principle and defaults in decisions 68-71.
-Captains, writers, shifts and GitHub reconciliation are the only execution path. PH-DS5
-removes the previous transport, admission machinery, separate PR-stage executor and client
-SQLite stores. See [the operating guide](direct-path.md) and
-[pilot evidence](pilots/direct-sessions.md).
-The [implementation map](architecture.md) diagrams component ownership, one writer's
-stage/result sequence and deployment boundaries. Removing the relay did not remove the
-HTTP API server or Scribe.
-
-## Principle
-
-Phalanx adds visibility and coordination, not an extra permission gate between the runtime
-and useful work. Repository checks, reviews, rulesets, trust and credentials still apply.
-Phalanx records, reconciles and flags.
+Native Captains, registered writers and an independent GitHub reconciler are the only
+execution path. Phalanx records, reconciles and flags; it adds no permission gate beyond
+repository checks/reviews/rulesets, trust and credentials. See the [implementation map](architecture.md)
+for code ownership and [operating guide](direct-path.md) for commands.
 
 ## Sources of truth
 
 | Owner | Authoritative for |
 | --- | --- |
-| GitHub | PR identity, state, heads, base, checks, reviews, merges, deployments and branch contents |
-| Phalanx server | Items, dependencies, executions, stage attempts, writer bindings/nonces, Captain registrations, questions, replies, evidence, reports, flags and timestamped observations |
+| GitHub | PR identity/state/head/base, checks, reviews, merges, deployments and branch contents |
+| Phalanx API | Items, dependencies, executions, attempts, writer bindings/nonces, Captain registrations, questions/replies, evidence, reports, flags and timestamped observations |
+| Execution host | Native sessions, configuration, credentials, worktrees, artifacts and logs |
 
-GitHub wins when observations disagree with cached PR facts. Chats, handoff notes, local
-artifacts and worktrees are context, not another queue database. A fresh Captain verifies
-them against the API, GitHub and native session state.
-
-## Components and state ownership
-
-The server alone writes its Phalanx store. Captain chats use native runtime tools to launch,
-message and stop sessions and register those actions through the API. Writers do the item's
-work in isolated worktrees and submit scoped evidence. The background reconciler reads git,
-GitHub and the API and posts observations; it never launches or stops sessions. GitHub owns
-merging. Config, credentials, worktrees, result artifacts and logs stay on the host.
+Only the server writes queue storage. Clients use authenticated API requests, not local
+SQLite queues/publication journals. GitHub wins over cached PR facts. Chat/handoff notes
+are hints to verify against current API, GitHub and native state, never another queue.
 
 ## Writer registration and fencing
 
-1. The Captain creates a writer token and launch nonce, writes the credential in the item's
-   Git directory, and registers the intent with `POST /v1/items/{item}/executions/{execution}/writer`.
-   Registration checks the expected version and atomically enforces one open writer per
-   execution and the owner's persisted dispatch Building/Total limits across all repositories.
-   Intents and waiting writers count; replacing a writer consumes no extra place. A full
-   limit is a normal wait, not an escalation. Dispatch pause refuses new registrations.
-2. The Captain launches one native session with a concise goal-derived name and the full nonce
-   in its kickoff. Task words come first; a short `[phx]` suffix aids discovery within
-   40 characters. Names redact recognized credentials and URLs before truncation, normalize
-   whitespace/control characters, and fall back to "Phalanx task" for absent text.
-   `shift launch` returns structured item ID, writer ID and full writer nonce separately.
-   Duplicate goals produce identical names, never shared writer identity. The
-   kickoff includes the repository's exact prepared `checks_environment`, distinct from the
-   Phalanx command. A missing or unusable environment is a visible validation gap; writers
-   never borrow another checkout's environment or install packages.
-3. The Captain confirms the native ID and link with `PATCH .../writer`. If the launch reply
-   was lost, search the full native session list and inspect kickoffs/metadata for the exact full
-   nonce before launching anything. A title alone never establishes writer identity.
-   If inspection is unavailable or inconclusive, retain the intent and surface the blocker. Only
-   the owning Captain acts on an unconfirmed intent until it ends, goes stale or abandons it.
-   Complete reserve/create/confirm for one item before reserving another. `shift launch`
-   reserves capacity and an attempt; it does not create a native session. An execution's
-   `running` status therefore does not prove a native writer ran. Scribe and `shift status`
-   show the unconfirmed wait, reservation age and recovery action immediately. After ten
-   minutes the same wait becomes an owner-notifying `launch_unconfirmed` alert, not an
-   automatic retry or a reason to wait until the next threshold.
-   Recover on the next wake: inspect fresh full native inventory, including all pages and
-   renamed sessions. If the full nonce matches, confirm that session. Only after proving
-   absence and no native create in flight may the owning Captain replay `shift launch`,
-   verify the same writer ID/full nonce and create/confirm once. This preserves the
-   reservation, attempt, credential and Building/Total allocation. Partial inventory or
-   an uncertain create outcome requires retaining the intent and reporting the exact
-   blocker. A takeover without the original replay credential reports that limitation;
-   existing verified-never-launched/stopped withdrawal rules remain unchanged.
-4. Replacement names the current writer ID in `replaces` and requires `replaced_stopped`.
-   Verify the exact session stopped and preserve all local changes first. The server
-   atomically ends its attempt and revokes its token. A stale writer cannot post.
-5. Writer credentials have no timed expiry. Liveness comes from native status reports and
-   progress. A busy and a hung worker can look alike; silence alone never authorizes stopping.
+1. The Captain prepares an isolated item worktree, creates a token/full launch nonce, saves
+   the credential in its Git directory and registers an intent through the API. Expected
+   versions, one open writer per execution, dispatch pause and persisted Building/Total
+   limits are checked atomically. Intents/waits consume Total; replacement adds no extra slot.
+2. `shift launch` returns a task-first name (at most 40 characters, suffix `[phx]`), item/writer
+   IDs, full nonce and kickoff. Names redact recognized credentials/URLs and normalize
+   whitespace; identical goals may share names. Identity is the registered session ID/full
+   nonce, never title text. The kickoff distinguishes the Phalanx control command from the
+   repository's prepared checks prefix. Missing/unusable checks environments require a
+   visible question, not borrowing environments or installing packages.
+3. Launch one native session and confirm its ID and returned link. Complete
+   reserve/create/confirm before reserving another item. A reservation's `running` state
+   does not prove a native session ran. After interruption, inspect **all** native inventory,
+   including renamed sessions, and verify the full nonce in kickoff/metadata. Confirm a
+   match. Only after proving absence and no create in flight may the owning Captain replay
+   the same reservation, verify unchanged writer ID/nonce and create/confirm once.
+   Inconclusive inventory or missing replay credentials retain the intent with an explicit
+   recovery blocker. The ten-minute alert is notification, not permission to delay recovery.
+4. Replacement names the current writer and attests its exact session stopped after local
+   work is preserved. The server ends the old attempt and revokes its token atomically.
+   Only the owning Captain handles an unconfirmed intent until it ends, goes stale or
+   abandons it. Silence/progress age alone never proves a writer stopped.
 
-One writer retains the item across stages, with a new fenced attempt per stage. A result
-that leaves runnable work opens the next attempt under that writer. Input waits, external
-waits, retry delays and dependency waits retain the writer; `phx work next` resumes when ready.
+One writer retains its item through runnable stages and input/external/retry/dependency
+waits, with a separately fenced attempt per stage. Tokens have no timed expiry; ended or
+replaced writers cannot submit. `work next` resumes eligible work. See
+[writer operations](writer-operations.md) for capacity acquisition/handoff and delivery.
+An API outage alone does not stop authorized physical work under that same writer's confirmed
+held allocation. Deferred stage bookkeeping is not an offline transition or a fresh admission;
+follow [control-plane outage recovery](writer-operations.md#control-plane-outages), preserving
+known stops, credential revocation, capacity and publication ceilings.
 
 ## Evidence submission
 
-The credential is `$(git rev-parse --git-path phalanx-writer.json)`, never chat text or a
-committed file. The worker runs `phx work status|next|progress|result|question` from its item
-worktree. Each result names the attempt, stage and expected version and authenticates with
-the writer token, not the runner token. Accepted results and uncertain retries remain
-idempotent. `needs_input` saves a focused question and handoff; Captain answers use
-`answered_by: captain`. Progress updates the writer's visible note and timestamp.
+The scoped credential is at `git rev-parse --git-path phalanx-writer.json`, never chat text
+or a committed file. Writers run `work status|next|progress|result|question` from the item
+worktree. Results bind the live writer, attempt, stage and expected version in the write
+transaction; retries are idempotent. Progress updates the visible note/timestamp.
+Questions preserve prompt/options/default/handoff; Captain replies record
+`answered_by: captain`, while owner is the default.
 
-`phx work status` and `phx work next` include `last_reply`: the latest persisted reply
-for this writer's execution, or `null` before any reply. It contains the exact `answer`,
-reply `version`, `created_at` and `answered_by` (`owner` or `captain`), matching owner
-inspection. Read it when resuming after input; no duplicate session message is needed.
-The reply version stays unchanged when `next` opens a new attempt.
+`status` and `next` return `last_reply` (or null) with the latest exact answer, version,
+timestamp and attribution. Opening another attempt does not change that reply version.
+Reports use drafting/review/storage of the exact content-addressed draft; the server retries
+final storage without redrafting. [STATE_MACHINE.md](../STATE_MACHINE.md) is authoritative
+for transitions and final-output guards.
 
 ### PR publication and delivery
 
-PR stages are `development` -> `self_review` -> `publication` -> `delivery`.
+Stages are `development -> self_review -> publication -> delivery`. The writer commits and
+reviews the exact candidate, pushes the deterministic item branch (`phalanx/<sha256 of item ID>`)
+and opens/reuses one PR at the explicit target base. Publication supplies its primary URL;
+a PR merged by an earlier execution cannot be reused. Every created description ends with
+`Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`.
 
-The writer commits and reviews the candidate, then pushes the deterministic item branch
-`phalanx/<sha256 of item ID>`. It opens one PR with the explicit target base or reuses the
-branch's open PR. For ready publication it marks a draft ready; publication may complete
-before merge gates pass, with auto-merge off and the same writer retained in delivery.
-It merges or enables GitHub auto-merge only for the current `checked_in` target after the
-[merge decision gates](writer-operations.md#merge-decision-before-auto-merge) pass. For `ready_for_check_in` it leaves
-merging to the owner. Every PR
-description ends with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`.
-The successful publication result supplies `pr_url`; it must belong to the registered repo
-and not have been merged by an earlier execution. The server records one primary PR.
+The current execution target and publication ceiling control delivery:
 
-PR intake defaults to `checked_in`; explicit `ready_for_check_in` and `report` targets are
-unchanged. An owner or Captain can steer an open PR item's target, including in direct
-`delivery`, between `ready_for_check_in` and `checked_in`. Only queued work accepts other edits
-alongside the target change. The timeline records the actor
-and before/after targets. The writer reads the latest target on each delivery pass and enables
-GitHub auto-merge only for `checked_in` after those gates pass, disabling it if any is
-outstanding or the item is retargeted to `ready_for_check_in`.
-GitHub's required reviews, checks and rulesets still gate a merge (D2); no new setting is needed.
-Steering never changes to or from `report`. Completed ready items cannot be steered, but the
-reconciler records a later owner merge of their verified head or a descendant without a rerun.
-Delivery waits for reconciler observations without an open attempt. The writer remains
-registered and fixes failing checks, feedback and conflicts on that PR.
-See [merge evidence, reproduction and retained-session activation](writer-operations.md#merge-decision-before-auto-merge).
+| Target/mode | Required behavior |
+| --- | --- |
+| `checked_in` (default), ready | Publish ready; keep auto-merge off until the [merge decision gates](writer-operations.md#merge-decision-before-auto-merge) pass on the current exact head, then deliver the authorized merge. |
+| `ready_for_check_in`, ready | Deliver a verified ready PR; leave merging to the owner. Never enable auto-merge. |
+| `publication_mode: "draft"` | Open/convert the reused PR to draft, disable auto-merge, never promote/merge. Delivery verifies it open, unmerged, at the reviewed head/item branch/target base without ready-only CI. A changed head queues self-review; ready raises `draft_required`. |
 
-**Draft-only publication:** intake `publication_mode: "draft"` is a ceiling for either PR
-target. The writer opens a draft with the explicit base, disables auto-merge and converts a
-reused ready PR to draft. It never promotes or merges. Delivery completes only when the
-trusted reconciler observes the exact primary PR open, unmerged, draft, on the item branch,
-at the self-reviewed candidate and target base. It requires no ready-only CI or mergeability.
-A new head queues self-review, a ready PR raises `draft_required`, and a wrong base waits.
-Draft delivery records `draft_published`, ends the writer and satisfies no ready/check-in
-dependency. An actual merge remains a GitHub delivery fact, never a draft outcome.
+Publication may finish before merge gates pass. The same writer remains registered during
+attempt-free delivery, fixes checks/feedback/conflicts on the primary PR and follows fresh
+target steering. Scoped Building is required before rework; spare Total is not permission.
+Self-review is not independent final-head approval. Trusted local checks raise flags, not
+an extra gate; repository checks/reviews/protections remain binding.
 
-Trusted local checks are flags, not a gate (D3). Writers still follow repository checks.
-Reports use drafting, review and storage of the exact content-addressed draft; the server
-retries final storage independently.
+Owner/Captain target steering is audited and cannot switch PR/report. Draft delivery records
+`draft_published`, ends the writer and satisfies no ready/check-in dependency. A verified
+merge remains authoritative for either PR target, including draft-mode work. Ready-only
+completion may later be enriched by an owner merge without restarting its writer.
 
 ## GitHub reconciliation
 
-The reconciler posts timestamped, idempotent observations with the primary PR and exact head.
-The server applies observations to delivery and records flags. Incomplete provider reads
-post nothing and back off; one failing repository does not block unrelated work.
+The reconciler reads git/GitHub and posts timestamped idempotent observations, without
+launching/stopping native sessions, making GitHub writes or opening queue storage.
+Incomplete reads post no false snapshot and back off independently by repository.
 
-| GitHub fact | Server behavior |
+| Observed fact | Server behavior |
 | --- | --- |
-| Primary PR merged into target by anyone, by merge, squash or rebase | Complete either PR target, record final head, merge commit, time and verified method. No Phalanx merge intent is required. A completed ready item's later owner merge also releases `checked_in` dependents. |
-| Primary PR closed without merge | Ask the owner; never silently open a replacement. A reply queues delivery for the writer. |
-| Ready primary head with required checks green, no feedback or conflict | Complete ready-only work, or record the ready milestone while checked-in work awaits GitHub merging. |
-| Changed head, conflict, failed check or review feedback | Record evidence and flags for the writer or Captain. A moved target tip alone is not a conflict. |
+| Primary PR merged into target by anyone using merge/squash/rebase | Verify delivery; record final head, merge commit, time and method. |
+| Closed without merge, or merged into the wrong base | Ask the owner; never silently replace the primary PR. |
+| Ready primary head on target with required checks green, no feedback/conflict | Complete ready-only work, or retain checked-in work awaiting merge. |
+| Head drift, conflicts, failed checks or actionable feedback | Raise evidence/flags for the retained writer. A moved target tip alone is not a conflict. |
 | Item branch reachable from base without a PR | Flag only. |
 
-GitHub rate limits back off and never block other items. An execution's unexpected
-observation failure is recorded with its item ID in the pass's errors; remaining
-executions are still processed.
+Older snapshots do not replace newer ones except an observed merge; unchanged observations
+do not bump versions. Missing trusted readiness policy remains a visible wait, but cannot
+invalidate a verified merge. Failures for one execution are reported with its ID while
+the pass continues for others. See [reconciler operation](direct-path.md#run-the-github-reconciler).
 
-A PR on another base never qualifies as ready; a merge into another base asks the owner.
-Older snapshots do not replace newer ones except an observed merge. Unchanged observations
-do not bump the version. Required ready checks come from trusted policy; absent policy
-keeps readiness waiting visibly but cannot invalidate an actual verified merge.
+Completed ready PRs are paged until observed merged, independent of deployment opt-in/window.
+Their verified `{head, base}` comes from `output_revision`, not the compact `{kind, url}`
+output reference. A different merged head needs GitHub ancestry proof matching the verified
+head. Unrelated heads, wrong-base and closed-unmerged PRs do not enrich completion.
+One audited transition updates the output and releases check-in dependents atomically;
+repeated observations do not bump versions. This grants no authority to merge ready-only work.
 
-Post-merge deployment is an optional observation, not a lifecycle stage or
-completion gate. A repository mapping's `post_merge_check` names its
-post-merge deployment check run. For configured repositories the reconciler
-observes executions checked into the mapping's `base_branch` for at most 24 hours
-after check-in, stopping earlier on success and never enumerating older closed pages.
-It reads that check on the exact delivered merge commit. The latest run derives a board flag: missing or
-unfinished is `deployment_pending`, completed success is `deployed`, and
-any other completed conclusion is `deployment_failed`. Rechecks replace the
-flag after retries before success. After the window, successes have no flag,
-failures remain visible, and still-pending signals become one owner-notifying
-`deployment_missing` flag with the deadline as its stable first-seen time.
-Closed executions never raise `observation_stale`. Heartbeats carry each mapped
-repository's current check name (or none); removing or changing it records a
-disabled signal for previously observed deployments without GitHub reads, even
-outside the polling window.
-Checked-in executions accept deployment observations matching their
-delivered PR, head and merge commit; those observations do not change state, output or version.
-Repositories without this setting have no deployment signal or
-extra post-merge polling. GitHub owns the workflow; no runtime runs a
-deployment stage and a pending or failed deploy never reopens delivery.
-
-Closed executions never raise observation-stale.
-
-The same reconciler also pages completed direct ready outcomes, without the deployment window
-or deployment opt-in, until their primary PR is observed merged. Operator summaries expose the
-verified final output's `{head, base}` as `output_revision` (null without a PR output); `output`
-remains the compact `{kind, url}` reference. The reconciler reads the verified head from
-`output_revision`, not the compact reference. It does not rerun checks or
-reactivate their ended writers. A merge into the target at the completed output's verified head
-enriches that output with the final revision, merge commit, method and GitHub's `merged_at`.
-For a different head the reconciler compares the verified head to that exact merged head using
-GitHub ancestry and includes `merged_head_ancestor` only when it is reachable. The server requires
-that proof to match the verified head. Closed-unmerged PRs, unrelated heads and wrong-base merges
-do not advance completed executions. One `pr_observed` transition records the enrichment and
-refreshes dependents in the same transaction; repeated observations do not bump the version.
-Status remains `completed` and the target is preserved, while the board outcome becomes
-`checked_in` and `checked_in` dependencies clear. This grants no authority to merge a ready-only
-item and adds no runner hook or polling service.
-
-## Liveness
-
-Captains heartbeat each wake and report native session state and inventory. Writers post
-progress. The reconciler heartbeats independently. Stale observations and processes are
-visible flags, never proof that local work can be discarded.
+Optional `post_merge_check` observes the exact delivered **merge commit** for up to 24 hours,
+stopping on success. Latest runs derive pending/failed/deployed flags; after the window,
+success clears, failure stays and pending becomes owner-notifying `deployment_missing`.
+Changing/removing configuration retires old signals without provider reads. These observations
+match delivered PR/head/merge commit and never change state, output or version. Closed
+executions never raise `observation_stale`. See [deployment signals](direct-path.md#post-merge-deployment-status).
 
 ## Captain continuity and goal adherence
 
-The operator-owned charter defines goal, repositories, authority, escalation and stop
-conditions. Each wake re-reads it, inspects flags, reconciles sessions and answers routine
-questions. Repository trust belongs only to the owner; keep a blocked writer/session rather
-than relaunching it. Use one shared trusted worktrees workspace where the runtime supports it.
-
-### Captain shifts and handoff
-
-Long chats degrade as context is compacted. Each Captain works a bounded **shift** and then starts a fresh successor. Shifts can overlap, because safety is per item.
-
-- **Registration.** A new Captain calls `POST /v1/captains` with its native session reference, charter revision and the Captain that spawned it, if any, and receives a Captain ID. Each wake heartbeats `PUT /v1/captains/{id}` with the charter revision, wake count, the items it is acting on and its state (`active`, `ending`, `ended`). The board lists every live Captain, its session link, shift age, last heartbeat and current focus.
-- **Reinforcement.** The same five-minute wake calls `shift wake`. Every 90 elapsed minutes
-  from registration it includes the fresh canonical workflow beside the fresh charter and
-  compact briefing. The Captain reads it before explicitly acknowledging that interval.
-  The server stores only the greatest acknowledged interval; non-wake heartbeats, missing
-  wakes and failed output cannot consume it. Delayed wakes coalesce intervals. No separate
-  scheduler, local timing file or compaction hook is required.
-- **Shift end.** Normal rotation is elapsed-time only, 24 hours from registration by
-  default (`[shift].max_hours`, a positive integer). Queue completion, empty queues,
-  dependency/external waits, wake counts and compaction counts never end a shift early,
-  including under older charter stop prose. Continue five-minute reconciliation while idle
-  or blocked. Compaction is a checkpoint; cumulative native counts remain idempotent
-  telemetry, with unknown totals left unknown. Explicit owner stop, missing/invalid authority
-  and genuine degradation/failure remain exceptions: three failed actions in a row, a
-  deviation flag it raised against itself (`captain_idle_with_work`, `orphan_session` it
-  created), or a missed heartbeat it notices on waking. Preserve visible reasons and recovery.
-- **Handoff.**
-  1. The outgoing Captain sets `ending` and posts a handoff note: open decisions, its unconfirmed intents and anything it was midway through. The note is a hint. The successor verifies every point against the server, GitHub and session status and never trusts it as state.
-  2. It launches the successor with the charter, the parent Captain ID and a nonce, using the same at-most-once launch rule as writers.
-  3. It doesn't wait for the successor to take over. It finishes or explicitly abandons each of its own intents, which the server records, so they become actionable by any Captain.
-  4. It sets `ended` and stops acting.
-- **Creator-owned cleanup.** Each Captain archives the writer sessions it created once their
-  executions are completed, failed or cancelled, or their abandoned/replaced writers have ended
-  and their runtime sessions are confirmed stopped. An ending Captain also cleans up its own
-  ended/stopped helpers, never its live successor. Closed items' writers remain discoverable as
-  `ended_writers` on the Captain, with a `cleanup_pending` count. After ending its shift, a Captain
-  with pending writers keeps only a cleanup wake, not dispatch/coordination, until this count is
-  zero. Refusals are escalated once and leave that actionable count.
-  The Captain's creator (including a keeper run that launched it), not its successor, archives
-  its chat after a clean handoff: `ended`, no owned intents or pending writer cleanup, and a
-  registered successor or explicit charter stop condition. A keeper checks its own previous
-  Captain before any live-Captain early exit and retains a cleanup wake/child-ended notification
-  in that same creator session; a fresh keeper run cannot assume its creator authority.
-  A predecessor still `ending` after 30 min is stale, not automatically safe to archive.
-  Immediately before any archive, `shift archive-check` verifies local work is preserved:
-  the worktree is clean and its commits are on its freshly fetched origin branch, or on the
-  item's freshly fetched origin base if its branch is absent. Unpushed commits, local changes
-  or unavailable evidence skip archival and raise `orphan_session`.
-  The runtime's session tools perform archival; the core, CLI and API stay runtime-neutral.
-  `shift archive-result` records success, block or refusal with the reason. A refused archive
-  leaves the session untouched and keeps its flag even after the reporter ends; it is never
-  retried in a loop. Only separately verified archival clears it. See the
-  [commands and runtime protocol](direct-path.md#creator-owned-session-cleanup).
-
-  As built in step 4:
-  - `shift handoff` sets `ending` with the note. It returns the Captain's open intents and a successor name, `phx captain <parent ID prefix>`, which the server derives and which serves as the successor's launch nonce, plus its kickoff.
-  - Off-shift chats disclose their role and route each new owner/forwarded interaction through
-    `shift current` (`GET /v1/captains/current`), not a remembered immediate successor. That
-    read examines all registrations and requires one live `active` Captain. Native tools verify
-    its exact `session_ref` and supply the clickable conversation link; a second read before
-    forwarding detects intervening succession. Missing, stale, ambiguous or unavailable evidence
-    is reported explicitly, never repaired by guessed links, duplicate dispatch or fabricated
-    owner provenance. Original-message forwarding preserves permission boundaries.
-    On first registration a Captain's name uses its own ID where native renaming is supported.
-    After a completed handoff (`ended`, no open intents, verified registered successor), only
-    the outgoing Captain renames its own verified conversation with exactly one `[retired] `
-    prefix, preserving the substantive title and normalizing repeated leading retirement tags.
-    The successor notifies the verified predecessor binding once after registering, so the
-    outgoing chat can finish its own presentation change even after its scheduled wakes stop.
-    Native identity inspection and a fresh `shift current` check protect the incoming/active
-    Captain and unrelated sessions; premature, failed or uncertain handoff leaves names alone.
-    Retries re-read state/identity/title and skip an already correct name. Missing/restricted
-    rename support or title limits are reported, never bypassed by truncation or storage edits.
-    Retirement is presentation only, not election/lease state, archival or writer cleanup;
-    off-shift replies still disclose their role even if renaming fails.
-    The predecessor-derived launch nonce remains recovery context, not
-    current identity. No runtime nesting or archive ownership changes.
-    The tracked forwarding section is composed into Captain/keeper prompts and generated
-    handoffs; retained chats require an explicit verbatim relay after normal deployment.
-    See [forwarding and rollout](direct-path.md#retained-chats-and-owner-message-forwarding).
-  - States only move forward (`active`, `ending`, `ended`), and `ending_at` is set once. `ended` isn't refused while intents remain open: they become actionable by any Captain, and the Captain view lists them.
-  - Each Captain action is posted with `shift action` to `POST /v1/items/{id}/captain-actions` and appears on both timelines.
-    The reserved action `held` requires a reason describing the charter lane order, writer cap or
-    mutual exclusion. Refresh it for each deliberately unlaunched runnable item every wake. It is
-    active only while it is the latest Captain action on the queued execution's current version,
-    is less than 30 minutes old, and its Captain is live and not ended. The board and item view show
-    its reason as the wait reason (behind existing dispatch, retry and prerequisite waits). Holds
-    suppress dispatch-overdue warnings and exclude normal Captain pickup while active, but reserve no capacity.
-    Full-capacity backlog remains visible even with an active hold.
-  - The record step reports every Phalanx runtime session: task-first names ending in `[phx]`, registered session IDs and renamed sessions identified by kickoff/metadata. Reports contain ID, display name and, for writers, a separately verified full `writer_nonce` (`--session-writer ID NONCE`). The server keeps each session's first sighting and derives `orphan_session` and `duplicate_writer` only by registered session ID and full nonce. Titles never establish writer ownership. A pending successor's name is exempt while its parent is `ending`.
-  - The keeper prompt is `shift prompt keeper`. A decommissioned reconciler's heartbeat is retired with `DELETE /v1/reconcilers/{runner_id}` (`shift retire-reconciler`).
-  - Worker sessions open in one runtime workspace for the whole worktrees folder (`session_workspace` in the shift config), which the owner trusts once.
-- **Dying mid-handoff.** A Captain whose heartbeat is older than 15 min is `stale`. Its unconfirmed intents become actionable by any live Captain, which resolves them by nonce. If it had already launched a successor, that successor continues. If not, [No live Captain](#no-live-captain) applies.
-
-### No live Captain
-
-The keeper starts a new Captain every thirty minutes only when none is live, respecting
-recent handoffs and charter stop conditions. Captain wakes occur every five minutes.
-Existing writers and the reconciler continue without a Captain; `no_live_captain` notifies
-the owner. Runtime schedules must be checked after a reboot.
+The operating guide is the single reference for [Captain shifts and handoff](direct-path.md#captain-shifts-and-handoff),
+[creator-owned cleanup](direct-path.md#creator-owned-session-cleanup) and
+[retained-chat forwarding](direct-path.md#retained-chats-and-owner-message-forwarding).
+Runtime prompts implement that workflow; historical pilot/decision records are evidence,
+not competing operating instructions.
 
 ### Deviation flags
 
-A flag names an item or a Captain and carries a reason, `first_seen`, a recovery action and an automatic clear when its condition clears. The board shows flags. `no_live_captain` and owner-needed flags notify the owner.
+Flags carry identity, reason, first-seen time and recovery, clearing when their condition
+clears. Owner-needed flags notify; informational flags do not block work.
 
-| Flag | Condition | Recovery |
-| --- | --- | --- |
-| `captain_stale` | A registered Captain has sent no heartbeat for 15 min | Live Captains take over its intents. Its creator cleans up only after handoff and preservation checks. |
-| `no_live_captain` | No live Captain while open work exists | The keeper starts one, or the owner does |
-| `captain_idle_with_work` | **Dispatch overdue**: live Captains, dispatch enabled, both admission limits permit the work, and runnable work unassigned for 30 min with no active deliberate hold | A Captain launches it, or records/refreshes a `held` action with the charter reason |
-| `queue_backlogged` | **Queue backlogged**: unassigned work waiting 30 min while Building or Total admission is exhausted, eligible waiting PR fixes take preference, or dispatch is paused. Counts and precise affected limit included; informational even with a Captain hold, never a stopped/failed Captain signal | Wait for affected capacity, service eligible PR fixes or resume dispatch. Existing writer-health flags remain independent |
-| `pickup_blocked` | Unassigned work waiting 30 min on scope/uninitialized authority, affinity or repository/trust readiness; not a Captain failure or handoff signal | The shared pickup decision supplies the concrete reason and recovery; notify the owner |
-| `launch_unconfirmed` | Writer intent unconfirmed for 10 min; owner notification | Inspect fresh full native inventory by full nonce; confirm the match, or safely replay the same reservation after proving absence and no in-flight create. Retain/report inconclusive recovery |
-| `duplicate_writer` | Two visible sessions carry one item's nonce or ID | Captain stops the unregistered one |
-| `orphan_session` | A visible session has no registration, or archival was blocked/refused | Its creator preserves local work and archives only when safe; a refusal records the reason and needs owner resolution, never a retry loop |
-| `no_progress` | No progress post or stage advance for 2 h while `busy` | Captain checks the session, then nudges or replaces it |
-| `writer_stopped` | Writer reported `stopped`/`error` without a result | Captain resumes the same session or replaces the writer |
-| `head_drift`, `checks_failed`, `review_feedback`, `pr_closed` | From GitHub reconciliation | The writer acts, or the Captain relaunches |
-| `reconciler_stale` | A reconciler has sent no heartbeat for 15 min (one flag per reconciler) | Captain restarts it, or reports it to the owner |
-| `observation_stale` | An open item's latest GitHub observation is over 15 min old | Captain checks the reconciler's pass log for that item's error |
-
-Writers also flag `worker_overdue` after three hours. Informational flags do not block work.
+| Flag | Condition / recovery |
+| --- | --- |
+| `captain_stale`, `no_live_captain` | Captain liveness/recovery follows the [continuity rules](direct-path.md#captain-shifts-and-handoff). |
+| `captain_idle_with_work` | Runnable unassigned work for 30 minutes with admission available, dispatch on and no deliberate hold; launch or refresh a justified hold. |
+| `queue_backlogged` | Unassigned work waiting 30 minutes on Building/Total, PR-fix preference or pause; informational, including with a hold. |
+| `pickup_blocked` | Unassigned work waiting 30 minutes on scope/authority, affinity or checkout/trust; notify with the shared pickup reason/recovery, not a Captain-failure signal. |
+| `launch_unconfirmed` | Unconfirmed for ten minutes; recover the same reservation by full nonce as above. |
+| `duplicate_writer` | Two sessions carry one item's ID/nonce; stop the unregistered one. |
+| `orphan_session` | Unregistered session or blocked/refused archival; creator preserves work, records outcome and escalates refusals once. |
+| `no_progress`, `worker_overdue` | No progress/stage advance for two hours while busy, or writer overdue after three hours; inspect before nudging/replacing. |
+| `writer_stopped` | Native stopped/error without result; resume the same session or safely replace. |
+| `head_drift`, `checks_failed`, `review_feedback`, `pr_closed` | Writer addresses fresh GitHub evidence. |
+| `reconciler_stale`, `observation_stale` | Reconciler heartbeat/open-item observation older than 15 minutes; inspect pass errors and restore the exact owned service or escalate. |
 
 ## Failure and recovery
 
-Discover a lost launch by nonce. Resume an interrupted writer or replace it only with stopped
-attestation and preserved work. Server restart retains bindings and token digests; workers
-retry identical posts. A dead reconciler or Captain raises flags while other work continues.
-See [Recovery](recovery.md).
-
-## Durable state
-
-Only the API and explicit server-host backup/restore administration open the queue database.
-Execution clients keep configuration, credentials, the charter,
-worktrees, artifacts and OS file locks, not local SQLite stores. Existing unused files are
-left untouched; upgrades never delete live queue records.
+Server restarts preserve bindings/token digests; writers retry identical requests.
+Stopped-writer replacement preserves local work and reconciles external effects.
+Stale native/provider observations never authorize discarding work. See [Recovery](recovery.md).
+Only API/server-host administration opens queue storage; upgrades leave unused runtime
+files untouched and never delete live records.
 
 ## Migration order
 
-This is the historical implementation/removal sequence, not a current deployment checklist.
-Both removals shipped in [#209](https://github.com/caltseng/phalanx/pull/209) and
-[#214](https://github.com/caltseng/phalanx/pull/214). The pilot records distinguish landed
-code from live acceptance evidence; this list certifies no additional pilot cases.
-For an existing installation follow [reviewed deployment adoption](deployment.md#existing-runtime-reviewed-adoption-not-a-rename),
-not the retired recovery machinery.
-
-1. Record merged means delivered, including owner merges releasing dependencies.
-2. Register direct writers and accept their scoped evidence.
-3. Observe GitHub with the independent reconciler.
-4. Pilot shifts, overlap and keeper restart.
-5. Verify lost-launch discovery, racing Captains, safe writer replacement, all merge methods,
-   handoff and keeper restart in the [pilot](pilots/direct-sessions.md). Retire the previous
-   transport and reservations in part 1, then runner-only stages/local stores in part 2.
-   Each removal updates the specs and operational docs and runs full CI and the envelope probe.
-   Startup creates only the canonical schema; it never converts deployed data.
-   Existing stores require the operator-owned [offline conversion](development.md#existing-store-conversion).
-   Immutable history, attempts, outputs, versions and timestamps are preserved.
+The relay, numbered slots, runner-only stages and client SQLite journals are retired.
+Their implementation/removal history belongs in the [decision log](decisions.md) and
+[pilot evidence](pilots/direct-sessions.md), not a current rollout checklist.
+For existing stores, retain the explicit operator-owned
+[offline conversion contract](development.md#existing-store-conversion) and
+[reviewed adoption procedure](deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
+Startup creates/checks the canonical schema; it does not convert arbitrary deployed data.
 
 ## Decisions
 
-Caleb accepted these defaults on 2026-11-23 (decision 71).
-
-| # | Decision |
-| --- | --- |
-| D1 | Writers push and open their own PRs. Repository rules apply; Phalanx reconciles one primary PR. |
-| D2 | Writers merge or enable GitHub auto-merge only for current checked-in targets after the [merge decision gates](writer-operations.md#merge-decision-before-auto-merge) pass. Accept any permitted merge method. |
-| D3 | Trusted local checks are reconciler flags, not a Phalanx gate. Repository CI gates merging. |
-| D4 | Scoped writer token in the worktree's Git directory, never chat text or the runner token. |
-| D5 | Wake five minutes, stale fifteen, no progress two hours, overdue three hours. |
-| D6 | Enforce dispatch pause and persisted workspace Building (`max_building_writers`, initially 5) and Total (`max_writers`, initially 10 on new installs) atomically. Publication handoff releases Building, not Total; publication/delivery fixes must reacquire Building before editing or substantial tests. Eligible waiting PR fixes precede new builds. Owner edits persist through reload/restart; existing installations activate separately. |
-| D7 | Normal shifts rotate only on elapsed registration age: 24 hours by default, configured by charter `max_hours`, with canonical charter/workflow reinforcement every 90 elapsed minutes through the same five-minute wake. Five-minute reconciliation continues through empty or blocked queues; wakes and compactions are telemetry only. Explicit owner stop and genuine authority/safety failure remain exceptions. Supersedes earlier wake/compaction bounds and queue-completion stops. |
-| D8 | Runtime keeper every thirty minutes; owner notification is the fallback. |
+The historical D1-D8 record and subsequent amendments live in [decisions.md](decisions.md).
+Current writer behavior is specified above and in [writer operations](writer-operations.md);
+current Captain behavior is in the [operating guide](direct-path.md#captain-shifts-and-handoff).
