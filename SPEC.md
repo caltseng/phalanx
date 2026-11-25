@@ -67,6 +67,17 @@ See [deployment tooling and migration](docs/deployment.md).
 
 ## Dispatch and execution
 
+### Display-only observed usage
+
+Optional cumulative native-session snapshots live outside lifecycle state. Scribe details
+separate current-execution writer usage from all-executions item subtotals, with source,
+provider/model, window, observation time, covered sessions and explicit unknown/final gaps.
+Credits/money require attributable provider units and basis; tokens never imply a bill.
+Usage cannot change lifecycle versions, dispatch, capacity, outcomes or pauses. Authorized
+late observations do not revive writer credentials. See [the contract and provider capability
+boundaries](docs/usage.md); Copilot App read-only metadata transport is supported, while
+automatic actual Codex App export remains unverified, not assumed from CLI/app-server docs.
+
 | Term | Meaning |
 | --- | --- |
 | Muster | A batch of work launched from the Captain chat. |

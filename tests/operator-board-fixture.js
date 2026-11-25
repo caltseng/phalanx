@@ -72,8 +72,26 @@
   let pendingSignal;
   const calls = [];
   const openedReports = [];
+  const usageTokens = { input: 123, output: 0, cache_read: null, cache_write: null, reasoning: null, total: null };
+  const usageSummary = { tokens: usageTokens, field_sessions: { input: 1, output: 1, cache_read: 0,
+    cache_write: 0, reasoning: 0, total: 0 }, covered_sessions: 1, bound_sessions: 2, status: "partial" };
+  const usageFixture = {
+    execution: usageSummary, item: usageSummary,
+    overhead: "Captain/shared reviewer usage unallocated; not included",
+    capabilities: { "codex-app": "Automatic App-bound export unverified" },
+    sessions: [{
+      execution_id: "run", runtime: "copilot-app", session_id: nativeId, status: "pending_final",
+      reason: "<img src=x> Final native turn not observed",
+      snapshot: { provider: "github-copilot", model: null, source: "app_session_metadata",
+        source_version: "fixture-v1", origin: "local", window_start: hourAgo, cutoff: now,
+        observed_at: now, scope: "item_exclusive", tokens: usageTokens,
+        credits: { amount: "1.25", unit: "provider credit", basis: "estimated", source: "native UI" },
+        money: null }
+    }]
+  };
   const detailData = (item, cursor) => ({
     item, attempt: "att2",
+    usage: item.id === "run" ? usageFixture : undefined,
     question: item.id === "wait" ? { prompt: "Which target?", options: ["staging", "prod"], proposedDefault: "staging" } : null,
     dependencies: [{ title: "Build", milestone: "verified", status: "satisfied" }],
     events: [{
@@ -443,6 +461,14 @@
     await tick();
     const detail = () => root.querySelector("#detail-run");
     assert(detail() && detail().previousElementSibling.contains(item("run")), "Detail opens in place under its row");
+    const usageText = detail().textContent;
+    for (const text of ["Observed usage", "Current execution writer subtotal", "All executions item writer subtotal",
+      "input tokens: 123", "output tokens: 0", "cache write tokens: unavailable", "1/2 bound sessions",
+      "model unavailable", "Window ", "observed ", "1.25 provider credit (estimated", "money: unavailable",
+      "Captain/shared reviewer usage unallocated", "App-bound export unverified", "Final native turn not observed"]) {
+      assert(usageText.includes(text), "Observed usage detail renders " + text);
+    }
+    assert(!detail().querySelector("img"), "Usage provenance stays text, never HTML");
     const history = detail().querySelector(".timeline").textContent;
     assert(history.includes("self review") && history.includes("development") &&
       detail().textContent.includes("Prerequisites"), "Stage history and dependencies");

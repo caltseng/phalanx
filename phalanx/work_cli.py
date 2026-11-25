@@ -74,6 +74,8 @@ def add_work_command(commands):
     capacity.add_argument("phase", choices=("building", "delivering"))
     progress = actions.add_parser("progress", help="record progress, with an optional note")
     progress.add_argument("--note")
+    usage = actions.add_parser("usage", help="submit optional native cumulative usage; never advances work")
+    usage.add_argument("--file", type=Path, required=True, help="allowlisted usage snapshot JSON")
     result = actions.add_parser("result", help="post the open attempt's stage result")
     result.add_argument("--attempt", required=True, help="the attempt ID from `phx work next` or status")
     result.add_argument("--file", type=Path, required=True,
@@ -107,6 +109,10 @@ def run_work(args):
         result = request(base_url, token, "/v1/writer/capacity", body=body)
     elif args.work_command == "progress":
         result = request(base_url, token, "/v1/writer/progress", body={"note": args.note})
+    elif args.work_command == "usage":
+        from .usage_models import Snapshot
+        payload = Snapshot.model_validate_json(args.file.read_text(encoding="utf-8"))
+        result = request(base_url, token, "/v1/writer/usage", body=payload.model_dump(mode="json"))
     elif args.work_command == "result":
         payload = json.loads(args.file.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):

@@ -760,10 +760,13 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
             ORDER BY events.version DESC, events.created_at DESC LIMIT ?""",
             (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
         ).fetchall()
+        from .usage import projection
+        usage = projection(db, execution["item_id"], execution_id)
         now = datetime.now(UTC)
         context = dispatch_context(db, now)
     return {
         "item": summary(execution, now, context),
+        "usage": usage,
         "attempt": attempt["id"] if attempt else None,
         "previous_execution_id": relatives["previous_id"],
         "next_execution_id": relatives["next_id"],
