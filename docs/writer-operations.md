@@ -220,6 +220,10 @@ for a later integrated head. Preserve the PR bodies, CI runs and diagnostic mani
 | [#253](https://github.com/caltseng/phalanx/pull/253), head `7e231933` | Five of six Windows reductions passed 40%; Python 3.14/shard 3 was 128 s versus a 125.4 s maximum (38.76%); [CI 45652410596](https://github.com/caltseng/phalanx/actions/runs/45652410596). | API writer preserves the 321-ID matched comparison; Captain tracks the 2.6 s remaining miss and phase-level diagnosis as follow-up, not a blocking forced tuning round. |
 | [#258](https://github.com/caltseng/phalanx/pull/258), earlier CLI-only evidence | Windows shift/writer durations 3.482/3.234 s (3.12), 2.919/3.423 s (3.14) against under-2 s; [CI 45649550659](https://github.com/caltseng/phalanx/actions/runs/45649550659). | CLI writer finishes the already-running frozen 326-ID combined diagnostic and reports actual numbers; Captain tracks residual CLI latency separately. Pending combined evidence is not a passed target or authority to merge other items. |
 
+These are historical measurement snapshots, not current PR dispositions; the later
+[decision-94 closeout](decisions.md#ordinary-performance-case-closeout-decision-94) records verified
+merges separately without claiming the missed metrics passed.
+
 The Captain/service operator, not another item's writer credential, reads fresh authenticated item
 state and uses these existing owner controls:
 
