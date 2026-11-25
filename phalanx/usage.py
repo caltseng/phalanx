@@ -1,6 +1,6 @@
 """Optional cumulative writer observations, never lifecycle or admission evidence."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 import json
 
@@ -10,12 +10,20 @@ from . import intake, writers
 from .auth import require_coordinator, require_writer
 from .intake_api import run
 from .intake_models import Identifier, Payload
-from .usage_models import Snapshot, TOKEN_FIELDS
+from .usage_models import MAX_COUNTER, Snapshot, TOKEN_FIELDS
 
 
 class CaptainObservation(Payload):
     captain_id: Identifier
     snapshot: Snapshot
+
+
+def latest(db, writer_id):
+    row = db.execute("SELECT * FROM writer_usage WHERE writer_id=?", (writer_id,)).fetchone()
+    return ({"sequence": row["sequence"],
+             "snapshot": json.loads(row["snapshot_json"]) if row["snapshot_json"] else None,
+             "acquisition_error": json.loads(row["failure_json"]) if row["failure_json"] else None}
+            if row else None)
 
 
 def observe(db, writer, snapshot):
@@ -100,7 +108,8 @@ def projection(db, item_id, execution_id):
         failure = json.loads(row["failure_json"]) if row["failure_json"] else None
         included = bool(snapshot and snapshot["scope"] == "item_exclusive" and row["bindings"] == 1)
         status = snapshot["status"] if snapshot else "unavailable"
-        reason = snapshot["reason"] if snapshot else "No authorized native usage observation; retry at an ordinary runtime observation"
+        reason = ((snapshot or failure)["reason"] if snapshot or failure else
+                  "No authorized native usage observation; retry at an ordinary runtime observation")
         if snapshot and status == "observed" and (
                 not row["ended_at"] or datetime.fromisoformat(snapshot["cutoff"]) <
                 datetime.fromisoformat(row["ended_at"])):
@@ -123,7 +132,8 @@ def projection(db, item_id, execution_id):
         for name in TOKEN_FIELDS:
             values = [row["snapshot"]["tokens"][name] for row in included
                       if row["snapshot"]["tokens"][name] is not None]
-            tokens[name] = sum(values) if values else None
+            total = sum(values)
+            tokens[name] = (str(total) if total > MAX_COUNTER else total) if values else None
             covered[name] = len(values)
         statuses = {row["status"] for row in selected}
         status = ("unavailable" if not included else "pending_final" if statuses == {"pending_final"}

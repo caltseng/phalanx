@@ -99,12 +99,15 @@ Example shape only; replace placeholders and timestamps with verified source met
 ```
 
 Unknown keys are rejected. Counters are optional nonnegative safe integers; optional `total`
-and `reasoning` preserve source-native definitions and are never derived. One cumulative
+and `reasoning` preserve source-native definitions and are never derived. Subtotals exceeding
+the JavaScript safe-integer range are returned as exact decimal strings. One cumulative
 source/epoch/model aggregate per writer keeps storage bounded. Increasing sequence and
 nondecreasing cutoff/counters prevent replay, rewind, missing fields and out-of-order
 snapshots from inflating/erasing consumption. Identical replay is accepted without adding.
 Source-account/origin/epoch/model/window/scope changes conflict instead of summing incompatible
-series. For a reset/fork/missing baseline, submit an unavailable acquisition with a sanitized
+series. `work status` includes only this writer's latest `usage.sequence`, retained `snapshot`
+and `acquisition_error` so an interrupted observer can resume without a client journal.
+For a reset/fork/missing baseline, submit an unavailable acquisition with a sanitized
 reason; retained measurements stay visible as partial. Model partitions and baseline-delta
 accounting are deliberately not implemented. Use model null for a whole-session aggregate.
 

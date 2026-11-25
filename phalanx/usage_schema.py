@@ -6,4 +6,5 @@ USAGE_SCHEMA = (
         snapshot_json TEXT,
         failure_json TEXT
     )""",
+    "CREATE INDEX writers_by_item ON writers(item_id, created_at)",
 )

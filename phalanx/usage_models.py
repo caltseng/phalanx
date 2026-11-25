@@ -10,7 +10,8 @@ from .intake_models import Payload
 
 Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Reason = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
-Counter = Annotated[int, Field(strict=True, ge=0, le=9007199254740991)]
+MAX_COUNTER = 9007199254740991
+Counter = Annotated[int, Field(strict=True, ge=0, le=MAX_COUNTER)]
 Amount = Annotated[str, StringConstraints(pattern=r"^(0|[1-9][0-9]{0,14})(\.[0-9]{1,9})?$")]
 TOKEN_FIELDS = ("input", "output", "cache_read", "cache_write", "reasoning", "total")
 
@@ -61,6 +62,6 @@ class Snapshot(Payload):
         known = any(value is not None for value in self.tokens.model_dump().values())
         if self.status == "unavailable" and (known or self.credits or self.money):
             raise ValueError("Unavailable acquisition must not invent or erase numeric counters")
-        if self.status == "observed" and not (known or self.credits or self.money):
-            raise ValueError("Observed usage requires a supplied measurement")
+        if self.status != "unavailable" and not (known or self.credits or self.money):
+            raise ValueError("Numeric usage status requires a supplied measurement; otherwise use unavailable")
         return self

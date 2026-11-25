@@ -94,6 +94,9 @@ class UsageTest(ServerFixture, unittest.TestCase):
         with read_transaction(self.path) as db:
             change = db.execute("SELECT token FROM operator_change").fetchone()[0]
         self.ok("/v1/writer/usage", self.token, snapshot)
+        recovered = self.ok("/v1/writer", self.token)["usage"]
+        self.assertEqual(recovered["sequence"], 1)
+        self.assertEqual(recovered["snapshot"]["tokens"]["output"], 0)
         self.assertFalse(self.ok("/v1/writer/usage", self.token, snapshot)["accepted"])
         self.assertEqual(before, self.lifecycle())
         with read_transaction(self.path) as db:
@@ -144,6 +147,31 @@ class UsageTest(ServerFixture, unittest.TestCase):
         self.assertIn("Metadata access", row["sessions"][0]["reason"])
         self.assertEqual(before, self.lifecycle())
 
+    def test_initial_acquisition_failure_is_not_an_observed_zero(self):
+        snapshot = self.snapshot(tokens={})
+        self.ok("/v1/writer/usage", self.token, snapshot, code=422)
+        snapshot.update(status="unavailable", reason="Native App export missing; retry after hook becomes available")
+        self.ok("/v1/writer/usage", self.token, snapshot)
+        usage = self.detail()["usage"]
+        self.assertEqual(usage["execution"]["covered_sessions"], 0)
+        self.assertIsNone(usage["execution"]["tokens"]["input"])
+        self.assertIn("export missing", usage["sessions"][0]["reason"])
+        self.assertEqual(usage["sessions"][0]["acquisition_error"]["provider"], "provider-a")
+
+    def test_observation_during_attempt_free_wait_does_not_reacquire_capacity(self):
+        snapshot = self.snapshot()
+        binding = self.ok("/v1/writer", self.token)
+        self.ok(f"/v1/items/{self.item}/executions/{self.execution}/result", self.token, {
+            "attempt_id": binding["writer"]["attempt_id"], "stage": binding["state"]["stage"],
+            "expected_version": binding["version"], "outcome": "needs_input",
+            "question": {"prompt": "Synthetic external wait", "handoff": "Usage remains nonblocking"}})
+        waiting = self.ok("/v1/writer", self.token)
+        self.assertIsNone(waiting["writer"]["attempt_id"])
+        before = self.lifecycle()
+        self.ok("/v1/writer/usage", self.token, snapshot)
+        self.assertEqual(before, self.lifecycle())
+        self.assertEqual(self.detail()["usage"]["execution"]["tokens"]["input"], 10)
+
     def test_late_observation_does_not_revive_ended_writer_or_advance_execution(self):
         snapshot = self.snapshot()
         self.ok("/v1/writer/usage", self.token, snapshot)
@@ -186,7 +214,7 @@ class UsageTest(ServerFixture, unittest.TestCase):
         self.assertEqual(usage["item"]["status"], "pending_final")
 
     def test_replacement_retains_prior_usage_once_and_revokes_old_transport(self):
-        snapshot = self.snapshot()
+        snapshot = self.snapshot(tokens={"input": 9007199254740991})
         self.ok("/v1/writer/usage", self.token, snapshot)
         _, _, writer, token = self.register("replacement-native", self.item, self.writer)
         current = self.ok("/v1/writer", token)
@@ -197,7 +225,7 @@ class UsageTest(ServerFixture, unittest.TestCase):
         self.ok("/v1/writer/usage", token, newer)
         self.ok("/v1/writer/usage", self.token, snapshot, code=401)
         usage = self.detail()["usage"]
-        self.assertEqual(usage["execution"]["tokens"]["input"], 30)
+        self.assertEqual(usage["execution"]["tokens"]["input"], "9007199254741011")
         self.assertEqual(usage["execution"]["covered_sessions"], 2)
 
     def test_shared_lifetime_without_baseline_is_visible_but_excluded(self):
@@ -220,11 +248,14 @@ class UsageTest(ServerFixture, unittest.TestCase):
 
     def test_quantities_keep_estimates_and_units_without_a_billing_sum(self):
         snapshot = self.snapshot(
+            tokens={"input": 10, "output": 0, "total": 99, "reasoning": 3},
             credits={"amount": "1.25", "unit": "provider-a credit", "basis": "estimated", "source": "native UI"},
             money={"amount": "0.01", "unit": "USD", "basis": "estimated", "source": "native UI"})
         self.ok("/v1/writer/usage", self.token, snapshot)
         usage = self.detail()["usage"]
         self.assertEqual(usage["sessions"][0]["snapshot"]["credits"]["basis"], "estimated")
+        self.assertEqual(usage["execution"]["tokens"]["total"], 99)
+        self.assertEqual(usage["execution"]["tokens"]["reasoning"], 3)
         self.assertNotIn("credits", usage["item"])
         self.ok("/v1/writer/usage", self.token, dict(snapshot, sequence=2, credits={
             **snapshot["credits"], "unit": "other credit"}), code=409)

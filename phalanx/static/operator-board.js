@@ -847,7 +847,7 @@
       }
       box.append(h("p", { text: "Credits and money are unavailable unless explicitly reported below; never token-derived. " + usage.overhead }));
       for (const session of usage.sessions) {
-        const snapshot = session.snapshot;
+        const snapshot = session.snapshot || session.acquisition_error;
         const text = [
           session.execution_id === executionId ? "Current execution" : "Other execution " + short(session.execution_id),
           session.runtime, session.session_id || "native session unconfirmed",
