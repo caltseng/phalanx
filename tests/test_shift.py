@@ -566,6 +566,41 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "max_writers=1"):
             shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
 
+    def test_unmapped_replacement_preserves_writer_and_capacity(self):
+        self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
+        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        route = f"/v1/items/{item['id']}/executions/{launched['execution_id']}/writer"
+        self.api(route, body={"captain_id": captain, "writer_id": launched["writer"]["id"],
+                              "session_id": "original-session"}, method="PATCH")
+        worktree = Path(launched["worktree"])
+        path = shift.credential_path(worktree)
+        saved = path.read_bytes()
+        base_url, token = credential(worktree)
+        binding = request(base_url, token, "/v1/writer")
+        status = shift.status(self.api, self.charter)
+        with closing(sqlite3.connect(self.database)) as db:
+            writers = db.execute("SELECT * FROM writers").fetchall()
+            attempts = db.execute("SELECT * FROM attempts").fetchall()
+
+        config = {**self.config, "repositories": {}}
+        with (mock.patch.object(shift, "WorkspaceManager") as manager,
+              self.assertRaisesRegex(shift.ShiftError, "Repository repo has no checkout mapping")):
+            shift.launch(self.api, config, self.charter, captain, item["id"],
+                         replaces=launched["writer"]["id"])
+        manager.assert_not_called()
+        self.assertEqual(request(base_url, token, "/v1/writer"), binding)
+        after = shift.status(self.api, self.charter)
+        for field in ("active_writers", "building_writers"):
+            self.assertEqual(after[field], status[field])
+            self.assertEqual(after[field], 1)
+        self.assertEqual(path.read_bytes(), saved)
+        self.assertFalse(path.with_name(shift.PENDING).exists())
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual(db.execute("SELECT * FROM writers").fetchall(), writers)
+            self.assertEqual(db.execute("SELECT * FROM attempts").fetchall(), attempts)
+
     def test_completed_writer_releases_a_place(self):
         self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
