@@ -17,6 +17,7 @@ from .operator_api import router as operator_router
 from .operator_web import assets as operator_assets, router as operator_web_router
 from .store import connect, migrate, write_transaction
 from .writers import router as writers_router
+from .usage import router as usage_router
 
 
 @asynccontextmanager
@@ -83,7 +84,7 @@ def create_app() -> FastAPI:
     app.get("/v1/owner/status", dependencies=[Depends(require_owner)])(owner_status)
     app.get("/v1/runner/status", dependencies=[Depends(require_runner)])(runner_status)
     for router in (intake_router, dispatch_router, operator_router, captains_router,
-                   flags_router, writers_router, muster_router):
+                   flags_router, writers_router, usage_router, muster_router):
         app.include_router(router)
     return app
 

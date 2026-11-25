@@ -249,6 +249,7 @@
         const params = query(limit, cursor);
         return projected(EXECUTIONS + "/" + identifier(id) + "/timeline?" + params, signal, page => ({
           item: item(page.item),
+          usage: page.usage,
           nextAction: page.item.next_action,
           previousExecutionId: page.previous_execution_id ? identifier(page.previous_execution_id) : null,
           nextExecutionId: page.next_execution_id ? identifier(page.next_execution_id) : null,
