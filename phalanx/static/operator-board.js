@@ -275,6 +275,7 @@
    * source.openReport?(output) opens a stored report in the host. Reject failed reads.
    * source.openNewItem?(trigger, created) opens host intake; call created(item) on acknowledgment.
    * source.concurrencyControl? is the host's authoritative settings disclosure; the host restores it on cleanup.
+   * Reads reuse the same result object for unchanged snapshots; changed snapshots return new objects.
    * options selects home/queue/history/detail, URL filters/cursors and an itemId or executionId.
    */
   function mount(root, source, options = {}) {
@@ -301,6 +302,7 @@
     let disposed = false;
     let readFrame = null;
     let clearConcurrency;
+    const reportOutputs = new WeakMap();
 
     const announce = h("p", { class: "sr-only", role: "status" });
     const health = h("div", { class: "health" });
@@ -530,11 +532,16 @@
         });
         const data = await Promise.race([read(current.signal), deadline]);
         if (current.signal.aborted) return undefined;
+        if (target.failed || !target.updated || target.snapshot !== data) renderRead();
+        target.snapshot = data;
         target.failed = false;
         target.updated = Date.now();
         return data;
       } catch {
-        if (!current.signal.aborted) target.failed = true;
+        if (!current.signal.aborted) {
+          if (!target.failed) renderRead();
+          target.failed = true;
+        }
         return undefined;
       } finally {
         clearTimeout(timer);
@@ -553,25 +560,21 @@
         target.next = data.nextCursor ?? null;
         noteChanges(data.items);
       }
-      renderRead();
     }
 
     async function loadFlags() {
       const data = await guarded(state.flags, signal => source.flags({ signal }));
       if (data) state.flags.rows = data.flags;
-      renderRead();
     }
 
     async function loadCaptains() {
       const data = await guarded(state.captains, signal => source.captains({ signal }));
       if (data) state.captains.rows = data.captains;
-      renderRead();
     }
 
     async function loadOverview() {
       const data = await guarded(state.overview, signal => source.overview({ signal }));
       if (data) state.overview.data = data.sections;
-      renderRead();
     }
 
     function detailState(id) {
@@ -591,7 +594,6 @@
         detail.data = data;
         detail.next = data.nextCursor ?? null;
       }
-      if (state.expanded === id) renderRead();
     }
 
     async function loadRoute() {
@@ -605,7 +607,6 @@
         target.data = data;
         target.next = data.nextCursor ?? null;
       }
-      renderRead();
     }
 
     function noteChanges(items) {
@@ -717,10 +718,7 @@
         if (source.openReport) {
           const button = h("button", { type: "button", class: "link pr", text: "report",
             "data-report": item.id, "data-focus": "report:" + item.id });
-          button.addEventListener("click", event => {
-            event.stopPropagation();
-            source.openReport(item.output);
-          });
+          reportOutputs.set(button, item.output);
           return button;
         }
         const report = safeUrl(item.output.url);
@@ -791,10 +789,6 @@
         h("span", { class: "name" }, title, chips(flags)),
         h("span", { class: "repo", title: item.repo, text: item.repo }),
         cells);
-      line.addEventListener("click", event => {
-        if (!event.target.closest("a, button")) toggle(item.id);
-      });
-      title.addEventListener("click", () => toggle(item.id));
       const changedAt = state.changed.get(item.id);
       const row = h("li", { class: "row t-" + itemTone + (expanded ? " open" : "") +
         (changedAt != null ? " changed" : ""), "data-id": item.id }, line);
@@ -1226,7 +1220,21 @@
       }
     }
 
+    function onRowClick(event) {
+      const report = event.target.closest?.("button[data-report]");
+      if (report && body.contains(report)) {
+        source.openReport(reportOutputs.get(report));
+        return;
+      }
+      const line = event.target.closest?.(".items > .row > .line");
+      if (!line || !body.contains(line)) return;
+      const control = event.target.closest("a, button");
+      const id = line.parentElement.dataset.id;
+      if (!control || control.matches("button.title")) toggle(id);
+    }
+
     refresh.addEventListener("click", refreshAll);
+    root.addEventListener("click", onRowClick);
     root.addEventListener("keydown", onKey);
     const interval = setInterval(refreshAll, REFRESH_MS);
     const ticker = setInterval(() => { if (!document.hidden) renderHealth(); }, TICK_MS);
@@ -1242,6 +1250,7 @@
       clearInterval(interval);
       clearInterval(ticker);
       document.removeEventListener("visibilitychange", refreshAll);
+      root.removeEventListener("click", onRowClick);
       root.removeEventListener("keydown", onKey);
       for (const target of [state.open, state.closed, state.route, state.flags, state.captains, state.overview, ...state.details.values()]) target.request?.abort();
       root.replaceChildren();

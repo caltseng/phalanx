@@ -14,6 +14,11 @@ The groups page, hosted sign-in and later phases below remain design goals. Ship
 features are not a claim that PH-29d performance/accessibility or owner visual acceptance
 has passed.
 
+Unchanged conditional polls retain the cached board and detail nodes without DOM writes.
+Changed responses and failed/recovered reads still refresh the view; the separate health
+timer continues to update freshness. Row title, cell and report clicks share one delegated
+listener per mount, removed on unmount.
+
 ## Goal
 
 The dashboard is a website, reachable from the internet, where each Phalanx user can see what Phalanx is doing across their workspace's repositories, what needs them, and what it delivered. They can use it from a phone or a laptop, and later act on it there too. It serves many users across workspaces ([SPEC.md](SPEC.md#users-and-workspaces)), with Caleb as the first. It must stay fast and readable with thousands of items, tens of workers running at once, and years of history.
