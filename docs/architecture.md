@@ -289,6 +289,9 @@ Templates do not install a supervisor, launch sessions or deploy themselves. Ado
 on an existing installation is a reviewed service-owner operation preserving paths,
 database, tokens, active writers and capacity; never initialize a replacement database
 or restart another owner's services from a writer.
+The [Windows API entrypoint](../phalanx/server_admin.py) normalizes only its own inherited
+background CPU priority to Normal before serving; the operator configures the existing
+supervisor at Normal as well. This does not change writer capacity or other processes.
 
 After an API restart, bindings, attempts, replies and outputs survive in SQLite.
 After a Captain loss, existing writers and the reconciler continue; a keeper/fresh
