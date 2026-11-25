@@ -51,6 +51,12 @@ It does not launch sessions, write GitHub, or merge PRs.
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
 | Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [models](../phalanx/usage_models.py), [API/projection](../phalanx/usage.py), [schema](../phalanx/usage_schema.py) |
 
+Operator summary waits are selected in `operator_api.summary_wait`: writerless queued
+work uses only `pickup.decision`; otherwise Building acquisition, delivery rework/handoff,
+persisted waits, prerequisites, retained-writer queue controls and unconfirmed launch
+waits take precedence in that order. The projection reuses the request-local context
+and performs no additional reads.
+
 Execution clients never open the queue database. `server backup` and `server restore`
 are explicit **server-host-only administration**, not an alternative client state path.
 Local credential/pending-intent files and OS locks support launch replay and exclusion;
