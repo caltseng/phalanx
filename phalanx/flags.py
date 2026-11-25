@@ -24,6 +24,7 @@ Kind = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,63}$")]
 Subject = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{0,100}$")]
 LAUNCH_UNCONFIRMED = timedelta(minutes=10)
 NO_PROGRESS = timedelta(hours=2)
+ACTIVE_OVERDUE = timedelta(minutes=90)
 DERIVED_LIMIT = 200
 
 router = APIRouter(prefix="/v1")
@@ -289,11 +290,70 @@ def stored(row):
             "first_seen": row["first_seen"], "notify_owner": bool(row["notify_owner"]), "source": "stored"}
 
 
+def active_overdue(db, now, known_flags):
+    """Elapsed execution age is the first persisted attempt, never a liveness clock."""
+    by_execution = {}
+    for known in known_flags:
+        by_execution.setdefault(known["execution_id"], []).append(known)
+    result = []
+    for row in db.execute(
+        f"""SELECT execution.*,
+                   (SELECT min(started_at) FROM attempts
+                    WHERE execution_id=execution.id) AS started_at,
+                   writer.id AS writer_id, writer.captain_id, writer.session_id,
+                   writer.last_progress_at, writer.progress_note
+            FROM executions AS execution
+            LEFT JOIN writers AS writer ON writer.execution_id=execution.id AND writer.ended_at IS NULL
+            WHERE {OPEN} AND started_at < ?
+            ORDER BY started_at, execution.id LIMIT ?""",
+        ((now - ACTIVE_OVERDUE).isoformat(timespec="microseconds"), DERIVED_LIMIT),
+    ):
+        started = at(row["started_at"])
+        age = (now - started).total_seconds()
+        state = json.loads(row["state_json"])
+        wait = state.get("wait") or {}
+        evidence = []
+        recovery = []
+        if wait:
+            evidence.append(f"Recorded wait: {wait['reason']}")
+            recovery.append(f"Recorded resume trigger: {wait['trigger']}")
+        for known in by_execution.get(row["id"], ()):
+            evidence.append(f"{known['kind']}: {known['reason']}")
+            recovery.append(known["recovery"])
+        if row["progress_note"]:
+            evidence.append(f"Writer report at {row['last_progress_at']}: {row['progress_note']}")
+        action = db.execute(
+            """SELECT * FROM captain_actions WHERE execution_id=?
+               ORDER BY created_at DESC, rowid DESC LIMIT 1""", (row["id"],),
+        ).fetchone()
+        if action:
+            evidence.append(f"Captain {action['captain_id']} recorded {action['action']} at "
+                            f"{action['created_at']}: {action['reason']}")
+        actor = (f"Writer {row['writer_id']}"
+                 + (f" (session {row['session_id']})" if row["session_id"] else "")
+                 + f"; Captain {row['captain_id']} coordinates"
+                 if row["writer_id"] else "An in-scope Captain (no registered writer)")
+        reason = (f"Active work overdue: {age / 60:.2f} elapsed minutes ({age:g} s) since "
+                  f"{row['started_at']}; stage {row['stage']}, status {row['status']}. "
+                  + ("; ".join(evidence) if evidence else
+                     "No concrete blocker or resume trigger is recorded; assessment needed."))
+        recovery = (f"Assessment/action actor: {actor}. "
+                    + "; ".join(dict.fromkeys(recovery))
+                    + ". Inspect current delivery evidence, take the next authorized unblocking action, "
+                    "and record the concrete blocker, responsible actor and resume trigger if still waiting. "
+                    "Age alone authorizes no cancellation, replacement or merge.")
+        result.append(flag("active_overdue", reason[:16000], recovery[:16000],
+                           started + ACTIVE_OVERDUE, item_id=row["item_id"], execution_id=row["id"],
+                           captain_id=row["captain_id"] or ""))
+    return result
+
+
 def all_flags(db, now=None):
     now = now or datetime.now(UTC)
     flags = [stored(row) for row in db.execute("SELECT * FROM flags")]
     for derive in DERIVED:
         flags.extend(derive(db, now))
+    flags.extend(active_overdue(db, now, flags))
     return {"flags": sorted(flags, key=lambda item: (item["first_seen"], item["kind"]))}
 
 

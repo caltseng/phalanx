@@ -68,6 +68,72 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 "expected_version": binding["version"], "outcome": "succeeded", **fields}
         return self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/result", token, body)
 
+    def test_overdue_age_survives_progress_stages_replacement_but_not_completion_or_rerun(self):
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        started = datetime.now(UTC) - timedelta(minutes=91)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE attempts SET started_at=? WHERE execution_id=?",
+                       (started.isoformat(timespec="microseconds"), execution_id))
+        route = f"/v1/items/{item_id}/executions/{execution_id}/writer"
+        self.ok(route, RUNNER, {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                               "session_id": "original", "state": "busy"}, method="PATCH")
+        self.ok("/v1/writer/progress", token, {"note": "Still drafting; no blocker"})
+        first = next(flag for flag in self.ok("/v1/writer", token)["flags"]
+                     if flag["kind"] == "active_overdue")
+        self.assertIn("Still drafting; no blocker", first["reason"])
+        self.assertIn("session original", first["recovery"])
+        binding = self.submit(token, binding, report_markdown="# Report\n")
+        reviewed = next(flag for flag in self.ok("/v1/writer", token)["flags"]
+                        if flag["kind"] == "active_overdue")
+        self.assertEqual(reviewed["first_seen"], first["first_seen"])
+        self.assertIn("stage report_review", reviewed["reason"])
+        replacement, replacement_token, _ = self.register(
+            item_id, execution_id, replaces=binding["writer"]["id"], replaced_stopped=True)
+        replaced = next(flag for flag in self.ok("/v1/writer", replacement_token)["flags"]
+                        if flag["kind"] == "active_overdue")
+        self.assertEqual(replaced["first_seen"], first["first_seen"])
+        self.assertIn(replacement["writer"]["id"], replaced["recovery"])
+        binding = self.submit(replacement_token, replacement, report_revision=intake.digest("# Report\n"))
+        done = self.submit(replacement_token, binding, report_revision=intake.digest("# Report\n"))
+        self.assertEqual(done["state"]["status"], "completed")
+        self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
+        rerun = self.ok(f"/v1/items/{item_id}/executions/{execution_id}/rerun", OWNER,
+                       {"expected_version": done["version"], "target": "report"})
+        fresh, _, _ = self.register(item_id, rerun["id"])
+        self.assertEqual(fresh["id"], rerun["id"])
+        self.assertNotIn("active_overdue", [flag["kind"] for flag in self.ok("/v1/flags", RUNNER)["flags"]])
+
+    def test_overdue_delivery_surfaces_known_blocker_actor_and_trigger_through_existing_reads(self):
+        publication, token = self.publish("checked_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        self.assertEqual(delivery["state"]["status"], "waiting_for_external")
+        started = datetime.now(UTC) - timedelta(minutes=91)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE attempts SET started_at=? WHERE execution_id=?",
+                       (started.isoformat(timespec="microseconds"), delivery["id"]))
+        self.ok("/v1/flags", RUNNER, {
+            "kind": "review_wait", "item_id": delivery["item_id"], "execution_id": delivery["id"],
+            "reason": "Required independent final-head review pending for reviewer R",
+            "recovery": "Reviewer R approves exact head " + HEAD + "; same writer resumes delivery",
+        }, method="PUT")
+        self.ok(f"/v1/items/{delivery['item_id']}/captain-actions", RUNNER, {
+            "captain_id": self.captain["id"], "action": "review requested",
+            "reason": "Reviewer R owns exact-head approval; resume on review; CI is green",
+        }, code=201)
+        current = self.ok("/v1/writer", token)
+        warning = next(flag for flag in current["flags"] if flag["kind"] == "active_overdue")
+        self.assertIn("stage delivery, status waiting_for_external", warning["reason"])
+        self.assertIn("Required independent final-head review pending for reviewer R", warning["reason"])
+        self.assertIn("CI is green", warning["reason"])
+        self.assertIn("Reviewer R approves exact head " + HEAD, warning["recovery"])
+        self.assertIn(delivery["writer"]["id"], warning["recovery"])
+        briefing = shift.status(lambda route: self.ok(route, RUNNER), {"repositories": ["repo"]})
+        self.assertIn("active_overdue", [flag["kind"] for flag in briefing["flags"]])
+        self.assertEqual(current["version"], delivery["version"])
+        self.assertEqual(current["state"], delivery["state"])
+        self.assertEqual(current["writer"]["capacity_revision"], delivery["writer"]["capacity_revision"])
+
     def test_writer_claims_a_named_item_and_carries_it_through_every_stage(self):
         head, _ = self.item()
         item_id, execution_id = self.item()
@@ -1407,6 +1473,35 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (queued["execution"]["id"],))
         dispatch.set_dispatch(db, DispatchSettings(max_writers=1, max_building_writers=1))
         return captain, binding, queued
+
+    def test_active_overdue_strict_boundary_never_claimed_and_terminal_exclusion(self):
+        with write_transaction(self.path) as db:
+            _, binding, queued = self.backlog(db)
+            started = datetime(2026, 1, 1, tzinfo=UTC)
+            db.execute("UPDATE attempts SET started_at=? WHERE execution_id=?",
+                       (started.isoformat(timespec="microseconds"), binding["id"]))
+            for delta in (-timedelta(microseconds=1), timedelta(), timedelta(microseconds=1)):
+                now = started + timedelta(minutes=90) + delta
+                with self.subTest(delta=delta):
+                    warnings = flags.active_overdue(db, now, [])
+                    self.assertEqual(len(warnings), int(delta > timedelta()))
+                    if warnings:
+                        self.assertEqual(warnings[0]["execution_id"], binding["id"])
+                        self.assertNotEqual(warnings[0]["execution_id"], queued["execution"]["id"])
+                        self.assertIn("5400", warnings[0]["reason"])
+                        self.assertEqual(warnings[0]["first_seen"],
+                                         (started + timedelta(minutes=90)).isoformat(timespec="microseconds"))
+                        self.assertIn("No concrete blocker", warnings[0]["reason"])
+            for status in ("queued", "running", "waiting_for_input", "waiting_for_external",
+                           "completed", "failed", "cancelled"):
+                with self.subTest(status=status):
+                    state = dict(binding["state"], status=status)
+                    if status in ("completed", "failed", "cancelled"):
+                        state["final_output"] = {"reference": "phalanx://reports/test"}
+                    db.execute("UPDATE executions SET state_json=? WHERE id=?",
+                               (intake.encode(state), binding["id"]))
+                    warnings = flags.active_overdue(db, started + timedelta(hours=5), [])
+                    self.assertEqual(len(warnings), int(status not in ("completed", "failed", "cancelled")))
 
     def test_capacity_backlog_uses_assigned_writers_and_keeps_fresh_holds_visible(self):
         with write_transaction(self.path) as db:
