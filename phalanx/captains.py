@@ -146,10 +146,16 @@ def is_live(row, now):
     return row["state"] != "ended" and now < gone_at(row)
 
 
+def live_captains(db, now):
+    """Live active and ending registrations, keyed by ID in heartbeat order."""
+    return {row["id"]: row for row in db.execute(
+        "SELECT * FROM captains WHERE state != 'ended' ORDER BY heartbeat_at, id")
+        if is_live(row, now)}
+
+
 def active_holds(db, now):
     """Current-version holds remain advisory and expire with their Captain or after 30 minutes."""
-    live = {row["id"] for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")
-            if is_live(row, now)}
+    live = live_captains(db, now)
     if not live:
         return {}
     return {
@@ -191,8 +197,9 @@ def availability_reports(db):
     }
 
 
-def view(db, row, now=None, session_reports=None):
+def view(db, row, now=None, session_reports=None, live=None):
     now = now or datetime.now(UTC)
+    live = live_captains(db, now) if live is None else live
     return {
         "id": row["id"], "session_ref": row["session_ref"], "charter_revision": row["charter_revision"],
         "pickup": json.loads(row["pickup_json"]),
@@ -203,8 +210,8 @@ def view(db, row, now=None, session_reports=None):
         "reinforcement": reinforcement(row, now),
         "focus": json.loads(row["focus_json"]), "sessions": json.loads(row["sessions_json"]),
         "handoff_note": row["handoff_note"], "created_at": row["created_at"],
-        "heartbeat_at": row["heartbeat_at"], "ending_at": row["ending_at"], "live": is_live(row, now),
-        "stale": row["state"] != "ended" and not is_live(row, now),
+        "heartbeat_at": row["heartbeat_at"], "ending_at": row["ending_at"], "live": row["id"] in live,
+        "stale": row["state"] != "ended" and row["id"] not in live,
         "open_intents": open_intents(db, row["id"]),
         "successors": [successor["id"] for successor in db.execute(
             "SELECT id FROM captains WHERE parent_id=? ORDER BY created_at, id", (row["id"],))],
@@ -294,7 +301,8 @@ def captains(db, limit):
         "SELECT * FROM captains ORDER BY state = 'ended', heartbeat_at DESC, id LIMIT ?", (limit,),
     ).fetchall()
     reports = availability_reports(db)
-    return {"captains": [view(db, row, now, reports) for row in rows]}
+    live = live_captains(db, now)
+    return {"captains": [view(db, row, now, reports, live) for row in rows]}
 
 
 def current_captain(db):
@@ -302,8 +310,8 @@ def current_captain(db):
     now = datetime.now(UTC)
     candidates = [
         {"id": row["id"], "session_ref": row["session_ref"]}
-        for row in db.execute("SELECT * FROM captains WHERE state='active' ORDER BY created_at, id")
-        if is_live(row, now)
+        for row in sorted(live_captains(db, now).values(), key=lambda row: (row["created_at"], row["id"]))
+        if row["state"] == "active"
     ]
     captain = None
     if not candidates:

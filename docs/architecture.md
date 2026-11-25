@@ -49,12 +49,18 @@ It does not launch sessions, write GitHub, or merge PRs.
 | API and database | Items, dependencies, executions, attempts, questions/replies, reports, bindings, actions, observations and flags; atomic transitions and finalization | [API startup](../phalanx/api.py), [store](../phalanx/store.py), [intake](../phalanx/intake.py), [transitions](../phalanx/transitions.py) |
 | GitHub | PR identity, actual head/base, checks, feedback, merge and deployment facts | [GitHub reader](../phalanx/github.py), [reconciliation](../phalanx/reconciliation.py) |
 | Captain runtime | Native launch/discovery, coordination, trust-block escalation, shift handoff and creator-owned cleanup | [shift client](../phalanx/shift.py), [Captain prompt](../phalanx/prompts/captain.md), [keeper prompt](../phalanx/prompts/keeper.md) |
-| Pickup projection | Request-local capacity/rework, holds and native availability snapshots feed board validators and rows; writer reads derive only their execution's flags, sharing capacity with the binding | [pickup](../phalanx/pickup.py), [operator views](../phalanx/operator_api.py), [flags](../phalanx/flags.py) |
+| Pickup projection | Captain liveness comes from `captains.live_captains`; routing/pickup select only active registrations. Request-local capacity/rework, holds and native availability snapshots feed board validators and rows; writer reads derive only their execution's flags, sharing capacity with the binding | [captains](../phalanx/captains.py), [pickup](../phalanx/pickup.py), [operator views](../phalanx/operator_api.py), [flags](../phalanx/flags.py) |
 | Scribe browser | Shared DOM/link helpers, board and Markdown rendering, fetch/auth transport, and shell-owned response projections and form/dialog wiring | [helpers](../phalanx/static/operator-helpers.js), [board](../phalanx/static/operator-board.js), [Markdown](../phalanx/static/operator-markdown.js), [HTTP](../phalanx/static/operator-http.js), [shell](../phalanx/static/operator-shell.js) |
 | Writer runtime | Implement, run repository checks, self-review, commit, publish, and fix its primary PR through delivery | [writer binding](../phalanx/writers.py), [work CLI](../phalanx/work_cli.py), [worker prompt](../phalanx/prompts/worker.md) |
 | Execution host | Mapped checkouts, isolated item worktrees, Git credentials, prepared checks environments, scoped credential files and artifacts | [workspaces](../phalanx/workspaces.py), [configuration](configuration.md) |
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
-| Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [models](../phalanx/usage_models.py), [API/projection](../phalanx/usage.py), [schema](../phalanx/usage_schema.py) |
+| Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [models](../phalanx/usage_models.py), [API/projection](../phalanx/usage.py), [schema](../phalanx/schema.py) |
+
+Operator summary waits are selected in `operator_api.summary_wait`: writerless queued
+work uses only `pickup.decision`; otherwise Building acquisition, delivery rework/handoff,
+persisted waits, prerequisites, retained-writer queue controls and unconfirmed launch
+waits take precedence in that order. The projection reuses the request-local context
+and performs no additional reads.
 
 Execution clients never open the queue database. `server backup` and `server restore`
 are explicit **server-host-only administration**, not an alternative client state path.
@@ -84,6 +90,9 @@ local shorthand, not a separately installed executable.
   before off-shift chats forward owner input. The tracked
   [forwarding section](../phalanx/prompts/forwarding.md) is composed into Captain/keeper prompts
   and handoffs; retained chats require an explicit relay after deployment.
+  The Captain prompt owns coordination, rotation, startup and creator-cleanup rules; the keeper
+  loads those sections for recovery, and the wake briefing resumes that canonical workflow.
+  Shared rules are referenced rather than copied into each prompt.
 - `work` runs from the item's worktree and reads its scoped credential from the Git
   directory. Do not copy it, expose it or substitute the Captain's runner token.
 - `muster status` discovers existing configuration and reads authenticated API status.

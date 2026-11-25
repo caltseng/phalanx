@@ -14,7 +14,7 @@ def session_id(reference):
 
 
 def session_reference(reference, runtime=None):
-    """Keep unknown/legacy references intact instead of guessing their host."""
+    """Keep opaque references intact instead of guessing their host."""
     prefix = PREFIX.get(runtime)
     if prefix and re.fullmatch(NATIVE_ID, reference):
         return prefix + reference
