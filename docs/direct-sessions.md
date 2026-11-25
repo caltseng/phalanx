@@ -46,6 +46,10 @@ One writer retains its item through runnable stages and input/external/retry/dep
 waits, with a separately fenced attempt per stage. Tokens have no timed expiry; ended or
 replaced writers cannot submit. `work next` resumes eligible work. See
 [writer operations](writer-operations.md) for capacity acquisition/handoff and delivery.
+An API outage alone does not stop authorized physical work under that same writer's confirmed
+held allocation. Deferred stage bookkeeping is not an offline transition or a fresh admission;
+follow [control-plane outage recovery](writer-operations.md#control-plane-outages), preserving
+known stops, credential revocation, capacity and publication ceilings.
 
 ## Evidence submission
 
