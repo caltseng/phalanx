@@ -3,11 +3,9 @@ from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import json
-import os
 from pathlib import Path
 from secrets import token_urlsafe
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -21,11 +19,11 @@ from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, initialize, write_transaction
 from phalanx.transitions import item_branch
 
+from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
 STAGES = ["report_drafting", "report_review", "report_storage"]
-ROOT = Path(__file__).resolve().parents[1]
 HEAD, OTHER, BASE, MERGE = "a" * 40, "b" * 40, "c" * 40, "d" * 40
 PR_URL = "https://github.com/e/r/pull/7"
 
@@ -512,9 +510,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                                               encoding="utf-8")
 
         def work(*arguments, code=0):
-            result = subprocess.run([sys.executable, "-m", "phalanx", "work", *arguments], cwd=worktree,
-                                    env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True,
-                                    text=True, timeout=30)
+            result = run_cli(["work", *arguments], cwd=worktree)
             self.assertEqual(result.returncode, code, result.stderr)
             return json.loads(result.stdout) if code == 0 else result.stderr
 

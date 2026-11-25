@@ -283,10 +283,8 @@ ends that writer's control access; inspect terminal state through an authorized
 Captain/owner, not by manufacturing a new credential. Stale heartbeat/progress flags
 alone never prove a process stopped. Follow [resume](resume.md) and [recovery](recovery.md).
 
-Activation requires the service owner to deploy the API/CLI projection and flag changes
-and refresh retained Captain instructions from the packaged prompt verbatim. Existing
-reservations and allocations remain in place; there is no schema/configuration change.
-Writers do not restart services or patch retained/live configuration to activate this.
+Use the [service-owner adoption procedure](deployment.md#coordination-policy-adoption-boundary)
+for code, schema and retained instructions; source merge is not installation evidence.
 
 ### Shipped code is not installation state
 
@@ -295,9 +293,8 @@ detail reads. Owner-only display titles use the separate append-only `item_title
 with their own revision fence and audit identity/time. They do not mutate work scope,
 execution state/version, attempts or outputs. The insert invalidates board ETags, so
 unchanged polls remain no-ops while actual title changes refresh normally. This source
-change needs a service-owner deployment of the API, schema step and static assets before
-the route is available. It does not itself restart a service or alter the live database.
-Only after that deployment may an owner read the title revision, PUT the requested title
+needs the API, canonical schema and static assets installed before the route is available.
+Only after deployment may an owner read the title revision, PUT the requested title
 with a stable idempotency key and read back both metadata and the Scribe caption. Never
 use queued-only goal Steering, stage interruption or direct database edits as a substitute.
 
@@ -312,29 +309,10 @@ A mismatched open head has a visible `head_drift` flag and board wait. GitHub me
 authoritative; ending/withdrawing/replacing the writer clears the handoff for recovery.
 Counts, board waits and dispatch-overdue/backlog reporting use `dispatch`'s same state/helpers,
 not stage-derived guesses or a second budget. Intents and waiting writers retain Total.
-`shift launch` supplies no limit, and charters reject concurrency keys; `deploy init` writes
-only `max_hours = 24` for elapsed-time rotation. Existing stores retain their saved Total, all live writers and
-conservative Building allocations. Shipped code does not prove installation state: follow
-[separate deployment and activation](deployment.md#two-limit-writer-activation); do not treat
-approval or an open PR as deployment.
-`shift heartbeat` compares the Captain's registration age with freshly loaded charter
-`max_hours` (default 24). `shift wake` uses the returned server heartbeat timestamp for age,
-prints a compact briefing and adds the fresh canonical workflow every 90 elapsed minutes.
-The Captain row's `reinforced_interval` is the last acknowledged registration-relative
-90-minute interval. `PUT /v1/captains/{id}/reinforcement` advances it monotonically only
-after the Captain reads that output. Non-wake heartbeats never touch it; retries reprint
-unacknowledged workflow, and delayed wakes coalesce intervals without another scheduler.
-The explicit additive column and API rollout are described in the deployment guide.
-Wake and compaction counts remain monotone telemetry, not
-rotation triggers. Packaged Captain/keeper instructions retain five-minute reconciliation
-through queue completion and dependency/external waits, with explicit owner stop and genuine
-safety exceptions. The client rejects retired count-limit keys rather than silently ignoring
-them. See the [retained-conversation rollout boundary](deployment.md#elapsed-time-shift-activation).
-Captain/keeper prompts are the native-session launch control path. Shared API outages retain
-identities and schedules with visible blocked/unknown status; stale/no-live server flags retain
-their freshness semantics but direct recovery to exact native verification, not automatic launch.
-Available Captains refresh the same registration after recovery; unknown state cannot authorize
-replacement. No schema, election service or scheduler is added.
+`shift launch` supplies no limit, and charters reject concurrency keys. Existing stores
+preserve saved Total and conservative allocations under [reviewed adoption](deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
+Captain timing and succession are documented once in [the operating guide](direct-path.md#captain-shifts-and-handoff);
+the [API reference](api.md#captain-workflow-reinforcement) specifies acknowledgement fields.
 Likewise tokenless local-board actions require both shipped code and verified deployment:
 explicit `PHALANX_LOCAL_BOARD=1`, a loopback-only listener, direct loopback peer and local
 Host, with exact same-origin writes and no forwarding headers. Narrow `/operator/api/`

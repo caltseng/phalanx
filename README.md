@@ -51,19 +51,12 @@ each writer uses its own scoped credential stored in the item's Git directory.
 The operator keeps a charter outside mapped repositories. On each wake, the Captain uses
 `python -m phalanx shift` commands, re-reads the charter and chooses work within its repository scope
 and lane policy.
-Normal Captain rotation is elapsed-time only: 24 hours from registration, with five-minute
-reconciliation retained even when the queue is empty or dependency-blocked. Wake and compaction
-counts are telemetry, not early handoff triggers. Explicit owner stop and genuine safety
-failures remain exceptions.
-Shared API/control-plane outages are visible blocked/unknown states, not Captain failures:
-retain the same Captain, writers and schedules, then refresh that registration on recovery.
-Keeper recovery verifies native loss rather than treating stale heartbeats as proof of failure.
-The same wake provides fresh charter/workflow reinforcement every 90 elapsed minutes;
-server-owned acknowledgements keep missed or failed reminders pending without another scheduler.
+The [Captain operating guide](docs/direct-path.md#captain-shifts-and-handoff) owns shift,
+wake, reinforcement and handoff rules.
 The owner's persisted Building (`max_building_writers`, initially 5) and Total (`max_writers`,
 initially 10 on new installs) limits, editable together under **Writer concurrency** in Scribe,
 apply across all Captains and repositories. Existing installs retain their approved Total until
-[coordinated activation](docs/deployment.md#two-limit-writer-activation).
+[reviewed adoption](docs/deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
 Registration enforces both limits atomically; waiting writers retain Total.
 
 Captains launch and confirm sessions through their runtime's native tools. In the Copilot
@@ -139,6 +132,13 @@ Stopped-writer replacement preserves local work and reconciles external effects.
 | [`tests/`](tests/), [CI workflow](.github/workflows/ci.yml) | Standard-library unittest suite, HTTP/Git fixtures and cross-platform CI. |
 | [`.agents/skills/`](.agents/skills/) | Reusable agent skills: [PR review](.agents/skills/pr-review/SKILL.md) and [complexity-killer](.agents/skills/complexity-killer/SKILL.md) for evidence-based complexity and blocking audits. |
 | [`docs/`](docs/), [`SPEC.md`](SPEC.md), [`STATE_MACHINE.md`](STATE_MACHINE.md) | Operating guides, implementation map and authoritative design/lifecycle references. |
+
+HTTP tests use isolated API applications running in-process on real loopback sockets
+and selector event loops (avoiding Windows Proactor reset/teardown leaks),
+so urllib and CLI subprocesses still exercise HTTP, authentication and background tasks.
+Each fixture start runs a fresh application lifespan; explicit restart tests still stop
+and start it against the same database. The bootstrap backup/restore test also retains
+real server-process launches to cover process boundaries and durable recovery.
 
 ## Quickstart: new install
 

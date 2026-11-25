@@ -40,12 +40,8 @@ Charter revision, wake counts and liveness retain their existing contracts.
 
 `phx shift heartbeat --captain <id> --compaction-count <count>` reports the same counter;
 normal dashboard refreshes display it as `compactions N` or `compactions unavailable`.
-`shift heartbeat` returns `compaction_count` and `wakes` as telemetry only. `handoff_due`
-compares elapsed time from the registration's `created_at` with charter `[shift].max_hours`
-(default 24), never wake or compaction counts. Compaction is a checkpoint, with no count-based
-handoff or first-compaction fallback. Five-minute reconciliation continues through queue
-completion and dependency/external waits. Explicit owner stop and actual degradation/failure
-safeguards remain independent; the server's telemetry contract is unchanged.
+`shift heartbeat` returns `compaction_count` and `wakes` as telemetry only.
+For `handoff_due` and rotation policy, see [Captain shifts and handoff](direct-path.md#captain-shifts-and-handoff).
 
 ## Captain workflow reinforcement
 
