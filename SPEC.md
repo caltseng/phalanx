@@ -194,8 +194,8 @@ so existing reports, board pages and later owner-merge reconciliation remain rea
   delivery, take the next authorized action and record concrete blocker/actor/resume triggers.
   Reassess obsolete batch holds; a busy label or green open PR is not completion.
   This adds no lifecycle gate, deadline, cancellation/replacement, capacity change,
-  auto-merge authorization, scheduler or quota. Five-minute wakes, 24-hour Captain lifetime,
-  90-minute reinforcement, exact-head review, CI, trust and explicit output ceilings remain.
+  auto-merge authorization, scheduler or quota. [Captain continuity](docs/direct-path.md#captain-shifts-and-handoff),
+  exact-head review, CI, trust and explicit output ceilings remain.
 - Results require the current writer binding, attempt, stage and expected version. A
   writer token has no timed expiry. Ended/replaced writers and stale attempts cannot submit.
   Retryable mutations are idempotent; reconcile uncertain remote effects first.
@@ -236,48 +236,12 @@ review and storage always reference the exact immutable draft revision.
 
 ### Captain shifts and continuity
 
-An operator-owned charter defines goal, repo scope, authority, escalation and
-stop conditions. Captain wakes every five minutes. Normal rotation is purely elapsed-time:
-24 hours from registration by default, using positive-integer charter `[shift].max_hours`.
-`shift wake` records a heartbeat and returns a compact briefing and the fresh charter.
-Every 90 elapsed minutes from registration it also returns the current canonical Captain
-workflow. The API owns the last acknowledged interval; only an explicit acknowledgement
-after reading the workflow advances it. Non-wake heartbeats and failed output cannot
-consume reinforcement. Missed intervals coalesce on the next wake, unacknowledged output
-repeats, and duplicate or late acknowledgements cannot erase newer pending intervals.
-Server UTC determines intervals, clamped at zero on clock rollback; acknowledged intervals
-never regress. Reinforcement uses the existing five-minute wake, not another scheduler,
-local timing file or compaction hook.
-Queue completion, empty queues, dependency/external waits, wake counts and compaction counts
-never end a shift early, including under older charter stop prose. Idle Captains retain
-ownership and reconcile on schedule. Compaction is a checkpoint, not a rotation trigger;
-unknown telemetry stays unknown. Explicit owner stop, missing/invalid authority and actual
-degradation/failure remain safety exceptions with visible reasons and recovery.
-Overlap is bounded to thirty minutes. The
-predecessor finishes/abandons uncertain intents and performs creator-owned cleanup before
-ending, without waiting forever for a successor. Only the owner grants repository trust.
-
-A runtime keeper wakes every thirty minutes to start a Captain if none is live, respecting
-recent handoff and charter stop conditions. Existing writers and the reconciler continue
-without a Captain. Stale Captain/reconciler, no progress, unconfirmed launches, stopped
-writers and orphan sessions are visible flags with recovery actions. Archival requires
-preserved local work and runtime creator authority; server records do not perform archival.
-
-Retained off-shift chats disclose their role rather than resume coordination. On every new
-owner/forwarded interaction, `shift current` resolves a unique live active registration across
-all history; native tools verify its binding and supply the clickable conversation link.
-Re-resolve before forwarding via supported original-message provenance. No unique destination,
-link or provenance is an explicit routing condition, not permission to guess or duplicate work.
-Use the registered Captain's own ID, not its predecessor-derived launch nonce, for role wording
-and supported display-name changes. Preserve runtime nesting, succession history and cleanup
-authority. Tracked prompts deploy normally; retained chats need the changed forwarding section
-relayed explicitly, not an untracked muster patch.
-
-Captain heartbeats may report the native session's cumulative successful compaction count.
-Persist the greatest reported count; duplicate, older or omitted telemetry cannot inflate or
-erase it. Historical and unsupported runtime counts stay unknown, never inferred from wakes,
-tokens, checkpoints or failed attempts. Scribe labels this count (or unavailable) beside
-heartbeat and wakes instead of the charter hash; charter revision enforcement is unchanged.
+An operator-owned charter defines goal, repository scope, authority, escalation and stop
+conditions. The single operating reference is [Captain shifts and handoff](docs/direct-path.md#captain-shifts-and-handoff),
+including progress accountability, reinforcement, recovery and creator-owned cleanup.
+The [API reference](docs/api.md#captain-workflow-reinforcement) defines reinforcement and
+telemetry fields; [retained-chat forwarding](docs/direct-path.md#retained-chats-and-owner-message-forwarding)
+defines off-shift routing. Native prompts implement these rules, not separate policy.
 
 ## Settings and dispatch gates
 

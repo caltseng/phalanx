@@ -252,8 +252,8 @@ Verify receipt and inspect current target/head/gates before any further merge ac
 Existing in-flight writers already received explicit corrective gate instructions for this
 incident; preserve that containment, rather than reverting them to older kickoff wording.
 Do not contact, revive or replace ended writers. Keep the same live writer/Total through rework
-and respect Building acquisition/handoff. This activation does not change the new24h Captain
-cadence: 24-hour shifts, five-minute reconciliation and 90-minute reinforcement remain unchanged.
+and respect Building acquisition/handoff. Captain cadence follows the
+[shift and handoff rules](direct-path.md#captain-shifts-and-handoff).
 
 If cancellation or forced failure sets `state.stopping`, stop new work and reconcile any
 in-flight GitHub effects. Delivery has no open attempt, but its writer is still live:
