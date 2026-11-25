@@ -877,11 +877,19 @@ class WriterTest(ServerFixture, unittest.TestCase):
         withdrawal = {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
                       "reason": "Stopped rework and reconciled effects", "stopped": True}
         ended = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
-        replay = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
-        self.assertEqual(ended, replay)
         self.assertEqual(ended["state"]["pending_output"], "cancelled")
-        self.assertFalse(ended["writer"]["building"])
-        self.assertIsNone(ended["writer"]["handoff_head"])
+        # Finalization may advance the execution between withdrawal responses.
+        closed = finalization.attempt(self.path, binding["id"])
+        self.assertEqual(closed["state"]["status"], "cancelled")
+        replay = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
+        self.assertEqual(replay["state"]["status"], "cancelled")
+        self.assertIsNone(replay["state"]["pending_output"])
+        for response in (ended, replay):
+            self.assertEqual(response["writer"]["id"], binding["writer"]["id"])
+            self.assertEqual(response["writer"]["state"], "ended")
+            self.assertIsNotNone(response["writer"]["ended_at"])
+            self.assertFalse(response["writer"]["building"])
+            self.assertIsNone(response["writer"]["handoff_head"])
         capacity = self.ok("/v1/dispatch/settings", OWNER)
         self.assertEqual((capacity["building_writers"], capacity["active_writers"]), (1, 1))
         current = self.ok("/v1/writer", other_token)
