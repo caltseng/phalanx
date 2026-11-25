@@ -103,6 +103,14 @@ both capacity limits, sole-writer ownership, review/CI/merge safeguards and crea
 
 ## Every wake
 
+Optional usage observations belong to the existing native-session check, never a new schedule or
+pickup/delivery gate. With authorized read-only metadata for an exactly bound writer, use
+`phx shift usage --captain <id> --item <item> --execution <execution> --writer <writer> --file <snapshot.json>`.
+See `docs/usage.md` for the allowlisted contract and Copilot App query. A live in-scope successor
+may observe an ended writer without reviving its credential or capacity. Keep its ownership cutoff;
+if a source cannot exclude later unrelated turns, leave the final gap explicit. Codex App automatic
+export remains unverified; do not start an app-server, scan private history or substitute CLI usage.
+
 Do these steps in order and keep each wake short:
 
 1. **Heartbeat and reinforcement.** Run `phx shift wake --captain <id>`. This records one wake

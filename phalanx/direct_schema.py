@@ -1,5 +1,7 @@
 """Server state for direct sessions: Captains, registered writers and deviation flags."""
 
+from .usage_schema import USAGE_SCHEMA
+
 DIRECT_SCHEMA = (
     """CREATE TABLE captains (
         id TEXT PRIMARY KEY NOT NULL,
@@ -51,6 +53,7 @@ DIRECT_SCHEMA = (
         updated_at TEXT NOT NULL,
         PRIMARY KEY (kind, item_id, execution_id, captain_id)
     )""",
+    *USAGE_SCHEMA,
 )
 
 # Shift handoff: when a Captain started ending, and the actions Captains record on item timelines.

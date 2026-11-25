@@ -49,6 +49,7 @@ It does not launch sessions, write GitHub, or merge PRs.
 | Writer runtime | Implement, run repository checks, self-review, commit, publish, and fix its primary PR through delivery | [writer binding](../phalanx/writers.py), [work CLI](../phalanx/work_cli.py), [worker prompt](../phalanx/prompts/worker.md) |
 | Execution host | Mapped checkouts, isolated item worktrees, Git credentials, prepared checks environments, scoped credential files and artifacts | [workspaces](../phalanx/workspaces.py), [configuration](configuration.md) |
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
+| Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [models](../phalanx/usage_models.py), [API/projection](../phalanx/usage.py), [schema](../phalanx/usage_schema.py) |
 
 Execution clients never open the queue database. `server backup` and `server restore`
 are explicit **server-host-only administration**, not an alternative client state path.
