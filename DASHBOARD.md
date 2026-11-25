@@ -16,7 +16,9 @@ has passed.
 
 Unchanged conditional polls retain the cached board and detail nodes without DOM writes.
 Changed responses and failed/recovered reads still refresh the view; the separate health
-timer continues to update freshness. Row title, cell and report clicks share one delegated
+timer updates freshness and relative ages in place when their displayed spans change.
+Optimistic intake rows are reconciled on the next poll without mutating cached snapshots.
+Row title, cell and report clicks share one delegated
 listener per mount, removed on unmount.
 
 ## Goal

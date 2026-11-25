@@ -73,6 +73,7 @@
     const text = span(now - time) + " ago";
     const { "aria-label": context, ...rest } = attrs;
     return h("time", { datetime: new Date(time).toISOString(), title: stamp(time), ...rest,
+      "data-age-context": context,
       "aria-label": [context, text, stamp(time)].filter(Boolean).join(" · "), text });
   }
 
@@ -624,7 +625,8 @@
       if (disposed || state.open.rows.some(row => row.id === item.id)) return;
       state.open.request?.abort();
       state.open.request = null;
-      state.open.rows.push(item);
+      state.open.rows = [...state.open.rows, item];
+      state.open.snapshot = null;
       state.changed.set(item.id, Date.now());
       const { scrollX: x, scrollY: y } = window;
       render();
@@ -1233,11 +1235,24 @@
       if (!control || control.matches("button.title")) toggle(id);
     }
 
+    function tick() {
+      if (document.hidden) return;
+      const now = Date.now();
+      for (const node of body.querySelectorAll("time[datetime]")) {
+        const time = epoch(node.dateTime);
+        const text = span(now - time) + " ago";
+        if (node.textContent === text) continue;
+        node.textContent = text;
+        node.setAttribute("aria-label", [node.dataset.ageContext, text, stamp(time)].filter(Boolean).join(" · "));
+      }
+      renderHealth();
+    }
+
     refresh.addEventListener("click", refreshAll);
     root.addEventListener("click", onRowClick);
     root.addEventListener("keydown", onKey);
     const interval = setInterval(refreshAll, REFRESH_MS);
-    const ticker = setInterval(() => { if (!document.hidden) renderHealth(); }, TICK_MS);
+    const ticker = setInterval(tick, TICK_MS);
     document.addEventListener("visibilitychange", refreshAll);
     applyTheme();
     render();
