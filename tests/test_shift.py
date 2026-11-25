@@ -715,7 +715,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn("dependency/external waits", captain)
         for signal in ("three failed actions in a row", "self-raised deviation flag",
                        "missed heartbeat noticed on waking"):
-            self.assertIn(signal, captain)
+            self.assertIn(signal, captain.lower())
 
     def test_keeper_preserves_accountability_and_adoption_without_replacing_live_work(self):
         keeper = " ".join(shift.prompt("keeper").split())
