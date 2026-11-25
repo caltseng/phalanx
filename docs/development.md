@@ -6,6 +6,11 @@ Run the localhost HTTP and persistence tests with `python -m unittest discover -
 
 The [CI workflow](../.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14, and Ubuntu and macOS with CPython 3.14. Each run is split into three parallel jobs with `python tests/shard.py INDEX 3`, which deals the discovered tests round-robin so each test runs exactly once, and the single `Tests` check passes only when every shard passes.
 
+CLI behavior tests use `tests/cli_runner.py` to call the real entry point in process,
+capturing stdout, stderr and the exit code while restoring arguments, environment and
+working directory after each call. The isolated deployment lifecycle test retains
+`python -m phalanx` subprocess coverage for startup, restart and exclusive ownership.
+
 `tests/operator-create-fixture.html` exercises the real shell/client with mocked transport,
 including owner connections (`?owner`) and tokenless local mode. For the real-API flow, use
 an isolated temporary database/server bound to loopback with `PHALANX_LOCAL_BOARD=1` and

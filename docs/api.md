@@ -40,12 +40,8 @@ Charter revision, wake counts and liveness retain their existing contracts.
 
 `phx shift heartbeat --captain <id> --compaction-count <count>` reports the same counter;
 normal dashboard refreshes display it as `compactions N` or `compactions unavailable`.
-`shift heartbeat` returns `compaction_count` and `wakes` as telemetry only. `handoff_due`
-compares elapsed time from the registration's `created_at` with charter `[shift].max_hours`
-(default 24), never wake or compaction counts. Compaction is a checkpoint, with no count-based
-handoff or first-compaction fallback. Five-minute reconciliation continues through queue
-completion and dependency/external waits. Explicit owner stop and actual degradation/failure
-safeguards remain independent; the server's telemetry contract is unchanged.
+`shift heartbeat` returns `compaction_count` and `wakes` as telemetry only.
+For `handoff_due` and rotation policy, see [Captain shifts and handoff](direct-path.md#captain-shifts-and-handoff).
 
 ## Captain workflow reinforcement
 
@@ -250,7 +246,7 @@ Paginated routes default to 25 entries and accept `limit` from 1 through 100. Pa
 
 Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. Outcome and closure-time filters apply only to closed lists. Filtered pages inspect at most 2,000 indexed candidates and may return an empty page with a continuation cursor. Lists, overview and groups support weak `ETag`/`If-None-Match` conditional reads (`private, no-cache`); unchanged state returns 304. Display ages alone do not invalidate the token: calculate elapsed time from the retained snapshot's timestamps. State changes, retry/queue deadlines, unconfirmed-launch deadlines and 24-hour closure boundaries invalidate it.
 
-Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
+Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. Summaries also include the execution's `publication_mode` and nullable requested `target_branch`; a null branch uses the client's configured repository base. The reconciler uses these fields without fetching individual item details. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
 
 `last_advanced_at` records entry into the current stage, and `last_progress_at` the latest
 execution transition. Summaries also expose nullable `active_started_at` (the execution's

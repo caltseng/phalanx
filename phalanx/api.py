@@ -41,12 +41,6 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-app = FastAPI(title="Phalanx", lifespan=lifespan)
-app.include_router(operator_web_router)
-app.mount("/operator/assets", operator_assets, name="operator-assets")
-
-
-@app.exception_handler(sqlite3.OperationalError)
 async def store_unavailable(request: Request, error: sqlite3.OperationalError):
     # Only contention is transient; other operational errors stay 500 so clients don't retry forever.
     code = getattr(error, "sqlite_errorcode", None)
@@ -64,7 +58,6 @@ async def store_unavailable(request: Request, error: sqlite3.OperationalError):
     )
 
 
-@app.get("/health")
 def health(request: Request):
     try:
         with connect(request.app.state.database_path, mode="ro") as db:
@@ -74,20 +67,26 @@ def health(request: Request):
     return {"status": "ok"}
 
 
-@app.get("/v1/owner/status", dependencies=[Depends(require_owner)])
 def owner_status():
     return {"role": "owner"}
 
 
-@app.get("/v1/runner/status", dependencies=[Depends(require_runner)])
 def runner_status():
     return {"role": "runner"}
 
-app.include_router(intake_router)
-app.include_router(dispatch_router)
-app.include_router(operator_router)
-app.include_router(captains_router)
-app.include_router(flags_router)
-app.include_router(writers_router)
-app.include_router(usage_router)
-app.include_router(muster_router)
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="Phalanx", lifespan=lifespan)
+    app.include_router(operator_web_router)
+    app.mount("/operator/assets", operator_assets, name="operator-assets")
+    app.add_exception_handler(sqlite3.OperationalError, store_unavailable)
+    app.get("/health")(health)
+    app.get("/v1/owner/status", dependencies=[Depends(require_owner)])(owner_status)
+    app.get("/v1/runner/status", dependencies=[Depends(require_runner)])(runner_status)
+    for router in (intake_router, dispatch_router, operator_router, captains_router,
+                   flags_router, writers_router, usage_router, muster_router):
+        app.include_router(router)
+    return app
+
+
+app = create_app()

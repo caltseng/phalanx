@@ -63,24 +63,12 @@ The pair updates atomically; omitted settings remain unchanged. Both must be str
 and blocks affected admissions; raising takes effect on the next admission/acquisition retry.
 `GET /v1/dispatch/settings` shows both limits, `building_writers`, `delivering_writers` and
 `active_writers` (Total usage), all derived from registered allocations.
-Charter `[shift]` accepts positive-integer `max_hours` (default 24). Normal rotation uses
-elapsed time since registration only; wake and compaction counts remain telemetry.
-Remove retired `max_wakes` and `max_compactions` settings; the client rejects them with
-explicit guidance. Queue completion and dependency/external waits never end a shift early.
-Five-minute reconciliation, explicit owner stop and genuine safety behavior remain.
-The same wake reinforces the fresh charter and canonical workflow every 90 elapsed minutes.
-This interval is fixed, not another charter setting or a compaction threshold; acknowledgements
-are server-owned. See [activation](deployment.md#elapsed-time-shift-activation) before updating
-an existing installation's client, API or retained wake instructions.
-Either concurrency key is
-rejected with guidance to remove it and use dispatch settings instead. Remove that entry
-in the same deployment cutover that introduces this implementation, leaving the live
-charter unchanged until then. Upgrading an existing store preserves its saved Total and
-initializes Building to min(5, Total), conservatively charging existing workers Building.
-Subsequent restarts preserve owner edits. Do not raise the live old single limit to 10;
-follow [deployment and separate activation](deployment.md#two-limit-writer-activation).
-The reconciler
-runs local checks serially and never configures publication or merging.
+Charter shift settings and rejected legacy keys are documented with
+[Captain shifts and handoff](direct-path.md#captain-shifts-and-handoff). Charter concurrency
+keys are rejected in favor of dispatch settings. Existing-store limits and conservative
+allocations require [reviewed adoption](deployment.md#existing-runtime-reviewed-adoption-not-a-rename),
+not a client-driven increase. The reconciler runs local checks serially and never configures
+publication or merging.
 
 Writer credentials live only in the item's Git directory. Captains wake through their runtime
 scheduler, not a CLI process.

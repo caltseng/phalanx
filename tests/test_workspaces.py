@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from phalanx import workspaces
 from phalanx.workspaces import WorkspaceError, WorkspaceManager
 
 
@@ -81,6 +82,36 @@ class WorkspaceTests(unittest.TestCase):
                 "item", base="HEAD",
             )
         self.assertFalse(self.root.exists())
+
+    def test_origin_preparation_verifies_checkout_once_and_preserves_existing_work(self):
+        remote = self.directory / "origin.git"
+        self.git(self.directory, "init", "--bare", str(remote))
+        self.git(self.checkout, "remote", "set-url", "origin", remote.as_uri())
+        self.git(self.checkout, "push", "origin", "main")
+        manager = WorkspaceManager(self.checkout, remote.as_uri(), self.root)
+        for existing in (False, True):
+            with self.subTest(existing=existing), patch("phalanx.workspaces._git", wraps=workspaces._git) as calls:
+                workspace = manager.prepare_from_origin("item", branch="main")
+            checkout_calls = [call.args[1:] for call in calls.call_args_list if call.args[0] == self.checkout]
+            self.assertEqual(sum(args[:2] == ("rev-parse", "--show-toplevel")
+                                 for args in checkout_calls), 1)
+            self.assertEqual(sum(args[:2] == ("remote", "get-url") for args in checkout_calls), 1)
+            self.assertEqual(workspace.head, self.base)
+            self.assertEqual(workspace.dirty, existing)
+            (workspace.path / "source").write_text("uncommitted work\n")
+            self.git(self.checkout, "commit", "--allow-empty", "-m", "origin advanced")
+            self.git(self.checkout, "push", "origin", "main")
+        self.assertEqual(self.git(self.checkout, "rev-parse", "origin/main"),
+                         self.git(self.checkout, "rev-parse", "main"))
+        self.assertEqual((workspace.path / "source").read_text(), "uncommitted work\n")
+
+    def test_origin_preparation_reverifies_each_operation_before_fetch(self):
+        self.prepare()
+        self.git(self.checkout, "remote", "set-url", "origin", "https://github.com/owner/other")
+        with patch("phalanx.workspaces._git", wraps=workspaces._git) as calls, \
+                self.assertRaisesRegex(WorkspaceError, "does not match"):
+            self.manager.prepare_from_origin("item", branch="main")
+        self.assertFalse(any(call.args[1] == "fetch" for call in calls.call_args_list))
 
     def test_rejects_workspace_root_inside_checkout_or_git_metadata(self):
         linked = self.directory / "linked"

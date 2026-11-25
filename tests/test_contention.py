@@ -140,7 +140,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
             path = Path(directory) / "external.sqlite3"
             store.initialize(path)
             with patch("test_bootstrap.SERVER_PROCESS", CONTENTION_SERVER):
-                server = self.start_server(path)
+                server = self.start_server(path, in_process=False)
             try:
                 self.assertEqual(self.request("/fixture/workers", body={})[0], 200)
                 with store.connect(path) as lock:
@@ -323,7 +323,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
             }
             headers = {"Idempotency-Key": "contention-result"}
             with patch("test_bootstrap.SERVER_PROCESS", SERVER_PROCESS if external else CONTENTION_SERVER):
-                server = self.start_server(path)
+                server = self.start_server(path, in_process=False)
             cleanup.callback(self.stop_server, server)
             with store.connect(path, mode="ro") as db:
                 before = {

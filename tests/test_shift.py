@@ -7,19 +7,18 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
-from phalanx import captains, shift
+from phalanx import captains, shift, workspaces
 from phalanx.store import initialize, write_transaction
 from phalanx.work_cli import credential, request
 
+from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
-ROOT = Path(__file__).resolve().parents[1]
 CHARTER = """goal = "Deliver the pilot's queued work"
 repositories = ["repo"]
 allowed_actions = ["launch and replace writer sessions"]
@@ -234,6 +233,39 @@ class CharterTest(unittest.TestCase):
             text = " ".join(shift.prompt(name).split())
             with self.subTest(prompt=name):
                 self.assertIn("phx shift prompt captain", text)
+
+    def test_outage_continuity_preserves_confirmed_capacity_and_explicit_ceilings(self):
+        for target, mode in (("checked_in", "ready"), ("ready_for_check_in", "ready"),
+                             ("checked_in", "draft"), ("report", "ready")):
+            with self.subTest(target=target, mode=mode):
+                prompt = shift.kickoff(
+                    {"id": "item", "repository_id": "repo", "goal": "Deliver",
+                     "execution": {"id": "execution",
+                                   "state": {"target": target, "publication_mode": mode}}},
+                    "worktree", "nonce", "phx work", "main")
+                text = " ".join(prompt.split())
+                self.assertIn(f"Target: {target}", text)
+                self.assertIn(f"Publication mode: {mode}", text)
+                for clause in (
+                    "same live writer's last confirmed held allocation",
+                    "continue development, local validation, review, publication and authorized check-in",
+                    "New/unconfirmed registration or Building acquisition still requires server confirmation",
+                    "uncertain result/release could have relinquished Building or ended the writer",
+                    "Honor every known stop/cancel instruction, `state.stopping`, ended writer and HTTP 401",
+                    "HTTP 403 is an authorization denial",
+                    "Preserve explicit ready-only/report targets and draft ceilings",
+                    "never blindly replay with a fresh version/key",
+                    "let the reconciler record the actual merge",
+                    "Do not claim a report stored or an execution complete without a receipt",
+                ):
+                    self.assertIn(clause, text)
+                self.assertNotIn("re-read `phx work status` and fresh GitHub facts", text)
+                self.assertIn("a fresh status or progress receipt is not itself a merge gate", text)
+                self.assertIn("current exact head has applicable independent final-head approval", text)
+                self.assertIn("exact-head guard", text)
+        captain = " ".join(shift.prompt("captain").split())
+        self.assertIn("must not gate already-authorized work under verified held allocations", captain)
+        self.assertIn("Do not launch an unconfirmed admission", captain)
 
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
@@ -464,7 +496,12 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         item = self.item()
         self.item("other")
 
-        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        with mock.patch("phalanx.workspaces._git", wraps=workspaces._git) as calls:
+            launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        checkout = Path(self.config["repositories"]["repo"]["checkout"]).resolve()
+        checkout_calls = [call.args[1:] for call in calls.call_args_list if call.args[0] == checkout]
+        self.assertEqual(sum(args[:2] == ("rev-parse", "--show-toplevel") for args in checkout_calls), 1)
+        self.assertEqual(sum(args[:2] == ("remote", "get-url") for args in checkout_calls), 1)
         writer = launched["writer"]
         self.assertEqual((launched["status"], writer["state"], writer["captain_id"]), ("running", "launching", captain))
         self.assertEqual(launched["session_name"], "Write the report [phx]")
@@ -635,6 +672,81 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 shift.wake(api, self.charter, "captain", config=self.config)
             api.assert_not_called()
 
+    def test_outage_and_lost_heartbeat_reply_resume_same_stale_captain_and_writer(self):
+        started = shift.start(self.api, self.charter, "outage-captain", config=self.config)["captain"]
+        captain = started["id"]
+        item = self.item()
+        launched = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        writer = launched["writer"]
+        # Repeated failed wakes neither register successors nor abandon the writer.
+        unavailable = mock.Mock(side_effect=ConnectionError("shared API unavailable"))
+        for _ in range(4):
+            with self.assertRaisesRegex(ConnectionError, "shared API unavailable"):
+                shift.wake(unavailable, self.charter, captain, config=self.config)
+        self.assertTrue(all(call.args == (f"/v1/captains/{captain}",)
+                            for call in unavailable.call_args_list))
+        with write_transaction(self.database) as db:
+            db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
+                       ((datetime.now(UTC) - timedelta(minutes=20)).isoformat(), captain))
+        stale = shift.status(self.api, self.charter, captain)
+        self.assertTrue(stale["captain"]["stale"])
+        self.assertIsNone(self.api("/v1/captains/current")["captain"])
+        for kind in ("captain_stale", "no_live_captain"):
+            (warning,) = [flag for flag in stale["flags"] if flag["kind"] == kind]
+            self.assertIn("same available Captain", warning["recovery"])
+            self.assertIn("native", warning["recovery"])
+
+        def lose_reply(route, **options):
+            result = self.api(route, **options)
+            if options.get("method") == "PUT":
+                raise ConnectionError("heartbeat saved but reply lost")
+            return result
+
+        with self.assertRaisesRegex(ConnectionError, "reply lost"):
+            shift.wake(lose_reply, self.charter, captain, config=self.config)
+        recovered = shift.wake(self.api, self.charter, captain, config=self.config)
+        self.assertEqual(recovered["captain"]["id"], captain)
+        self.assertEqual(recovered["captain"]["session_ref"], started["session_ref"])
+        self.assertEqual(recovered["captain"]["created_at"], started["created_at"])
+        self.assertEqual(recovered["captain"]["state"], "active")
+        self.assertTrue(recovered["captain"]["live"])
+        self.assertEqual(recovered["captain"]["successors"], [])
+        self.assertEqual(self.api("/v1/captains/current")["captain"]["id"], captain)
+        replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
+        self.assertEqual(replay["writer"]["id"], writer["id"])
+        self.assertEqual(replay["writer"]["nonce"], writer["nonce"])
+        self.assertEqual(replay["writer"]["attempt_id"], writer["attempt_id"])
+        with closing(sqlite3.connect(self.database)) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM captains").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
+
+    def test_outage_policy_reaches_wakes_handoffs_keeper_and_retained_routing(self):
+        for name in ("captain", "keeper"):
+            text = " ".join(shift.prompt(name).split())
+            with self.subTest(prompt=name):
+                self.assertIn("control plane blocked", text)
+                self.assertIn("current server state unknown", text)
+                self.assertIn("same", text.lower())
+        wake = shift.prompt("wake")
+        self.assertIn("*Shared API/control-plane outages*", wake)
+        self.assertIn("phx shift prompt captain", wake)
+        self.assertIn("five-minute", shift.prompt("captain"))
+        self.assertIn("*Shared API/control-plane outages*", shift.prompt("keeper"))
+        captain = shift.start(self.api, self.charter, "handoff-policy")["captain"]["id"]
+        handoff = shift.handoff(self.api, self.charter, captain, "Normal age rotation", "phx shift")
+        self.assertIn("Shared API/control-plane outages", handoff["kickoff"])
+        self.assertIn("never trigger a safety handoff", " ".join(handoff["kickoff"].split()))
+        keeper = " ".join(shift.prompt("keeper").split())
+        self.assertIn("Apply this check to all non-ended stale registrations", keeper)
+        self.assertIn("fresh native evidence confirms the exact Captain is stopped", keeper)
+        self.assertIn("including after an ended Captain", keeper)
+        self.assertIn("never duplicate it", keeper)
+        forwarding = " ".join(shift.prompt("forwarding").split())
+        self.assertIn("An active but stale registration is unverified", forwarding)
+        self.assertIn("refresh the SAME active, unsuperseded registration", forwarding)
+        self.assertNotIn("An ending/ended/stale Captain discloses", forwarding)
+
     def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
         captain = " ".join(shift.prompt("captain").split())
         keeper = " ".join(shift.prompt("keeper").split())
@@ -650,7 +762,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn("dependency/external waits", captain)
         for signal in ("three failed actions in a row", "self-raised deviation flag",
                        "missed heartbeat noticed on waking"):
-            self.assertIn(signal, captain)
+            self.assertIn(signal, captain.lower())
 
     def test_keeper_preserves_accountability_and_adoption_without_replacing_live_work(self):
         keeper = " ".join(shift.prompt("keeper").split())
@@ -1010,9 +1122,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
 
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
-            result = subprocess.run([sys.executable, "-m", "phalanx", "shift", *arguments],
-                                    env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True,
-                                    text=True, timeout=30)
+            result = run_cli(["shift", *arguments])
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
 
@@ -1048,10 +1158,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                           ("--no-sessions", "--session-writer", "s-task", "nonce"),
                           ("--session-availability", "missing", "deleted"),
                           ("--session", "s-task", "Task", "--session-availability", "s-task", "unknown")):
-            result = subprocess.run(
-                [sys.executable, "-m", "phalanx", "shift", "--config", str(config),
-                 "heartbeat", "--captain", captain, *arguments],
-                env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True, text=True, timeout=30)
+            result = run_cli(
+                ["shift", "--config", str(config),
+                 "heartbeat", "--captain", captain, *arguments])
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--session", result.stderr)
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain, "--no-sessions"))
