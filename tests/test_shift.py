@@ -132,7 +132,7 @@ class CharterTest(unittest.TestCase):
         self.assertEqual(shift.load_config(path), self.config)
 
     def test_overdue_guidance_is_in_ordinary_wakes_and_canonical_reinforcement(self):
-        for name in ("captain", "wake"):
+        for name in ("captain",):
             text = " ".join(shift.prompt(name).split())
             with self.subTest(prompt=name):
                 for instruction in ("`active_overdue`", "90 elapsed minutes", "first persisted attempt",
@@ -143,6 +143,9 @@ class CharterTest(unittest.TestCase):
                 self.assertIn("five-minute", text)
                 self.assertIn("24-hour", text)
                 self.assertIn("90-minute reinforcement", text)
+        wake = shift.prompt("wake")
+        self.assertIn("*Own progress and unblock delivery*", wake)
+        self.assertIn("phx shift prompt captain", wake)
 
     def test_kickoff_names_the_current_executions_target_not_the_original_request(self):
         item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Rerun for review",
@@ -518,19 +521,11 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertNotIn("workflow", first["reinforcement"])
         ordinary = " ".join(first["instructions"].split())
         for requirement in (
-                "progress and outcome accountability",
-                "every ordinary scheduled wake and material work event",
-                "Is work progressing as expected? What is stalled or at risk?",
-                "Take the next useful authorized action and verify its effect",
-                "stage/progress, dependency, validation, CI/review, integration and merge evidence",
-                "not by themselves delivery progress",
-                "waiting-fix preference", "retaining the same writer",
-                "concrete reason, responsible actor and next action or resume trigger",
-                "Queued wake prompts do not refresh liveness during a lengthy turn",
-                "between bounded coordination batches before the heartbeat becomes stale",
-                "Heartbeat freshness is liveness, not delivery progress",
-                "Preserve explicit report/ready-only targets and draft ceilings",
-                "keep auto-merge off until independent final exact-head approval"):
+                "already recorded *Every wake*, step 1's heartbeat",
+                "returned charter/reinforcement instructions",
+                "continue the canonical Captain workflow at step 2",
+                "*Own progress and unblock delivery*", "*Ending a shift*",
+                "phx shift prompt captain"):
             with self.subTest(delivery="ordinary", requirement=requirement):
                 self.assertIn(requirement, ordinary)
         with write_transaction(self.database) as db:
@@ -544,18 +539,20 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         reinforced = " ".join(due["reinforcement"]["workflow"].split())
         for requirement in (
                 "## Own progress and unblock delivery",
-                "every ordinary scheduled wake and material work event",
-                "Take the next useful authorized action and verify its effect",
-                "stage's expectations", "last meaningful evidence",
-                "stale holds and reconciliation", "both capacity limits",
-                "Do not churn, interrupt or replace healthy sessions",
-                "concrete reason, responsible actor, and next action or resume trigger",
-                "current charter revision", "retained sessions need explicit adoption"):
+                "On scheduled wakes and material native/stage/result/question",
+                "verify recovery effects",
+                "last meaningful stage evidence and next step/wait trigger",
+                "stale reconciliation and cleared prerequisites",
+                "atomic server Building/Total limits",
+                "do not churn sessions",
+                "concrete reason, responsible actor and resume trigger",
+                "charter revision; stage evidence",
+                "Instructions apply when read"):
             with self.subTest(delivery="reinforcement", requirement=requirement):
                 self.assertIn(requirement, reinforced)
-        self.assertIn("run the existing non-wake", reinforced)
-        self.assertIn("before the current heartbeat becomes stale", reinforced)
-        self.assertIn("not delivery progress", reinforced)
+        self.assertIn("non-wake `phx shift heartbeat --captain <id>`", reinforced)
+        self.assertIn("before staleness", reinforced)
+        self.assertIn("heartbeats are not outcomes", reinforced)
         self.assertEqual(due["charter"], shift.load_charter(self.config))
         self.assertEqual(due["reinforcement"]["acknowledgement_arguments"],
                          ["shift", "ack-reinforcement", "--captain", captain_id, "--interval", "1"])
@@ -604,12 +601,13 @@ class ShiftTest(ServerFixture, unittest.TestCase):
     def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
         captain = " ".join(shift.prompt("captain").split())
         keeper = " ".join(shift.prompt("keeper").split())
-        for prompt in (captain, keeper):
+        for prompt in (captain,):
             self.assertIn("rotation is elapsed-time only", prompt)
             self.assertIn("[shift].max_hours", prompt)
             self.assertIn("checkpoint, not a mandatory handoff", prompt)
             self.assertIn("first-compaction fallback", prompt)
             self.assertNotIn("max_compactions", prompt)
+        self.assertIn("*Authority and shift lifetime*", keeper)
         self.assertIn("five-minute wake/reconciliation schedule", captain)
         self.assertIn("Stop for good on an explicit owner stop, not queue completion", captain)
         self.assertIn("dependency/external waits", captain)
@@ -620,15 +618,10 @@ class ShiftTest(ServerFixture, unittest.TestCase):
     def test_keeper_preserves_accountability_and_adoption_without_replacing_live_work(self):
         keeper = " ".join(shift.prompt("keeper").split())
         for requirement in (
-                "current canonical Captain workflow and fresh charter revision",
-                "progress and outcome accountability",
-                "taking useful authorized unblocking action and verifying the effect",
-                "blockers' concrete reasons/responsible actors/next actions or resume triggers",
-                "explicit report/ready/draft ceilings and existing writer ownership",
-                "Do not replace healthy sessions or add a watchdog/schedule",
-                "adoption occurs when the current instructions are actually read",
-                "90-minute reinforcement",
-                "keeper neither grants new access nor takes over a live Captain's work"):
+                "current canonical workflow and fresh charter",
+                "phx shift prompt captain",
+                "accountability, autonomy and instruction-adoption sections govern the inherited work",
+                "not take over a live Captain's work or grant access"):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, keeper)
 
@@ -859,7 +852,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn("predecessor", handoff["session_name_identity"])
         self.assertEqual(handoff["off_shift_instructions"], shift.prompt("forwarding"))
         self.assertIn(handoff["off_shift_instructions"], handoff["kickoff"])
-        self.assertIn("browser canvas by default", handoff["kickoff"])
+        self.assertIn("available browser canvas", handoff["kickoff"])
         successor = shift.start(self.api, self.charter, "chat-2", captain)["captain"]["id"]
         again = shift.handoff(self.api, self.charter, captain, "Item X waits on review", "phx-test shift")
         self.assertEqual([entry["id"] for entry in again["successors"]], [successor])
@@ -950,8 +943,8 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                 with self.subTest(guard=guard):
                     self.assertIn(guard, text)
         self.assertIn("Ending the shift alone is not a completed handoff",
-                      handoff["kickoff"])
-        self.assertIn("notify your predecessor's verified native `session_ref` once",
+                      " ".join(handoff["kickoff"].split()))
+        self.assertIn("Notify your predecessor's verified native `session_ref` once",
                       handoff["kickoff"])
         self.assertIn("never rename the predecessor yourself", handoff["kickoff"])
 
@@ -1256,11 +1249,13 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertIn("ended_writers", captain)
         self.assertIn("completed`, `failed` or", captain)
         self.assertIn("all ended/stopped helper sessions you created", captain)
-        for prompt in (captain, keeper):
+        for prompt in (captain,):
             self.assertLess(prompt.index("archive-check"), prompt.index("archive-session tool"))
             self.assertIn("--outcome refused", prompt)
             self.assertIn("orphan_session", prompt)
             self.assertIn("Never retry a refused archive in a loop", " ".join(prompt.split()))
+        self.assertIn("phx shift prompt captain", keeper)
+        self.assertIn("*Creator-owned cleanup*", keeper)
 
 
 if __name__ == "__main__":
