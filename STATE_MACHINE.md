@@ -56,8 +56,13 @@ flowchart TD
 
 ### Publication and delivery targets
 
-For ready publication the writer marks a reused draft ready and enables GitHub auto-merge
-**only** for `checked_in`. A `ready_for_check_in` item is never merged by its writer. Steering
+For ready publication the writer marks a reused draft ready and may report its URL before
+merge gates pass, retaining the same writer in delivery with auto-merge off. Merge or enable
+auto-merge **only** for the current `checked_in` target after the
+[merge decision gates](docs/writer-operations.md#merge-decision-before-auto-merge) pass.
+This is a writer instruction, not an engine approval gate;
+self-review or an observed ready milestone is not independent final approval.
+A `ready_for_check_in` item is never merged by its writer. Steering
 between PR targets is allowed while open, including delivery; the writer re-reads the target
 and disables auto-merge when retargeted to ready-only. New work on a completed item requires
 a rerun; recording a later verified owner merge only enriches its existing final output.

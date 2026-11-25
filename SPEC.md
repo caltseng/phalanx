@@ -40,7 +40,9 @@ See [deployment tooling and migration](docs/deployment.md).
   base before work. Repository instructions apply. Missing mappings or prepared checks
   environments are visible blockers, not permission to improvise another environment.
 - PR target defaults to `checked_in`; explicit `ready_for_check_in` and `report` are
-  preserved. Writers enable GitHub auto-merge only for checked-in work. Owner/Captain
+  preserved. Writers merge or enable GitHub auto-merge only for checked-in work after the
+  [merge decision gates](docs/writer-operations.md#merge-decision-before-auto-merge) pass. Publication may precede
+  those gates with the same writer retained in delivery and auto-merge off. Owner/Captain
   steering can change an open PR target, including delivery, but cannot switch PR/report.
   The writer reconciles GitHub auto-merge with the latest target on each delivery pass.
   Newer explicit owner instructions supersede contradictory older charter prose or historical

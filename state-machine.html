@@ -71,7 +71,11 @@
   <details open>
     <summary>Publication and delivery</summary>
     <p>Publish one primary PR with an explicit target base. Ready-only work is never merged
-      by its writer. Checked-in work may enable GitHub auto-merge, under repository rules.
+      by its writer. Current checked-in work may merge or enable GitHub auto-merge only after the
+      <a href="docs/writer-operations.md#merge-decision-before-auto-merge">merge decision gates</a>
+      pass. Publication may finish
+      first, with auto-merge off and the same writer retained in delivery. These writer
+      instructions are not an engine-enforced approval gate.
       Trusted local checks are flags, not a Phalanx gate.</p>
     <p>Delivery normally waits without an open attempt while the same writer remains
       registered. Ready-mode fixes need no stage result; a reply that queues delivery
