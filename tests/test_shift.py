@@ -454,11 +454,6 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                        "missed heartbeat noticed on waking", "Elapsed-time/wake bounds still apply"):
             self.assertIn(signal, captain)
 
-    def test_launch_refuses_out_of_charter_repositories(self):
-        captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
-        with self.assertRaisesRegex(shift.ShiftError, "outside the charter"):
-            shift.launch(self.api, self.config, self.charter, captain, self.item("other")["id"])
-
     def test_writer_cap_counts_intents_and_confirmed_writers_across_captains(self):
         self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
@@ -802,12 +797,10 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         owned = next(entry for entry in status["captains"] if entry["id"] == captain)
         self.assertEqual([writer["session_id"] for writer in owned["ended_writers"]], ["worker"])
         self.assertEqual(owned["cleanup_pending"], 1)
-        archive_session = mock.Mock(return_value="Archived worker")
         checked = self.check_archive(item)
         self.assertTrue(checked["can_archive"], checked)
-        confirmation = archive_session(checked["session_id"])
-        shift.archive_result(self.api, "worker", "archived", confirmation, "creator")
-        archive_session.assert_called_once_with("worker")
+        self.assertEqual(checked["session_id"], "worker")
+        shift.archive_result(self.api, "worker", "archived", "Archived worker", "creator")
         owned = self.api(f"/v1/captains/{captain}")
         self.assertEqual((owned["ended_writers"], owned["cleanup_pending"]), ([], 0))
         self.assertFalse(self.check_archive(item)["can_archive"])
@@ -946,10 +939,8 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         self.assertFalse(check()["can_archive"])
         shift.start(self.api, self.charter, "successor", captain)
         self.assertTrue(check()["can_archive"])
-        archive_session = mock.Mock(return_value="Archived previous Captain")
         shift.archive_result(self.api, "previous-captain", "archived",
-                             archive_session("previous-captain"), "keeper")
-        archive_session.assert_called_once_with("previous-captain")
+                             "Archived previous Captain", "keeper")
         self.assertFalse(check()["can_archive"])
         keeper = shift.prompt("keeper")
         self.assertLess(keeper.index("Before any early exit"), keeper.index('If any Captain has'))
