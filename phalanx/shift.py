@@ -602,6 +602,11 @@ def add_shift_command(commands):
     withdraw = actions.choices["withdraw"]
     withdraw.add_argument("--reason", required=True)
     withdraw.add_argument("--stopped", action="store_true", help="attest that the session is stopped")
+    usage = actions.add_parser("usage", parents=[shared],
+                               help="observe a bound writer's usage, including after delivery")
+    for option in ("--captain", "--item", "--execution", "--writer"):
+        usage.add_argument(option, required=True)
+    usage.add_argument("--file", type=Path, required=True, help="allowlisted cumulative snapshot JSON")
 
 
 def run_shift(args):
@@ -662,6 +667,13 @@ def run_shift(args):
         result = archive_result(API(config), args.session, args.outcome, args.reason, args.by)
     elif args.shift_command == "launch":
         result = launch(API(config), config, charter, args.captain, args.item, replaces=args.replaces)
+    elif args.shift_command == "usage":
+        from .usage_models import Snapshot
+        snapshot = Snapshot.model_validate_json(args.file.read_text(encoding="utf-8"))
+        route = (f"/v1/items/{_q(args.item)}/executions/{_q(args.execution)}"
+                 f"/writers/{_q(args.writer)}/usage")
+        result = API(config)(route, body={
+            "captain_id": args.captain, "snapshot": snapshot.model_dump(mode="json")})
     elif args.shift_command == "writer":
         body = {"captain_id": args.captain, "writer_id": args.writer}
         for field in ("session_id", "session_url", "state"):

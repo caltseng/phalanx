@@ -831,6 +831,49 @@
       return h("div", { class: "block" }, h("h4", { text: "Stage path" + (returns ? " · " + returns + " returns" : "") }), rail);
     }
 
+    function observedUsage(usage, executionId) {
+      const box = h("div", { class: "block" }, h("h4", { text: "Observed usage" }));
+      if (!usage) {
+        box.append(h("p", { text: "Writer usage unavailable; native observation not supplied. Credits and money unavailable." }));
+        return box;
+      }
+      const tokens = value => Object.entries(value.tokens).map(([name, count]) =>
+        name.replaceAll("_", " ") + " tokens: " + (count == null ? "unavailable" : String(count)) +
+        " (" + value.field_sessions[name] + "/" + value.bound_sessions + " sessions)").join("; ");
+      for (const [title, value] of [["Current execution writer subtotal", usage.execution],
+        ["All executions item writer subtotal", usage.item]]) {
+        box.append(h("p", { text: title + " · " + label(value.status) + " · " +
+          value.covered_sessions + "/" + value.bound_sessions + " bound sessions covered. " + tokens(value) }));
+      }
+      box.append(h("p", { text: "Credits and money are unavailable unless explicitly reported below; never token-derived. " + usage.overhead }));
+      for (const session of usage.sessions) {
+        const snapshot = session.snapshot || session.acquisition_error;
+        const text = [
+          session.execution_id === executionId ? "Current execution" : "Other execution " + short(session.execution_id),
+          session.runtime, session.session_id || "native session unconfirmed",
+          label(session.status), session.reason,
+          session.ended_at && "Ownership ended " + session.ended_at,
+          snapshot && (snapshot.provider + " · model " + (snapshot.model || "unavailable") +
+            " · " + snapshot.source + " " + snapshot.source_version + " · " + snapshot.origin),
+          snapshot && ("Window " + snapshot.window_start + " to " + snapshot.cutoff +
+            "; observed " + snapshot.observed_at + "; " + snapshot.scope.replaceAll("_", " ")),
+          snapshot && Object.entries(snapshot.tokens).map(([name, count]) =>
+            name.replaceAll("_", " ") + " tokens: " + (count == null ? "unavailable" : String(count))).join("; "),
+          ...["credits", "money"].map(name => {
+            const value = snapshot?.[name];
+            return name + ": " + (value ? value.amount + " " + value.unit + " (" + value.basis +
+              "; " + value.source + "; same window)" : "unavailable");
+          }),
+          session.acquisition_error && ("Latest acquisition unavailable at " +
+            session.acquisition_error.observed_at + ": " + session.acquisition_error.reason)
+        ].filter(Boolean).join(" · ");
+        box.append(h("p", { class: "pre", text }));
+      }
+      box.append(h("p", { class: "faint", text: Object.entries(usage.capabilities)
+        .map(([runtime, reason]) => runtime + ": " + reason).join(" · ") }));
+      return box;
+    }
+
     function renderDetail(row, flags, now, detail = state.details.get(row.id)) {
       const box = h("div", { class: "detail", id: "detail-" + row.id, role: "region", "aria-label": "Details: " + row.title });
       box.style.setProperty("--since", state.expandedAt - now + "ms");
@@ -850,6 +893,7 @@
       }
       box.append(links);
       box.append(h("div", { class: "goal", text: item.goal || item.title }));
+      box.append(observedUsage(data.usage, item.id));
       box.append(facts([
         ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],
         ["Stage", h("span", {}, label(item.stage), " · ", ago(item.lastAdvancedAt, now))],

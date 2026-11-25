@@ -14,9 +14,11 @@ SERVER = {
     "dispatch_api", "dispatch_schema", "finalization", "finalization_schema", "flags", "intake", "intake_api",
     "intake_schema", "muster_api", "operator_api", "operator_schema", "operator_web", "pickup", "reconciliation",
     "reconciliation_schema", "server_admin", "store", "wait_schema", "waits", "writers",
+    "usage", "usage_schema",
 }
 # Contracts and display helpers both sides import. They depend only on each other.
-SHARED = {"display_text", "intake_models", "pr_models", "session_links", "transitions", "validation"}
+SHARED = {"display_text", "intake_models", "pr_models", "session_links", "transitions", "validation",
+          "usage_models"}
 SERVER_PACKAGES = {"fastapi", "starlette", "uvicorn"}
 MODULES = sorted(path.stem for path in PACKAGE.glob("*.py") if path.stem != "__init__")
 CLIENT = [name for name in MODULES if name not in SERVER | SHARED]
