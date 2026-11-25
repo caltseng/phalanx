@@ -4,11 +4,11 @@ import runpy
 from tempfile import TemporaryDirectory
 import unittest
 
-from phalanx import intake
-from phalanx.intake_models import Intake
+from phalanx import finalization, intake
+from phalanx.intake_models import Cancel, Intake
 from phalanx.store import connect, initialize, write_transaction
 
-from test_bootstrap import ServerFixture, claim_stage
+from test_bootstrap import OWNER, ServerFixture, claim_stage
 
 conversion = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts" / "convert_store.py"))
 convert, objects = conversion["convert"], conversion["objects"]
@@ -22,11 +22,10 @@ class StoreConversionTest(ServerFixture, unittest.TestCase):
         with write_transaction(self.source) as db:
             intake.register(db, "repo", "https://github.com/example/repo")
             self.item = intake.create(db, Intake(repository_id="repo", goal="Keep active work", target="report"))
-            closed = intake.create(db, Intake(repository_id="repo", goal="Keep history", target="report"))
-            db.execute(
-                """UPDATE executions SET state_json=json_set(
-                       state_json, '$.status', 'cancelled', '$.final_output', json('{}'))
-                   WHERE id=?""", (closed["execution"]["id"],))
+            self.closed = intake.create(db, Intake(repository_id="repo", goal="Keep history", target="report"))
+            intake.cancel(db, self.closed["id"], self.closed["execution"]["id"],
+                          Cancel(expected_version=1, reason="Keep historical report"))
+        finalization.attempt(self.source, self.closed["execution"]["id"])
         self.token = "w" * 32
         self.claim = claim_stage(self.source, self.item["id"], self.token)
         with write_transaction(self.source) as db:
@@ -52,11 +51,21 @@ class StoreConversionTest(ServerFixture, unittest.TestCase):
         initialize(fresh)
         with connect(fresh) as new, connect(destination) as converted, connect(self.source) as old:
             self.assertEqual(objects(new), objects(converted))
-            for table in ("executions", "transition_history", "writers", "operator_progress", "operator_change"):
+            for table in ("executions", "transition_history", "reports", "writers",
+                          "operator_progress", "operator_change"):
                 self.assertEqual(list(map(tuple, old.execute(f"SELECT * FROM {table}"))),
                                  list(map(tuple, converted.execute(f"SELECT * FROM {table}"))))
         initialize(destination)
         self.start_server(destination)
+        status, closed = self.get(f"/v1/items/{self.closed['id']}", OWNER)
+        self.assertEqual(status, 200, closed)
+        self.assertEqual(closed["execution"]["state"]["status"], "cancelled")
+        status, report = self.get(closed["execution"]["state"]["final_output"]["reference"], OWNER)
+        self.assertEqual(status, 200, report)
+        self.assertIn("Keep historical report", report)
+        status, board = self.get("/v1/operator/executions?kind=closed", OWNER)
+        self.assertEqual(status, 200, board)
+        self.assertIn(self.closed["execution"]["id"], {row["id"] for row in board["items"]})
         status, current = self.get("/v1/writer", self.token)
         self.assertEqual(status, 200, current)
         self.assertEqual(current["writer"]["attempt_id"], self.claim["attempt_id"])
