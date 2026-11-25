@@ -30,7 +30,7 @@ class CLIRunnerTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "phalanx: PHALANX_OWNER_TOKEN is required for this command\n")
-        self.assertEqual(dict(os.environ), environment)
+        self.assertTrue(dict(os.environ) == environment, "Process environment was not restored")
         self.assertIs(sys.argv, argv)
         self.assertIs(sys.stdout, stdout)
         self.assertIs(sys.stderr, stderr)
@@ -59,7 +59,7 @@ class CLIRunnerTest(unittest.TestCase):
                   self.assertRaisesRegex(RuntimeError, "unexpected")):
                 run_cli([], env={"PHALANX_OWNER_TOKEN": "temporary"}, cwd=temporary)
             self.assertEqual(Path.cwd(), cwd)
-        self.assertEqual(dict(os.environ), environment)
+        self.assertTrue(dict(os.environ) == environment, "Process environment was not restored")
         self.assertIs(sys.argv, argv)
         self.assertEqual(output.getvalue(), "")
         self.assertEqual(errors.getvalue(), "")
