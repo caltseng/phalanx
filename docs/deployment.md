@@ -56,7 +56,7 @@ Generated files contain no credentials, database or live state:
   must be checked by the owner before saving secrets.
 - `shift.json`, `charter.toml`, `reconciler.json`: edit the runtime, native workspace,
   repository mappings, goal and stable reconciler ID. The charter template sets only
-  `max_hours = 4`, `max_wakes = 48` and `max_compactions = 5` under `[shift]`, generated from the same
+  `max_hours = 24` under `[shift]`, generated from the same
   defaults the Captain client uses. Fill its repository list and
   corresponding mappings before use. Concurrency comes from persisted
   `dispatch_settings.max_building_writers` (Building, initially 5) and `max_writers`
@@ -221,44 +221,81 @@ recovery window. Preserve logs, artifacts and historical data. A later offline r
 if desired, is separate work requiring all service and session owners; no automatic
 directory migration is supplied.
 
-## Compaction threshold activation
+## Elapsed-time shift activation
 
-The compaction-handoff change affects the per-command Captain client and packaged prompts,
-not the API's schema or cumulative telemetry contract. **No API or reconciler restart is
-needed for this change alone.** Keep the original database, private environment, credentials,
+This change supersedes the earlier compaction-threshold and four-hour rollout.
+The 24-hour default affects the per-command client and packaged prompts; reliable 90-minute
+reinforcement additionally needs the API and one Captain acknowledgement column.
+Keep the original database, private environment, credentials,
 active writers/attempts, writer cap and sole server/reconciler unchanged. Updating a client
 does not update instructions already loaded in retained native conversations.
 
 After review/check-in, the authorized deployment owner:
 
+0. Backs up with supported server-host `server backup` and validates the backup.
+   Rehearses the following additive schema change on that backup, then schedules the
+   controlled API-only rollout with its existing service owner. Stop just the exact API
+   process through its supervisor, apply the column once using server-host administration,
+   and restart the same API with the same configuration, database and credentials, without
+   `--initialize-database`. Leave the reconciler and every native writer/Captain running;
+   API calls during the short outage may need their normal retry. Never reset registrations,
+   attempts, counters, limits or a dirty checkout. Advance the complete clean pinned deployment
+   checkout to the reviewed merge commit, not a selection of runtime files. There is no new
+   migration or legacy-schema fallback. Verify health, authenticated status and existing
+   writer bindings after startup. A missing column/API is an activation blocker, not a
+   reason to report reinforcement as active.
+
+   ```sql
+   ALTER TABLE captains ADD COLUMN reinforced_interval INTEGER NOT NULL DEFAULT 0
+       CHECK (reinforced_interval >= 0);
+   ```
+
+   Existing Captains start with no acknowledged intervals, so an already-aged Captain gets
+   one current reinforcement on its next `shift wake`, not a replay of every missed interval.
 1. Records the deployed revision, validated charter revision/effective bounds, current
    Captain/native session binding, writer registrations and dispatch settings through
    existing authenticated controls. Confirms the client command's installed source and
    clean, pinned deployment checkout before advancing it to the reviewed merge commit.
    Preserve its existing branch/detached deployment style.
    Never install dependencies into a writer environment or reset a dirty checkout.
-2. Uses `deploy cli --config <existing deployment.json> -- shift charter` to validate the
-   existing charter against the new client. An omitted `max_compactions` now resolves to
-   5. If an explicit active value of 5 is desired, the charter owner sets
-   `[shift] max_compactions = 5` without changing other authority/bounds; writers cannot
-   edit that external charter. Re-read and record the effective value and revision.
-3. Relays the changed *Every wake* heartbeat and *Ending a shift* sections verbatim from
+2. With charter-owner authority, removes `max_wakes` and `max_compactions` from `[shift]`,
+   sets `max_hours = 24`, and replaces queue-completion stop conditions with explicit
+   owner stop. Add a latest-policy note superseding earlier count-based handoff notes.
+   Preserve unrelated authority, lanes and content. Uses
+   `deploy cli --config <existing deployment.json> -- shift charter` to validate the
+   charter against the new client; record effective bounds and revision. Old clients
+   still supply retired count limits from their defaults even after keys are removed:
+   a charter edit alone does not activate the new client behavior.
+3. Relays the changed *Your charter*, *Every wake* heartbeat and *Ending a shift* sections verbatim from
    `shift prompt captain` to every retained coordinating Captain, and the changed live-Captain
    step from `shift prompt keeper` to retained keepers. Have each recipient acknowledge
-   that it supersedes its earlier first-compaction instruction. Future prompts/successor
+   that normal rotation is now elapsed-time only and supersedes earlier queue/count-based
+   stop instructions. Keep the existing registration and five-minute reconciliation schedule,
+   not a 24-hour wake schedule. Replace the old full-prompt wake paragraph with:
+   "Run the existing configured CLI's `shift wake --captain <current id>`. Follow the
+   briefing and fresh charter. When reinforcement is due, read its full workflow, then
+   run `reinforcement.acknowledgement_arguments` through that same CLI. Continue ordinary
+   reconciliation every five minutes; preserve existing writers, owner stop/safety rules,
+   current-execution target authority and repository protections."
+   Preserve unrelated automation content. Future prompts/successor
    kickoffs load the tracked version. Do not revive ended Captains or launch replacements
    to update their instructions; before any later coordination they must load the current prompt.
-4. The current Captain runs its normal heartbeat with trustworthy cumulative successful
-   telemetry only, or omits it when unavailable. Verify `shift.max_compactions == 5`,
-   `handoff_due` and preserved known/unknown totals. An age/wake/degradation handoff may
+4. The current Captain runs `shift wake` and acknowledges any workflow it actually read.
+   Report trustworthy cumulative successful compaction telemetry separately on a non-wake
+   heartbeat, or omit it when unavailable. Verify `shift.max_hours == 24`, absence of
+   retired count-limit fields, age-only `handoff_due` and preserved known/unknown totals.
+   An elapsed-age or genuine degradation handoff may
    still be due. Recheck writer identity/cap and service/reconciler continuity. Record
    the exact revision, charter, recipients and heartbeat time as the rollout boundary;
-   until retained instructions are acknowledged, activation is only partial.
+   until retained instructions are acknowledged and the existing automation uses `shift wake`,
+   activation is only partial. Verify an immediate repeat does not repeat acknowledged
+   reinforcement. Exercise future intervals only in fixtures, never by rewriting live clocks
+   or registration timestamps.
 
-Rollback changes only the client revision and charter setting under the same owner;
-remove the new key if the previous client does not accept it.
-Relay the reverted instructions explicitly. Never roll back the database or fabricate
-telemetry to exercise the live threshold; boundary tests use isolated fixtures.
+Rollback changes only the client revision and charter under the same owner and requires
+owner approval before restoring the superseded early-ending policy.
+Relay changed instructions explicitly. Never roll back the database or fabricate
+telemetry to exercise live rotation; boundary tests use isolated fixtures.
 
 ### Default intake pickup activation
 
