@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -81,6 +82,17 @@ server.run()
 """
 
 
+class InProcessServer(uvicorn.Server):
+    def __init__(self, config):
+        super().__init__(config)
+        self.stop_requested = threading.Event()
+
+    async def main_loop(self):
+        # Wake teardown immediately, retaining uvicorn's normal graceful shutdown.
+        if not await self.on_tick(0):
+            await asyncio.to_thread(self.stop_requested.wait)
+
+
 class ServerFixture:
     def start_server(self, path, *, in_process=True, **environment):
         listener = socket.socket()
@@ -91,7 +103,7 @@ class ServerFixture:
                    PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0")
         env.update(environment)
         if in_process:
-            server = uvicorn.Server(uvicorn.Config(
+            server = InProcessServer(uvicorn.Config(
                 create_app(), host="127.0.0.1", port=port, log_config=None,
                 log_level="error", access_log=False,
                 timeout_graceful_shutdown=5, timeout_keep_alive=0,
@@ -130,6 +142,7 @@ class ServerFixture:
         if isinstance(server, tuple):
             instance, thread, listener = server
             instance.should_exit = True
+            instance.stop_requested.set()
             thread.join(timeout=STARTUP_TIMEOUT)
             listener.close()
             if thread.is_alive():
