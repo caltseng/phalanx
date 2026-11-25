@@ -460,3 +460,17 @@ current state first: this document is neither a live mutation nor evidence that 
 met. Record each accepted API receipt and retained-writer acknowledgement in the existing timeline/
 operator runbook, retaining baseline/round measurements and explicit remaining misses. Until those
 receipts, API installation and instruction adoption are verified, report activation as partial.
+
+### API-outage continuity adoption
+
+Source check-in alone does not activate the outage-continuity correction. This correction
+changes packaged worker/Captain instructions, review guidance and CLI transport diagnostics,
+not schema, lifecycle or API permissions; it needs no service restart by itself. Only the
+authorized installation owner installs the reviewed revision through the existing deployment
+procedure. Preserve unrelated installed hotfixes and prompt edits. Fresh generated kickoffs
+use the installed template; retained writers/Captains need the canonical **Control-plane
+outages** section and corresponding capacity/merge clauses explicitly relayed through supported
+messaging. Record exact source/installed revisions, recipients and receipts separately.
+Do not regenerate a retained writer with `shift launch`, revive ended credentials, or
+represent a sent message as acknowledged adoption. Deferred Phalanx evidence remains pending
+until its own authenticated receipts and actual GitHub reconciliation are verified.

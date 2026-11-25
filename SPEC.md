@@ -14,6 +14,15 @@ and OS locks, not SQLite queues or publication journals.
 The [implementation map and diagrams](docs/architecture.md) trace current code ownership
 and deployment boundaries. The relay's removal did not remove the HTTP API or Scribe.
 
+Control-plane transport failure alone does not gate already-authorized development, local
+validation, publication or check-in by the same live writer under verified held capacity.
+Status/heartbeat/progress/results are best-effort during an outage, with missing receipts
+explicit. New admissions/acquisitions still require confirmation; known stop, cancellation,
+ended/revoked credentials and explicit ready-only/report/draft ceilings remain binding.
+GitHub owns actual PR/head/check/review/protection/merge facts. Recovery reconciles accepted
+versions and actual side effects through existing fenced/idempotent controls, not an offline
+queue or fabricated lifecycle transitions. See [outage continuity](docs/writer-operations.md#control-plane-outages).
+
 Direct clients discover the existing muster via `--home`, `PHALANX_HOME`, then the single
 per-user `~/.phalanx/muster.json` locator. Discovery is read-only: never initialize or migrate
 state to repair discovery. Authenticated `muster status` reads identity, Captains, writers,
