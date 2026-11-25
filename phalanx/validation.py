@@ -29,15 +29,11 @@ class GateResult:
 class PreOutcome(StrEnum):
     PASSED = "passed"
     FAILED = "failed"
-    INAPPLICABLE = "inapplicable"
-    SKIPPED = "skipped"
 
 
 @dataclass(frozen=True)
 class PreCheck:
     name: str
-    allow_inapplicable: bool = False
-    allow_skip: bool = False
 
 
 class Phase(StrEnum):
@@ -48,7 +44,6 @@ class Phase(StrEnum):
 class CheckKind(StrEnum):
     CHECK_RUN = "check_run"
     STATUS = "status"
-    PREVIEW = "preview"
 
 
 class CheckOutcome(StrEnum):
@@ -102,8 +97,7 @@ def evaluate_published_checks(
     Supply complete policy for this phase, including separate requirements
     when a check run and commit status share a required name. The adapter
     selects the authoritative head or correlated test merge SHA per check,
-    and normalizes the latest observation per source. Preview observations
-    represent validation of the served revision and configured environment.
+    and normalizes the latest observation per source.
     """
     if current.revision.head != current.candidate:
         return GateResult(GateState.BLOCKED, ("The primary PR head differs from the expected candidate",))

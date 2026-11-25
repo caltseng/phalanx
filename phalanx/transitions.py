@@ -195,7 +195,7 @@ def _close(state: Execution, status: Status, output: FinalOutput) -> Execution:
                    stopping=None, pending_output=None)
 
 
-def _disposition(state: Execution, status: Status, report: StoredReport | None) -> Execution:
+def _finalize_report(state: Execution, status: Status, report: StoredReport | None) -> Execution:
     if report is not None:
         return _close(state, status, report)
     return _wait(state, Status.WAITING_FOR_EXTERNAL,
@@ -288,7 +288,7 @@ def _success(state: Execution, evidence: Evidence) -> Execution:
         if report is None:
             _require(state.report_draft and evidence.report_draft == state.report_draft,
                      "Storage requires the current reviewed report draft")
-            return _disposition(state, Status.COMPLETED, None)
+            return _finalize_report(state, Status.COMPLETED, None)
         _require(report and state.report_draft and report.draft_revision == state.report_draft,
                  "Storage must persist the reviewed report draft")
         return _close(state, Status.COMPLETED, report)
@@ -339,13 +339,13 @@ def decide(
             _require(state.stage is Stage.REPORT_STORAGE
                      and state.report_draft == evidence.stored_report.draft_revision,
                      "Finalization requires the reviewed report revision")
-        return _disposition(state, state.pending_output, evidence.stored_report)
+        return _finalize_report(state, state.pending_output, evidence.stored_report)
     if state.stopping is not None:
         if (event is Event.PR_OBSERVED and evidence.pr and evidence.pr.merge_commit
                 and not evidence.off_base):
             return _pr_observed(state, evidence)
         _require(event is Event.STOP_CONFIRMED, "Reconcile outstanding effects before closing")
-        return _disposition(state, state.stopping, evidence.stored_report)
+        return _finalize_report(state, state.stopping, evidence.stored_report)
     if event is Event.PR_OBSERVED:
         return _pr_observed(state, evidence)
     if event in {Event.CANCEL, Event.CLOSE_FAILURE}:
@@ -354,7 +354,7 @@ def decide(
             return _wait(state, Status.WAITING_FOR_EXTERNAL,
                          Wait("Reconcile the worker and outstanding effects", "stop confirmed"),
                          stopping=status)
-        return _disposition(state, status, evidence.stored_report)
+        return _finalize_report(state, status, evidence.stored_report)
 
     if event is Event.CLAIM:
         _require(state.status is Status.QUEUED, "Only queued work can be claimed")
