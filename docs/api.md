@@ -244,7 +244,16 @@ Execution lists accept `repository`, `label`, `status`, `stage`, `outcome`, `q` 
 Intake accepts `label` (also `phalanx intake --label`); steering can change or clear it with `null`. Summaries add `label`, `revision_round`, `duplicate_count`, `pr`, and a `next_action` whenever an open row has no wait reason. The summary `target` is the execution's `state.target`, including reruns and steered targets, not the item's original request. PR fields and duplicate counts come only from the latest reconciler GitHub observation, never from a writer's claim, and are null when unobserved. The local-board contract is detailed in [DASHBOARD.md](../DASHBOARD.md#api-additions). It adds no runners endpoint or capacity fields.
 
 `last_advanced_at` records entry into the current stage, and `last_progress_at` the latest
-execution transition. Wait details include the reason, resume trigger and age. Scheduled
+execution transition. Summaries also expose nullable `active_started_at` (the execution's
+first persisted attempt start), `active_age_seconds` (elapsed since that start, ending at
+closure for closed executions), and `stage_started_at` (the later of first activation and
+current stage entry). Before any attempt these are null; queue time is not active work.
+Retained writers, replacements, rework and delivery waits keep the first activation;
+a rerun is a new execution with its own start. These are read-only projections: creation,
+queue eligibility, stage-entry, attempt and writer timestamps are not rewritten.
+The `active_overdue` flag uses the same start and still requires strictly more than
+90 elapsed minutes; queue age alone never triggers it. Session titles are not clock evidence.
+Wait details include the reason, resume trigger and age. Scheduled
 retries appear as `retry_at_ms`. `primary_pr_url` identifies the primary PR. Writer fields
 expose its native session and progress.
 `version` is the version a reply must name. Timelines list blocking `prerequisites` and the

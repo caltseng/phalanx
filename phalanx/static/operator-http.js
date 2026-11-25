@@ -126,6 +126,8 @@
         stage: row.stage,
         status: row.status,
         createdAt: row.created_at,
+        activeStartedAt: row.active_started_at,
+        stageStartedAt: row.stage_started_at,
         lastAdvancedAt: row.last_advanced_at,
         lastProgressAt: row.last_progress_at,
         waitSince: row.wait_since,

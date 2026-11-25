@@ -19,7 +19,8 @@
   const captainUrl = "codex://threads/" + nativeId;
   const row = { id: execution, item_id: id, title: "Searchable report", goal: "Keep the existing details",
     repository_id: "example", stage: "report_storage", status: "completed", created_at: now,
-    last_advanced_at: now, closed_at: now, outcome: "report_stored", output: { kind: "report" },
+    last_advanced_at: now, active_started_at: now, stage_started_at: now,
+    closed_at: now, outcome: "report_stored", output: { kind: "report" },
     delivery: { merged: true, merge_commit: "f".repeat(40), merged_at: now, merge_method: "merge" },
     writer: { state: "ended", runtime: "copilot-app", session_id: nativeId, session_url: writerUrl,
       session_availability: "unverified" } };
@@ -147,6 +148,10 @@
     await until(() => app.doc.querySelector(".detail-links"));
     assert(calls.includes("/v1/operator/items/" + id), "Item route resolves the current execution");
     assert(app.doc.querySelector(".goal").textContent === row.goal, "Item route reuses full existing detail");
+    const activeSince = [...app.doc.querySelectorAll(".facts dt")]
+      .find(node => node.textContent === "Active since");
+    assert(activeSince?.nextElementSibling.querySelector("time")?.dateTime === now,
+      "Real HTTP adapter preserves authoritative activation for detail age");
     const assertBrief = () => {
       const blocks = [...app.doc.querySelectorAll(".work-brief")];
       assert(blocks.length === 2, "Both labeled brief blocks render");
