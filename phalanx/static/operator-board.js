@@ -536,7 +536,11 @@
 
     async function loadOverview() {
       const data = await guarded(state.overview, signal => source.overview({ signal }));
-      if (data) state.overview.data = data.sections;
+      if (data) {
+        state.overview.data = data.sections;
+        state.overview.scout = data.issue_scout;
+        state.overview.scoutNeeds = data.issue_scout_needs_owner || [];
+      }
     }
 
     function detailState(id) {
@@ -1137,11 +1141,54 @@
       }
       const needRows = needs.map(item => itemRow(item, "open", index, now));
       const needContent = h("div", {});
+      const scoutNeeds = state.overview.scoutNeeds || [];
+      for (const issue of scoutNeeds) {
+        const row = h("div", { class: "block" },
+          h("a", { href: safeUrl(issue.url, { httpsOnly: true }), text: issue.repository_id + " #" + issue.number }),
+          h("p", { text: "Author: " + (issue.author_login || "deleted user") + ". " + issue.reason }));
+        const message = h("p", { role: "status" });
+        const controls = [];
+        for (const decision of ["approved", "declined"]) {
+          const button = h("button", { type: "button", text: decision === "approved" ? "Approve intake" : "Decline" });
+          button.addEventListener("click", async () => {
+            for (const control of controls) control.disabled = true;
+            try {
+              await source.decideScout(issue, decision);
+              message.textContent = decision === "approved"
+                ? "Approved. The next scouting pass rechecks the issue before intake; no work queued yet."
+                : "Declined. No work queued.";
+              await loadOverview();
+            } catch (error) {
+              message.textContent = error.message;
+              for (const control of controls) control.disabled = false;
+            }
+          });
+          controls.push(button);
+          row.append(button);
+        }
+        row.append(message);
+        needContent.append(row);
+      }
       if (looseNotify.length) needContent.append(h("div", { class: "rows flags" }, flagGroups(looseNotify, titles, now)));
       needContent.append(needRows.length || !looseNotify.length
         ? list(needRows, state.open.updated ? "No work needing you on this page." : "Loading…", "items") : "");
-      sections.push(section("needs", "Needs you", pageCount(needs.length + looseNotify.length),
-        needs.length + looseNotify.length ? "attn" : "", needContent));
+      sections.push(section("needs", "Needs you", pageCount(needs.length + looseNotify.length + scoutNeeds.length),
+        needs.length + looseNotify.length + scoutNeeds.length ? "attn" : "", needContent));
+      const scout = state.overview.scout;
+      if (scout) {
+        const pass = scout.last_pass;
+        sections.push(section("issue-scout", "GitHub issue scouting", scout.state,
+          scout.state === "failed" ? "attn" : "",
+          h("p", { text: "Next due: " + (scout.settings.due_at || "not configured")
+            + ". Imported: " + (scout.counts.imported || 0)
+            + "; needs owner: " + (scout.counts.needs_owner || 0)
+            + "; approved waiting for recheck (not queued): " + (scout.counts.approved || 0)
+            + "; skipped: " + (scout.counts.skipped || 0)
+            + (pass?.failure_kind ? ". Failure: " + pass.failure_kind + ". " + scout.resume_trigger : "")
+            + (pass?.failure_status ? " (HTTP " + pass.failure_status + ")" : "")
+            + (pass && !pass.completed_at ? ". Durable cursor: repository " + pass.repository_index + ", page " + pass.page : "")
+          })));
+      }
       if (enabled.flags) {
         sections.push(section("flags", "Flags", otherFlags.length,
           otherFlags.some(flag => !["queue_backlogged", "deployed"].includes(flag.kind)) ? "wait" : "",

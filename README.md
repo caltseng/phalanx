@@ -119,6 +119,11 @@ Stopped-writer replacement preserves local work and reconciles external effects.
 [Writer operations](docs/writer-operations.md), the [state machine](STATE_MACHINE.md) and
 [Recovery](docs/recovery.md) for the detailed contracts.
 
+Optional [periodic GitHub issue scouting](docs/direct-path.md#periodic-github-issue-scouting)
+uses existing Captain wakes and durable server settings. A verified configured author's
+open issues enter ordinary intake; other authors appear in Scribe **Needs you** for explicit
+approval or decline. It starts disabled and never treats issue text as authority.
+
 ## Repository layout
 
 | Path | Contents |

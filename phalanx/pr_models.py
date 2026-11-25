@@ -1,6 +1,7 @@
 """GitHub identities and check configuration shared by direct clients and server."""
 
 from datetime import timedelta
+from hashlib import sha256
 import re
 from typing import Annotated
 
@@ -28,3 +29,13 @@ GITHUB_REMOTE = re.compile(
     r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
     r"([a-z0-9_.-]+/[a-z0-9_.-]+?)(?:\.git)?/?", re.IGNORECASE | re.ASCII,
 )
+
+
+def github_repository(remote):
+    match = GITHUB_REMOTE.fullmatch(remote)
+    return match[1].lower() if match else None
+
+
+def github_issue_key(repository_id, repository, number):
+    identity = f"{repository_id}:{repository}:{number}"
+    return f"github-issue:{sha256(identity.encode()).hexdigest()}"

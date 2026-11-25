@@ -49,7 +49,7 @@ before retrying an uncertain mutation.
 Follow [AGENTS.md](../AGENTS.md) and decision 67 before adding schema changes; do not
 add migrations or compatibility machinery without authorization. `store.initialize`
 creates the canonical SQL in `phalanx.schema` transactionally on an empty database.
-An existing database must have the current application ID and schema version (25);
+An existing database must have the current application ID and schema version (26);
 startup never replays schema history or rewrites records.
 
 ### Existing-store conversion
@@ -57,14 +57,14 @@ startup never replays schema history or rewrites records.
 The service owner, not a writer or startup hook, owns activation. Do not run this
 against live state or reset a queue. Rehearse on an operator-supplied snapshot first:
 
-1. The service owner retains the reviewed schema-24 snapshot at an explicitly documented
+1. The service owner retains the reviewed schema-24 (or already converted schema-25) snapshot at an explicitly documented
    archive path, makes it read-only, and retains its source revision as the rollback/archive
    pair. The deployed shape was initialized at `b981351b6f9e652f592aafcaa2b8b2f8db426964`,
    then received the usage/title additions from `6cf538ed84a96f407ab1f4fd1f5ae2f239bd84a4`.
    In particular its attempts still carry retired NOT NULL lease columns.
    Take that backup with the pinned deployed schema-24 environment and the explicit
    existing `PHALANX_DB`: `python -P -m phalanx server backup <snapshot>`.
-   Do not use the target schema-25 admin command to open a schema-24 source.
+   Do not use the target schema-26 admin command to open a schema-24/25 source.
 2. From the reviewed target checkout, use the configured checks interpreter to run
    `python -m scripts.convert_store <snapshot> <new-database>`. Both paths must be
    operator-selected; the destination must not exist. This explicit one-off tool uses
@@ -82,6 +82,12 @@ against live state or reset a queue. Rehearse on an operator-supplied snapshot f
    writer bindings, versions, timestamps, capacity and board caches remain intact.
    Retired attempt fields, `attempt_workers` and `external_rechecks` remain available in the retained source
    archive, not runtime tables.
+   The reviewed converter now covers **24 -> 26 directly**, including the retained-column
+   conversion formerly used for 24 -> 25, or **25 -> 26** if that prior conversion was already
+   activated. Both initialize only the four new scouting tables, with scouting disabled;
+   the source inventory must otherwise match exactly. There is no need to run an obsolete
+   intermediate service or temporarily expose schema 25. Preserve source-specific overlays,
+   credentials and configured capacities in the cutover plan; source merge is not adoption.
 4. Open the converted copy with an isolated target API and verify authenticated item,
    writer and board reads; rehearse a writer result/next-attempt transition only on that
    disposable copy. Do not run a reconciler or publish external effects from the rehearsal.

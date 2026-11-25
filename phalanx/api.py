@@ -18,6 +18,7 @@ from .operator_web import assets as operator_assets, router as operator_web_rout
 from .store import connect, initialize, write_transaction
 from .writers import router as writers_router
 from .usage import router as usage_router
+from .issue_scout import router as issue_scout_router
 
 
 @asynccontextmanager
@@ -74,7 +75,6 @@ def owner_status():
 def runner_status():
     return {"role": "runner"}
 
-
 def create_app() -> FastAPI:
     app = FastAPI(title="Phalanx", lifespan=lifespan)
     app.include_router(operator_web_router)
@@ -84,7 +84,7 @@ def create_app() -> FastAPI:
     app.get("/v1/owner/status", dependencies=[Depends(require_owner)])(owner_status)
     app.get("/v1/runner/status", dependencies=[Depends(require_runner)])(runner_status)
     for router in (intake_router, dispatch_router, operator_router, captains_router,
-                   flags_router, writers_router, usage_router, muster_router):
+                   flags_router, writers_router, usage_router, muster_router, issue_scout_router):
         app.include_router(router)
     return app
 

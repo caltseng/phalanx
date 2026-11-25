@@ -20,6 +20,8 @@ class StoreConversionTest(ServerFixture, unittest.TestCase):
         self.source = self.root / "source.sqlite3"
         initialize(self.source)
         with write_transaction(self.source) as db:
+            for table in ("issue_scout_decisions", "issue_sources", "issue_scout_passes", "issue_scout_settings"):
+                db.execute(f"DROP TABLE {table}")
             intake.register(db, "repo", "https://github.com/example/repo")
             self.item = intake.create(db, Intake(repository_id="repo", goal="Keep active work", target="report"))
             self.closed = intake.create(db, Intake(repository_id="repo", goal="Keep history", target="report"))
@@ -104,3 +106,17 @@ class StoreConversionTest(ServerFixture, unittest.TestCase):
         result = convert(self.source, self.root / "current.sqlite3")
         self.assertEqual(result["rows"]["attempts"], 1)
         self.assertTrue(result["sqlite_master_matches"])
+
+    def test_schema_25_conversion_preserves_records_and_starts_scouting_disabled(self):
+        with write_transaction(self.source) as db:
+            db.execute("DROP TABLE attempt_workers")
+            for name in ("runner_id", "lease_digest", "lease_expires_at", "blocker"):
+                db.execute(f"ALTER TABLE attempts DROP COLUMN {name}")
+            db.execute("PRAGMA user_version=25")
+        destination = self.root / "schema26.sqlite3"
+        result = convert(self.source, destination)
+        self.assertEqual(result["source_archive"]["schema_version"], 25)
+        self.assertFalse(result["scouting_enabled"])
+        with connect(destination) as db:
+            self.assertEqual(db.execute("SELECT enabled, revision FROM issue_scout_settings").fetchone()[:], (0, 0))
+            self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)

@@ -12,6 +12,7 @@ from .auth import require_board_owner, require_same_origin
 from .dispatch_api import DispatchSettings, read_settings, settings
 from .intake_api import Key, create, run
 from .intake_models import Intake
+from .issue_scout import Decision, decide
 
 static = Path(__file__).with_name("static")
 router = APIRouter()
@@ -39,6 +40,12 @@ def board_settings(request: Request):
             dependencies=[Depends(require_board_owner), Depends(require_same_origin)])
 def board_save_settings(request: Request, body: DispatchSettings):
     return settings(request, body)
+
+
+@router.post("/operator/api/issue-scout/{repository_id}/{number}/decision",
+             dependencies=[Depends(require_board_owner), Depends(require_same_origin)])
+def board_scout_decision(request: Request, repository_id: str, number: int, body: Decision):
+    return run(request, decide, repository_id, number, body, write=True)
 
 
 @router.get("/operator/", include_in_schema=False)

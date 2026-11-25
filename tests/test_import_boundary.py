@@ -13,6 +13,7 @@ SERVER = {
     "api", "auth", "captains", "config", "dependencies", "dispatch", "dispatch_api", "finalization",
     "finalization_schema", "flags", "intake", "intake_api", "muster_api", "operator_api", "operator_schema",
     "operator_web", "pickup", "reconciliation", "schema", "server_admin", "store", "waits", "writers", "usage",
+    "issue_scout",
 }
 # Contracts and display helpers both sides import. They depend only on each other.
 SHARED = {"display_text", "intake_models", "pr_models", "session_links", "transitions", "validation",

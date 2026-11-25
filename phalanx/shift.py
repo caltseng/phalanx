@@ -237,6 +237,7 @@ def status(api, charter, captain_id=None):
     scoped = [_summary(item) for item in items if item["repository_id"] in scope]
     capacity = api("/v1/dispatch/settings")
     return {
+        "issue_scout": api("/v1/issue-scout"),
         "flags": api("/v1/flags")["flags"],
         "captains": api("/v1/captains?limit=100")["captains"],
         "items": scoped,
@@ -392,6 +393,8 @@ def prompt(name):
 
 
 def wake(api, charter, captain_id, *, config):
+    from .issue_scout_client import scout
+
     workflow = prompt("captain")
     instructions = prompt("wake")
     current = api(f"/v1/captains/{_q(captain_id)}")
@@ -407,6 +410,7 @@ def wake(api, charter, captain_id, *, config):
         result["reinforcement"]["acknowledgement_arguments"] = [
             "shift", "ack-reinforcement", "--captain", captain_id,
             "--interval", str(result["reinforcement"]["interval"])]
+    result["issue_scout"] = scout(api, captain_id)
     return result
 
 

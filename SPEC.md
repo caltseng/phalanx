@@ -91,7 +91,20 @@ writer capacity, database semantics, other processes or scheduling on other plat
   number. The local client reads the issue/comments with its credential, then posts an
   immutable owner-authenticated snapshot. Stable per-repo issue idempotency prevents
   duplicate retry intake; edited snapshots conflict. Issue content cannot grant authority
-  or edit config. Polling, webhooks and ongoing synchronization are not part of this path.
+  or edit config. This manual path remains distinct from optional periodic scouting.
+- Owner-configured periodic GitHub scouting persists enabled state, supported cadence,
+  explicit login **and numeric user ID**, repository scope, due time, pass/cursor, claims,
+  failures and source/decision evidence in the server store. One bounded page runs inside
+  the existing Captain wake, not a second scheduler or replacement Captain. The local
+  GitHub credential must verify both configured identity fields on each page. Only open
+  issues (not PRs) from that identity automatically enter ordinary owner intake; other
+  authors require Scribe **Needs you** approval or decline. Approval binds the content
+  fingerprint and a fresh observation; a message or approval receipt is not queued intake.
+  Stable source identity and historical goal/context links reconcile manual imports and
+  completed/cancelled work without duplicate executions or automatic reruns. Issue edits
+  and closure update source metadata, not existing work. Pauses, dependencies, target
+  defaults, repository readiness and both writer limits remain ordinary intake/dispatch
+  controls. See [safe scouting activation](docs/direct-path.md#periodic-github-issue-scouting).
 - Optional `post_merge_check` observes deployment on the delivered merge commit for up to
   24 hours, stopping on success. Pending/failed/deployed/missing are flags, not stages or
   delivery gates. Rechecks replace the latest signal; changed/removed config retires old

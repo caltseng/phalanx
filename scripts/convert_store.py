@@ -1,4 +1,4 @@
-"""One-off, offline schema-24 conversion. Never called by the service."""
+"""One-off, offline schema-24/25 conversion. Never called by the service."""
 
 import argparse
 from contextlib import closing
@@ -10,6 +10,9 @@ import sqlite3
 from tempfile import TemporaryDirectory
 
 from phalanx.store import APPLICATION_ID, SCHEMA_VERSION, connect, initialize
+
+
+SCOUT_TABLES = {"issue_scout_settings", "issue_scout_passes", "issue_sources", "issue_scout_decisions"}
 
 
 def quoted(name):
@@ -63,9 +66,9 @@ def convert(source: Path, destination: Path):
             original.backup(copy)
         initialize(after)
         with connect(before, mode="ro") as old, connect(after) as new:
-            if (old.execute("PRAGMA application_id").fetchone()[0],
-                    old.execute("PRAGMA user_version").fetchone()[0]) != (APPLICATION_ID, 24):
-                raise ValueError("Expected the operator's reviewed schema-24 Phalanx snapshot")
+            source_version = old.execute("PRAGMA user_version").fetchone()[0]
+            if old.execute("PRAGMA application_id").fetchone()[0] != APPLICATION_ID or source_version not in (24, 25):
+                raise ValueError("Expected the operator's reviewed schema-24/25 Phalanx snapshot")
             check(old)
             source_inventory = {
                 row[0]: inventory(old, row[0], columns(old, row[0]))
@@ -76,16 +79,20 @@ def convert(source: Path, destination: Path):
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")]
             source_tables = {row[0] for row in old.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
-            extra = source_tables - set(tables) - {"attempt_workers", "external_rechecks"}
+            retired_tables = {"attempt_workers", "external_rechecks"} if source_version == 24 else set()
+            extra = source_tables - set(tables) - retired_tables
             missing = set(tables) - source_tables
-            if extra or missing:
+            if extra or missing != SCOUT_TABLES:
                 raise ValueError(f"Unexpected source tables (extra={sorted(extra)}, missing={sorted(missing)}); "
                                  "review the snapshot before conversion")
             retained, retired_columns = {}, {}
             for table in tables:
+                if table in SCOUT_TABLES:
+                    continue
                 target = columns(new, table)
                 removed = set(columns(old, table)) - set(target)
-                allowed = {"runner_id", "lease_digest", "lease_expires_at", "blocker"} if table == "attempts" else set()
+                allowed = ({"runner_id", "lease_digest", "lease_expires_at", "blocker"}
+                           if table == "attempts" and source_version == 24 else set())
                 if removed - allowed or set(target) - set(columns(old, table)):
                     raise ValueError(f"Unexpected columns in {table}")
                 if removed:
@@ -131,13 +138,14 @@ def convert(source: Path, destination: Path):
             "sqlite_master_matches": True, "integrity_check": "ok", "foreign_key_check": [],
             "retained_values_match": True, "rows": counts,
             "source_archive": {"path": str(source.resolve()), "sha256": source_hash,
-                               "schema_version": 24, "tables": source_inventory},
+                               "schema_version": source_version, "tables": source_inventory},
+            "added_tables": sorted(SCOUT_TABLES), "scouting_enabled": False,
             "retired_metadata": {"tables": sorted(source_tables - set(tables)), "columns": retired_columns}}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("source", type=Path, help="retained operator-owned schema-24 snapshot")
+    parser.add_argument("source", type=Path, help="retained operator-owned schema-24 or schema-25 snapshot")
     parser.add_argument("destination", type=Path, help="new, nonexistent converted database path")
     args = parser.parse_args()
     print(json.dumps(convert(args.source, args.destination), indent=2))

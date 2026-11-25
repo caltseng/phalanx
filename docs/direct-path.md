@@ -42,6 +42,77 @@ For a repository that deploys from its base branch, optionally set `"post_merge_
 
 Unconfigured repositories keep the existing behavior. This is GitHub observation only: check-in still completes on merge, dependencies unblock, and no deployment stage or agent-runtime integration is added. Deployment reads start after check-in is recorded, so an unavailable deployment-check API can't hold up delivery. The design is in [direct-session reconciliation](direct-sessions.md#github-reconciliation).
 
+## Periodic GitHub issue scouting
+
+Scouting starts **disabled**. The service owner must first adopt the reviewed API and
+Captain client together. Existing deployed schema-24 stores require the complete,
+record-preserving [offline 24 -> 26 conversion](development.md#existing-store-conversion);
+the same explicit tool accepts an already-converted schema-25 snapshot. Startup does
+not migrate, reset or replace live data. Rehearse on a disposable snapshot, including
+authenticated writer continuation, board reads, integrity, exact retained rows, capacities
+and credentials. Only the designated live-service owner performs the quiesced cutover.
+
+On the Captain's host, keep `PHALANX_GITHUB_TOKEN` in the private environment, with read
+access to the selected repositories. The token must represent the explicitly configured
+author, verified via GitHub `/user` on every page; do not infer identity from a machine's
+login, repository owner or issue body. No token is stored in the API settings or diagnostics.
+Inspect `GET /v1/issue-scout`, then owner-authenticated
+`PUT /v1/issue-scout/settings` with the returned `settings.revision`:
+
+```json
+{
+  "expected_revision": 0,
+  "enabled": true,
+  "cadence_minutes": 60,
+  "author_login": "your-explicit-github-login",
+  "author_id": 12345,
+  "repositories": ["your-registered-repository-id"]
+}
+```
+
+Replace both identity fields with the actual authenticated login/numeric ID and explicitly
+select registered github.com repositories. Cadences are 15, 30, 60, 180, 360, 720 or 1440
+minutes after a full pass. Five-minute Captain wakes remain the only timing mechanism:
+each existing wake advances at most one 30-entry created-order page, including closed
+issues for reconciliation and excluding PRs. Large backlogs therefore span multiple
+wakes; due does not promise a full pass within one wake. A live active Captain must cover
+the full configured repository scope. No separate scout session or replacement Captain
+is started, and scouting consumes no writer capacity.
+
+Claims are server-fenced for ten minutes. Page intake/cursor updates commit atomically;
+lost responses, restart and Captain handoff resume the same durable pass/cursor.
+Provider/credential failures retain progress and retry no sooner than five minutes later.
+An uncertain API response leaves its claim intact until expiry, rather than asserting
+an empty scan or repeating intake. Settings changes fence the old pass and start the next
+configured pass without removing source/decision history. Disabling settings stops new
+scouting effects, not already admitted work.
+The wake reports a separate redacted `observation_error: api` for an API outage; this
+does not invalidate its already-recorded heartbeat or require Captain replacement.
+
+Configured-author open issues enter ordinary intake with the normal merged target,
+source URL and an explicit untrusted-context criterion. Pauses, both capacity limits,
+repository readiness, dependencies and later steering apply through existing dispatch.
+Existing issue keys and historical goal/context URL links, including completed, failed
+and cancelled work, are reconciled before intake. Edits, closure or reopening never
+change that work or automatically create a rerun. Historical work with **no issue URL
+or source identity** cannot be reliably inferred: add the source link to authorized
+queued work before activation or reconcile it explicitly with the owner.
+
+Other-author issues appear in Scribe **Needs you** with their source link, author and
+triage reason. Approve/decline persists an owner-attributed, fingerprint-bound decision.
+Approval is **not** queued intake: a later pass re-fetches the issue; changed content
+requires approval again, and closed issues are skipped. Declines remain declined across
+edits/reopening. The owner API equivalent is
+`POST /v1/issue-scout/issues/<repository-id>/<number>/decision` with
+`{"expected_fingerprint":"<current fingerprint>","decision":"approved"}` (or `"declined"`).
+The dashboard's narrowly authorized local action keeps same-origin checks.
+
+Scribe and `shift status` expose configuration, due/running state, durable cursor, last
+completion, classified failure/retry, and imported/needs-owner/approved/skipped counts.
+Only metadata and digests enter scouting diagnostics; raw issue bodies are stored only
+in admitted work. Neither issue content nor a coordinator message grants permission to
+change identity, scope, configuration or to approve another author's issue.
+
 ## Run a Captain on the direct path
 
 A Captain is an agent chat in any runtime that can start visible sessions. It launches one native worker session per item, registers it as the item's writer and coordinates it. It never does item work. The worker posts its own stage results with `phx work`, and the reconciler observes GitHub.

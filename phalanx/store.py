@@ -9,7 +9,7 @@ from .schema import SCHEMA
 
 
 APPLICATION_ID = 0x50484C58  # PHLX
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 BUSY_TIMEOUT = 2  # seconds
 # A write can spend one SQLite busy timeout starting and another committing.
 ADMISSION_TIMEOUT = 2 * BUSY_TIMEOUT

@@ -1,11 +1,11 @@
 """Explicit local GitHub issue snapshots submitted through owner API intake."""
 
 import os
-from hashlib import sha256
 
 from .github import github_repository
 from .github import GitHubClient
 from .intake_models import Intake
+from .pr_models import github_issue_key
 
 
 def ingest_issue(api_request, base_url, repository_id, number, target, *, key=None, publication_mode="ready"):
@@ -32,8 +32,7 @@ def ingest_issue(api_request, base_url, repository_id, number, target, *, key=No
     payload = Intake(repository_id=repository_id, goal=goal, target=target,
                      context_links=[issue.url], publication_mode=publication_mode)
     # Keep issue edits from silently creating another item after an uncertain POST.
-    identity = f"{repository_id}:{repository}:{number}"
-    key = key or f"github-issue:{sha256(identity.encode()).hexdigest()}"
+    key = key or github_issue_key(repository_id, repository, number)
     return api_request(base_url, "/v1/items", key=key,
                        body=payload.model_dump(mode="json"))
 
