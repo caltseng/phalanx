@@ -123,7 +123,10 @@ not hide full-capacity backlog. **Dispatch overdue** keeps warning styling only 
 unassigned runnable work with free capacity, dispatch enabled and no active hold
 (the API retains `captain_idle_with_work` for compatibility). Dependency waits are
 not missed launches. Flags retain first-seen ages and execution/item links; paused
-dispatch is informational, not evidence that a Captain stopped.
+dispatch is informational, not evidence that a Captain stopped. **Pickup blocked**
+uses the same 30-minute budget to notify the owner about scope, uninitialized authority,
+affinity or repository/trust blockers, carrying the shared pickup reason and recovery.
+It is not a Captain failure or handoff signal.
 
 ## Who uses it
 

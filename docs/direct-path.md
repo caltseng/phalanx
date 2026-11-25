@@ -267,7 +267,10 @@ record the predecessor item ID and actual lane/owner constraint, not merely "not
 Existing persisted dependencies, dispatch pause, retry, Building/Total capacity and PR-rework
 preference remain authoritative waits. Eligible intake with no writer and no exclusion
 uses the existing 30-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
-and pause use `queue_backlogged`, without another dispatch budget.
+and pause use `queue_backlogged`, without another dispatch budget. Scope, uninitialized
+authority, affinity and repository/trust blockers use `pickup_blocked` on the same budget,
+with the shared decision's reason/recovery and owner notification. This is not a
+`captain_idle_with_work` handoff signal.
 
 Checkout mappings are checked at start/heartbeat; missing mappings and origin mismatches
 become visible repository blockers instead of preventing observation of the entire charter.

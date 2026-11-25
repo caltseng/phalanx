@@ -1379,6 +1379,42 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                                (cutoff, queued["execution"]["id"]))
                     self.assertEqual(flags.captain_idle_with_work(db, now)[0]["kind"], kind)
 
+    def test_owner_action_pickup_blockers_remain_visible_after_the_existing_queue_budget(self):
+        from phalanx.operator_api import SUMMARY, dispatch_context, summary
+
+        with write_transaction(self.path) as db:
+            intake.register(db, "repo", "https://github.com/e/r.git")
+            captain = captains.register(db, captains.CaptainRegistration(
+                session_ref="chat", charter_revision="c1"))
+            item = intake.create(db, Intake(repository_id="repo", goal="Queued intake", target="report"))
+            now = datetime.now(UTC)
+            cutoff = int((now - flags.IDLE_WITH_WORK).timestamp() * 1000)
+            cases = (
+                ("uninitialized", {}, ""),
+                ("out_of_scope", {"other": None}, ""),
+                ("repository_blocked", {"repo": "Owner trust approval required"}, ""),
+                ("affinity", {"repo": None}, "assigned-runner"),
+            )
+            for code, repositories, affinity in cases:
+                with self.subTest(code=code):
+                    captains.heartbeat(db, captain["id"], captains.Heartbeat(
+                        charter_revision="c1", wake_count=1, state="active",
+                        pickup=captains.Pickup(repositories=repositories)))
+                    db.execute("UPDATE executions SET ready_since=?, queue_affinity=? WHERE id=?",
+                               (cutoff + 1, affinity, item["execution"]["id"]))
+                    self.assertEqual(flags.captain_idle_with_work(db, now), [])
+                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                               (cutoff, item["execution"]["id"]))
+                    (blocked,) = flags.all_flags(db, now)["flags"]
+                    row = db.execute(SUMMARY + " WHERE execution.id=?", (item["execution"]["id"],)).fetchone()
+                    board = summary(row, now, dispatch_context(db, now))
+                    self.assertEqual(board["pickup"]["code"], code)
+                    self.assertEqual(blocked["kind"], "pickup_blocked")
+                    self.assertEqual(blocked["execution_id"], item["execution"]["id"])
+                    self.assertEqual(blocked["reason"], board["wait_reason"])
+                    self.assertEqual(blocked["recovery"], board["resume_trigger"])
+                    self.assertTrue(blocked["notify_owner"])
+
     def test_slot_release_changes_backlog_to_overdue_and_assignment_clears_it_over_http(self):
         with write_transaction(self.path) as db:
             captain, binding, queued = self.backlog(db)

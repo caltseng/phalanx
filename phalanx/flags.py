@@ -91,7 +91,7 @@ def no_live_captain(db, now):
 
 
 def captain_idle_with_work(db, now):
-    """Distinguish overdue dispatch from informational capacity backlog, not Captain failure."""
+    """Distinguish overdue dispatch, pickup blockers and informational capacity backlog."""
     if not any(is_live(row, now) for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")):
         return []
     cutoff = int((now - IDLE_WITH_WORK).timestamp() * 1000)
@@ -114,8 +114,12 @@ def captain_idle_with_work(db, now):
             reason = (f"{waiting}; Building {capacity['building_writers']}/{capacity['max_building_writers']}, "
                       f"Delivering {capacity['delivering_writers']}, Total {occupied}/{maximum}")
             recovery = "Wait for the affected capacity, resume dispatch or service eligible waiting PR fixes"
-        elif not decision["eligible"]:
+        elif decision["code"] in ("held", "retry", "not_ready", "closing"):
             continue
+        elif not decision["eligible"]:
+            kind = "pickup_blocked"
+            reason = decision["reason"]
+            recovery = decision["trigger"]
         else:
             kind = "captain_idle_with_work"
             reason = ("Dispatch overdue: runnable for 30 min with no registered writer; "
@@ -125,7 +129,7 @@ def captain_idle_with_work(db, now):
             reason += f". Captain hold: {holds[row['id']]}"
         result.append(flag(kind, reason, recovery,
              datetime.fromtimestamp(row["ready_since"] / 1000, UTC) + IDLE_WITH_WORK,
-             item_id=row["item_id"], execution_id=row["id"]))
+             item_id=row["item_id"], execution_id=row["id"], notify_owner=kind == "pickup_blocked"))
         if len(result) >= DERIVED_LIMIT:
             break
     return result
