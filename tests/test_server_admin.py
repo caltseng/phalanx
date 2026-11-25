@@ -52,6 +52,16 @@ assert kernel.GetPriorityClass(kernel.GetCurrentProcess()) == 0x20
         self.assertEqual(kernel.GetPriorityClass(kernel.GetCurrentProcess()), original)
 
     @unittest.skipUnless(os.name == "nt", "Windows process scheduling")
+    def test_idle_and_below_normal_rise_only_to_normal(self):
+        for priority in (0x40, 0x4000):
+            with self.subTest(priority=priority):
+                kernel = Mock()
+                kernel.GetPriorityClass.return_value = priority
+                with patch.object(ctypes, "WinDLL", return_value=kernel):
+                    server_admin.foreground_priority()
+                kernel.SetPriorityClass.assert_called_once_with(kernel.GetCurrentProcess.return_value, 0x20)
+
+    @unittest.skipUnless(os.name == "nt", "Windows process scheduling")
     def test_normal_and_explicit_higher_priorities_are_unchanged(self):
         for priority in (0x20, 0x8000, 0x80, 0x100):
             with self.subTest(priority=priority):

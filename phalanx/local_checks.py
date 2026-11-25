@@ -1,5 +1,6 @@
 """Trusted local checks from reconciler policy, and how to run one on a checkout."""
 
+import errno
 import os
 import re
 import signal
@@ -11,6 +12,7 @@ from pathlib import Path
 from .validation import PreCheck, PreOutcome
 
 OUTPUT_TAIL_BYTES = 4096
+CLEANUP_TIMEOUT_SECONDS = 5
 # unittest/pytest failure lines, tracebacks, and progress lines with F or E markers.
 _FAILURE = re.compile(
     rb"^(?:FAIL:|ERROR:|FAILED |Traceback \(most recent call last\))"
@@ -74,15 +76,25 @@ def run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str, bool]:
 
 
 def kill_tree(process: subprocess.Popen) -> None:
-    """Stop a timed-out check and the processes it started, by its own process ID."""
+    """Bound cleanup of a child started in its own POSIX session or Windows process tree."""
     if os.name == "nt":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, check=False)
+        try:
+            result = subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, check=False,
+                                    timeout=CLEANUP_TIMEOUT_SECONDS)
+            if result.returncode and process.poll() is None:
+                raise OSError(f"Cannot stop owned process tree {process.pid}: taskkill exit {result.returncode}")
+        finally:
+            process.kill()
+            process.wait(timeout=CLEANUP_TIMEOUT_SECONDS)
     else:
         try:
             os.killpg(process.pid, signal.SIGKILL)
-        except OSError:  # The group may already be gone; macOS reports EPERM for zombies.
-            pass
-    process.kill()
-    process.wait()
+        except OSError as exc:
+            # macOS can report EPERM for an already-reaped group's zombies.
+            if exc.errno != errno.ESRCH and not (exc.errno == errno.EPERM and process.poll() is not None):
+                raise
+        finally:
+            process.kill()
+            process.wait(timeout=CLEANUP_TIMEOUT_SECONDS)

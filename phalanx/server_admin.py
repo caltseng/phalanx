@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def foreground_priority():
-    """Keep the Windows API out of an inherited background scheduling class."""
+    """Keep this critical Windows service out of an inherited background scheduling class."""
     if os.name != "nt":
         return
     import ctypes
@@ -28,11 +28,11 @@ def foreground_priority():
     priority = kernel.GetPriorityClass(process)
     if not priority:
         raise ctypes.WinError(ctypes.get_last_error())
-    # Task Scheduler's default priority 7 is BelowNormal, which can starve the API.
+    # Task Scheduler's default priority 7 is BelowNormal, which can starve control traffic.
     if priority in (0x40, 0x4000):  # Idle, BelowNormal
         if not kernel.SetPriorityClass(process, 0x20):  # Normal, never High/Realtime
             raise ctypes.WinError(ctypes.get_last_error())
-        logger.warning("API inherited background CPU priority; changed this process to Normal")
+        logger.warning("Service inherited background CPU priority; changed this process to Normal")
 
 
 def serve(*, host, port):

@@ -23,6 +23,7 @@ from .github import GitHubClient, GitHubError, github_repository, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
 from .pr_models import DEPLOYMENT_WINDOW
+from .server_admin import foreground_priority
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy
@@ -113,7 +114,7 @@ class Reconciler:
             try:
                 failures = self.run_checks(checkout, head, checks)
                 self.api.call(path, {"head": head, "failures": failures})
-            except ReconcilerError as error:
+            except (ReconcilerError, OSError, subprocess.SubprocessError) as error:
                 errors.append(f"{path}: {error}")
         try:
             self.notify_owner()
@@ -204,10 +205,10 @@ class Reconciler:
             checkout = self.checkout(repo, remote, fetched)
             # With no remote branch there is nothing to flag, but posting keeps the observation fresh.
             if not git(checkout, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}",
-                       check=False).returncode:
+                       check=False, allowed_returncodes=(0, 1)).returncode:
                 body["merged_branch"] = git(
                     checkout, "merge-base", "--is-ancestor", f"refs/remotes/origin/{branch}",
-                    f"refs/remotes/origin/{base}", check=False,
+                    f"refs/remotes/origin/{base}", check=False, allowed_returncodes=(0, 1),
                 ).returncode == 0
         else:
             body["target_base"] = base
@@ -309,7 +310,8 @@ class Reconciler:
         checkout = Path(self.config["repositories"][repo]["checkout"]).resolve()
         top = git(checkout, "rev-parse", "--show-toplevel").stdout.decode().strip()
         # The configured URL, before any local insteadOf rewrite, names the repository.
-        urls = git(checkout, "config", "--get-all", "remote.origin.url", check=False).stdout.decode().split()
+        urls = git(checkout, "config", "--get-all", "remote.origin.url",
+                   check=False, allowed_returncodes=(0, 1)).stdout.decode().split()
         origin = github_repository(urls[0]) if len(urls) == 1 else None
         expected = github_repository(remote)
         if (Path(top).resolve() != checkout or origin is None or expected is None
@@ -329,7 +331,8 @@ class Reconciler:
             scratch.parent.mkdir(parents=True, exist_ok=True)
         except OSError as error:
             raise ReconcilerError(f"Cannot create the check scratch directory: {error}") from None
-        if git(checkout, "cat-file", "-e", f"{head}^{{commit}}", check=False).returncode:
+        if git(checkout, "rev-parse", "--verify", "--quiet", f"{head}^{{commit}}",
+               check=False, allowed_returncodes=(0, 1)).returncode:
             git(checkout, "fetch", "--no-tags", "origin", head)
         git(checkout, "worktree", "add", "--detach", str(scratch), head)
         try:
@@ -371,6 +374,7 @@ class Reconciler:
 
     def run(self, stop, interval=PASS_SECONDS, once=False):
         """Run passes while holding the state directory, so no other reconciler removes its scratch."""
+        foreground_priority()
         with ExitStack() as stack:
             try:
                 self.state.mkdir(parents=True, exist_ok=True)

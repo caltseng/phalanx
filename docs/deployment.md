@@ -107,20 +107,28 @@ owned process tree before replacing commands. Do not stack watchdogs, script res
 and supervisor policies. Raw Uvicorn does not acquire the deployment lock: inventory and
 retire preexisting launchers with their owner.
 
-### Windows API scheduling under host load
+### Windows critical-service scheduling under host load
 
-Configure the API task with Normal process priority (Task Scheduler priority 5), not the
+Configure the API and reconciler tasks with Normal process priority (Task Scheduler priority 5), not the
 default priority 7 (BelowNormal). Verify the actual listener **and** virtual-environment
 launcher with `Get-Process -Id <verified-PID>` (`PriorityClass`, `BasePriority`) and inspect
 the exact owning task's `Settings.Priority`. A database-free authenticated status request
 can stall under sustained Normal-priority host work; fast database probes or occasional
 health responses do not rule that out.
 
-The server entrypoint promotes only its own inherited Idle/BelowNormal Windows process to
-Normal before Uvicorn and logs the correction. It preserves Normal/higher classes, never
+The API and reconciler entrypoints promote only their own inherited Idle/BelowNormal Windows process to
+Normal before serving or reconciling and log the correction. They preserve Normal/higher classes, never
 chooses High/Realtime and fails visibly if Windows rejects the operation. Other platforms,
-CLI commands, writers and the reconciler are unchanged. Keep the supervisor correct too;
-the API does not edit tasks or other processes.
+CLI commands and writers are unchanged. Keep the supervisors correct too;
+the services do not edit tasks or other processes.
+
+Git commands in checkout verification, preparation and reconciliation have a 60-second
+completion limit. On timeout or interruption the caller stops only its owned Git process
+tree; Windows tree cleanup and direct-child reap each have a five-second limit. Start,
+timeout and cleanup errors surface to the caller, including unchecked ref probes.
+Only the documented absent-ref exit counts as absence. A failed reconciler item keeps its
+last-known observation (which can become stale), logs the error and does not stop other
+items from being observed. These bounds do not prove host-load latency by themselves.
 
 For an incident, verify exact task/process ownership before the operator changes only that
 API task and its live listener/launcher to Normal. No restart, schema conversion or queue

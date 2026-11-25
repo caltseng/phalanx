@@ -3,15 +3,17 @@ from datetime import UTC, datetime, timedelta
 from http.client import IncompleteRead, RemoteDisconnected
 import json
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 from threading import Event
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from phalanx import intake
+from phalanx.git import run_git
 from phalanx.intake_models import Intake
 from phalanx.github import CommitChecks, GitHubError, PullRequest
 from phalanx.github_checks import CheckCollection
@@ -386,6 +388,86 @@ class ReconcilerPassTest(unittest.TestCase):
         git(checkout, "config", f"url.{bare.as_uri()}.insteadOf", "https://github.com/example/repo.git")
         self.config["repositories"]["repo"] = {"checkout": str(checkout), "base_branch": "main"}
         return checkout, heads
+
+    def test_priority_normalization_precedes_pass_and_errors_abort(self):
+        reconciler = self.reconciler(FakeAPI([], {}))
+        order = []
+        with patch("phalanx.reconciler.foreground_priority", side_effect=lambda: order.append("priority")), \
+                patch.object(reconciler, "_run", side_effect=lambda *a: order.append("pass")):
+            reconciler.run(Event(), once=True)
+        self.assertEqual(order, ["priority", "pass"])
+        with patch("phalanx.reconciler.foreground_priority", side_effect=OSError("denied")), \
+                patch.object(reconciler, "_run") as run, self.assertRaisesRegex(OSError, "denied"):
+            reconciler.run(Event(), once=True)
+        run.assert_not_called()
+
+    def test_ref_failure_preserves_last_observation_and_other_item_progress(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}, "other": {"base_branch": "main"}}
+        self.github["repo"] = FakeGitHub()
+        self.github["other"] = FakeGitHub([pull_request(HEAD, item_branch("healthy"))])
+        for codes in ((1,), (128,), (-15,), (0, 128), (0, 1), (0, 0)):
+            with self.subTest(codes=codes):
+                api = FakeAPI([execution("failed"), execution("healthy", "other")], {
+                    "repo": "https://github.com/example/repo", "other": "https://github.com/example/other"})
+                previous = ("failed", {"observed_at": "2026-01-01T00:00:00+00:00", "merged_branch": True})
+                api.posts.append(previous)
+                reconciler = self.reconciler(api)
+                processes = [Mock(returncode=code) for code in codes]
+                with patch.object(reconciler, "checkout", return_value=self.root), \
+                        patch("phalanx.git.subprocess.Popen", side_effect=processes):
+                    result = reconciler.run_pass()
+                failed = codes in ((128,), (-15,), (0, 128))
+                self.assertEqual(result["observed"], 1 if failed else 2)
+                self.assertEqual(len(result["errors"]), int(failed))
+                self.assertEqual(api.posts[0], previous)
+                self.assertEqual(api.posts[-1][0], "healthy")
+                if failed:
+                    self.assertIn("failed: Git", result["errors"][0])
+                    self.assertEqual([item for item, _ in api.posts], ["failed", "healthy"])
+                else:
+                    observed = api.posts[1][1]
+                    if codes == (1,):
+                        self.assertNotIn("merged_branch", observed)
+                    else:
+                        self.assertEqual(observed["merged_branch"], codes == (0, 0))
+
+    def test_hung_fetch_reports_error_without_posting_and_observes_next_item(self):
+        self.repository({})
+        self.config["repositories"]["other"] = {"base_branch": "main"}
+        self.github["repo"] = FakeGitHub()
+        self.github["other"] = FakeGitHub([pull_request(HEAD, item_branch("healthy"))])
+        api = FakeAPI([execution("hung"), execution("healthy", "other")], {
+            "repo": "https://github.com/example/repo", "other": "https://github.com/example/other"})
+        process = Mock()
+        process.wait.side_effect = subprocess.TimeoutExpired("git fetch", 0.1)
+
+        def git_call(path, *args, **kwargs):
+            if args[0] == "fetch":
+                with patch("phalanx.git.subprocess.Popen", return_value=process):
+                    return run_git(path, *args, **kwargs)
+            return run_git(path, *args, **kwargs)
+
+        with patch("phalanx.reconciler.git", side_effect=lambda *a, **k: git_call(
+                *a, error=ReconcilerError, **k)), patch("phalanx.git.kill_tree") as cleanup:
+            result = self.reconciler(api).run_pass()
+        self.assertEqual((result["observed"], len(result["errors"])), (1, 1))
+        self.assertIn("hung: Git fetch timed out", result["errors"][0])
+        self.assertEqual([item for item, _ in api.posts], ["healthy"])
+        cleanup.assert_called_once_with(process)
+
+    def test_check_cleanup_failure_does_not_abort_later_jobs(self):
+        self.config["repositories"] = {"repo": {"base_branch": "main"}}
+        api = FakeAPI([execution("one"), execution("two")], {"repo": "https://github.com/example/repo"})
+        reconciler = self.reconciler(api)
+        paths = ["/one/local-checks", "/two/local-checks"]
+        jobs = [(path, HEAD, self.root, ()) for path in paths]
+        with patch.object(reconciler, "observe", side_effect=[(0, job) for job in jobs]), \
+                patch.object(reconciler, "run_checks",
+                             side_effect=[subprocess.TimeoutExpired("taskkill", 5), []]):
+            result = reconciler.run_pass()
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertIn(paths[0], result["errors"][0])
+        self.assertEqual(api.local_checks, [{"head": HEAD, "failures": []}])
 
     def test_a_rate_limited_repository_waits_while_others_are_observed(self):
         self.config["repositories"] = {"repo": {"base_branch": "main"}, "other": {"base_branch": "main"}}
