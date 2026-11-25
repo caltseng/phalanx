@@ -5,28 +5,11 @@ import sqlite3
 from tempfile import TemporaryDirectory
 from threading import Condition
 
-from .dependency_schema import DEPENDENCY_SCHEMA
-from .direct_schema import (
-    CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, DIRECT_SCHEMA,
-    SESSION_ARCHIVE_SCHEMA,
-)
-from .dispatch_schema import (
-    ADOPTION_SCHEMA, CONCURRENCY_SCHEMA, DISPATCH_SCHEMA, STAGE_QUEUE_SCHEMA, WRITER_CAPACITY_SCHEMA,
-)
-from .finalization_schema import FINALIZATION_SCHEMA
-from .intake_schema import INTAKE_SCHEMA
-from .operator_schema import DASHBOARD_SCHEMA, ITEM_TITLE_SCHEMA, OPERATOR_SCHEMA
-from .reconciliation_schema import RECONCILIATION_SCHEMA
-from .wait_schema import WAIT_SCHEMA
-
-
-# Version 11 rewrote pre-PH-15b rows. Its step stays empty so deployed stores keep their version.
-REVISION_MIGRATION = ()
+from .schema import SCHEMA
 
 
 APPLICATION_ID = 0x50484C58  # PHLX
-# Older stores needed row rewrites that were removed (decision 67), so they are refused.
-OLDEST_SUPPORTED_VERSION = 12
+SCHEMA_VERSION = 25
 BUSY_TIMEOUT = 2  # seconds
 
 
@@ -87,45 +70,6 @@ class _Gate:
 
 _gate = _Gate()
 
-# Each tuple is one migration.
-MIGRATIONS = (
-    (f"PRAGMA application_id = {APPLICATION_ID}",),
-    INTAKE_SCHEMA,
-    DISPATCH_SCHEMA,
-    FINALIZATION_SCHEMA,
-    OPERATOR_SCHEMA,
-    STAGE_QUEUE_SCHEMA,
-    DEPENDENCY_SCHEMA,
-    WAIT_SCHEMA,
-    (),  # Retired worker metadata; keep subsequent version numbers stable.
-    ADOPTION_SCHEMA,
-    REVISION_MIGRATION,
-    (),  # Retired runner blockers.
-    DIRECT_SCHEMA,
-    RECONCILIATION_SCHEMA,
-    CAPTAIN_SHIFT_SCHEMA,
-    CLOSED_WRITER_MIGRATION,
-    DASHBOARD_SCHEMA,
-    SESSION_ARCHIVE_SCHEMA,
-    (
-        "DROP TABLE attempt_adoptions",
-        "DROP TABLE runner_limits",
-    ),
-    (
-        # Closed outputs remain readable without keeping retired stages in the runtime.
-        # Preserve their immutable timeline, attempts, outputs, versions and timestamps.
-        """UPDATE executions SET state_json=json_set(state_json, '$.stage', 'delivery')
-           WHERE status IN ('completed', 'failed', 'cancelled')
-             AND stage IN ('pr_creation', 'pre_pr_validation', 'pr_promotion', 'pr_validation',
-                           'adversarial_review', 'pr_reconciliation', 'pr_revision', 'check_in')""",
-    ),
-    CAPTAIN_COMPACTION_SCHEMA,
-    CONCURRENCY_SCHEMA,
-    WRITER_CAPACITY_SCHEMA,
-    ITEM_TITLE_SCHEMA,
-)
-
-
 @contextmanager
 def connect(path: Path, *, mode: str = "rw"):
     """Open a short-lived connection with explicit SQL transaction control."""
@@ -160,14 +104,13 @@ def read_transaction(path: Path):
 
 
 def _check_supported(app_id: int, version: int) -> None:
-    if app_id != APPLICATION_ID or not 1 <= version <= len(MIGRATIONS):
-        raise ValueError("Unsupported Phalanx database identity or schema version")
-    if version < OLDEST_SUPPORTED_VERSION:
-        raise ValueError(f"Phalanx store schema version {version} predates the oldest supported "
-                         f"version {OLDEST_SUPPORTED_VERSION} and cannot be upgraded")
+    if app_id != APPLICATION_ID or version != SCHEMA_VERSION:
+        raise ValueError("Unsupported Phalanx database identity or schema version; "
+                         "existing stores require explicit offline conversion")
 
 
-def migrate(path: Path) -> None:
+def initialize(path: Path) -> None:
+    """Create the canonical schema on an empty store; never upgrade an existing one."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with write_transaction(path, create=True) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
@@ -180,12 +123,11 @@ def migrate(path: Path) -> None:
         if db.execute("PRAGMA journal_mode").fetchone()[0] != "delete":
             raise ValueError("Phalanx requires SQLite DELETE journal mode")
 
-        for next_version, statements in enumerate(MIGRATIONS[version:], start=version + 1):
-            for statement in statements:
+        if version == 0:
+            for statement in SCHEMA:
                 db.execute(statement)
-            db.execute(f"PRAGMA user_version = {next_version}")
-        if version == 0 and WRITER_CAPACITY_SCHEMA in MIGRATIONS:
-            db.execute("UPDATE dispatch_settings SET max_writers=10 WHERE id=1")
+            db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
+            db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def snapshot(source: Path, destination: Path) -> None:

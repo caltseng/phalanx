@@ -189,7 +189,7 @@ def writer_flags(db, now, *, execution_id=None, current=None):
 
 
 def session_flags(db, now, *, execution_id=None):
-    """Match reported nonces (or legacy name words), optionally for just one execution."""
+    """Match registered session IDs and reported full nonces, optionally for one execution."""
     reported = {}
     for captain in live_captains(db, now).values():
         for session in json.loads(captain["sessions_json"]):
@@ -208,7 +208,6 @@ def session_flags(db, now, *, execution_id=None):
     writers = db.execute(OPEN_WRITERS + (" AND execution.id=?" if execution_id else ""),
                          (execution_id,) if execution_id else ()).fetchall()
     by_nonce = {writer["nonce"]: writer for writer in writers}
-    by_word = {word: writer for writer in writers for word in (writer["item_id"][:8], writer["nonce"])}
     flags = []
     for session in sorted(reported.values(), key=lambda entry: (entry["first_seen"], entry["id"])):
         if session.get("availability") in ("missing", "deleted"):
@@ -221,9 +220,6 @@ def session_flags(db, now, *, execution_id=None):
         label = f"Session {session['id']} ({session['name']})"
         nonce = session.get("writer_nonce")
         writer = by_nonce.get(nonce)
-        if (nonce is None and session["name"].startswith("phx ")
-                and not session["name"].endswith(" [phx]")):
-            writer = next((by_word[word] for word in session["name"].split() if word in by_word), None)
         if execution_id and writer is None:
             continue
         if writer is None:
@@ -231,8 +227,7 @@ def session_flags(db, now, *, execution_id=None):
                               "A Captain archives it if its work is done or abandoned, or stops it and "
                               "reports it to the owner", datetime.fromisoformat(session["first_seen"]),
                               captain_id=session["captain_id"]))
-        elif writer["session_id"] is not None or (
-                nonce != writer["nonce"] and writer["nonce"] not in session["name"].split()):
+        elif writer["session_id"] is not None:
             flags.append(flag(
                 "duplicate_writer",
                 f"{label} carries item {writer['item_id']}, whose writer is {writer['session_id'] or writer['nonce']}",

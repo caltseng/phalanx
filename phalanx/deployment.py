@@ -183,7 +183,7 @@ def add_deploy_command(commands):
     init.add_argument("--port", type=int, default=8000)
     for name in ("check", "run", "cli"):
         action = actions.add_parser(name)
-        action.add_argument("--config", type=Path, help="explicit deployment.json, including legacy layouts")
+        action.add_argument("--config", type=Path, help="explicit deployment.json, including existing layouts")
         action.add_argument("--home", help="existing home; otherwise PHALANX_HOME or locator")
         if name == "run":
             action.add_argument("service", choices=("server", "reconciler"))
