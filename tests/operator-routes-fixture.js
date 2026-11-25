@@ -29,6 +29,7 @@
     "- First", "- Second", "", "1. Ordered", "2. List", "", "> Quoted", "",
     "| Check | Result |", "| --- | --- |", "| Tests | Passed |", "",
     "[Safe](https://example.com/report) [Unsafe](javascript:alert%281%29)",
+    "[Relative](/relative-report) [Empty]() [Credentials](https://user:password@example.com/report)",
     "![No image](https://example.com/tracker.png)", "",
     "<script>window.reportExecuted=true</script><img src=x onerror=alert(1)>",
     '<svg onload="alert(1)"><a href="javascript:alert(1)">HTML link</a></svg>', "",
@@ -208,6 +209,11 @@
     assert(!content.querySelector("script, img, svg, iframe, style") && !app.win.reportExecuted, "Report HTML never becomes DOM");
     assert(!content.querySelector('a[href^="javascript:"]') && content.querySelector("a").protocol === "https:",
       "Only safe generated links survive");
+    const reportLinks = [...content.querySelectorAll("a")];
+    assert(reportLinks.find(link => link.textContent === "Relative")?.href === location.origin + "/relative-report" &&
+      reportLinks.find(link => link.textContent === "Empty")?.href === app.doc.baseURI &&
+      !reportLinks.some(link => link.textContent === "Credentials"),
+    "Shared link validation preserves relative and empty Markdown targets and rejects credentials");
     for (const width of [1280, 390, 320]) {
       frame.style.width = width + "px";
       frame.style.height = "600px";

@@ -21,6 +21,13 @@ Optimistic intake rows are reconciled on the next poll without mutating cached s
 Row title, cell and report clicks share one delegated
 listener per mount, removed on unmount.
 
+The browser scripts share DOM construction and web-link validation in
+`operator-helpers.js`. `operator-http.js` owns only authenticated fetches and conditional
+response caching; `operator-shell.js` projects API responses and wires the board,
+creation/settings forms and report dialog. The shell loads helpers before their consumers
+and the HTTP transport before the shell wiring; the standalone board fixture loads the
+same helpers.
+
 Open rows label their clock **active** from the execution's first persisted attempt,
 not intake or a conversation title. Before any attempt, **queued** means elapsed time
 since execution creation (including prerequisite/dispatch waits), not time actively worked.
