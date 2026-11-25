@@ -249,8 +249,19 @@ Long chats degrade as context is compacted. Each Captain works a bounded **shift
     forwarding detects intervening succession. Missing, stale, ambiguous or unavailable evidence
     is reported explicitly, never repaired by guessed links, duplicate dispatch or fabricated
     owner provenance. Original-message forwarding preserves permission boundaries.
-    A registered Captain's name uses its own ID where native renaming is supported; off-shift
-    names/replies say so. The predecessor-derived launch nonce remains recovery context, not
+    On first registration a Captain's name uses its own ID where native renaming is supported.
+    After a completed handoff (`ended`, no open intents, verified registered successor), only
+    the outgoing Captain renames its own verified conversation with exactly one `[retired] `
+    prefix, preserving the substantive title and normalizing repeated leading retirement tags.
+    The successor notifies the verified predecessor binding once after registering, so the
+    outgoing chat can finish its own presentation change even after its scheduled wakes stop.
+    Native identity inspection and a fresh `shift current` check protect the incoming/active
+    Captain and unrelated sessions; premature, failed or uncertain handoff leaves names alone.
+    Retries re-read state/identity/title and skip an already correct name. Missing/restricted
+    rename support or title limits are reported, never bypassed by truncation or storage edits.
+    Retirement is presentation only, not election/lease state, archival or writer cleanup;
+    off-shift replies still disclose their role even if renaming fails.
+    The predecessor-derived launch nonce remains recovery context, not
     current identity. No runtime nesting or archive ownership changes.
     The tracked forwarding section is composed into Captain/keeper prompts and generated
     handoffs; retained chats require an explicit verbatim relay after normal deployment.

@@ -43,10 +43,46 @@ resume live coordination or dispatch the owner's work yourself. Resolve and forw
 
 Use your own registered Captain ID when describing yourself, and label `parent_id` as the
 predecessor. Where native rename tools support it, name a registered chat
-`Captain <own ID prefix> [phx]`, and an off-shift chat `Off-shift <own ID prefix> [phx]`.
+`Captain <own ID prefix> [phx]` on first registration only. Do not replace an existing
+substantive title on later wakes or owner interactions.
 A pending successor's `phx captain <predecessor prefix>` is only its recovery launch nonce;
 preserve that identity in its kickoff/registration even if its display name changes.
 If rename is unavailable or restricted, state the current/off-shift role explicitly in replies;
 never claim a rename happened. Do not change runtime nesting or detach chats to clarify names.
 Succession history, writer bindings, creator-owned archive authority, cleanup wakes and retirement
 rules are unchanged.
+
+### Retirement display title
+
+After a completed handoff, the outgoing Captain marks **only its own native conversation**
+with exactly one literal `[retired]` prefix followed by one space, preserving its substantive title.
+This is presentation, not active-Captain election, a lease change, a stop command or archival.
+API registrations/liveness and `phx shift current`, never a title, determine authority.
+
+1. Re-read `phx shift status --captain <your Captain ID>`. Require your exact registration to
+   be `ended`, with no `open_intents`, and a registered successor whose `parent_id` is your
+   Captain ID. Verify that successor's registration, not just its launch name or a successful
+   create-session response. It may already have handed off again. Do not require pending writer
+   cleanup to finish: creator-owned cleanup is separate and may continue after retirement.
+   An `active`, `ending` or merely stale registration, unresolved intents, failed/uncertain
+   handoff or missing successor is not enough; leave the title unchanged and report the condition.
+2. Resolve your own registration's `session_ref` with its matching runtime/provider's native
+   session tools. Verify it is this outgoing conversation, and read its current full title.
+   Run `phx shift current` as a fresh authority check: an unavailable lookup or a result naming
+   your registration/session prevents renaming. Never target the incoming/current Captain, a
+   keeper, a writer, an unrelated chat or a predecessor selected by title. A successor or keeper
+   must not rename another conversation on the outgoing Captain's behalf.
+3. Use the existing native rename tool for this conversation, within its permissions and title
+   limits. Repeatedly remove only leading literal `[retired]` tags and the whitespace immediately
+   following each; prepend `[retired] ` once to the remaining title, preserving it exactly.
+   For example, `Captain abc12345 [phx]` and `[retired] [retired] Captain abc12345 [phx]`
+   both become `[retired] Captain abc12345 [phx]`. Do not substitute an `Off-shift` title,
+   abbreviate, truncate or remove other tags to fit a tool limit. If the exact title already
+   matches, do not rename. On every retry re-read identity, state and title; never prepend to
+   a cached name. Verify the resulting title through native inspection before claiming success.
+4. If inspection or renaming is unsupported, restricted, refused or uncertain, report the exact
+   limitation and keep explicit off-shift wording in replies. Do not bypass permissions, edit
+   runtime storage, repeatedly retry a refusal or claim retirement from an unverified rename.
+   A title failure does not roll back `ended`, restart coordination, alter writer bindings or
+   block the successor. Retained chats retry only on a later normal interaction/cleanup wake
+   when the limitation clears; never bulk-rename historical sessions.

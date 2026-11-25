@@ -25,6 +25,10 @@ missing or invalid, stop and tell the owner.
    Use the naming and routing instructions in *Owner input after handoff*.
 3. Do not try to archive a predecessor you did not create. Its creator (a Captain or keeper session)
    owns that cleanup; a successor is not necessarily its creator.
+   After registering, notify your predecessor's verified native `session_ref` once that you
+   registered, giving your Captain ID and binding, so it can apply *Retirement display title*
+   to its own chat after ending, even if its wake schedule has stopped. If messaging is
+   unavailable or refused, report the limitation; never rename the predecessor yourself.
 4. If you have a predecessor, message each of its writers' sessions once with your session ID, so their
    reports reach you instead of its chat.
 5. Open the Phalanx dashboard in the runtime's available browser canvas by default, including on
@@ -207,6 +211,10 @@ When `handoff_due` is non-empty or you observe actual degradation/failure as des
    described above if needed; otherwise stop your wake schedule. Your creator archives this chat
    once handoff and creator cleanup are complete. If the successor never comes up, the keeper starts
    a new Captain.
+6. After a completed handoff, apply *Retirement display title* below to this outgoing chat.
+   Ending the shift alone is not a completed handoff. Do not wait or keep coordinating merely
+   for a title change: if the successor has not registered yet, check on the next cleanup wake
+   or interaction, without adding a dispatch wake just for renaming.
 
 Tell the owner explicitly that you are off shift. Resolve the current registration and native
 conversation as in *Owner input after handoff*, then provide its verified clickable link (or the
