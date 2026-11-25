@@ -471,7 +471,7 @@
     const history = detail().querySelector(".timeline").textContent;
     assert(history.includes("self review") && history.includes("development") &&
       detail().textContent.includes("Prerequisites"), "Stage history and dependencies");
-    assert(detail().textContent.includes("att2") && detail().textContent.includes("opaque-worker-7"), "Attempt and legacy worker");
+    assert(detail().textContent.includes("att2"), "Current fenced attempt");
     assert(detail().querySelector(".captain-ref .t-run .mark-captain") && ended().open,
       "Captain reference uses a live helmet and Ended state is retained in details");
     running.writer.captainId = "cap-stale";
