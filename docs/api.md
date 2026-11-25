@@ -102,6 +102,8 @@ other execution flags. See [creator-owned cleanup](direct-path.md#creator-owned-
 | `GET /repositories` | Owner or runner | Read registered repositories. |
 | `POST /items` | Owner | File a new item with an initial queued execution. |
 | `GET /items/{item_id}` | Owner or runner | Read the request and current execution, including its version, stage, status, wait and output. |
+| `GET /items/{item_id}/title` | Owner | Read display-title metadata, including its independent revision (initially 0). |
+| `PUT /items/{item_id}/title` | Owner | Set or clear only the display title with `expected_revision`, `title` and a required `Idempotency-Key`. |
 | `GET /items/{item_id}/executions` | Owner or runner | Read past and current executions. |
 | `GET /items/{item_id}/executions/{execution_id}/timeline` | Owner or runner | Read durable transition history and evidence. |
 | `GET /items/{item_id}/executions/{execution_id}/drafts/{revision}` | Owner or runner | Retrieve the exact draft for review. |
@@ -112,6 +114,20 @@ other execution flags. See [creator-owned cleanup](direct-path.md#creator-owned-
 | `POST /items/{item_id}/executions/{execution_id}/stop-confirmed` | Writer | Confirm a cancellation under the current writer binding after accounting for the worker and its effects. |
 
 Intake requires `repository_id` and `goal`; `target` defaults to `checked_in`, preserving explicit `ready_for_check_in` and `report` requests. Optional fields include `context_links`, `acceptance_criteria`, `target_branch` and `priority` (`low`, `normal` or `urgent`). Use an `Idempotency-Key` header when retrying a mutation. The server returns the original response for a replay of the same validated request in its operation scope, or HTTP 409 for a different request under the same key. Registration is keyed by the repository ID and unique remote. Version conflicts also return 409. Versions start at 1 for each execution. A rerun preserves the prior execution and keeps the item's output type.
+
+The display-title route accepts a single-line trimmed title of 1-200 characters, or `null`
+to restore the goal-derived title. Its own `expected_revision` prevents concurrent title
+edits; stale revisions return 409. It returns `item_id`, `revision`, `title`, `changed_by`
+(`owner`) and `created_at`. Successful writes append an audit row, and exact retries replay
+the original receipt. No execution/attempt/writer/scope/output is changed, including for
+running or completed work. This is not queued-only goal Steering. It remains bearer-owner
+only even on a tokenless local board; browser writes require same origin.
+
+Scribe current-item and execution-timeline detail responses include only the stored
+`acceptance_criteria` and `context_links` lists beside the existing projected item. Missing
+lists are `[]`. Queue/group summaries omit those lists. The board does not read arbitrary
+request/result fields to construct a brief. Display titles apply to all item executions,
+including history, search and prerequisites; absent/cleared metadata uses the derived goal.
 
 Results require a matching `attempt_id`, `stage` and `expected_version`, authenticated with
 the current writer token. A successful report-drafting result sends `report_markdown`;

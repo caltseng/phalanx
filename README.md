@@ -96,7 +96,8 @@ Publication records one primary PR. **Publishing a PR or releasing a writer is d
 from verified delivery**: during normal delivery waits the writer stays registered,
 fixes actionable problems on that PR and follows its current target.
 
-- **`checked_in` (default):** the writer enables GitHub auto-merge under repository rules.
+- **`checked_in` (default):** the writer merges or enables GitHub auto-merge only after the
+  [merge decision gates](docs/writer-operations.md#merge-decision-before-auto-merge) pass.
   Completion requires the reconciler to observe a verified merge into the target branch.
 - **`ready_for_check_in`:** completion requires a ready PR on the target base with the
   policy's required checks satisfied, actionable feedback addressed and conflicts resolved.
@@ -112,7 +113,9 @@ GitHub owns PR facts and merging. Its required checks, reviews and rulesets appl
 writer self-review complements those safeguards. Reconciler local-check failures raise
 visible flags for the writer to address. Trusted validation policy defines required ready
 checks. Owners and Captains can steer an open PR item's completion target; the writer
-re-reads it and enables auto-merge only for ready-mode `checked_in` work.
+re-reads it and enables auto-merge only for ready-mode `checked_in` work after those gates pass.
+Publication need not wait for them: the same writer remains in delivery with auto-merge off.
+See the [merge decision and retained-session activation](docs/writer-operations.md#merge-decision-before-auto-merge).
 
 Questions, dependency waits, external waits and retries retain the writer and its context.
 Accepted evidence advances the item to its next stage; verified completion ends the writer.

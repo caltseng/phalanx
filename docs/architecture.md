@@ -140,7 +140,13 @@ Writer bindings have no timed expiry. Nonce replay, expected versions and stoppe
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
 
 The writer self-review stage is not a second independent PR reviewer. GitHub reviews,
-checks and repository rules still apply. The reconciler's trusted local-check failures
+checks and repository rules still apply. The generated writer instructions require the
+[merge decision gates](writer-operations.md#merge-decision-before-auto-merge) **before**
+merge or auto-merge activation.
+Publication can finish first with auto-merge off and the same writer waiting in delivery.
+This prompt boundary adds no engine approval predicate, review agent or lifecycle stage.
+Self-review and previous-head/content-only approval cannot satisfy independent final review.
+The reconciler's observations do not certify that review. Trusted local-check failures
 are flags, not another Phalanx delivery gate. Required ready checks come from trusted
 policy; missing policy is not success. A verified merge into the target by anyone
 completes either PR target, with `merge` or combined `squash_or_rebase` provenance.
@@ -211,6 +217,17 @@ reservations and allocations remain in place; there is no schema/configuration c
 Writers do not restart services or patch retained/live configuration to activate this.
 
 ### Shipped code is not installation state
+
+Scribe briefs are allowlisted from the existing request only on current-item/execution
+detail reads. Owner-only display titles use the separate append-only `item_titles` table,
+with their own revision fence and audit identity/time. They do not mutate work scope,
+execution state/version, attempts or outputs. The insert invalidates board ETags, so
+unchanged polls remain no-ops while actual title changes refresh normally. This source
+change needs a service-owner deployment of the API, schema step and static assets before
+the route is available. It does not itself restart a service or alter the live database.
+Only after that deployment may an owner read the title revision, PUT the requested title
+with a stable idempotency key and read back both metadata and the Scribe caption. Never
+use queued-only goal Steering, stage interruption or direct database edits as a substitute.
 
 The two writer limits are persisted in `dispatch_settings`: `max_building_writers` (Building,
 initially five) and `max_writers` (Total, initially ten on new installs), editable as an atomic

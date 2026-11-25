@@ -15,7 +15,7 @@ from .dispatch_schema import (
 )
 from .finalization_schema import FINALIZATION_SCHEMA
 from .intake_schema import INTAKE_SCHEMA
-from .operator_schema import BLOCKER_SCHEMA, DASHBOARD_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
+from .operator_schema import BLOCKER_SCHEMA, DASHBOARD_SCHEMA, ITEM_TITLE_SCHEMA, OPERATOR_SCHEMA, WORKER_SCHEMA
 from .reconciliation_schema import RECONCILIATION_SCHEMA
 from .wait_schema import WAIT_SCHEMA
 
@@ -122,6 +122,7 @@ MIGRATIONS = (
     CAPTAIN_COMPACTION_SCHEMA,
     CONCURRENCY_SCHEMA,
     WRITER_CAPACITY_SCHEMA,
+    ITEM_TITLE_SCHEMA,
 )
 
 

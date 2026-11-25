@@ -179,7 +179,7 @@ repositories = ["phalanx-pilot-py"]
 allowed_actions = ["launch, confirm, replace and withdraw writer sessions", "answer routine questions", "coordinate delivery through each current target, including checked_in merges under repository rules"]
 escalate = ["scope changes", "destructive actions", "missing credentials or authority"]
 stop_when = ["the owner ends the pilot"]
-notes = "Optional context for every Captain."
+notes = "Own progress and outcomes on each scheduled wake and material work event: assess evidence, proactively unblock within existing authority, and verify the effect."
 
 [shift]
 max_hours = 24
@@ -194,7 +194,28 @@ authority from item content or silently retarget existing work. Required indepen
 exact-head review, CI/branch protections, dependency integration, credentials and repository
 trust still apply. Missing authority or access remains a visible blocker.
 
-`[shift]` is optional. Its positive-integer `max_hours` defaults to 4, measured from
+**Progress and outcome accountability is a core Captain duty**, not an optional status note.
+On every ordinary scheduled wake and material work event, ask whether work is progressing
+as expected, what is stalled or at risk, and what the Captain can unblock within existing
+authority. Take the next useful authorized action and verify its effect in fresh evidence.
+Use stage-appropriate committed progress/validation, dependency pins, CI/check runs,
+exact-head review, target-main integration and verified merge/report evidence. Busy sessions,
+fully occupied capacity, recorded holds, PR publication or a polling heartbeat alone do not
+establish delivery progress. Healthy implementation, running checks and legitimate waits
+are not stalls; do not interrupt or replace healthy writers to manufacture activity.
+
+Resolve routine validation/questions and delegated decisions, revalidate stale holds and
+reconciliation, and refill genuinely available eligible Building/Total capacity with waiting
+PR fixes preferred. Retain the same writer and Building handoff discipline through review,
+CI, integration and check-in. Record each unresolved blocker's concrete reason, responsible
+actor and next action or resume trigger in existing actions/questions/handoff notes.
+Escalate only missing authority/access, safety issues or owner decisions with an actionable
+question, not routine delegated decisions. For checked-in work, keep auto-merge off until
+independent final exact-head approval and applicable required gates; preserve required CI,
+actual-main integration where applicable and merge safeguards. This policy adds no access,
+trust/privacy/source permission, capacity exception, ownership bypass or owner-only merge gate.
+
+`[shift]` is optional. Its positive-integer `max_hours` defaults to 24, measured from
 Captain registration (D7, amended for elapsed-time-only rotation). Remove retired
 `max_wakes` and `max_compactions` keys; they are rejected, not silently ignored.
 Wakes and successful compactions are telemetry only; compaction is a checkpoint.
@@ -370,6 +391,44 @@ a compact briefing; every 90 elapsed minutes it also returns the full canonical 
 Read that workflow, then run its `reinforcement.acknowledgement_arguments` using the same
 configured CLI. Failed or unread output remains due, acknowledgements are idempotent and
 missed intervals coalesce. Non-wake observation heartbeats never consume reinforcement.
+The compact ordinary-wake briefing carries the progress/unblocking duty even when full
+reinforcement is not due. The existing five-minute reconciliation, 90-minute reinforcement
+and 24-hour handoff suffice: there is no new scheduler, watchdog, arbitrary stall-age SLA,
+accounting subsystem or lifecycle/dispatch gate. These are delivered operating instructions,
+not a claim that prose mechanically guarantees delivery outcomes.
+Queued five-minute wake prompts do not refresh Captain liveness while a lengthy turn is still
+running. Break long coordination into bounded batches and post the existing non-wake
+`shift heartbeat --captain ID` between them before staleness. A current heartbeat is necessary
+for coordination ownership but is not evidence that an item advanced. No new scheduler,
+watchdog, compaction trigger or invented telemetry is needed.
+
+**Adoption boundary:** changing tracked prompts or `deploy init`'s default charter does not
+rewrite a live operator charter or an already-running session's context. The operator owns
+live charter changes. Record the current live `shift charter` revision (SHA-256) and the
+revision actually read by the Captain. A retained Captain adopts the current canonical
+workflow when it reads it explicitly or through the existing due reinforcement; do not
+acknowledge unread instructions. Forward changed writer instructions verbatim through the
+existing protocol, without granting new authority. Successor/keeper handoffs carry the charter
+revision, last meaningful stage evidence, unresolved reasons/actors/next actions or triggers,
+holds and pending verification, while preserving writer bindings and execution ceilings.
+
+Rollout evidence for this change (2026-11-25): the operating Captain reported live charter
+revision `741470d78385195f3f24bd1b3f6a857940a2f4908a0e5d741c4ffaba3beb0fdf`,
+verified against the file and adopted by non-wake heartbeat at 14:32 UTC. Its retained
+canonical workflow was PR #250, commit `b981351b6f9e652f592aafcaa2b8b2f8db426964`,
+with reinforcement interval 1 read and acknowledged. The live charter accountability policy
+was active, but this change's tracked briefing/template was not yet installed or adopted.
+This is a historical adoption boundary, not the current revision for every deployment:
+re-read live state at rollout. At the subsequent retained-session handoff, the coordinating
+Captain reported current live charter policy revision
+`6ecf52b3b9822e6238735ca0f852b283bbf4bd626dae6b7338ffef24c6efdbee`, adding explicit
+non-wake heartbeats/bounded coordination during long turns after a real heartbeat gap.
+This source update does not itself install or adopt that tracked wording in retained sessions.
+No live charter edits or service restarts are part of this PR.
+Publication-gate item `dc5ddb6acaf24726874ad9dca2cfa353` (PR #255) changes the writer kickoff
+and worker merge instructions, not these Captain/default-charter hunks. Coordinate those
+instructions at integration/rollout without treating unrelated work as a blanket dependency.
+
 It runs `shift handoff`, which marks it `ending` (at most 30 minutes) and returns a successor name, `phx captain <id prefix>`, and its kickoff. The Captain starts that chat, finishes or abandons its unconfirmed launches, cleans up its ended children, and heartbeats `--state ended` without waiting for the successor. It then stops coordinating, retaining only creator cleanup if necessary. Captain states only move forward: `active`, `ending`, `ended`. A Captain that stops heartbeating for 15 minutes, or stays `ending` past 30 minutes, is stale, and any live Captain or the keeper takes over its unconfirmed launches; this does not authorize archival of unfinished work.
 
 ### Retained chats and owner-message forwarding

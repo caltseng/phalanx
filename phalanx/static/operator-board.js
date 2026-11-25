@@ -893,6 +893,19 @@
       }
       box.append(links);
       box.append(h("div", { class: "goal", text: item.goal || item.title }));
+      for (const [heading, entries, linkEntries] of [
+        ["Acceptance criteria", item.acceptanceCriteria, false],
+        ["Supporting context", item.contextLinks, true]
+      ]) {
+        const content = entries?.length ? h("ul", { class: "brief-list" }, entries.map(text => {
+          const url = linkEntries && /^https?:\/\//i.test(text) && safeUrl(text);
+          return h("li", { class: "pre" }, url ? h("a", { href: url, text }) : text);
+        })) : h("p", { class: "faint", text: "None provided." });
+        const lengthy = entries?.length > 5 || entries?.join("\n").length > 1200;
+        box.append(lengthy
+          ? h("details", { class: "block work-brief" }, h("summary", { text: heading + " (" + entries.length + ")" }), content)
+          : h("div", { class: "block work-brief" }, h("h4", { text: heading }), content));
+      }
       box.append(observedUsage(data.usage, item.id));
       box.append(facts([
         ["Status", item.outcome ? label(outcomeKey(item)) : label(item.status)],

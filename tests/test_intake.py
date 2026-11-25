@@ -56,6 +56,66 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         return {"expected_version": updated["version"], "attempt_id": claim["attempt_id"],
                 "stage": updated["state"]["stage"], "outcome": "succeeded"}
 
+    def test_title_metadata_is_owner_only_fenced_and_does_not_change_active_or_closed_work(self):
+        item, _, base, execution = self.create()
+        self.claim(item, execution)
+        route = base + "/title"
+        self.assertEqual(self.get(route, OWNER)[1]["revision"], 0)
+        before = self.get(base, OWNER)[1]
+        with connect(self.path) as db:
+            attempts = list(map(tuple, db.execute("SELECT * FROM attempts")))
+            writers = list(map(tuple, db.execute("SELECT * FROM writers")))
+            history = list(map(tuple, db.execute("SELECT * FROM transition_history")))
+        title = {"expected_revision": 0, "title": "Require independent review before auto-merging PRs"}
+        headers = {"Idempotency-Key": "rename"}
+        for token, status in ((None, 401), (RUNNER, 403), (LEASE, 403)):
+            self.assertEqual(self.request(route, token, title, headers, method="PUT")[0], status)
+        self.assertEqual(self.request(route, OWNER, title, headers | {"Origin": "null"},
+                                      method="PUT")[0], 403)
+        saved = self.request(route, OWNER, title, headers, method="PUT")
+        self.assertEqual(saved[0], 200, saved)
+        self.assertEqual((saved[1]["title"], saved[1]["revision"], saved[1]["changed_by"]),
+                         (title["title"], 1, "owner"))
+        self.assertEqual(self.request(route, OWNER, title, headers, method="PUT"), saved)
+        self.assertEqual(self.request(route, OWNER, title, {"Idempotency-Key": "stale"},
+                                      method="PUT")[0], 409)
+        self.assertEqual(self.get(base, OWNER)[1], before)
+        with connect(self.path) as db:
+            self.assertEqual(list(map(tuple, db.execute("SELECT * FROM attempts"))), attempts)
+            self.assertEqual(list(map(tuple, db.execute("SELECT * FROM writers"))), writers)
+            self.assertEqual(list(map(tuple, db.execute("SELECT * FROM transition_history"))), history)
+        for invalid in ("", " ", "two\nlines", "x" * 201):
+            self.assertEqual(self.request(route, OWNER, dict(title, title=invalid),
+                                          headers, method="PUT")[0], 422)
+        # Complete real report stages without replacing or interrupting the open attempt.
+        with connect(self.path) as db:
+            attempt_id = db.execute("SELECT id FROM attempts WHERE ended_at IS NULL").fetchone()[0]
+        state = before["execution"]
+        draft = "A completed report."
+        from hashlib import sha256
+        revision = sha256(draft.encode()).hexdigest()
+        for stage, evidence in (
+            ("report_drafting", {"report_markdown": draft}),
+            ("report_review", {"report_revision": revision}),
+            ("report_storage", {"report_revision": revision}),
+        ):
+            payload = {"expected_version": state["version"], "attempt_id": attempt_id, "stage": stage,
+                       "outcome": "succeeded", **evidence}
+            status, state = self.request(execution + "/result", LEASE, payload)
+            self.assertEqual(status, 200, state)
+            with connect(self.path) as db:
+                attempt = db.execute("SELECT id FROM attempts WHERE ended_at IS NULL").fetchone()
+                attempt_id = attempt["id"] if attempt else None
+        closed = self.get(base, OWNER)[1]
+        self.assertEqual(closed["execution"]["state"]["status"], "completed")
+        cleared = self.request(route, OWNER, {"expected_revision": 1, "title": None},
+                               {"Idempotency-Key": "clear"}, method="PUT")
+        self.assertEqual((cleared[0], cleared[1]["revision"], cleared[1]["title"]), (200, 2, None))
+        self.assertEqual(self.get(base, OWNER)[1], closed)
+        with connect(self.path) as db:
+            audit = list(db.execute("SELECT title, changed_by FROM item_titles ORDER BY revision"))
+            self.assertEqual([tuple(row) for row in audit], [(title["title"], "owner"), (None, "owner")])
+
     def test_busy_store_returns_retryable_503(self):
         item, body, _, _ = self.create()
         request = Request(self.url + "/v1/items", data=json.dumps(body).encode("utf-8"), method="POST",
