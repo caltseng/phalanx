@@ -118,6 +118,8 @@
         version: row.version,
         title: row.title,
         goal: row.goal,
+        acceptanceCriteria: row.acceptance_criteria,
+        contextLinks: row.context_links,
         target: row.target,
         publicationMode: row.publication_mode,
         repo: row.repository_id,

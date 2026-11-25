@@ -137,6 +137,24 @@ def inspect(db, item_id):
     }
 
 
+def display_title(db, item_id):
+    item_row(db, item_id)
+    row = db.execute(
+        "SELECT * FROM item_titles WHERE item_id=? ORDER BY revision DESC LIMIT 1", (item_id,),
+    ).fetchone()
+    return (dict(row) if row else
+            {"item_id": item_id, "revision": 0, "title": None, "changed_by": None, "created_at": None})
+
+
+def set_display_title(db, item_id, payload):
+    current = display_title(db, item_id)
+    if current["revision"] != payload.expected_revision:
+        raise Conflict("Display title revision has changed")
+    db.execute("INSERT INTO item_titles VALUES (?, ?, ?, 'owner', ?)",
+               (item_id, current["revision"] + 1, payload.title, timestamp()))
+    return display_title(db, item_id)
+
+
 def history(db, item_id):
     item_row(db, item_id)
     return [execution_view(row) for row in db.execute(

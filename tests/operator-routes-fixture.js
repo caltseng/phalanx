@@ -37,6 +37,12 @@
     "- Keep the complete first requirement.\n- Preserve the second requirement.\n\n" +
     "https://example.com/" + "long-path-".repeat(40) + "\n\n" + "long-filename-".repeat(40) + ".md\n\n" +
     "A detailed approval paragraph with all of its context. ".repeat(40) + "\n\nEnd of approval draft.";
+  let emptyBrief = false;
+  const criteria = ["<img src=x onerror=alert(1)>", "Complete requirement. ".repeat(100)];
+  const context = ["A plain note\nwith two lines", "docs\\work-items.md", "https://example.com/brief",
+    "javascript:alert(1)", "https://user:password@example.com/private", "<script>alert(1)</script>"];
+  const withBrief = item => ({ ...item, acceptance_criteria: emptyBrief ? [] : criteria,
+    context_links: emptyBrief ? [] : context });
   let readingLayout = false;
   let ageOffset = 0;
   const waitingRow = () => ({ ...row, status: "waiting_for_input", outcome: null, output: null,
@@ -102,11 +108,11 @@
         { id: "cap-stale", state: "active", live: false, stale: true, heartbeat_at: now, compaction_count: null },
         { id: "cap-ended", state: "ended", live: false, stale: false, heartbeat_at: now, compaction_count: 0 }
       ] });
-      if (path === "/v1/operator/items/" + id) return fail ? json({}, 404) : snapshot({ item: row });
+      if (path === "/v1/operator/items/" + id) return fail ? json({}, 404) : snapshot({ item: withBrief(row) });
       if (path.startsWith("/v1/operator/executions/" + execution + "/timeline?")) {
         if (fail) return json({}, 404);
         const cursor = new URL(path, location.origin).searchParams.get("cursor");
-        return snapshot({ item: readingLayout ? waitingRow() : row, attempt: null, prerequisites: [],
+        return snapshot({ item: withBrief(readingLayout ? waitingRow() : row), attempt: null, prerequisites: [],
           question: readingLayout ? { prompt: approval, options: [approval], proposed_default: approval } : null,
           previous_execution_id: previous, next_execution_id: null,
           events: [{ created_at: now, stage: "report_storage", status: "completed", event: "result" }],
@@ -141,6 +147,25 @@
     await until(() => app.doc.querySelector(".detail-links"));
     assert(calls.includes("/v1/operator/items/" + id), "Item route resolves the current execution");
     assert(app.doc.querySelector(".goal").textContent === row.goal, "Item route reuses full existing detail");
+    const assertBrief = () => {
+      const blocks = [...app.doc.querySelectorAll(".work-brief")];
+      assert(blocks.length === 2, "Both labeled brief blocks render");
+      assert(blocks[0].querySelector("summary").textContent === "Acceptance criteria (2)",
+        "Long criteria use native keyboard-accessible disclosure");
+      assert(blocks[0].querySelector("li").textContent === criteria[0] &&
+        !blocks[0].querySelector("img,script"), "User-supplied criteria remain literal text");
+      assert(blocks[1].querySelectorAll("a").length === 1 &&
+        blocks[1].querySelector("a").href === context[2], "Only explicit safe URLs become links");
+      assert(blocks[1].textContent.includes(context[0]) && blocks[1].textContent.includes(context[1]),
+        "Plain notes and paths remain readable text");
+      blocks[0].querySelector("summary").focus();
+      assert(app.doc.activeElement === blocks[0].querySelector("summary"), "Disclosure is keyboard focusable");
+      blocks[0].open = true;
+      assert(blocks[0].querySelectorAll("li")[1].textContent === criteria[1], "Long content is complete, not truncated");
+      assert([...app.doc.querySelectorAll(".block h4")].some(node => node.textContent === "Observed usage"),
+        "Observed usage remains alongside the brief");
+    };
+    assertBrief();
     assert(app.doc.querySelector('.facts a[href="' + writerUrl + '"]')?.title.includes("unverified"),
       "Real HTTP adapter preserves a native session and honest availability on item details");
     assert(app.doc.querySelector('a[href="/operator/executions/' + previous + '"]'), "Previous execution is one click away");
@@ -151,6 +176,21 @@
 
     app = await load("/operator/executions/" + execution);
     await until(() => app.doc.querySelector(".detail-links"));
+    assertBrief();
+    for (const width of [1280, 390, 320]) {
+      frame.style.width = width + "px";
+      for (const block of app.doc.querySelectorAll(".work-brief")) block.open = true;
+      await new Promise(resolve => app.win.requestAnimationFrame(resolve));
+      assert(app.doc.documentElement.scrollWidth <= width, "Full briefs wrap at " + width + "px");
+    }
+    emptyBrief = true;
+    for (const path of ["/operator/items/" + id, "/operator/executions/" + execution]) {
+      app = await load(path);
+      await until(() => app.doc.querySelector(".detail-links"));
+      assert([...app.doc.querySelectorAll(".work-brief p")].every(node => node.textContent === "None provided.") &&
+        app.doc.querySelectorAll(".work-brief p").length === 2, "Absent criteria and context are explicit on " + path);
+    }
+    emptyBrief = false;
     assert(app.doc.querySelector('.facts a[href="' + writerUrl + '"]'), "Closed execution permalink retains writer link");
     assert(!calls.some(path => path.startsWith("/v1/operator/items/")), "Execution route preserves exact execution");
     app.doc.querySelector("[data-report]").focus();
@@ -380,7 +420,11 @@
     await unchangedPoll(5);
     app.doc.querySelector(".sec-active [data-item]").click();
     await until(() => app.doc.querySelector(".detail-links"));
+    const retainedBrief = app.doc.querySelector(".work-brief");
+    retainedBrief.open = true;
     await unchangedPoll(6);
+    assert(retainedBrief.isConnected && retainedBrief.open,
+      "Unchanged polling preserves brief disclosure DOM and user state");
     const ages = [...app.doc.querySelectorAll(".sections time[datetime]")].map(node => ({
       node, text: node.textContent, title: node.title, context: node.dataset.ageContext
     }));

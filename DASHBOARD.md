@@ -263,6 +263,15 @@ checks the complete header height, disclosure/focus/Escape behavior, applied and
 state, theme cycle, refresh, global search, URL filters and pagination. The separate intake
 fixture exercises the real modal and owner-authentication client flows.
 
+Current-item and execution details show **Acceptance criteria** and **Supporting context**
+from the stored brief, alongside the goal, Observed usage, facts, actions and history.
+Lists retain their complete text and wrap notes, paths and long URLs. Lengthy lists use
+native keyboard-accessible disclosures; absent lists say **None provided.** Only explicit
+HTTP(S) URLs accepted by the existing safe URL helper become links; all content is rendered
+as text, never HTML. Queue rows stay compact and do not fetch full briefs. Owner-only
+display-title metadata can clarify an item's caption without editing its goal or lifecycle;
+there is no general editor.
+
 Stored reports render in the existing report dialog as a local, dependency-free Markdown
 subset: headings, paragraphs, emphasis, links, lists, quotes, tables and fenced/inline code.
 Raw HTML tags/comments are stripped, images become alt text, and code stays literal.

@@ -31,6 +31,11 @@ See [deployment tooling and migration](docs/deployment.md).
 - An item has ID, registered repository, goal, output type (`report` or `pull_request`),
   timestamps, and one current execution. Optional fields include context, acceptance
   criteria, target branch, grouping label, priority, affinity and dependencies.
+- Owners can set a short item display title independently of its immutable work scope.
+  An append-only, revision-fenced title audit applies to running and completed work without
+  changing execution versions, attempts, writers or outputs; clearing it restores the
+  goal-derived title. Scribe loads stored acceptance criteria and supporting context only
+  for authorized current-item/execution details, not each queue row.
 - A repository has a stable ID and expected remote. Local mappings verify the checkout and
   base before work. Repository instructions apply. Missing mappings or prepared checks
   environments are visible blockers, not permission to improvise another environment.

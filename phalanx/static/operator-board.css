@@ -274,6 +274,10 @@ body { margin: 0; }
 }
 .block { min-width: 0; overflow-wrap: anywhere; }
 .block > .pre { margin: 0; }
+.work-brief > summary { cursor: pointer; color: var(--muted); padding: .2rem 0; }
+.work-brief > p { margin: 0; }
+.brief-list { margin: .25rem 0 0; padding-left: 1.4rem; display: grid; gap: .35rem; }
+.brief-list li { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .block .plain { margin: 0; padding: 0; list-style: none; display: grid; gap: .15rem; }
 .ask { padding: .5rem .6rem; border-left: 3px solid var(--attn); background: var(--attn-bg); border-radius: 0 6px 6px 0; }
 .ask p { margin: .2rem 0; }

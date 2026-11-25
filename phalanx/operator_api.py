@@ -42,6 +42,7 @@ SUMMARY = """
            execution.stage, execution.status, execution.state_json, execution.retry_at, execution.handoff_head,
            execution.ready_since, item.created_at AS item_created_at, item.label,
            item.repository_id, json_extract(item.request_json, '$.goal') AS goal,
+           title.title AS display_title,
            execution.queue_affinity AS runner_affinity, execution.dependency_wait_json,
            json_extract(item.request_json, '$.target') AS target,
            progress.last_advanced_at, progress.wait_since, progress.revision_round,
@@ -69,6 +70,9 @@ SUMMARY = """
             WHERE attempt.execution_id = execution.id AND attempt.ended_at IS NULL) AS stage_owner
     FROM executions AS execution
     JOIN work_items AS item ON item.id = execution.item_id
+    LEFT JOIN item_titles AS title ON title.item_id = item.id AND title.revision = (
+        SELECT max(revision) FROM item_titles WHERE item_id = item.id
+    )
     JOIN operator_progress AS progress ON progress.execution_id = execution.id
     LEFT JOIN operator_pr AS pr ON pr.execution_id = execution.id
     LEFT JOIN external_rechecks AS recheck
@@ -316,7 +320,7 @@ def summary(row, now, context):
         "id": row["id"],
         "item_id": row["item_id"],
         "version": row["version"],
-        "title": short_title(row["goal"]),
+        "title": row["display_title"] or short_title(row["goal"]),
         "goal": row["goal"],
         "label": row["label"],
         "target": state["target"],
@@ -394,9 +398,10 @@ def filter_clause(filters):
         number = PR_NUMBER.fullmatch(query)
         clauses.append(
             """(instr(lower(json_extract(item.request_json, '$.goal')), lower(?)) > 0
+                OR instr(lower(title.title), lower(?)) > 0
                 OR execution.item_id = ? OR execution.id = ? OR pr.url = ? OR pr.number = ?)"""
         )
-        params.extend((query, query, query, query, int(number[1]) if number else None))
+        params.extend((query, query, query, query, query, int(number[1]) if number else None))
     return "".join(f" AND {clause}" for clause in clauses), params
 
 
@@ -577,6 +582,16 @@ def overview(request: Request, response: Response):
 CURRENT = "NOT EXISTS (SELECT 1 FROM executions AS later WHERE later.previous_id = execution.id)"
 
 
+def brief(db, item_id):
+    row = db.execute(
+        """SELECT json_extract(request_json, '$.acceptance_criteria') AS criteria,
+                  json_extract(request_json, '$.context_links') AS context
+           FROM work_items WHERE id=?""", (item_id,),
+    ).fetchone()
+    return {"acceptance_criteria": json.loads(row["criteria"] or "[]"),
+            "context_links": json.loads(row["context"] or "[]")}
+
+
 @router.get("/operator/items/{item_id}")
 def current_item(request: Request, response: Response, item_id: Identifier):
     now = datetime.now(UTC)
@@ -590,7 +605,8 @@ def current_item(request: Request, response: Response, item_id: Identifier):
         if unchanged is not None:
             return unchanged
         context = dispatch_context(db, now)
-    return {"item": summary(row, now, context)}
+        work_brief = brief(db, item_id)
+    return {"item": {**summary(row, now, context), **work_brief}}
 
 
 @router.get("/operator/groups/{label}")
@@ -679,7 +695,9 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         ).fetchone()
         prerequisites = db.execute(
             """SELECT json_extract(block.value, '$.upstream_id') AS item_id,
-                      json_extract(upstream.request_json, '$.goal') AS title,
+                      coalesce((SELECT title FROM item_titles WHERE item_id = upstream.id
+                                ORDER BY revision DESC LIMIT 1),
+                               json_extract(upstream.request_json, '$.goal')) AS title,
                       json_extract(block.value, '$.milestone') AS milestone,
                       json_extract(block.value, '$.reason') AS reason
                FROM executions AS execution
@@ -764,8 +782,9 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         usage = projection(db, execution["item_id"], execution_id)
         now = datetime.now(UTC)
         context = dispatch_context(db, now)
+        work_brief = brief(db, execution["item_id"])
     return {
-        "item": summary(execution, now, context),
+        "item": {**summary(execution, now, context), **work_brief},
         "usage": usage,
         "attempt": attempt["id"] if attempt else None,
         "previous_execution_id": relatives["previous_id"],
