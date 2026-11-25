@@ -12,7 +12,7 @@ command prints JSON. The server holds all state. Don't keep your own notes about
 
 The charter file named in the shift config is your standing authority. It sets your goal, your
 in-scope repositories, your allowed actions, when to escalate and when to stop. Every wake re-reads
-it through `phx shift heartbeat`, and the server records its revision. Act only within that authority,
+it through `phx shift wake`, and the server records its revision. Act only within that authority,
 as amended by explicit owner instructions. If it is missing or invalid, stop and tell the owner.
 
 PR intake defaults to `checked_in`: deliver the actual merge on the owner's behalf, not merely
@@ -25,6 +25,14 @@ the owner explicitly changes them through the supported controls. Never downgrad
 or ask for routine merge permission solely because of superseded notes. Required independent
 exact-head review, checks, branch protections, dependency integration, credentials and repository
 trust still apply; missing authority or access is a visible blocker, not permission to bypass them.
+
+Normal rotation is elapsed-time only: 24 hours from the registration's `created_at`
+by default (`[shift].max_hours`). Keep the five-minute wake/reconciliation schedule; 24
+hours is the shift lifetime, not the wake interval. Queue completion, an empty queue,
+dependency/external waits, wake counts and compaction counts never end a shift early,
+even if older charter notes or stop conditions say otherwise. While idle or blocked,
+retain ownership, record visible wait reasons and reconcile on schedule until rotation.
+An explicit owner stop or genuine authority/safety failure remains an exception.
 
 Normal owner-authenticated API and dashboard intake in the charter's `repositories` is authorized
 for pickup by default. An item ID need not appear in `notes`, a named lane or a handoff.
@@ -58,19 +66,26 @@ Never wait for a per-item charter edit for otherwise eligible intake.
 
 Do these steps in order and keep each wake short:
 
-1. **Heartbeat.** Run `phx shift heartbeat --captain <id> --wake`. If `shift.handoff_due` is non-empty,
+1. **Heartbeat and reinforcement.** Run `phx shift wake --captain <id>`. This records one wake
+   and returns a compact briefing and the freshly loaded charter. Every 90 elapsed minutes
+   from registration, it also returns this full canonical workflow. Read it in full, then
+   run the returned `reinforcement.acknowledgement_arguments` with the same configured CLI.
+   Never acknowledge unread output. Retry the same acknowledgement after an uncertain reply.
+   The server retains pending reinforcement across non-wake heartbeats, missed wakes,
+   failures and process restarts; delayed wakes coalesce elapsed intervals into one current
+   reinforcement. Repeat calls after acknowledgement do not repeat it within that interval.
+   No compaction hook, separate reminder scheduler or local timing file is used.
+   Do not add a second `--wake` heartbeat. If `shift.handoff_due` is non-empty,
    or you notice actual degradation or failure, go to *Ending a shift* after this wake.
    When your runtime exposes a cumulative count of **successful** context compactions for this native
-   session, include `--compaction-count <count>` on the heartbeat. Refresh it each wake and before
+   session, report `--compaction-count <count>` on a non-wake heartbeat. Refresh it each wake and before
    ending. Report zero only when the runtime explicitly reports zero. If telemetry is unavailable or
    incomplete, omit the option; never infer a total from wakes, tokens, checkpoint files, compaction
    attempts or the mere presence of a summary. Failed attempts do not count. The server preserves a
    known count when omitted and counts repeated cumulative reports only once.
-   The authoritative successful-compaction threshold is the charter's `[shift].max_compactions`,
-   returned as `shift.max_compactions`. An ordinary successful compaction below that threshold is
-   a checkpoint, not a mandatory handoff. Unavailable telemetry stays unknown: it does not trigger
-   a first-compaction fallback. Elapsed-time/wake bounds still apply independently, as do actual
-   degradation/failure signals: three failed actions in a row, a self-raised deviation flag
+   Compaction is a checkpoint, not a mandatory handoff, regardless of count. Wake and compaction
+   counts are telemetry only; unavailable telemetry stays unknown, with no first-compaction fallback.
+   Actual degradation/failure signals remain independent: three failed actions in a row, a self-raised deviation flag
    (`captain_idle_with_work` or an `orphan_session` you created), or a missed heartbeat noticed on waking.
 2. **Reconcile.** Run `phx shift status --captain <id>`. Read the `flags`, the `captains`, your exact
    `captain` cleanup record and the charter's open `items`. `pickup_candidates` is the real
@@ -273,5 +288,8 @@ The handoff's `off_shift_instructions` is the durable forwarding section, not an
 Finish within 30 minutes of `ending`. After that the server treats you as stale and any live Captain,
 or the keeper, takes over your unconfirmed launches.
 
-Stop for good when a charter stop condition holds. End with `--state ended` and a handoff note that starts
-`Stop condition met:` and says which one. The keeper then leaves the work alone until the charter changes.
+Stop for good on an explicit owner stop, not queue completion or dependency/external waits.
+End with `--state ended` and a handoff note that starts `Stop condition met:` and records that
+owner instruction. The keeper then leaves the work alone until the charter changes.
+Missing/invalid authority or an unrecoverable safety failure requires a visible reason and
+owner escalation, not a success-shaped queue-completion stop.

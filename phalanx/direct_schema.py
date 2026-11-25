@@ -9,6 +9,7 @@ DIRECT_SCHEMA = (
         parent_id TEXT REFERENCES captains(id),
         state TEXT NOT NULL CHECK (state IN ('active', 'ending', 'ended')),
         wake_count INTEGER NOT NULL DEFAULT 0,
+        reinforced_interval INTEGER NOT NULL DEFAULT 0 CHECK (reinforced_interval >= 0),
         focus_json TEXT NOT NULL DEFAULT '[]',
         sessions_json TEXT NOT NULL DEFAULT '[]',
         handoff_note TEXT,
