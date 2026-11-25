@@ -92,7 +92,14 @@ uses synthetic Captains to select named work read-only. All work mutations use t
 Captain registration, writer attempt/progress/result and owner/reconciler APIs. Random choices
 use a fixed seed; wall timings vary. Invariant/fault violations exit nonzero; timing targets
 must be compared with the JSON measurements separately. The small CI configuration covers
-the same fault cases.
+the same fault cases in one standalone Ubuntu/Python 3.14 job per workflow run, outside
+the cross-platform unit-test shards. The required `Tests` check includes both the shards
+and this probe. Its JSON measurements are saved in the `envelope` workflow artifact.
+Run the same CI configuration locally with:
+
+```powershell
+python tests\envelope_probe.py --executions 1000 --due-waits 200 --fanout 60 --throttled 2 --captains 2 --max-writers 2 --duration 20 --throttle-seconds 4 --outage-seconds 3 --aging-seconds 10 --json-out envelope.json
+```
 
 [#209](https://github.com/caltseng/phalanx/pull/209) records the first part-1 direct default-scale
 comparison and decision 87's authenticated timing exception: invariant/fault checks passed,
