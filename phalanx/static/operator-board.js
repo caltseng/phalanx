@@ -16,20 +16,7 @@
   const DISPLAY_LABEL = { checked_in: "Merged", queue_backlogged: "Queue backlogged",
     captain_idle_with_work: "Dispatch overdue" };
   const absolute = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
-
-  function h(tag, props = {}, ...children) {
-    const node = document.createElement(tag);
-    for (const [key, value] of Object.entries(props)) {
-      if (value == null || value === false) continue;
-      if (key === "text") node.textContent = value;
-      else if (key === "class") node.className = value;
-      else node.setAttribute(key, value === true ? "" : value);
-    }
-    for (const child of children.flat()) {
-      if (child != null && child !== false) node.append(child);
-    }
-    return node;
-  }
+  const { h, safeUrl } = window.PhalanxOperatorHelpers;
 
   function label(value) {
     return DISPLAY_LABEL[value] || (value ? String(value).replaceAll("_", " ") : "unknown");
@@ -77,17 +64,6 @@
       "aria-label": [context, text, stamp(time)].filter(Boolean).join(" · "), text });
   }
 
-  function safeUrl(value) {
-    if (!value) return null;
-    try {
-      const url = new URL(value, document.baseURI);
-      if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
-    } catch {
-      // Missing or invalid link.
-    }
-    return null;
-  }
-
   function sessionTarget(record = {}) {
     if (["missing", "deleted"].includes(record.sessionAvailability)) {
       return { url: null, reason: "session " + record.sessionAvailability };
@@ -103,12 +79,7 @@
           (!record.sessionId || record.sessionId.toLowerCase() === native[2].toLowerCase())) {
         url = reference;
       } else if (typeof reference === "string" && /^https:\/\/[^\s\\]+$/.test(reference)) {
-        try {
-          const parsed = new URL(reference);
-          if (!parsed.username && !parsed.password) url = parsed.href;
-        } catch {
-          // A malformed recorded URL is unavailable, not a reason to guess another app.
-        }
+        url = safeUrl(reference, { httpsOnly: true });
       } else if (!record.sessionUrl && prefix && new RegExp("^" + uuid + "$").test(reference) &&
           (!record.sessionId || record.sessionId.toLowerCase() === reference.toLowerCase())) {
         url = prefix + reference;
