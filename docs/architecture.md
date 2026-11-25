@@ -86,6 +86,9 @@ local shorthand, not a separately installed executable.
   before off-shift chats forward owner input. The tracked
   [forwarding section](../phalanx/prompts/forwarding.md) is composed into Captain/keeper prompts
   and handoffs; retained chats require an explicit relay after deployment.
+  The Captain prompt owns coordination, rotation, startup and creator-cleanup rules; the keeper
+  loads those sections for recovery, and the wake briefing resumes that canonical workflow.
+  Shared rules are referenced rather than copied into each prompt.
 - `work` runs from the item's worktree and reads its scoped credential from the Git
   directory. Do not copy it, expose it or substitute the Captain's runner token.
 - `muster status` discovers existing configuration and reads authenticated API status.
