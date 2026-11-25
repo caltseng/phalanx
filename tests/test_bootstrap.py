@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -13,6 +14,9 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import uvicorn
+
+from phalanx.api import create_app
 from phalanx import store
 from phalanx.store import APPLICATION_ID, connect, migrate, read_transaction, write_transaction
 from cli_runner import run_cli
@@ -79,15 +83,48 @@ server.run()
 """
 
 
+class InProcessServer(uvicorn.Server):
+    def __init__(self, config):
+        super().__init__(config)
+        self.stop_requested = threading.Event()
+
+    async def main_loop(self):
+        # Wake teardown immediately, retaining uvicorn's normal graceful shutdown.
+        if not await self.on_tick(0):
+            await asyncio.to_thread(self.stop_requested.wait)
+
+
 class ServerFixture:
-    def start_server(self, path, **environment):
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            port = listener.getsockname()[1]
+    def start_server(self, path, *, in_process=True, **environment):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
         env = dict(os.environ, PHALANX_DB=str(path), PHALANX_OWNER_TOKEN=OWNER,
                    PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0")
         env.update(environment)
+        if in_process:
+            server = InProcessServer(uvicorn.Config(
+                create_app(), host="127.0.0.1", port=port, log_config=None,
+                log_level="error", access_log=False,
+                timeout_graceful_shutdown=5, timeout_keep_alive=0,
+            ))
+            # Proactor TCP reset callbacks can leak transports during Windows teardown.
+            thread = threading.Thread(
+                target=lambda: asyncio.run(server.serve(sockets=[listener]),
+                                           loop_factory=asyncio.SelectorEventLoop),
+                daemon=True,
+            )
+            self.addCleanup(self.stop_server, (server, thread, listener))
+            # The lifespan snapshots its environment before uvicorn marks startup complete.
+            with patch.dict(os.environ, env, clear=True):
+                thread.start()
+                deadline = time.monotonic() + STARTUP_TIMEOUT
+                while thread.is_alive() and not server.started and time.monotonic() < deadline:
+                    time.sleep(0.001)
+            self.assertTrue(server.started, "In-process API failed to start")
+            return server, thread, listener
+        listener.close()
         log = path.with_suffix(".log")
         with log.open("w") as output:
             server = subprocess.Popen(
@@ -107,6 +144,15 @@ class ServerFixture:
 
     @staticmethod
     def stop_server(server):
+        if isinstance(server, tuple):
+            instance, thread, listener = server
+            instance.should_exit = True
+            instance.stop_requested.set()
+            thread.join(timeout=STARTUP_TIMEOUT)
+            listener.close()
+            if thread.is_alive():
+                raise RuntimeError("In-process API failed to shut down")
+            return
         if server.stdin and not server.stdin.closed:
             server.stdin.close()
         # Teardown only: a slow shutdown on a loaded host is not a test failure.
@@ -150,7 +196,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             saved = Path(directory) / "backup.sqlite3"
             restored = Path(directory) / "restored.sqlite3"
             with self.subTest("HTTP roles and live backup"):
-                server = self.start_server(path)
+                server = self.start_server(path, in_process=False)
                 try:
                     for role, correct, wrong in (("owner", OWNER, RUNNER), ("runner", RUNNER, OWNER)):
                         route = f"/v1/{role}/status"
@@ -170,11 +216,39 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 finally:
                     self.stop_server(server)
 
+            with self.subTest("in-process servers isolate state and restore the environment"):
+                before = dict(os.environ)
+                with patch("test_bootstrap.subprocess.Popen", wraps=subprocess.Popen) as spawn:
+                    first = self.start_server(Path(directory) / "first.sqlite3",
+                                              PHALANX_LOCAL_BOARD="1")
+                    first_url = self.url
+                    second = self.start_server(Path(directory) / "second.sqlite3")
+                second_url = self.url
+                try:
+                    self.assertEqual(dict(os.environ), before)
+                    self.assertFalse(any(
+                        call.args[0][:3] == [sys.executable, "-c", SERVER_PROCESS]
+                        for call in spawn.call_args_list
+                    ), "In-process fixtures must not launch an API server process")
+                    self.assertEqual(self.get("/operator/api/repositories")[0], 401)
+                    self.url = first_url
+                    self.assertEqual(self.get("/operator/api/repositories"), (200, []))
+                    self.assertEqual(self.request("/v1/repositories", OWNER, {
+                        "id": "isolated", "remote": "https://github.com/example/project.git",
+                    })[0], 200)
+                    self.url = second_url
+                    self.assertEqual(self.get("/v1/repositories", OWNER), (200, []))
+                    self.stop_server(first)
+                    self.assertEqual(self.get("/health"), (200, {"status": "ok"}))
+                finally:
+                    self.stop_server(first)
+                    self.stop_server(second)
+
             self.run_cli(restored, "restore", saved)
             self.run_cli(path, "restore", saved, success=False)
             for db_path, expected in ((path, ["durable", "after snapshot"]), (restored, ["durable"])):
                 with self.subTest(path=db_path.name):
-                    server = self.start_server(db_path)
+                    server = self.start_server(db_path, in_process=False)
                     try:
                         with connect(db_path) as db:
                             self.assertEqual([row[0] for row in db.execute("SELECT value FROM sample ORDER BY rowid")],
