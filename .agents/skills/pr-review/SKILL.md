@@ -11,6 +11,15 @@ Review every PR this way, including docs, plan, and test-only PRs. [AGENTS.md](.
 
 Record the head SHA first and review only that commit (`git fetch origin pull/<n>/head`, `git diff origin/main...<sha>`). If the head moves, restart. Findings, CI evidence, and the merge decision all bind to that one SHA, and all required CI jobs must pass on it.
 
+Any qualified reviewer independent of the author may provide final exact-head review; no native
+session or person is a universal dependency. Reuse valid recorded approval covering the current
+exact head and effective scope with no unresolved actionable findings instead of adding another
+review. Preserve genuine GitHub required reviewers, CODEOWNERS and protections. A preferred
+reporting recipient or stale routing note does not make that reviewer exclusive.
+Authorized writers may choose and reach a qualified independent peer or read-only review agent
+with no authorship without Captain assignment. Record reviewer identity, verdict, scope and final
+SHA; self-review is never substitute independent approval.
+
 ## What matters most
 
 1. **Simplicity.** Is this the smallest design that keeps state correct and lets interrupted work resume? For every new abstraction, setting, gate, state, journal field, lane, or helper, ask what concrete problem it solves today. Prefer reusing what is already on `main` over adding a parallel mechanism. Name code that can be deleted or merged without losing correctness. Over-engineering is a finding, not a style nit.
@@ -35,4 +44,4 @@ Rank findings by impact as **blocking** or **follow-up**. Skip style nits. Say e
 
 - **Merge** only after the item's current target and publication mode authorize check-in and the [canonical merge decision gates](../../../docs/writer-operations.md#merge-decision-before-auto-merge) pass at the exact head. Until then, publish and retain the writer in delivery with auto-merge off. Re-read the current execution and GitHub head immediately before `gh pr merge <n> --auto --merge --match-head-commit <sha>`; respect repository-specific merge-owner restrictions and never use an admin bypass. Disable auto-merge before rework and reassess a changed head. `ready_for_check_in` leaves merging to the owner; never enable auto-merge or merge it. Draft-only publication never authorizes promotion or merging. A review recommendation does not override those limits.
 - **Fix round** otherwise: give file:line, the failure scenario, and the simplest fix direction. Prefer fixes that remove code or constraints over fixes that add them.
-- **Bound it.** After two rounds, deliver the verified part within the item's target and publication mode, and file a follow-up plan row. Merge only when authorized above.
+- **Bound it.** Ordinary performance targets have a two-round optimization budget. Retain baseline/round measurements, remaining numeric miss and a concrete accountable follow-up; never claim a missed number was met. Explicit safety/SLO/resource-contract gates stay hard, as do correctness, required CI and independent exact-head review. Recorded acceptance criteria need an owner-approved change through [supported versioned controls](../../../docs/writer-operations.md#bounded-performance-work), not an implicit waiver after two reviews. Deliver the authorized verified scope within the current target/publication ceiling, and pass follow-up plan updates to the Captain. Merge only when authorized above.
