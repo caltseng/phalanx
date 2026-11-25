@@ -168,6 +168,30 @@ stack a polling task, PowerShell restart loop and service-manager restart policy
 database lock coordinates these entrypoints, not arbitrary preexisting raw Uvicorn
 commands; inventory and retire those with the service owner first.
 
+### Windows API scheduling under host load
+
+Configure the existing API task with Normal process priority (Task Scheduler priority 5),
+not the default task priority 7 (BelowNormal). Verify the actual listener **and** any
+virtual-environment launcher with `Get-Process -Id <verified-PID>`, checking `PriorityClass`
+and `BasePriority`; inspect the exact owning task's `Settings.Priority`. A database-free
+authenticated status request can stall when a BelowNormal API competes with sustained
+Normal-priority host work. A fast database snapshot probe or occasional health response
+does not rule this out.
+
+The server entrypoint promotes only its own inherited Idle/BelowNormal Windows process
+to Normal before starting Uvicorn, logging the correction. It preserves Normal and
+explicitly higher classes, never selects High/Realtime, and fails visibly if Windows
+rejects the priority operation. Other platforms, CLI commands, writers and the reconciler
+are unchanged. Keep the supervisor setting correct as well so launchers inherit Normal;
+the API does not edit scheduled tasks or other processes.
+
+For an existing incident, verify exact task/process ownership before an operator changes
+only that API task's priority and its live listener/launcher to Normal. This needs no
+restart, schema conversion or queue mutation. Preserve the task's other settings and
+record before/after authenticated control and genuine writer reads/writes under comparable
+host load. Sustained recovery still requires bounded store admission and same-writer
+continuity; neither scheduling priority nor `/health` alone proves those guarantees.
+
 ### Windows deployment-test teardown
 
 The isolated deployment test must stop the service interpreter before waiting for its
