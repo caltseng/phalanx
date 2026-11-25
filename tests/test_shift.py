@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 from phalanx import captains, shift
-from phalanx.store import migrate, write_transaction
+from phalanx.store import initialize, write_transaction
 from phalanx.work_cli import credential, request
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
@@ -295,7 +295,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
         root = Path(temporary.name)
         database = root / "queue.sqlite3"
         self.database = database
-        migrate(database)
+        initialize(database)
         self.start_server(database)
         bare, checkout = root / "origin.git", root / "checkout"
         git(root, "init", "-q", "--bare", str(bare))

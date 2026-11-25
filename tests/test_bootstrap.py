@@ -14,7 +14,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from phalanx import store
-from phalanx.store import APPLICATION_ID, connect, migrate, read_transaction, write_transaction
+from phalanx.store import APPLICATION_ID, connect, initialize, read_transaction, write_transaction
 from timing import WAIT_SECONDS
 
 
@@ -189,60 +189,31 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         self.assertEqual(result.returncode, 0 if success else 1, result.stderr)
 
 
-    def test_migration_refuses_foreign_old_and_future_databases(self):
+    def test_bootstrap_refuses_foreign_old_and_future_databases(self):
         with TemporaryDirectory() as directory:
             foreign = Path(directory) / "foreign.sqlite3"
             with connect(foreign, mode="rwc") as db:
                 db.execute("CREATE TABLE other (value TEXT)")
             with self.assertRaises(ValueError):
-                migrate(foreign)
+                initialize(foreign)
             old = Path(directory) / "old.sqlite3"
             with connect(old, mode="rwc") as db:
                 db.execute(f"PRAGMA application_id = {APPLICATION_ID}")
                 db.execute("PRAGMA user_version = 1")
-            with self.assertRaisesRegex(ValueError, "predates"):
-                migrate(old)
+            with self.assertRaisesRegex(ValueError, "offline conversion"):
+                initialize(old)
             future = Path(directory) / "future.sqlite3"
-            migrate(future)
+            initialize(future)
             with connect(future) as db:
                 db.execute("PRAGMA user_version = 999")
             with self.assertRaises(ValueError):
-                migrate(future)
+                initialize(future)
 
-    def test_retirement_migration_preserves_items_attempts_and_history(self):
-        from phalanx import intake, writers
-        from phalanx.intake_models import Intake
-
-        with TemporaryDirectory() as directory:
-            path = Path(directory) / "upgrade.sqlite3"
-            retirement = next(index for index, migration in enumerate(store.MIGRATIONS)
-                              if "DROP TABLE runner_limits" in migration)
-            with patch.object(store, "MIGRATIONS", store.MIGRATIONS[:retirement]):
-                migrate(path)
-            with write_transaction(path) as db:
-                intake.register(db, "repo", "https://github.com/e/r.git")
-                item = intake.create(db, Intake(repository_id="repo", goal="Keep this", target="report"))
-                db.execute("INSERT INTO runner_limits VALUES ('old', 4)")
-                row = intake.current_execution(db, item["id"])
-                intake.claim_attempt(db, row, intake.STATE.validate_json(row["state_json"]),
-                                     writer_id="fixture")
-            with connect(path) as db:
-                saved = {table: ([column[0] for column in db.execute(f"SELECT * FROM {table} LIMIT 0").description],
-                                 [tuple(row) for row in db.execute(f"SELECT * FROM {table}")])
-                         for table in ("work_items", "executions", "attempts", "transition_history")}
-            migrate(path)
-            migrate(path)
-            with connect(path) as db:
-                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                self.assertTrue({"runner_limits", "attempt_adoptions"}.isdisjoint(tables))
-                for table, (columns, rows) in saved.items():
-                    self.assertEqual([tuple(row) for row in db.execute(
-                        f"SELECT {', '.join(columns)} FROM {table}")], rows)
 
     def test_serialized_transactions_commit_and_roll_back(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "writes.sqlite3"
-            migrate(path)
+            initialize(path)
             with write_transaction(path) as db:
                 self.assertEqual(db.execute("PRAGMA synchronous").fetchone()[0], 3)
                 self.assertEqual(db.execute("PRAGMA busy_timeout").fetchone()[0], 2000)
@@ -267,7 +238,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
     def test_reads_start_between_back_to_back_writes(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "reads.sqlite3"
-            migrate(path)
+            initialize(path)
             stop = time.monotonic() + 3
 
             def write(_):

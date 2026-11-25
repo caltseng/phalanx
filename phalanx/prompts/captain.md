@@ -111,7 +111,7 @@ Instructions apply when read, including the existing 90-minute reinforcement, no
      saves an intent/nonce; retrying replays it. `running` alone does not prove a native session ran.
    - For both new reservations and unconfirmed writers (`session_id` missing), search the full
      native inventory, not just names starting with `phx `. Include task-first `[phx]` names,
-     nonce-containing names, registered IDs and Phalanx kickoff/metadata even if renamed.
+     registered IDs and Phalanx kickoff/metadata even if renamed.
      Verify the exact full writer nonce (`session_identity.writer_nonce`) in kickoff/structured
      metadata, not title/goal/worktree. Recover now, not at the ten-minute alert.
    - Confirm a matching session immediately with `phx shift writer ... --session-id <ID>
