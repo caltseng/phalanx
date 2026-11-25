@@ -102,9 +102,12 @@ After review and check-in, the authorized deployment owner installs the reviewed
 the existing deployment procedure. No runtime restart is part of this fix. Newly generated
 kickoffs then use the corrected generator and packaged worker template. Retained native sessions
 do not automatically reload earlier instructions: the Captain relays the exact updated **Merge
-decision (publication and delivery)** section and publication/delivery clauses from canonical
-`shift prompt worker`, preserving the item's command and context, to still-live retained writers
-as needed. Verify receipt and inspect current target/head/gates before any further merge action.
+decision (publication and delivery)** section and delivery clause from canonical `shift prompt worker`
+to still-live retained writers as needed, using their existing command for `$work`.
+Explicitly state that this section supersedes the earlier generated publication-time instruction
+to enable auto-merge. The command prints a template, not a new item kickoff: do not relay the
+unexpanded `$publication` placeholder or call `shift launch` to regenerate an existing writer.
+Verify receipt and inspect current target/head/gates before any further merge action.
 
 Existing in-flight writers already received explicit corrective gate instructions for this
 incident; preserve that containment, rather than reverting them to older kickoff wording.
