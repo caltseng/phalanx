@@ -787,6 +787,8 @@ class Probe:
         started = time.monotonic()
         status, body = client.call("health", "GET", "/health", retry=False)
         health = status
+        if health != 503:
+            self.violation(f"Storage outage health returned {health}, expected 503: {body}")
         self.pause(max(0.0, started + self.config.outage_seconds - time.monotonic()))
         db.execute("ROLLBACK")
         db.close()

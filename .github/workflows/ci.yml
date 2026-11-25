@@ -51,15 +51,53 @@ jobs:
       - name: Run tests
         run: python tests/shard.py ${{ matrix.shard }} 3
 
-  # The single required check: it fails unless every shard of every target passed.
+  envelope:
+    name: Envelope probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.lock
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip install -e .
+
+      - name: Run envelope probe once
+        run: >-
+          python tests/envelope_probe.py
+          --executions 1000 --fanout 60 --throttled 2
+          --captains 2 --max-writers 2 --duration 20 --throttle-seconds 4
+          --outage-seconds 3 --aging-seconds 10 --json-out envelope.json
+
+      - name: Preserve envelope measurements
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: envelope
+          path: envelope.json
+          if-no-files-found: error
+
+  # The single required check covers every unit-test shard and the standalone probe.
   tests:
     name: Tests
     if: always()
-    needs: test
+    needs: [test, envelope]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every test shard to pass
-        if: needs.test.result != 'success'
+      - name: Require every test shard and the envelope probe to pass
+        if: needs.test.result != 'success' || needs.envelope.result != 'success'
         run: |
           echo "::error::Test shards finished with result: ${{ needs.test.result }}"
+          echo "::error::Envelope probe finished with result: ${{ needs.envelope.result }}"
           exit 1

@@ -5,6 +5,7 @@ item's worktree. The file is a credential under the git directory, never committ
 """
 
 import json
+from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import quote
@@ -37,6 +38,12 @@ def request(base_url, token, route, *, body=None, method=None, key=None, timeout
         with error:
             detail = error.read().decode("utf-8", errors="replace")
         raise ValueError(f"HTTP {error.code}: {detail}") from error
+    except (OSError, HTTPException) as error:
+        raise ValueError(
+            f"API response unavailable for {route}: {error}. "
+            "Any mutation's acceptance is unknown; reconcile status before retrying. "
+            "This is not a stop or an authorization response."
+        ) from error
 
 
 def post_result(base_url, token, attempt, payload, key=None):

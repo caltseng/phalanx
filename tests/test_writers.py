@@ -3,15 +3,14 @@ from contextlib import ExitStack
 from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import json
-import os
 from pathlib import Path
 from secrets import token_urlsafe
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store, work_cli, writers
 from phalanx.dispatch_api import DispatchSettings
@@ -20,11 +19,11 @@ from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, initialize, write_transaction
 from phalanx.transitions import item_branch
 
+from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
 STAGES = ["report_drafting", "report_review", "report_storage"]
-ROOT = Path(__file__).resolve().parents[1]
 HEAD, OTHER, BASE, MERGE = "a" * 40, "b" * 40, "c" * 40, "d" * 40
 PR_URL = "https://github.com/e/r/pull/7"
 
@@ -511,9 +510,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                                               encoding="utf-8")
 
         def work(*arguments, code=0):
-            result = subprocess.run([sys.executable, "-m", "phalanx", "work", *arguments], cwd=worktree,
-                                    env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True,
-                                    text=True, timeout=30)
+            result = run_cli(["work", *arguments], cwd=worktree)
             self.assertEqual(result.returncode, code, result.stderr)
             return json.loads(result.stdout) if code == 0 else result.stderr
 
@@ -565,6 +562,52 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 if actor == "owner":
                     asked = work("question", "Which detail?", "--attempt", resumed["writer"]["attempt_id"],
                                  "--handoff", "Audience chosen")
+
+    def test_work_transport_failure_is_not_an_authorization_or_stop_response(self):
+        for error in (ConnectionRefusedError("refused"), TimeoutError("timed out"),
+                      ConnectionResetError("connection lost")):
+            with self.subTest(error=type(error).__name__):
+                with patch.object(work_cli, "api_request", side_effect=error):
+                    with self.assertRaisesRegex(ValueError, "acceptance is unknown.*not a stop"):
+                        work_cli.request(self.url, "writer-token", "/v1/writer/progress", body={"note": "Done"})
+        for status in (401, 403, 409, 503):
+            with self.subTest(status=status):
+                error = HTTPError(self.url, status, "Rejected", {}, None)
+                with patch.object(work_cli, "api_request", side_effect=error):
+                    with self.assertRaisesRegex(ValueError, f"HTTP {status}:") as failure:
+                        work_cli.request(self.url, "writer-token", "/v1/writer")
+                    self.assertNotIn("not a stop", str(failure.exception))
+
+    def test_lost_result_reply_reconciles_accepted_attempt_without_replaying_next_stage(self):
+        item_id, execution_id = self.item()
+        binding, token, _ = self.register(item_id, execution_id)
+        attempt = binding["writer"]["attempt_id"]
+        payload = {"outcome": "succeeded", "report_markdown": "# Reviewed later\n"}
+        original = work_cli.api_request
+
+        def lose_reply(*args, **options):
+            response = original(*args, **options)
+            if args[2].endswith("/result"):
+                raise TimeoutError("reply lost after acceptance")
+            return response
+
+        with patch.object(work_cli, "api_request", side_effect=lose_reply):
+            with self.assertRaisesRegex(ValueError, "acceptance is unknown"):
+                work_cli.post_result(self.url, token, attempt, payload)
+        current = self.ok("/v1/writer", token)
+        self.assertEqual(current["state"]["stage"], "report_review")
+        self.assertNotEqual(current["writer"]["attempt_id"], attempt)
+        with self.assertRaisesRegex(ValueError, "is not open"):
+            work_cli.post_result(self.url, token, attempt, payload)
+        route = f"/v1/items/{item_id}/executions/{execution_id}/result"
+        body = {"attempt_id": attempt, "stage": binding["state"]["stage"],
+                "expected_version": binding["version"], **payload}
+        headers = {"Idempotency-Key": f"{attempt}-result"}
+        replay = self.ok(route, token, body, headers=headers)
+        self.assertEqual((replay["state"], replay["version"], replay["writer"]),
+                         (current["state"], current["version"], current["writer"]))
+        self.ok(route, token, {**body, "report_markdown": "Different mutation"}, 409, headers=headers)
+        self.assertEqual(self.ok("/v1/writer", token)["version"], current["version"])
 
     def test_writer_replies_are_isolated_by_item_and_execution(self):
         item_id, execution_id = self.item()
@@ -747,6 +790,24 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 with connect(self.path) as db:
                     self.assertIsNone(db.execute("SELECT handoff_head FROM executions WHERE id=?",
                                                  (delivery["id"],)).fetchone()[0])
+
+    def test_merge_before_deferred_publication_result_reconciles_without_a_new_writer(self):
+        publication, token = self.publish("checked_in")
+        writer_id = publication["writer"]["id"]
+        # GitHub has merged, but publication bookkeeping has not reached Phalanx yet.
+        early = self.observe(publication, state="closed", merged=True, merge_commit=MERGE)
+        self.assertEqual(early["version"], publication["version"])
+        self.assertIsNone(early["state"]["final_output"])
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        self.assertEqual(delivery["writer"]["id"], writer_id)
+        merged = self.observe(delivery, state="closed", merged=True, merge_commit=MERGE)
+        self.assertEqual(merged["state"]["status"], "completed")
+        self.assertEqual(merged["state"]["final_output"]["merge_commit"], MERGE)
+        self.ok("/v1/writer", token, code=401)
+        self.ok("/v1/writer/progress", token, {"note": "Late outage update"}, 401)
+        with connect(self.path, mode="ro") as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM writers WHERE execution_id=?",
+                                        (publication["id"],)).fetchone()[0], 1)
 
     def test_withdrawal_clears_superseded_handoff_and_recovers_delivery(self):
         publication, token = self.publish("ready_for_check_in")

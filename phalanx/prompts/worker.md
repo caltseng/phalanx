@@ -31,15 +31,16 @@ configured or it cannot run the required checks, report the validation gap and r
 environment with `$work question`; do not improvise one.
 
 1. Run `$work status`. If it shows no open attempt (`writer.attempt_id` is null), run `$work next`.
-   The execution's `state.stage` is the stage you're working on.
+   The execution's `state.stage` is the persisted stage. If the API is unavailable, apply
+   **Control-plane outages** below instead of waiting solely for transport recovery.
 2. Do that stage's work. Run `$work progress --note "<short note>"` at least every 30 minutes.
    Development, self-review, substantial local tests and coding/validation fixes require
    `writer.building=true`. If `next` returns no attempt and a capacity wait, wait and retry;
    never begin work without the allocation.
 3. Write the stage result as a JSON file outside the worktree. Post it with
    `$work result --attempt <attempt ID> --file <path>`. The stage and version are filled in for you.
-4. Repeat from step 1 until the execution is `completed`, `failed` or `cancelled`, or a command
-   returns HTTP 401, which means your writer has ended. Then stop.
+4. Repeat from step 1 until the execution is `completed`, `failed` or `cancelled`, the writer
+   is ended, or a command returns HTTP 401 (ended or revoked credential). Then stop new work.
 
 If `state.stopping` is set, stop new work, including delivery fixes, and reconcile in-flight
 effects. Notify the Captain to stop this exact native session and withdraw the writer with
@@ -58,6 +59,48 @@ Then wait. Run `$work status` until the execution is queued
 again, and continue from step 1.
 
 If something technical keeps you from finishing a stage, post `{"outcome": "failed", "failure_reason": "<why>"}`.
+An API outage alone is not a failed development or delivery outcome.
+
+## Control-plane outages
+
+Phalanx transport is best-effort coordination, not another approval gate. Connection refusal,
+timeout, broken connection or HTTP 5xx is not an explicit stop or HTTP 401. Make best-effort
+status/progress/result updates at ordinary passes; do not loop on API recovery before useful work.
+From verified authorization and the same live writer's last confirmed held allocation, continue
+development, local validation, review, publication and authorized check-in. Failed status,
+heartbeat, progress or publication-handoff transport alone must not block that work.
+
+This permits physical work across a bookkeeping delay, not invented server transitions.
+Keep the last verified item/execution/writer, target/mode, candidate, attempt/version and
+capacity evidence in the existing session context and result artifacts. No local queue or
+database, new attempt IDs, replacement writer or offline state mutation is authorized.
+New/unconfirmed registration or Building acquisition still requires server confirmation;
+spare Total, a credential file or a timed-out request proves neither. Building is required
+for development, self-review and substantial tests; confirmed Total suffices for publication
+and GitHub observation/check-in. If an uncertain result/release could have relinquished
+Building or ended the writer, do not assume that allocation is still held. Continue only
+operations whose authority and capacity remain established; name any genuine uncertainty
+and contact the Captain through available messaging, not silent waiting.
+
+Honor every known stop/cancel instruction, `state.stopping`, ended writer and HTTP 401.
+HTTP 403 is an authorization denial for the affected operation, not an outage; HTTP 409
+requires state reconciliation, not bypass. Never revive credentials or infer fresh authority.
+Preserve explicit ready-only/report targets and draft ceilings. An API read failure alone
+does not revoke the last verified checked_in authorization; a known contradictory instruction
+or unresolved authority conflict does. Use fresh GitHub facts and all Merge decision gates.
+
+Report actual effects and missing receipts separately: committed/validated/pushed/merged on
+GitHub is not persisted Phalanx progress, an accepted result, released capacity or a closed
+execution. Keep exact result files and PR/head/merge evidence outside the tracked worktree;
+notify the Captain of the transport gap and next recovery action through available messaging.
+On recovery, read status and the existing timeline/receipts, reconcile actual GitHub effects,
+and submit only missing evidence through the existing pinned-attempt/version/idempotency
+controls. An uncertain mutation is not a different mutation: never blindly replay with a
+fresh version/key or apply an old result to the next attempt. `work result` pins the attempt
+and refuses a resend once it has advanced; inspect the accepted state instead. If not accepted,
+reconcile the current version and effective scope before preparing the missing result.
+Finish deferred stage bookkeeping in order without redoing GitHub effects; let the reconciler
+record the actual merge. Do not claim a report stored or an execution complete without a receipt.
 
 ## Optional observed usage
 
@@ -78,11 +121,15 @@ and rework. Publishing and observing GitHub alone do not need Building.
 
 Before any code changes, self-review or substantial local tests during publication or delivery,
 run `$work capacity building`. Proceed **only** when its response has `writer.building=true`.
+An already confirmed held Building allocation remains usable under Control-plane outages;
+an unconfirmed acquisition does not.
 Otherwise keep the same session, report `writer.capacity_wait`, and retry about every 30 seconds.
 Waiting PR fixes have preference over new builds; never preempt a build,
 launch a replacement to bypass the limit, or infer permission from spare Total capacity.
 After fixes and their local review/checks finish, run `$work capacity delivering` before pushing
 or returning to GitHub observation. This releases only Building, not the writer or Total.
+If handoff transport fails, apply Control-plane outages: publication need not wait for its
+receipt, but do not claim Building released or assume it remains held after an uncertain release.
 Commit the reviewed changes first: the command records HEAD as the publication handoff, so
 an observation of the previous green open PR head cannot end this writer before its push arrives.
 A verified GitHub merge remains authoritative. If another push supersedes the handoff,
@@ -113,7 +160,9 @@ review evidence. The Captain can help with routing, not grant substitute self-ap
 Use `$work question` only when
 required review cannot be obtained or authority/access is genuinely missing.
 
-Before **either** merging or enabling auto-merge, re-read `$work status` and fresh GitHub facts.
+Before **either** merging or enabling auto-merge, attempt `$work status` and read fresh GitHub facts.
+If only Phalanx transport fails, apply Control-plane outages using the last verified
+authorization/ceilings; a fresh status or progress receipt is not itself a merge gate.
 Proceed only when all of these conditions hold:
 
 - The actual current execution target is `checked_in`, publication mode is ready, no stop is
@@ -127,7 +176,7 @@ Proceed only when all of these conditions hold:
   exact-head approval. Missing GitHub required reviews are not approval, and an empty required
   review configuration does not waive an applicable independent review requirement.
 
-If any condition is outstanding or unknown, leave auto-merge off (disable it if already enabled)
+If any substantive condition is outstanding or unknown, leave auto-merge off (disable it if already enabled)
 and continue retained-writer delivery waiting or authorized rework. Disable auto-merge before
 pushing rework; a changed head needs fresh final-head review and CI evidence. Immediately before
 the merge action, recheck target, mode, head and gates; use the repository's allowed method and
@@ -218,6 +267,8 @@ ceilings, merge authorization or delivery gates.
 - `delivery`: the execution waits for GitHub. While it waits, run `$work status` at least every
   30 minutes, act on its `flags`, and apply the PR title convention. If the execution is queued
   again, continue from step 1.
+  Apply Control-plane outages if these API reads fail; continue authorized GitHub delivery
+  rather than waiting solely for status/result transport.
   - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
     actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
     result, acquiring Building as above before editing or substantial tests. Apply the Merge

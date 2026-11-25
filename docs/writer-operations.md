@@ -31,7 +31,8 @@ Development, self-review, substantial local tests and coding/validation fixes re
 publication, but keeps this same writer's Total allocation. Pure publication and observing
 external CI/review use only Total. Before rework during publication or delivery, run
 `work capacity building` and inspect its returned binding: do not edit or test until
-`writer.building=true`. If full, wait and retry about every 30 seconds; retain the session,
+`writer.building=true`, unless that same allocation is already confirmed held under the
+outage policy below. If full, wait and retry about every 30 seconds; retain the session,
 Total and progress reporting. Eligible waiting PR fixes take precedence over new development.
 After fixes and local validation finish, run `work capacity delivering` before publication
 or external waiting. Never infer Building headroom from spare Total or the delivery stage.
@@ -42,6 +43,45 @@ visible wait: review and hand off that head, or stop and withdraw the writer to 
 handoff. A verified GitHub merge remains authoritative and always releases the writer.
 After an uncertain response or restart, read status and retry with fresh state. Capacity
 transitions are fenced by writer identity and allocation revision; no lease timeout releases work.
+
+## Control-plane outages
+
+Phalanx availability is not another approval gate. Best-effort status, heartbeat, progress,
+handoff and result updates must not block already-authorized development, local validation,
+review, publication or check-in by the same live writer under verified held capacity.
+Connection refusal, timeout, broken connection and HTTP 5xx do not mean stop or revocation.
+Use ordinary passes for retry, not a blocking API-recovery loop or a new watchdog.
+
+| Evidence | Authorized behavior |
+| --- | --- |
+| Verified live writer, held Building/Total, no contradictory instruction; status/progress transport fails | Continue authorized physical work and local validation. Preserve the last confirmed scope, target, publication mode and allocation evidence in existing session context/artifacts. |
+| Known checked_in authorization and ready mode; routine fresh status/handoff/progress transport fails | Continue publication/check-in when fresh GitHub facts and all substantive merge gates below pass. A missing Phalanx receipt alone is not unknown merge authority. |
+| Explicit ready-only/report target or draft ceiling | Preserve it; an outage never authorizes promotion, merging or a target change. |
+| New/unconfirmed registration or Building acquisition | No offline admission/acquisition, competing writer or inferred headroom. Resolve the specific uncertainty before work needing that allocation; continue independently authorized operations. |
+| Uncertain self-review result, capacity release or completion that could release an allocation/end the writer | Do not assume Building/Total is still held. Reconcile before work needing the uncertain allocation. Publication needs confirmed Total, not Building. |
+| Known stop/cancel, state.stopping, ended writer or HTTP 401 | Stop new work, preserve artifacts and reconcile in-flight effects; never revive credentials. HTTP 403 denies the affected operation; HTTP 409 requires reconciliation. Neither is outage permission. |
+| Genuine conflict or missing evidence of authority | Name the uncertainty, responsible actor and next action through available session messaging; do not silently wait or broaden authority. |
+
+This permits physical work across delayed bookkeeping, not invented server transitions. Keep
+exact result files and commit/check/review/PR/head/merge evidence outside the tracked worktree.
+Report actual GitHub/local effects separately from unpersisted Phalanx updates: no receipt means
+no claim of an accepted result, released allocation, stored report or closed execution.
+Notify the Captain through available messaging when transport prevents recording progress.
+No parallel queue, SQLite journal, offline database mutation or replacement allocation is allowed.
+
+When the API returns, read authenticated status and existing timeline/receipts. Reconcile the
+actual PR and merge on GitHub before retrying external effects. For a lost mutation reply,
+reuse its exact body/key only when the existing endpoint permits it; never blindly refresh
+only the version/key or apply an old result to the next attempt. `work result` pins the attempt
+and refuses a resend once it has advanced: inspect accepted state rather than force a replay.
+If the mutation was not accepted, reconcile current scope/version before preparing the missing
+result. Submit deferred development/self-review/publication evidence in order under the real
+fenced attempts, without redoing work or fabricating an earlier acceptance. The reconciler then
+records the verified actual merge through the normal observation path, even if it happened
+before publication bookkeeping caught up. Ended writers stay ended; the Captain/reconciler
+uses its own authorized controls to reconcile facts, never the revoked writer token.
+Reports can be drafted/reviewed under held Building during the outage, but storage/completion
+still requires the server's receipt. Known unresolved input/dependency waits remain binding.
 
 ## Publication and delivery
 
@@ -77,7 +117,9 @@ The Captain may help route a request but cannot substitute self-review for indep
 Use `work question` when required review cannot be
 obtained or authority/access is genuinely missing, not just because a preferred session is busy.
 
-Before either direct merge or auto-merge activation, read fresh `work status` and GitHub facts.
+Before either direct merge or auto-merge activation, attempt `work status` and read fresh GitHub facts.
+If only Phalanx transport fails, use the verified authorization/ceilings and held allocation under
+the outage policy above; a fresh status/handoff/progress receipt is not itself a merge gate.
 Require the current execution's `checked_in` target, ready publication, no pending stop,
 repository-specific merge-owner authority, applicable independent final approval of the
 **current exact PR head**, green required CI on that head, required GitHub reviews, resolved
@@ -87,10 +129,12 @@ Self-review is not independent approval; previous-head or content-only PASS is n
 exact-head approval. Missing required GitHub reviews, or no configured GitHub review requirement,
 cannot stand in for applicable independent review.
 
-While any gate is unknown or outstanding, disable any existing auto-merge and retain the same
+While any substantive gate is unknown or outstanding, disable any existing auto-merge and retain the same
 writer and Total allocation in delivery. Disable auto-merge before pushing rework, acquire
 Building before editing/self-review/substantial tests, then commit and hand off with
 `work capacity delivering` before pushing. Obtain fresh final-head approval and CI evidence.
+Handoff transport failure alone does not block publication/check-in; record its uncertain
+acceptance and reconcile it without assuming Building released or remains held.
 Immediately before the merge action recheck target, mode, head and all gates, using an
 exact-head guard where supported. Once satisfied, deliver the actual merge without another
 routine permission request; explicit owner-ready/report/draft ceilings and repository
@@ -245,8 +289,8 @@ Verify receipt and inspect current target/head/gates before any further merge ac
 Existing in-flight writers already received explicit corrective gate instructions for this
 incident; preserve that containment, rather than reverting them to older kickoff wording.
 Do not contact, revive or replace ended writers. Keep the same live writer/Total through rework
-and respect Building acquisition/handoff. This activation does not change the canonical
-[Captain shifts and handoff](direct-path.md#captain-shifts-and-handoff) cadence.
+and respect Building acquisition/handoff. Captain cadence follows the
+[shift and handoff rules](direct-path.md#captain-shifts-and-handoff).
 
 If cancellation or forced failure sets `state.stopping`, stop new work and reconcile any
 in-flight GitHub effects. Delivery has no open attempt, but its writer is still live:

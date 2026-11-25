@@ -1,10 +1,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-import os
 from pathlib import Path
-import subprocess
-import sys
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 import unittest
@@ -16,6 +13,7 @@ from phalanx.intake import apply, check_current, claim_attempt, digest, encode
 from phalanx.store import connect, write_transaction
 from phalanx.transitions import Event, Evidence, Outcome, PullRequest, Revision, Stage, Status, Wait
 
+from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture, claim_stage
 from timing import WAIT_SECONDS
 
@@ -157,20 +155,18 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         for command in (["inspect", item["id"]],
                         ["intake", "example", "Review the project", "--target", "report",
                          "--key", "first"]):
-            cli = subprocess.run(
-                [sys.executable, "-m", "phalanx", "--api-url", self.url, *command],
-                env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True,
-                capture_output=True, timeout=10,
+            cli = run_cli(
+                ["--api-url", self.url, *command],
+                env={"PHALANX_OWNER_TOKEN": OWNER},
             )
             self.assertEqual(cli.returncode, 0, cli.stderr)
             self.assertEqual(json.loads(cli.stdout), item)
 
     def test_label_cli_intake_steering_and_clear(self):
         self.create()
-        command = [sys.executable, "-m", "phalanx", "--api-url", self.url, "intake",
+        command = ["--api-url", self.url, "intake",
                    "example", "Grouped report", "--target", "report", "--label", "PH-29a"]
-        cli = subprocess.run(command, env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER),
-                             capture_output=True, text=True, timeout=10)
+        cli = run_cli(command, env={"PHALANX_OWNER_TOKEN": OWNER})
         self.assertEqual(cli.returncode, 0, cli.stderr)
         item = json.loads(cli.stdout)
         self.assertEqual(item["label"], "PH-29a")
@@ -195,11 +191,10 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         for extra, target in (([], "checked_in"), (["--target", "ready_for_check_in"], "ready_for_check_in"),
                               (["--target", "report"], "report")):
             with self.subTest(target=target):
-                cli = subprocess.run(
-                    [sys.executable, "-m", "phalanx", "--api-url", self.url,
+                cli = run_cli(
+                    ["--api-url", self.url,
                      "intake", "example", "Fix the bug", *extra],
-                    env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True,
-                    capture_output=True, timeout=60,
+                    env={"PHALANX_OWNER_TOKEN": OWNER},
                 )
                 self.assertEqual(cli.returncode, 0, cli.stderr)
                 self.assertEqual(json.loads(cli.stdout)["execution"]["state"]["target"], target)
@@ -220,10 +215,10 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         item, _, base, execution = self.create()
 
         def cancel():
-            return subprocess.run(
-                [sys.executable, "-m", "phalanx", "--api-url", self.url, "cancel", item["id"],
+            return run_cli(
+                ["--api-url", self.url, "cancel", item["id"],
                  "--reason", "Stale item"],
-                env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True, timeout=10,
+                env={"PHALANX_OWNER_TOKEN": OWNER},
             )
 
         cli = cancel()
@@ -391,12 +386,11 @@ class IntakeTest(ServerFixture, unittest.TestCase):
 
         self.stop_server(self.server)
         self.server = self.start_server(self.path)
-        cli = subprocess.run(
-            [sys.executable, "-m", "phalanx", "--api-url", self.url, "reply", item["id"],
+        cli = run_cli(
+            ["--api-url", self.url, "reply", item["id"],
              waiting["id"], answer["answer"], "--version", str(waiting["version"]),
              "--key", "answer"],
-            env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True,
-            timeout=10,
+            env={"PHALANX_OWNER_TOKEN": OWNER},
         )
         self.assertEqual(cli.returncode, 0, cli.stderr)
         self.assertEqual(json.loads(cli.stdout), queued)
@@ -424,12 +418,11 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         answer = {"expected_version": waiting["version"], "answer": "unittest"}
         self.assertEqual(self.submit(route + "/reply", dict(answer, answered_by="worker"),
                                      key="bad")[0], 422)
-        cli = subprocess.run(
-            [sys.executable, "-m", "phalanx", "--api-url", self.url, "reply", item["id"],
+        cli = run_cli(
+            ["--api-url", self.url, "reply", item["id"],
              waiting["id"], "unittest", "--version", str(waiting["version"]),
              "--key", "captain", "--answered-by", "captain"],
-            env=dict(os.environ, PHALANX_OWNER_TOKEN=OWNER), text=True, capture_output=True,
-            timeout=10,
+            env={"PHALANX_OWNER_TOKEN": OWNER},
         )
         self.assertEqual(cli.returncode, 0, cli.stderr)
         self.assertEqual(json.loads(cli.stdout)["state"]["status"], "queued")

@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -16,10 +15,10 @@ from phalanx import captains, shift
 from phalanx.store import initialize, write_transaction
 from phalanx.work_cli import credential, request
 
+from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
-ROOT = Path(__file__).resolve().parents[1]
 CHARTER = """goal = "Deliver the pilot's queued work"
 repositories = ["repo"]
 allowed_actions = ["launch and replace writer sessions"]
@@ -253,6 +252,39 @@ class CharterTest(unittest.TestCase):
         self.assertIn("During an attempt-free delivery external wait, omit `--attempt`",
                       " ".join(worker.split()))
         self.assertIn("An aspirational timing or percentage miss is not a failed", worker)
+
+    def test_outage_continuity_preserves_confirmed_capacity_and_explicit_ceilings(self):
+        for target, mode in (("checked_in", "ready"), ("ready_for_check_in", "ready"),
+                             ("checked_in", "draft"), ("report", "ready")):
+            with self.subTest(target=target, mode=mode):
+                prompt = shift.kickoff(
+                    {"id": "item", "repository_id": "repo", "goal": "Deliver",
+                     "execution": {"id": "execution",
+                                   "state": {"target": target, "publication_mode": mode}}},
+                    "worktree", "nonce", "phx work", "main")
+                text = " ".join(prompt.split())
+                self.assertIn(f"Target: {target}", text)
+                self.assertIn(f"Publication mode: {mode}", text)
+                for clause in (
+                    "same live writer's last confirmed held allocation",
+                    "continue development, local validation, review, publication and authorized check-in",
+                    "New/unconfirmed registration or Building acquisition still requires server confirmation",
+                    "uncertain result/release could have relinquished Building or ended the writer",
+                    "Honor every known stop/cancel instruction, `state.stopping`, ended writer and HTTP 401",
+                    "HTTP 403 is an authorization denial",
+                    "Preserve explicit ready-only/report targets and draft ceilings",
+                    "never blindly replay with a fresh version/key",
+                    "let the reconciler record the actual merge",
+                    "Do not claim a report stored or an execution complete without a receipt",
+                ):
+                    self.assertIn(clause, text)
+                self.assertNotIn("re-read `phx work status` and fresh GitHub facts", text)
+                self.assertIn("a fresh status or progress receipt is not itself a merge gate", text)
+                self.assertIn("current exact head has applicable independent final-head approval", text)
+                self.assertIn("exact-head guard", text)
+        captain = " ".join(shift.prompt("captain").split())
+        self.assertIn("must not gate already-authorized work under verified held allocations", captain)
+        self.assertIn("Do not launch an unconfirmed admission", captain)
 
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
@@ -1029,9 +1061,7 @@ class ShiftTest(ServerFixture, unittest.TestCase):
 
     def test_cli_prints_the_captain_prompt_and_validates_the_charter(self):
         def phx(*arguments):
-            result = subprocess.run([sys.executable, "-m", "phalanx", "shift", *arguments],
-                                    env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True,
-                                    text=True, timeout=30)
+            result = run_cli(["shift", *arguments])
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
 
@@ -1067,10 +1097,9 @@ class ShiftTest(ServerFixture, unittest.TestCase):
                           ("--no-sessions", "--session-writer", "s-task", "nonce"),
                           ("--session-availability", "missing", "deleted"),
                           ("--session", "s-task", "Task", "--session-availability", "s-task", "unknown")):
-            result = subprocess.run(
-                [sys.executable, "-m", "phalanx", "shift", "--config", str(config),
-                 "heartbeat", "--captain", captain, *arguments],
-                env=dict(os.environ, PYTHONPATH=str(ROOT)), capture_output=True, text=True, timeout=30)
+            result = run_cli(
+                ["shift", "--config", str(config),
+                 "heartbeat", "--captain", captain, *arguments])
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--session", result.stderr)
         beat = json.loads(phx("--config", str(config), "heartbeat", "--captain", captain, "--no-sessions"))
