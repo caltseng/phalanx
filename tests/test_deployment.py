@@ -69,6 +69,24 @@ class DeploymentTest(unittest.TestCase):
         charter = shift.load_charter(config)
         self.assertEqual(charter["repositories"], ["repo"])
         self.assertEqual(charter["shift"], {"max_hours": 24})
+        notes = " ".join(charter["notes"].split())
+        for requirement in (
+                "Core Captain responsibility: progress and outcome accountability",
+                "every ordinary scheduled wake and material work event",
+                "Take the next useful authorized action and verify its effect",
+                "actual stage/progress, dependency, validation, CI/review, integration and merge evidence",
+                "not by themselves delivery progress",
+                "Protect healthy work and legitimate waits",
+                "stale holds/reconciliation", "waiting-fix preference",
+                "retain the same writer and Building handoff discipline",
+                "concrete reason, responsible actor and next action or resume trigger",
+                "Preserve current-execution targets, explicit report/ready/draft ceilings",
+                "no new access or bypass",
+                "keep auto-merge off until independent final exact-head approval",
+                "five-minute reconciliation, 90-minute reinforcement and 24-hour handoff"):
+            with self.subTest(requirement=requirement):
+                self.assertIn(requirement, notes)
+        self.assertIn("merging checked_in PRs under repository rules", charter["allowed_actions"][0])
         now = shift.datetime.now(shift.UTC)
         captain = {"created_at": now.isoformat(), "wake_count": 1000}
         for count in (4, 5, 6):

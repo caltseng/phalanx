@@ -54,3 +54,12 @@ config and environment that printed this prompt: for example
 
    If `captains` lists earlier Captains, the new Captain passes `--parent` with the most recent one's
    ID, so it inherits that Captain's handoff note and open intents. Put that ID in the first prompt.
+   Ensure it reads the current canonical Captain workflow and fresh charter revision: its core
+   responsibility is progress and outcome accountability on every scheduled wake and material work
+   event, taking useful authorized unblocking action and verifying the effect, not merely reporting
+   busy sessions. Carry forward stage evidence, blockers' concrete reasons/responsible actors/next
+   actions or resume triggers, holds and pending verification, while preserving current-execution
+   targets, explicit report/ready/draft ceilings and existing writer ownership. Do not replace healthy
+   sessions or add a watchdog/schedule. A source update alone does not update retained-session
+   context; adoption occurs when the current instructions are actually read, including the existing
+   90-minute reinforcement. The keeper neither grants new access nor takes over a live Captain's work.
