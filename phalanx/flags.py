@@ -91,12 +91,12 @@ def no_live_captain(db, now):
                  first_seen, captain_id=last["id"] if last else "", notify_owner=True)]
 
 
-def captain_idle_with_work(db, now):
+def captain_idle_with_work(db, now, *, current=None):
     """Distinguish overdue dispatch, pickup blockers and informational capacity backlog."""
     if not any(is_live(row, now) for row in db.execute("SELECT * FROM captains WHERE state != 'ended'")):
         return []
     cutoff = int((now - IDLE_WITH_WORK).timestamp() * 1000)
-    pickup_context = pickup.context(db, now)
+    pickup_context = pickup.context(db, now) if current is None else current
     holds = pickup_context["holds"]
     capacity = pickup_context["capacity"]
     occupied, maximum = capacity["active_writers"], capacity["max_writers"]
@@ -160,9 +160,12 @@ def launch_wait(writer_id, nonce, created_at, now):
     }
 
 
-def writer_flags(db, now):
+def writer_flags(db, now, *, execution_id=None, current=None):
     flags = []
-    for row in db.execute(OPEN_WRITERS + " ORDER BY writer.created_at, writer.id LIMIT ?", (DERIVED_LIMIT,)):
+    current = {"capacity": dispatch.settings(db), "rework": dispatch.first_rework(db)} if current is None else current
+    scope = " AND execution.id=?" if execution_id else ""
+    for row in db.execute(OPEN_WRITERS + scope + " ORDER BY writer.created_at, writer.id LIMIT ?",
+                          (*((execution_id,) if execution_id else ()), DERIVED_LIMIT)):
         subject = {"item_id": row["item_id"], "execution_id": row["execution_id"],
                    "captain_id": row["captain_id"]}
         if row["confirmed_at"] is None and now - at(row["created_at"]) >= LAUNCH_UNCONFIRMED:
@@ -171,7 +174,8 @@ def writer_flags(db, now):
                 "launch_unconfirmed", wait["reason"], wait["trigger"],
                 at(row["created_at"]) + LAUNCH_UNCONFIRMED, notify_owner=True, **subject))
         capacity_wait = (row["building_requested_at"] and not row["building"]
-                         and dispatch.building_wait(db, row["id"]))
+                         and dispatch.building_wait(db, row["id"], capacity=current["capacity"],
+                                                    rework=current["rework"]))
         if row["state"] == "busy" and not capacity_wait:
             moved = max(at(value) for value in (row["last_progress_at"], row["last_advanced_at"],
                                                 row["confirmed_at"]) if value)
@@ -187,13 +191,8 @@ def writer_flags(db, now):
     return flags
 
 
-def session_flags(db, now):
-    """Check the native sessions live Captains report against registered writers and Captains.
-
-    Task-first names are labels, not identities. Captains inspect the kickoff and report the full
-    writer nonce separately. Legacy names still match an item's ID prefix or the full nonce.
-    An unconfirmed intent's nonce is that launch, which launch_unconfirmed covers.
-    """
+def session_flags(db, now, *, execution_id=None):
+    """Match reported nonces (or legacy name words), optionally for just one execution."""
     reported = {}
     for captain in db.execute(
             "SELECT * FROM captains WHERE state != 'ended' ORDER BY heartbeat_at, id").fetchall():
@@ -212,7 +211,8 @@ def session_flags(db, now):
         "UNION SELECT session_ref FROM captains WHERE state != 'ended'")}
     successors = {successor_name(row[0]) for row in db.execute(
         "SELECT id FROM captains WHERE state = 'ending'")}
-    writers = db.execute(OPEN_WRITERS).fetchall()
+    writers = db.execute(OPEN_WRITERS + (" AND execution.id=?" if execution_id else ""),
+                         (execution_id,) if execution_id else ()).fetchall()
     by_nonce = {writer["nonce"]: writer for writer in writers}
     by_word = {word: writer for writer in writers for word in (writer["item_id"][:8], writer["nonce"])}
     flags = []
@@ -230,6 +230,8 @@ def session_flags(db, now):
         if (nonce is None and session["name"].startswith("phx ")
                 and not session["name"].endswith(" [phx]")):
             writer = next((by_word[word] for word in session["name"].split() if word in by_word), None)
+        if execution_id and writer is None:
+            continue
         if writer is None:
             flags.append(flag("orphan_session", f"{label} has no registered writer or Captain",
                               "A Captain archives it if its work is done or abandoned, or stops it and "
@@ -258,7 +260,7 @@ def archive_flags(db, now):
     ]
 
 
-# Each function is fn(db, now) -> list of flags in the GET /v1/flags shape.
+# Derivations return flags in the GET /v1/flags shape.
 DERIVED = (captain_stale, no_live_captain, captain_idle_with_work, writer_flags, session_flags,
            archive_flags, *reconciliation.DERIVED_FLAGS)
 
@@ -290,7 +292,7 @@ def stored(row):
             "first_seen": row["first_seen"], "notify_owner": bool(row["notify_owner"]), "source": "stored"}
 
 
-def active_overdue(db, now, known_flags):
+def active_overdue(db, now, known_flags, *, execution_id=None):
     """Elapsed execution age is the first persisted attempt, never a liveness clock."""
     by_execution = {}
     for known in known_flags:
@@ -303,9 +305,10 @@ def active_overdue(db, now, known_flags):
                    writer.last_progress_at, writer.progress_note
             FROM executions AS execution
             LEFT JOIN writers AS writer ON writer.execution_id=execution.id AND writer.ended_at IS NULL
-            WHERE {OPEN} AND started_at < ?
+            WHERE {OPEN} AND started_at < ? {"AND execution.id=?" if execution_id else ""}
             ORDER BY started_at, execution.id LIMIT ?""",
-        ((now - ACTIVE_OVERDUE).isoformat(timespec="microseconds"), DERIVED_LIMIT),
+        ((now - ACTIVE_OVERDUE).isoformat(timespec="microseconds"),
+         *((execution_id,) if execution_id else ()), DERIVED_LIMIT),
     ):
         started = at(row["started_at"])
         age = (now - started).total_seconds()
@@ -348,11 +351,20 @@ def active_overdue(db, now, known_flags):
 
 
 def all_flags(db, now=None):
+    return execution_flags(db, now=now)
+
+
+def execution_flags(db, execution_id=None, *, now=None, current=None):
     now = now or datetime.now(UTC)
-    flags = [stored(row) for row in db.execute("SELECT * FROM flags")]
-    for derive in DERIVED:
-        flags.extend(derive(db, now))
-    flags.extend(active_overdue(db, now, flags))
+    flags = [stored(row) for row in db.execute("SELECT * FROM flags" + (" WHERE execution_id=?" if execution_id else ""),
+                                              (execution_id,) if execution_id else ())]
+    current = pickup.context(db, now) if execution_id is None else current
+    for derive in ((writer_flags, session_flags, reconciliation.observation_flags) if execution_id else DERIVED):
+        options = ({"current": current} if derive in (captain_idle_with_work, writer_flags) else {})
+        if execution_id:
+            options["execution_id"] = execution_id
+        flags.extend(derive(db, now, **options))
+    flags.extend(active_overdue(db, now, flags, execution_id=execution_id))
     return {"flags": sorted(flags, key=lambda item: (item["first_seen"], item["kind"]))}
 
 

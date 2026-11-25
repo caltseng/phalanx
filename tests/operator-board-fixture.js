@@ -17,10 +17,9 @@
     id: "run", itemId: "item-run", title: "Update telemetry", goal: "Update telemetry", target: "checked_in",
     repo: "example/service", stage: "self_review", status: "running", lastAdvancedAt: now, createdAt: hourAgo,
     activeStartedAt: now, stageStartedAt: now,
-    primaryPrUrl: "https://example.com/pull/7", recheckAt: Date.now() + 60000,
+    primaryPrUrl: "https://example.com/pull/7",
     nextAction: "A worker is running the self_review stage",
-    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId },
-    historicalWorker: { workerRef: "opaque-worker-7" }
+    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId }
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
@@ -483,7 +482,7 @@
     const history = detail().querySelector(".timeline").textContent;
     assert(history.includes("self review") && history.includes("development") &&
       detail().textContent.includes("Prerequisites"), "Stage history and dependencies");
-    assert(detail().textContent.includes("att2") && detail().textContent.includes("opaque-worker-7"), "Attempt and legacy worker");
+    assert(detail().textContent.includes("att2"), "Current fenced attempt");
     assert(detail().querySelector(".captain-ref .t-run .mark-captain") && ended().open,
       "Captain reference uses a live helmet and Ended state is retained in details");
     running.writer.captainId = "cap-stale";

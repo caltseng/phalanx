@@ -10,8 +10,6 @@ DISPATCH_SCHEMA = (
     """CREATE INDEX queue_heads ON executions
         (queue_repository, queue_affinity, queue_priority, ready_since, item_id, id)
         WHERE status = 'queued' AND ready_since IS NOT NULL""",
-    """CREATE INDEX open_attempts_by_runner ON attempts(runner_id, lease_expires_at, id)
-        WHERE ended_at IS NULL""",
     """CREATE TABLE dispatch_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         paused INTEGER NOT NULL CHECK (paused IN (0, 1)),

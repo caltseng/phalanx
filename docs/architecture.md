@@ -45,7 +45,7 @@ It does not launch sessions, write GitHub, or merge PRs.
 | API and database | Items, dependencies, executions, attempts, questions/replies, reports, bindings, actions, observations and flags; atomic transitions and finalization | [API startup](../phalanx/api.py), [store](../phalanx/store.py), [intake](../phalanx/intake.py), [transitions](../phalanx/transitions.py) |
 | GitHub | PR identity, actual head/base, checks, feedback, merge and deployment facts | [GitHub reader](../phalanx/github.py), [reconciliation](../phalanx/reconciliation.py) |
 | Captain runtime | Native launch/discovery, coordination, trust-block escalation, shift handoff and creator-owned cleanup | [shift client](../phalanx/shift.py), [Captain prompt](../phalanx/prompts/captain.md), [keeper prompt](../phalanx/prompts/keeper.md) |
-| Pickup projection | One eligibility/reason decision from live Captain scope/readiness snapshots, persisted waits and canonical capacity; shared by discovery, Scribe and overdue flags | [pickup](../phalanx/pickup.py), [operator views](../phalanx/operator_api.py), [flags](../phalanx/flags.py) |
+| Pickup projection | Request-local capacity/rework, holds and native availability snapshots feed board validators and rows; writer reads derive only their execution's flags, sharing capacity with the binding | [pickup](../phalanx/pickup.py), [operator views](../phalanx/operator_api.py), [flags](../phalanx/flags.py) |
 | Writer runtime | Implement, run repository checks, self-review, commit, publish, and fix its primary PR through delivery | [writer binding](../phalanx/writers.py), [work CLI](../phalanx/work_cli.py), [worker prompt](../phalanx/prompts/worker.md) |
 | Execution host | Mapped checkouts, isolated item worktrees, Git credentials, prepared checks environments, scoped credential files and artifacts | [workspaces](../phalanx/workspaces.py), [configuration](configuration.md) |
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
@@ -138,6 +138,9 @@ Status is separate from stage. Input, dependency, retry and external waits retai
 the writer; pause blocks new registrations and Building acquisitions, not an allocated writer's stage continuation.
 Writer bindings have no timed expiry. Nonce replay, expected versions and stopped-session
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
+Attempts contain only stage timing and identity; results check the live writer-to-attempt
+binding in the write transaction. There are no runner leases, scheduled external rechecks
+or separate historical-worker records. Scribe gets native session identity from writers.
 
 The writer self-review stage is not a second independent PR reviewer. GitHub reviews,
 checks and repository rules still apply. The generated writer instructions require the

@@ -6,11 +6,6 @@ from enum import StrEnum
 
 from phalanx.transitions import Revision
 
-# Bounds accepted by the external-wait API.
-CHECK_RECHECK_RANGE = (5, 86400)
-CHECK_WAIT_LIMIT_RANGE = (60, 30 * 86400)
-
-
 class GateState(StrEnum):
     SATISFIED = "satisfied"
     NOT_CONFIGURED = "not_configured"

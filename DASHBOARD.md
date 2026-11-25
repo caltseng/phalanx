@@ -342,7 +342,7 @@ Open rows, from left to right, in aligned columns:
 - time in stage;
 - the primary PR number, or a report link;
 - the writer: busy, idle, `unconfirmed` while its launch is unconfirmed, stopped, error, or `no writer`;
-- the reason: the wait reason, the highest-priority flag, a scheduled retry or recheck, or the status.
+- the reason: the wait reason, the highest-priority flag, a scheduled retry, or the status.
 
 Closed rows show the outcome (`Merged`, `ready for check-in`, `draft published`, `report stored`, `failed` or `cancelled`) instead of the stage, `closed 7m ago`, the PR or report and `took 17m` from intake to close (also on mobile). A completion target appears only for a shortfall, e.g. `wanted: merged`; it comes from the execution's actual `state.target`, not the original request. A ready completion whose reconciler-observed `pr.state` is `merged` displays `Merged` and meets a merged target, without changing persisted state. The full target remains in details. One JS display-label mapping renders `checked_in` as `Merged` everywhere, including history stage text; API values, query parameters, identifiers and stored data stay unchanged. All relative ages say `ago`; absolute local and UTC timestamps remain in tooltips and screen-reader labels.
 
@@ -357,7 +357,7 @@ Clicking a title, or pressing Enter on it, expands the detail in place under its
 Built now:
 
 - **Request:** the full goal.
-- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry and recheck times, attempt, writer and its session, PR or report, and IDs. Historical attempt worker references/links remain readable after PH-DS5 part 2; they are evidence, not surviving runner slots or lease recovery.
+- **Facts:** status or outcome, stage and time in it, target, version, age, last progress, wait reason and since when, resume trigger, retry time, attempt, writer and its session, PR or report, and IDs. Native session references come from writer bindings, not separate historical attempt-worker records.
 - **Flags** on this item, with their recovery and age.
 - **Question** with its options, proposed default and the exact `reply` command.
 - **Prerequisites** with their milestone and reason.
@@ -367,7 +367,7 @@ Built now:
 The target detail also includes:
 - **Header:** the title, repository, label, status or outcome, the completion target (ready or Merged), the primary PR and any duplicates, and the worker chat.
 - **Lifecycle rail:** the stage sequence from [STATE_MACHINE.md](STATE_MACHINE.md) with the current stage highlighted. Returns to development or report drafting appear as counts; older timelines may retain retired stages.
-- **Now:** the next action or resume trigger, the wait reason, retry and recheck times, and the registered writer and current fenced attempt (if any), not an expiring runner lease.
+- **Now:** the next action or resume trigger, the wait reason, retry time, and the registered writer and current fenced attempt (if any), not an expiring runner lease.
 - **Evidence by revision:** the local checks, CI, review findings and approvals, each tied to the head SHA it covered.
 - **Conversation:** each question with its options, the reply, and who replied.
 - **Timeline and attempts:** paginated, with a worker link for each attempt.
@@ -451,7 +451,7 @@ reads current server values; charter settings cannot undo dashboard edits.
 - Draft-completed executions use `draft_published` consistently in summary rows, the outcome filter, overview and label-group rollups. They count as delivered in the overview, not as ready for check-in.
 - Filters on `GET /v1/operator/executions`: `repository`, `label`, `status`, `stage`, `outcome`, `q` and `closed_after`. `outcome` and `closed_after` apply to `kind=closed`, and `status` must match the kind; otherwise the server returns 400. `q` matches goal text, an item or execution ID, or an observed PR URL or number. Filtered cursors are bound to their filters. A filtered page inspects at most 2,000 indexed candidate executions, so it can return fewer rows than requested (even zero) with a cursor to continue.
 - `GET /v1/operator/groups/{label}`: a bounded page of current executions with that label and a rollup **of that page only** (`scope: "page"`; items, open, outcomes, summed size with a count of PRs whose size is unknown, first created, oldest open and last closed). Follow `next_cursor` for subsequent pages; no request aggregates the whole label. Returns 404 when no item has the label.
-- Execution lists, overview and groups return a weak `ETag` and accept `If-None-Match`. An unchanged poll returns `304` before reading rows or rollups. A durable change token and indexed retry/lease/24-hour-closure boundaries invalidate the tag. Ticking display ages alone do not: retain the last snapshot and calculate elapsed age from its timestamps and `generated_at`. Authentication is checked before conditional reads.
+- Execution lists, overview and groups return a weak `ETag` and accept `If-None-Match`. An unchanged poll returns `304` before reading rows or rollups. A durable change token and indexed retry/queue/unconfirmed-launch/24-hour-closure boundaries invalidate the tag. Ticking display ages alone do not: retain the last snapshot and calculate elapsed age from its timestamps and `generated_at`. Authentication is checked before conditional reads.
 - Reports render as sanitized Markdown on the local board, with raw HTML stripped and no
   browser dependency or change to the plain-text report API.
 

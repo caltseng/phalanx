@@ -52,18 +52,6 @@ OPERATOR_SCHEMA = (
        END""",
 )
 
-# Opaque worker session reference and optional link.
-WORKER_SCHEMA = (
-    """CREATE TABLE attempt_workers (
-        attempt_id TEXT PRIMARY KEY NOT NULL REFERENCES attempts(id),
-        reference TEXT NOT NULL,
-        url TEXT
-    )""",
-)
-
-# The latest blocker a runner reported for its open attempt, shown as the item's wait reason.
-BLOCKER_SCHEMA = ("ALTER TABLE attempts ADD COLUMN blocker TEXT",)
-
 # Rework loops: re-entering one of these stages starts a new revision round.
 REWORK_ENTRY = "('development', 'pr_revision', 'report_drafting')"
 
@@ -118,7 +106,6 @@ DASHBOARD_SCHEMA = (
     """CREATE INDEX operator_observed ON github_observations
        (execution_id, last_observed_at DESC, observed_at DESC)""",
     f"CREATE INDEX operator_retry ON executions(retry_at) WHERE {OPEN}",
-    "CREATE INDEX operator_lease ON attempts(lease_expires_at) WHERE ended_at IS NULL",
     f"""CREATE TABLE operator_pr AS SELECT {PR_COLUMNS}
         FROM github_observations AS observation
         WHERE (observation.pr_url, observation.head_sha, observation.digest) = (
@@ -143,7 +130,7 @@ DASHBOARD_SCHEMA = (
             BEGIN UPDATE operator_change SET token = hex(randomblob(16)); END"""
         for table in (
             "work_items", "executions", "attempts", "dispatch_settings", "writers",
-            "external_rechecks", "attempt_workers", "github_observations", "transition_history",
+            "github_observations", "transition_history",
             "local_check_results", "captain_actions", "writer_usage",
         )
         for event in ("INSERT", "UPDATE", "DELETE")

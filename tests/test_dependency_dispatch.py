@@ -45,8 +45,7 @@ class DependencyDispatchTests(ServerFixture, unittest.TestCase):
     def claim(self, db, item):
         row = intake.current_execution(db, item["id"])
         assignment = intake.claim_attempt(
-            db, row, intake.STATE.validate_json(row["state_json"]), runner_id="@writer",
-            lease_digest=intake.digest(item["id"]), lease_expires_at=int(time()) + 300,
+            db, row, intake.STATE.validate_json(row["state_json"]), writer_id="fixture",
         )
         return None if assignment is None else {
             **assignment, "item_id": item["id"], "request": intake.inspect(db, item["id"]),

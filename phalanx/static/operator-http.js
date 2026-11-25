@@ -135,12 +135,6 @@
         nextAction: row.next_action,
         resumeTrigger: row.resume_trigger,
         retryAt: epochMs(row.retry_at_ms),
-        recheckAt: epochMs(row.recheck_at_ms),
-        // Preserved worker references on historical attempts.
-        historicalWorker: {
-          workerRef: typeof row.worker_reference === "string" ? row.worker_reference : null,
-          chatUrl: httpsUrl(row.worker_url)
-        },
         primaryPrUrl: httpsUrl(row.primary_pr_url),
         prState: row.pr?.state,
         closedAt: row.closed_at,

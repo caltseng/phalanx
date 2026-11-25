@@ -209,16 +209,6 @@
     return Boolean(from) && (STAGES.indexOf(to) < STAGES.indexOf(from));
   }
 
-  // Preserved worker references on historical attempts.
-  function historicalWorkerFacts(item) {
-    const legacy = item.historicalWorker || {};
-    const chat = safeUrl(legacy.chatUrl);
-    return [
-      legacy.workerRef && ["Worker", legacy.workerRef],
-      chat && ["Worker chat", h("a", { href: chat, text: "open" })]
-    ].filter(Boolean);
-  }
-
   function queryForm(action, props = {}, ...children) {
     const form = h("form", { action, method: "get", ...props }, ...children);
     form.addEventListener("submit", event => {
@@ -262,11 +252,10 @@
    * Cursors are opaque strings or null. Closed items come newest first; open work puts input waits first.
    * Items contain string id, itemId?, version?, title (one line), goal?, target?, publicationMode?, repo, stage, status,
    * createdAt?, activeStartedAt?, stageStartedAt?, lastAdvancedAt, lastProgressAt?, waitSince?,
-   * waitReason?, nextAction?, resumeTrigger?, retryAt? and
-   * recheckAt? (epoch ms), primaryPrUrl?, closedAt?, outcome?, output?: {kind: "pr"|"report", url?},
+   * waitReason?, nextAction?, resumeTrigger?, retryAt? (epoch ms), primaryPrUrl?, closedAt?,
+   * outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
-   * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?} and
-   * historicalWorker?: {workerRef?, chatUrl?} for preserved attempt evidence.
+   * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?}.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
    * recovery, firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionRef,
    * state, live, stale, heartbeatAt, wakeCount, compactionCount?, charterRevision?, focus, handoffNote?}]}.
@@ -922,7 +911,6 @@
         ["Last progress", epoch(item.lastProgressAt) && ago(item.lastProgressAt, now)],
         ["Waiting", epoch(item.waitSince) && ago(item.waitSince, now)],
         ["Retry", item.retryAt && stamp(item.retryAt)],
-        ["Recheck", item.recheckAt && stamp(item.recheckAt)],
         ["Attempt", data.attempt && h("code", { text: short(data.attempt), title: data.attempt })],
         ["Writer", writer && h("span", {}, label(writer.state), " · ", writer.runtime || "runtime unknown",
           writer.captainId ? h("span", {}, " · ", captainReference(writer.captainId)) : "",
@@ -933,8 +921,7 @@
         ["Delivery", delivery(item, now)],
         ["Output", item.output?.kind === "report" ? prCell(item) : null],
         ["IDs", h("code", { title: "item " + (item.itemId || "?") + " · execution " + item.id,
-          text: short(item.itemId) + " / " + short(item.id) })],
-        ...historicalWorkerFacts(item)
+          text: short(item.itemId) + " / " + short(item.id) })]
       ]));
       for (const [heading, text] of [
         ["Wait reason", item.waitReason], ["Resumes on", item.resumeTrigger],
