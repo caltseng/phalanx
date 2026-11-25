@@ -238,7 +238,7 @@ class Probe:
                 intake.register(db, repository, f"https://github.com/example/{repository}.git")
             dispatch.set_dispatch(db, DispatchSettings(
                 paused=False, aging_seconds=config.aging_seconds,
-                max_writers=self.writer_capacity))
+                max_writers=self.writer_capacity, max_building_writers=self.writer_capacity))
 
         now_ms = int(time.time() * 1000)
         ready, blocked, closed = [], [], []

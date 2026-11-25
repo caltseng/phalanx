@@ -15,6 +15,8 @@ The writer runs these commands from that worktree:
 ```text
 python -m phalanx work status
 python -m phalanx work next
+python -m phalanx work capacity building
+python -m phalanx work capacity delivering
 python -m phalanx work progress --note "Current progress"
 python -m phalanx work result --attempt ATTEMPT --file RESULT_JSON
 python -m phalanx work question "Decision needed" --attempt ATTEMPT --handoff "Resume context"
@@ -23,6 +25,23 @@ python -m phalanx work question "Decision needed" --attempt ATTEMPT --handoff "R
 Keep the same writer through runnable stages. Each stage has its own fenced attempt. On a
 question, external wait or retry delay, inspect status and resume when its trigger clears.
 Never print the writer credential or give a worker the runner token.
+
+Development, self-review, substantial local tests and coding/validation fixes require
+`writer.building=true`. The server releases Building at successful self-review handoff into
+publication, but keeps this same writer's Total allocation. Pure publication and observing
+external CI/review use only Total. Before rework during publication or delivery, run
+`work capacity building` and inspect its returned binding: do not edit or test until
+`writer.building=true`. If full, wait and retry about every 30 seconds; retain the session,
+Total and progress reporting. Eligible waiting PR fixes take precedence over new development.
+After fixes and local validation finish, run `work capacity delivering` before publication
+or external waiting. Never infer Building headroom from spare Total or the delivery stage.
+Commit the reviewed changes first: the CLI records HEAD as the durable publication handoff.
+An observation of the previous green open PR head cannot complete the execution before the
+new commit is published, even after restart. A superseding head surfaces `head_drift` and a
+visible wait: review and hand off that head, or stop and withdraw the writer to clear the
+handoff. A verified GitHub merge remains authoritative and always releases the writer.
+After an uncertain response or restart, read status and retry with fresh state. Capacity
+transitions are fenced by writer identity and allocation revision; no lease timeout releases work.
 
 ## Publication and delivery
 
@@ -55,5 +74,5 @@ worktrees, not a local database. Existing unused files are not deleted by an upg
 All durable queue and observation records remain behind the API.
 
 Use [Resume](resume.md) after restart and [Recovery](recovery.md) for uncertain launches or
-stopped writers. Dispatch pause refuses new writer registrations and new stage attempts, not progress
-or results for existing attempts.
+stopped writers. Dispatch pause refuses new writer registrations and Building acquisitions,
+not stage continuation, progress or results for already allocated writers.

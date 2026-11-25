@@ -31,10 +31,10 @@ flowchart TD
     Kind -->|Field report| Draft[Report drafting]
     Dev -->|Candidate commit| Self[Self review]
     Self -->|Changes required| Dev
-    Self -->|Exact candidate reviewed| Publish[Publication]
+    Self -->|Exact candidate reviewed; release Building| Publish[Publication]
     Publish -->|Primary PR URL recorded| Deliver[Delivery: API verifies observations]
-    Deliver -->|Checks, feedback or conflict| Fix[Writer fixes same PR]
-    Fix -->|Push to primary PR| Deliver
+    Deliver -->|Checks, feedback or conflict; acquire Building| Fix[Writer fixes same PR]
+    Fix -->|Local checks complete; release Building; push| Deliver
     Deliver -->|Draft head changed| Self
     Deliver -->|Verified requested target| Done([Completed])
     Draft -->|Stored draft revision| ReportReview[Report review]
@@ -124,14 +124,16 @@ stateDiagram-v2
 
 | Event | Server behavior |
 | --- | --- |
-| Writer registration | Check expected version, named execution eligibility, dispatch pause, prerequisites and persisted workspace writer limit. Atomically enforce capacity and one open writer. An unbound queued item visibly awaits a direct Captain and consumes no capacity. |
-| Named writer attempt | Verify the current scoped token and runnable state. Assign a new attempt and pin exact upstream executions/output revisions. A wait exposes its reason and resume trigger. |
+| Writer registration | Check expected version, named execution eligibility, dispatch pause, prerequisites and both persisted workspace writer limits. Atomically enforce Total plus Building for building work, and one open writer. An unregistered queued item consumes neither. |
+| Named writer attempt | Verify the scoped token and runnable state. Building stages require an allocation before opening an attempt, including recovery from delivery to self-review. Pin exact upstream outputs. A capacity wait retains the writer and Total. |
+| Publication handoff | Successful self-review releases Building in the stage-result transaction, retaining the same writer and Total. Pure publication and external CI/review consume only Total. |
+| Delivery/publication rework | Before editing, self-review or substantial local tests, the writer requests Building. If full, persist the request and wait without preemption. Eligible waiting PR fixes precede new development. Fenced `capacity delivering` releases Building when local work finishes and records the reviewed commit awaiting publication. A mismatched open head waits visibly; ending/withdrawing/replacing the writer clears the handoff. Verified merges remain authoritative. This does not change lifecycle stage or merge policy. |
 | Valid result | Check attempt, writer binding, version, stage and evidence. Record outcome and history atomically; end that attempt. Open the next runnable attempt for the same writer or retain the writer through the wait. Old attempts/tokens cannot advance state. |
 | Paused dispatch | Refuse new registrations and attempts. Existing attempts can post progress/results. Resume makes runnable work available again. |
 | Prerequisite satisfied | Re-evaluate durable milestones in bounded batches and at claim time. Unrelated items remain runnable. Failed/cancelled upstream work never qualifies through its disposition report. |
 | Human judgment | Save question/options/default/handoff and notify. Captain replies record `answered_by: captain`; owner is the default. Reply queues the same stage, retaining its writer and context. |
 | External wait | Store reason, gate, expected revision and due recheck. Events or bounded jittered polling resume it. Delivery observations can complete directly without another attempt. |
-| Interrupted writer | No timed expiry. Verify native state, exact session and preserved local work. Discover uncertain launch by nonce before launching. Replacement must name the current writer and attest it stopped; revoke old credential atomically. |
+| Interrupted writer | No timed expiry. Verify native state, exact session and preserved local work. Discover uncertain launch by nonce before launching. Replacement must name the current writer and attest it stopped; atomically transfer allocations/pending requests and revoke the old credential. Ended writers consume neither limit. |
 | Repeated lack of progress | Bound retries/repeated findings and ask for a decision with prior attempts and next action. Silence and stale-progress flags alone do not authorize replacing a writer. |
 | Cancel requested | Stop new work and reconcile in-flight effects; confirm the exact worker stopped. If a merge succeeded, record it rather than claiming cancellation. Store a disposition report when needed. |
 | Finalize report | Persist terminal intent, then store/reuse exact artifact and close atomically. Retry independently of pause. |

@@ -11,12 +11,13 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import StringConstraints
+from pydantic import Field, StringConstraints
 
 from . import captains, dispatch, intake, intake_api
 from .auth import authenticate, require_coordinator, require_writer
 from .flags import all_flags
 from .intake_models import Identifier, Payload, Text, Versioned
+from .pr_models import SHA
 from .transitions import TERMINAL, Event, Stage, Status
 
 
@@ -64,6 +65,12 @@ class Progress(Payload):
     note: Text | None = None
 
 
+class Capacity(Payload):
+    phase: Literal["building", "delivering"]
+    expected_revision: Annotated[int, Field(strict=True, ge=0)]
+    handoff_head: SHA | None = None
+
+
 def writer_row(db, writer_id):
     row = db.execute("SELECT * FROM writers WHERE id=?", (writer_id,)).fetchone()
     if row is None:
@@ -91,6 +98,13 @@ def binding(db, writer):
             "abandoned_at": writer["abandoned_at"], "state_reported_at": writer["state_reported_at"],
             "last_progress_at": writer["last_progress_at"], "progress_note": writer["progress_note"],
             "ended_at": writer["ended_at"], "end_reason": writer["end_reason"],
+            "building": bool(writer["building"]),
+            "building_requested_at": writer["building_requested_at"],
+            "capacity_revision": writer["capacity_revision"],
+            "handoff_head": execution["handoff_head"],
+            "capacity_wait": (dispatch.building_wait(db, writer["id"]) or
+                              "Building capacity available; retry acquisition"
+                              if writer["building_requested_at"] and not writer["building"] else None),
         },
     }
 
@@ -110,13 +124,62 @@ def claim_next(db, writer, *, continued_from=None):
     claim = None
     if (state.status == Status.QUEUED and state.stopping is None and state.pending_output is None
             and row["ready_since"] is not None and row["ready_since"] <= int(now * 1000)):
-        claim = intake.claim_attempt(
-            db, row, state, runner_id=WRITER_RUNNER_ID, lease_digest=writer["token_digest"],
-            lease_expires_at=NO_EXPIRY, now=now, continued_from=continued_from,
-        )
+        if not dispatch.needs_building(state.stage) or acquire_building(db, writer):
+            claim = intake.claim_attempt(
+                db, row, state, runner_id=WRITER_RUNNER_ID, lease_digest=writer["token_digest"],
+                lease_expires_at=NO_EXPIRY, now=now, continued_from=continued_from,
+            )
     db.execute("UPDATE writers SET attempt_id=? WHERE id=?",
                (claim["attempt_id"] if claim else None, writer["id"]))
     return claim
+
+
+def acquire_building(db, writer):
+    if writer["building"]:
+        return True
+    if writer["building_requested_at"] is None:
+        db.execute("""UPDATE writers SET building_requested_at=?, capacity_revision=capacity_revision+1
+                      WHERE id=?""", (intake.timestamp(), writer["id"]))
+    if dispatch.building_wait(db, writer["id"]):
+        return False
+    db.execute("""UPDATE writers SET building=1, building_requested_at=NULL,
+                  capacity_revision=capacity_revision+1 WHERE id=?""", (writer["id"],))
+    return True
+
+
+def release_building(db, writer_id):
+    db.execute("""UPDATE writers SET building=0, building_requested_at=NULL,
+                  capacity_revision=capacity_revision+1
+                  WHERE id=? AND (building=1 OR building_requested_at IS NOT NULL)""", (writer_id,))
+
+
+def capacity(db, writer_id, payload):
+    writer = writer_row(db, writer_id)
+    if writer["ended_at"] is not None:
+        raise intake.Conflict("The writer has ended")
+    if writer["capacity_revision"] != payload.expected_revision:
+        raise intake.Conflict("Writer capacity changed; read status before retrying")
+    execution = intake.execution_row(db, writer["item_id"], writer["execution_id"])
+    state = intake.STATE.validate_json(execution["state_json"])
+    if state.status in TERMINAL or state.stopping is not None or state.pending_output is not None:
+        raise intake.Conflict("The execution is closed or closing")
+    if payload.phase == "delivering":
+        if dispatch.needs_building(state.stage):
+            raise intake.Conflict("Development, self-review and report work must retain Building capacity")
+        if writer["building"]:
+            if payload.handoff_head is None:
+                raise intake.Conflict("Returning to delivery requires the reviewed commit's handoff_head")
+            db.execute("UPDATE executions SET handoff_head=? WHERE id=?",
+                       (payload.handoff_head, execution["id"]))
+        release_building(db, writer_id)
+    else:
+        if (state.status == Status.WAITING_FOR_INPUT or execution["dependency_wait_json"] is not None
+                or execution["retry_at"] is not None and execution["retry_at"] > int(time() * 1000)
+                or state.status == Status.QUEUED and (
+                    execution["ready_since"] is None or execution["ready_since"] > int(time() * 1000))):
+            raise intake.Conflict("Resolve input, dependencies or scheduling wait before starting building work")
+        acquire_building(db, writer)
+    return binding(db, writer_row(db, writer_id))
 
 
 def release(db, writer, reason):
@@ -135,6 +198,8 @@ def release(db, writer, reason):
     elif attempt is not None and attempt["id"] == writer["attempt_id"]:
         intake.apply(db, row, state, Event.RETRY, attempt_id=attempt["id"], retry_allowed=True,
                      details=details)
+    release_building(db, writer["id"])
+    db.execute("UPDATE executions SET handoff_head=NULL WHERE id=?", (writer["execution_id"],))
     db.execute("UPDATE writers SET ended_at=?, end_reason=?, attempt_id=NULL WHERE id=?",
                (intake.timestamp(), reason, writer["id"]))
 
@@ -167,13 +232,13 @@ def register(db, item_id, execution_id, payload):
         release(db, current, "replaced")
     elif payload.replaces is not None:
         raise intake.Conflict("The writer to replace is no longer registered")
-    maximum = db.execute("SELECT max_writers FROM dispatch_settings WHERE id=1").fetchone()[0]
     active = dispatch.active_writers(db)
-    # A stopped replacement does not add a session, even after the owner lowers the cap.
-    if len(active) >= maximum and current is None:
+    # A stopped replacement transfers its exact allocation, even after limits are lowered.
+    waiting = dispatch.admission_wait(db, state.stage) if current is None else None
+    if waiting:
         names = ", ".join(f"{writer['id']} (item {writer['item_id']}, "
                           f"session {writer['session_id'] or 'unconfirmed'})" for writer in active)
-        raise intake.Conflict(f"Wait: dispatch max_writers={maximum} reached; "
+        raise intake.Conflict(f"Wait: dispatch {waiting}; "
                               f"active writers: {names}. Retry when a writer ends; no escalation needed")
     state = intake.STATE.validate_json(intake.execution_row(db, item_id, execution_id)["state_json"])
     if state.status == Status.RUNNING:
@@ -181,9 +246,12 @@ def register(db, item_id, execution_id, payload):
     writer_id = uuid4().hex
     db.execute(
         """INSERT INTO writers (id, execution_id, item_id, captain_id, runtime, nonce, token_digest,
-               replaced_id, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?)""",
+               replaced_id, state, created_at, building, building_requested_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'launching', ?, ?, ?)""",
         (writer_id, execution_id, item_id, payload.captain_id, payload.runtime, payload.nonce,
-         payload.token_digest, payload.replaces, intake.timestamp()),
+         payload.token_digest, payload.replaces, intake.timestamp(),
+         current["building"] if current is not None else int(dispatch.needs_building(state.stage)),
+         current["building_requested_at"] if current is not None else None),
     )
     claim_next(db, writer_row(db, writer_id))
     return binding(db, writer_row(db, writer_id))
@@ -254,6 +322,12 @@ def advance(db, writer_id, previous_attempt_id, view):
         if view["state"]["status"] in TERMINAL:
             intake.end_writers(db, writer["execution_id"], view["state"]["status"])
         else:
+            previous = db.execute("SELECT stage FROM attempts WHERE id=?", (previous_attempt_id,)).fetchone()
+            if (previous is not None and previous["stage"] == Stage.SELF_REVIEW
+                    and view["state"]["stage"] == Stage.PUBLICATION):
+                release_building(db, writer_id)
+                db.execute("UPDATE executions SET handoff_head=NULL WHERE id=?", (writer["execution_id"],))
+                writer = writer_row(db, writer_id)
             claim_next(db, writer, continued_from=previous_attempt_id)
     return binding(db, writer_row(db, writer_id))
 
@@ -320,3 +394,8 @@ def post_attempt(request: Request):
 @router.post("/writer/progress", dependencies=[Depends(require_writer)])
 def post_progress(request: Request, body: Progress):
     return intake_api.run(request, progress, own_writer(request), body, write=True)
+
+
+@router.post("/writer/capacity", dependencies=[Depends(require_writer)])
+def post_capacity(request: Request, body: Capacity):
+    return intake_api.run(request, capacity, own_writer(request), body, write=True)

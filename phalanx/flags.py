@@ -100,19 +100,17 @@ def captain_idle_with_work(db, now):
     occupied, maximum = capacity["active_writers"], capacity["max_writers"]
     result = []
     for row in db.execute(
-            """SELECT id, item_id, ready_since FROM executions AS execution
+            """SELECT id, item_id, ready_since, stage FROM executions AS execution
                WHERE status = 'queued' AND ready_since <= ? AND dependency_wait_json IS NULL
                  AND NOT EXISTS (SELECT 1 FROM writers
                                  WHERE execution_id = execution.id AND ended_at IS NULL)
                ORDER BY ready_since, id""", (cutoff,)):
-        if capacity["paused"]:
+        waiting = dispatch.admission_wait(db, row["stage"], capacity=capacity)
+        if waiting:
             kind = "queue_backlogged"
-            reason = f"Waiting for dispatch to resume; {occupied} of {maximum} writer slots occupied"
-            recovery = "The owner resumes dispatch when ready"
-        elif occupied >= maximum:
-            kind = "queue_backlogged"
-            reason = f"Waiting for writer capacity: {occupied} of {maximum} writer slots occupied"
-            recovery = "Wait for a registered writer to finish or release its slot"
+            reason = (f"{waiting}; Building {capacity['building_writers']}/{capacity['max_building_writers']}, "
+                      f"Delivering {capacity['delivering_writers']}, Total {occupied}/{maximum}")
+            recovery = "Wait for the affected capacity, resume dispatch or service eligible waiting PR fixes"
         elif row["id"] in holds:
             continue
         else:
@@ -148,7 +146,9 @@ def writer_flags(db, now):
                 "launch_unconfirmed", f"Writer intent {row['nonce']} unconfirmed since {row['created_at']}",
                 "Inspect native session kickoffs/metadata for the full nonce, then confirm or withdraw",
                 at(row["created_at"]) + LAUNCH_UNCONFIRMED, **subject))
-        if row["state"] == "busy":
+        capacity_wait = (row["building_requested_at"] and not row["building"]
+                         and dispatch.building_wait(db, row["id"]))
+        if row["state"] == "busy" and not capacity_wait:
             moved = max(at(value) for value in (row["last_progress_at"], row["last_advanced_at"],
                                                 row["confirmed_at"]) if value)
             if now - moved >= NO_PROGRESS:

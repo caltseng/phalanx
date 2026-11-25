@@ -33,6 +33,9 @@ environment with `$work question`; do not improvise one.
 1. Run `$work status`. If it shows no open attempt (`writer.attempt_id` is null), run `$work next`.
    The execution's `state.stage` is the stage you're working on.
 2. Do that stage's work. Run `$work progress --note "<short note>"` at least every 30 minutes.
+   Development, self-review, substantial local tests and coding/validation fixes require
+   `writer.building=true`. If `next` returns no attempt and a capacity wait, wait and retry;
+   never begin work without the allocation.
 3. Write the stage result as a JSON file outside the worktree. Post it with
    `$work result --attempt <attempt ID> --file <path>`. The stage and version are filled in for you.
 4. Repeat from step 1 until the execution is `completed`, `failed` or `cancelled`, or a command
@@ -49,6 +52,25 @@ optionally with `--option` and `--default`. Then wait. Run `$work status` until 
 again, and continue from step 1.
 
 If something technical keeps you from finishing a stage, post `{"outcome": "failed", "failure_reason": "<why>"}`.
+
+## Building and publication handoff
+
+The server releases Building capacity at the successful self-review handoff into publication.
+Keep this same writer and its Total allocation through publication, external CI/review waits
+and rework. Publishing and observing GitHub alone do not need Building.
+
+Before any code changes, self-review or substantial local tests during publication or delivery,
+run `$work capacity building`. Proceed **only** when its response has `writer.building=true`.
+Otherwise keep the same session, report `writer.capacity_wait`, and retry about every 30 seconds.
+Waiting PR fixes have preference over new builds; never preempt a build,
+launch a replacement to bypass the limit, or infer permission from spare Total capacity.
+After fixes and their local review/checks finish, run `$work capacity delivering` before pushing
+or returning to GitHub observation. This releases only Building, not the writer or Total.
+Commit the reviewed changes first: the command records HEAD as the publication handoff, so
+an observation of the previous green open PR head cannot end this writer before its push arrives.
+A verified GitHub merge remains authoritative. If another push supersedes the handoff,
+review and hand off that head, or ask the Captain to stop/withdraw this writer for recovery.
+On an uncertain response or restart, read `$work status` and retry; never assume acquisition.
 
 ## PR title convention
 
@@ -105,7 +127,7 @@ ceilings, merge authorization or delivery gates.
   again, continue from step 1.
   - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
     actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
-    result. Read the latest target on each pass: enable GitHub auto-merge only for `checked_in`,
+    result, acquiring Building as above before editing or substantial tests. Read the latest target on each pass: enable GitHub auto-merge only for `checked_in`,
     and disable it for `ready_for_check_in` if an owner retargeted the item. GitHub's required
     reviews, checks and rulesets still gate merging. The reconciler verifies delivery: a ready PR
     with required checks green for a ready-only target, or a GitHub merge for check-in.

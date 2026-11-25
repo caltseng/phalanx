@@ -60,13 +60,16 @@
       assert(!doc.querySelector("#operator-settings-token"), "No local settings token input");
       settings.open = true;
       const maximum = doc.querySelector("#operator-max-writers");
+      const building = doc.querySelector("#operator-max-building-writers");
       await until(() => maximum.value !== "");
       const before = await (await realFetch("/v1/dispatch/settings")).json();
       maximum.value = String(before.max_writers + 1);
+      building.value = String(before.max_building_writers + 1);
       doc.querySelector("#operator-settings-form").requestSubmit();
       await until(() => doc.querySelector("#operator-settings-status").textContent === "Concurrency saved.");
       const after = await (await realFetch("/v1/dispatch/settings")).json();
       assert(after.max_writers === before.max_writers + 1 &&
+        after.max_building_writers === before.max_building_writers + 1 &&
         after.paused === before.paused && after.aging_seconds === before.aging_seconds,
       "Settings save uses canonical state without overwriting pause/aging");
       assert((await realFetch("/v1/dispatch/settings", {
@@ -88,6 +91,7 @@
     const settingsWrites = [];
     let rejectSettingsSave = true;
     let maximum = 5;
+    let buildingMaximum = 2;
     let lostResponse;
     let saved;
     const now = new Date().toISOString();
@@ -115,9 +119,14 @@
             return json({}, 503);
           }
           maximum = JSON.parse(options.body).max_writers;
+          buildingMaximum = JSON.parse(options.body).max_building_writers;
         }
-        return json({ paused: true, aging_seconds: 99, max_writers: maximum, active_writers: 3 });
+        return json({ paused: true, aging_seconds: 99, max_writers: maximum, active_writers: 3,
+          max_building_writers: buildingMaximum, building_writers: 2, delivering_writers: 1 });
       }
+      if (path === "/v1/operator/overview") return json({
+        sections: { needs_you: 0, running: 0, queued: rows.length, blocked: 0, waiting_on_checks: 0 }
+      });
       if (path.startsWith("/v1/operator/executions?")) {
         if (ownerMode && !options.headers.Authorization) return json({ detail: "Bearer token required" }, 401);
         const limit = Number(new URL(path, location.origin).searchParams.get("limit"));
@@ -215,10 +224,17 @@
     const capacityStatus = doc.querySelector("#operator-settings-status");
     const capacityForm = doc.querySelector("#operator-settings-form");
     const capacityInput = doc.querySelector("#operator-max-writers");
+    const buildingInput = doc.querySelector("#operator-max-building-writers");
     settings.open = true;
-    await until(() => capacity.textContent.includes("3 active / 5 maximum"));
+    await until(() => capacity.textContent.includes("Building 2/2 | Delivering 1 | Total 3/5"));
     assert(doc.querySelector('label[for="operator-max-writers"]'), "Concurrency input is labelled");
+    assert(doc.querySelector('label[for="operator-max-building-writers"]'), "Building input is labelled");
+    buildingInput.value = "6";
+    capacityForm.requestSubmit();
+    await until(() => capacityStatus.textContent.includes("Building no greater than Total"));
+    assert(settingsWrites.length === 0, "Incoherent pair rejected without writing");
     capacityInput.value = "2";
+    buildingInput.value = "1";
     assert(!doc.querySelector("#operator-settings-token"), "Settings has no separate token gate");
     capacityForm.requestSubmit();
     await until(() => capacityStatus.textContent.includes("HTTP 503"));
@@ -227,19 +243,23 @@
     doc.querySelector("#operator-settings-refresh").click();
     await until(() => capacityInput.value === "5");
     capacityInput.value = "2";
+    buildingInput.value = "1";
     capacityForm.requestSubmit();
     await until(() => capacityStatus.textContent === "Concurrency saved.");
-    assert(maximum === 2 && capacity.textContent.includes("3 active / 2 maximum"),
+    assert(maximum === 2 && buildingMaximum === 1 &&
+      capacity.textContent.includes("Building 2/1 | Delivering 1 | Total 3/2"),
       "Trusted dashboard can lower below current usage and sees authoritative result");
     assert(settingsWrites.every(write => ownerMode
       ? write.headers.Authorization === "Bearer " + "o".repeat(32)
       : !("Authorization" in write.headers)), "Local settings never sends a bearer token");
     const changed = JSON.parse(settingsWrites.at(-1).body);
-    assert(Object.keys(changed).join() === "max_writers", "Saving does not overwrite pause or aging");
+    assert(Object.keys(changed).sort().join() === "max_building_writers,max_writers",
+      "Saving sends exactly the atomic pair, not pause or aging");
     maximum = 7;
     doc.querySelector("#operator-settings-refresh").click();
     await until(() => capacityInput.value === "7");
-    assert(capacity.textContent.includes("3 active / 7 maximum"), "Refresh reads persisted effective capacity");
+    assert(capacity.textContent.includes("Building 2/1 | Delivering 1 | Total 3/7"),
+      "Refresh reads persisted effective capacity");
     if (ownerMode) {
       doc.querySelector("#operator-board").append(settings);
       doc.querySelector("#operator-disconnect").click();

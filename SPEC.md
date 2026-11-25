@@ -80,7 +80,7 @@ End each created PR description with
 2. The Captain re-reads its charter and API/GitHub/native session state. It chooses named
    eligible work, records a writer intent/nonce and scoped token digest before launching
    one native session. Registration atomically enforces one open writer per execution and
-   the persisted dispatch `max_writers` across all repositories. Dispatch pause stops new admissions.
+   the persisted dispatch Building and Total limits across all repositories. Dispatch pause stops new admissions.
 3. The writer uses an isolated item worktree, reads repository instructions and performs
    its stage. `phx work` submits progress, result/evidence or a focused question using the
    credential in the item's Git directory. Never expose it in chat or commits.
@@ -197,11 +197,23 @@ heartbeat and wakes instead of the charter hash; charter revision enforcement is
 
 ## Settings and dispatch gates
 
-- Persisted dispatch `max_writers` (initially 5) bounds new registered writers across the
-  workspace. Owners edit it in Scribe or the dispatch settings API. Intents and waiting
-  writers count; queued items without writers do not. Replacements add no extra place;
-  reductions do not end writers. Charter `[shift] max_writers` is rejected with
-  guidance to remove it and use dispatch settings instead.
+- Exactly two persisted writer limits: `max_building_writers` (Building, initially 5) and
+  `max_writers` (Total, initially 10 on new installs). Owners edit either or an atomic pair
+  in Scribe or the dispatch settings API, with integer bounds 1..2147483647 and Building <=
+  Total. Existing installations retain their approved Total until coordinated activation.
+  Intents and waiting registered writers count toward Total; unregistered queued work counts
+  toward neither. Building is an allocation, not an execution stage: development, self-review,
+  substantial local tests and coding/validation fixes require it.
+- Successful self-review handoff into publication releases Building, retaining writer identity
+  and Total. Pure publication and external CI/review waits need only Total. Before rework in
+  publication/delivery, `work capacity building` must grant Building; otherwise the same writer
+  waits. Eligible waiting PR fixes precede new development admissions. After local work completes,
+  `work capacity delivering` releases Building again. Stage resumes reacquire automatically.
+  Replacements atomically transfer the stopped writer's allocation and pending request;
+  ended/revoked writers cannot release another writer's allocation.
+- Reductions never kill or abandon existing writers; they block affected admissions until usage
+  permits them. Owner settings persist across reload/restart; charter concurrency keys are
+  rejected. No delivery quota, per-stage limits or alternate authoritative settings exist.
 - Pause blocks new registrations/attempts while existing progress/results continue.
 - Captains consider repo mappings, charter scope, affinity, dependencies and retry time.
   Rank eligible work by urgent/normal/low priority aged toward urgent, then oldest ready

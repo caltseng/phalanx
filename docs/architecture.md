@@ -111,7 +111,9 @@ sequenceDiagram
     W->>A: Publication result with primary PR URL
     A-->>W: Delivery wait, no open attempt, writer stays registered
     opt Actionable delivery flags
+        W->>A: Request Building; wait for granted allocation
         W->>G: Fix checks, feedback or conflicts on the same PR
+        W->>A: Release Building with reviewed publication head
     end
     R->>G: Read exact PR, checks, feedback and verified merge facts
     R->>A: Timestamped observation (no worker attempt)
@@ -131,7 +133,7 @@ name the exact content-addressed draft. The server stores the reviewed report an
 terminal output atomically, retrying finalization without redrafting.
 
 Status is separate from stage. Input, dependency, retry and external waits retain
-the writer; pause blocks new registrations/attempts, not an existing attempt's result.
+the writer; pause blocks new registrations and Building acquisitions, not an allocated writer's stage continuation.
 Writer bindings have no timed expiry. Nonce replay, expected versions and stopped-session
 attestation prevent duplicate writers and stale submissions, not runtime trust or review.
 
@@ -196,15 +198,22 @@ alone never prove a process stopped. Follow [resume](resume.md) and [recovery](r
 
 ### Shipped code is not installation state
 
-The single concurrent-writer budget is persisted `dispatch_settings.max_writers`,
-initially five, editable by the owner in Scribe or through the dispatch settings API.
-Registration enforces it atomically across Captains and repositories; intents and
-waiting writers count. `shift launch` supplies no separate limit, and charters reject
-`[shift] max_writers`; `deploy init` writes `max_hours`, `max_wakes` and
-`max_compactions` shift
-bounds. This is **not** five building writers plus ten total. Shipped code does not
-prove installation state: coordinate removal of an existing charter concurrency
-entry with service deployment; do not treat approval or an open PR as deployment.
+The two writer limits are persisted in `dispatch_settings`: `max_building_writers` (Building,
+initially five) and `max_writers` (Total, initially ten on new installs), editable as an atomic
+pair by the owner. `writers.building` is the authoritative allocation; `building_requested_at`
+persists rework waits and FIFO preference for eligible PR fixes. Registration/acquisition and
+release run inside the same SQLite write transaction as writer/stage changes. Successful
+self-review releases Building into publication; delivery fixes explicitly reacquire it.
+`executions.handoff_head` fences the reviewed commit awaiting publication across restart.
+A mismatched open head has a visible `head_drift` flag and board wait. GitHub merges remain
+authoritative; ending/withdrawing/replacing the writer clears the handoff for recovery.
+Counts, board waits and dispatch-overdue/backlog reporting use `dispatch`'s same state/helpers,
+not stage-derived guesses or a second budget. Intents and waiting writers retain Total.
+`shift launch` supplies no limit, and charters reject concurrency keys; `deploy init` writes
+only `max_hours`, `max_wakes` and `max_compactions`. Existing stores retain their saved Total, all live writers and
+conservative Building allocations. Shipped code does not prove installation state: follow
+[separate deployment and activation](deployment.md#two-limit-writer-activation); do not treat
+approval or an open PR as deployment.
 The charter's `max_compactions` is the only compaction-handoff threshold (default five).
 The server retains monotone cumulative successful telemetry; `shift heartbeat` compares
 that total with the freshly loaded charter. Packaged Captain/keeper instructions defer

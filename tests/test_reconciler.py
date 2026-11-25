@@ -327,6 +327,11 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                         # Undo later columns before replaying closed-stage normalization.
                         db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
                         db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_writers")
+                        db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")
+                        db.execute("DROP INDEX waiting_writer_builds")
+                        db.execute("ALTER TABLE executions DROP COLUMN handoff_head")
+                        for column in ("building", "building_requested_at", "capacity_revision"):
+                            db.execute(f"ALTER TABLE writers DROP COLUMN {column}")
                         db.execute(f"PRAGMA user_version={PRE_NORMALIZATION_VERSION}")
                         saved = {table: [tuple(row) for row in db.execute(f"SELECT * FROM {table}")]
                                  for table in ("work_items", "attempts", "transition_history", "reports")}
@@ -376,6 +381,11 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                                 item["execution"]["id"]))
                     db.execute("ALTER TABLE captains DROP COLUMN compaction_count")
                     db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_writers")
+                    db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")
+                    db.execute("DROP INDEX waiting_writer_builds")
+                    db.execute("ALTER TABLE executions DROP COLUMN handoff_head")
+                    for column in ("building", "building_requested_at", "capacity_revision"):
+                        db.execute(f"ALTER TABLE writers DROP COLUMN {column}")
                     db.execute(f"PRAGMA user_version={PRE_NORMALIZATION_VERSION}")
                 migrate(self.path)
                 rows = api.call("/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]

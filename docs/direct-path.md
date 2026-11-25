@@ -192,10 +192,12 @@ max_compactions = 5
 The compaction threshold uses only cumulative successful native telemetry; ordinary
 compaction below it is a checkpoint. Missing telemetry stays unknown, with no hidden
 first-compaction fallback. Configure concurrency with Scribe's **Writer concurrency**
-control or owner-authenticated `PUT /v1/dispatch/settings` (`{"max_writers": 5}`),
-not in the charter or `allowed_actions` prose. The persisted limit starts at 5.
-Charter `[shift] max_writers` is rejected with guidance to remove it and use
-dispatch settings instead; heartbeats and launches never configure the limit.
+control or owner-authenticated `PUT /v1/dispatch/settings`
+(`{"max_building_writers": 5, "max_writers": 10}`), not in the charter or `allowed_actions`
+prose. Building and Total default to 5/10 on new installs; existing stores preserve Total
+until [coordinated activation](deployment.md#two-limit-writer-activation).
+Charter concurrency keys are rejected with guidance to remove them and use
+dispatch settings instead; heartbeats and launches never configure either limit.
 The server counts registered intents and
 confirmed writers on open executions across all repositories and Captains
 (including predecessors). Idle or waiting writers still count. Completion, failure,
@@ -206,7 +208,12 @@ If the cap is reached, launch refuses with a wait message naming the cap and act
 writers; retry when a place opens, without escalating or raising a flag. Lowering the
 cap does not stop existing writers. Queued items without registered sessions do not count.
 `shift status` prints the server's `active_writers` against
-`max_writers`. `shift charter` validates the file and prints its revision, the SHA-256
+`max_writers`, plus `building_writers`/`max_building_writers` and `delivering_writers`.
+Publication handoff releases Building but retains Total; delivery-stage fixes must acquire
+Building with `work capacity building`, wait for `writer.building=true`, and release it with
+`work capacity delivering` after local changes/checks finish. Eligible waiting PR fixes
+precede new development. Spare Total never implies Building availability.
+`shift charter` validates the file and prints its revision, the SHA-256
 of its bytes. Each heartbeat re-reads the charter and records that revision.
 
 ### Commands

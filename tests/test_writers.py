@@ -1,3 +1,4 @@
+from argparse import Namespace
 from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -10,7 +11,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from phalanx import captains, dispatch, finalization, flags, intake, shift, store, writers
+from phalanx import captains, dispatch, finalization, flags, intake, shift, store, work_cli, writers
 from phalanx.direct_schema import (
     CAPTAIN_COMPACTION_SCHEMA, CAPTAIN_SHIFT_SCHEMA, CLOSED_WRITER_MIGRATION, SESSION_ARCHIVE_SCHEMA,
 )
@@ -146,13 +147,18 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual(recorded["writer"]["session_id"], "recorded-session")
         self.assertEqual(recorded["wait_reason"], "Awaiting a direct Captain")
         self.assertIsNone(shift._summary(recorded)["writer"])
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]
+        self.assertIn("Building capacity exhausted", recorded["wait_reason"])
+        self.assertEqual(recorded["writer"]["session_id"], "recorded-session")
+        self.withdraw_binding(builds[0])
         replacement, _, _ = self.register(item_id, execution_id)
         recorded = self.ok(f"/v1/operator/items/{item_id}", OWNER)["item"]["writer"]
         self.assertEqual(recorded["id"], replacement["writer"]["id"])
         self.assertIsNone(recorded["session_id"])
 
     def test_concurrent_registrations_without_charter_limits_do_not_overfill(self):
-        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         items = [self.item() for _ in range(8)]
         bodies = [{"expected_version": self.version(item_id), "captain_id": self.captain["id"],
                    "runtime": "any-runtime", "nonce": token_urlsafe(16),
@@ -184,11 +190,11 @@ class WriterTest(ServerFixture, unittest.TestCase):
                      "session_id": f"native-{index}",
                      "state": ("busy", "idle", "error", "stopped", "busy")[index]}, method="PATCH")
         status = self.ok("/v1/dispatch/settings", OWNER)
-        self.assertEqual((status["max_writers"], status["active_writers"]), (5, 5))
+        self.assertEqual((status["max_writers"], status["active_writers"]), (10, 5))
         self.register(*queued[5], code=409)
 
     def test_failed_and_cancelled_writers_release_capacity(self):
-        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         for ending in ("failed", "cancelled"):
             with self.subTest(ending=ending):
                 item_id, execution_id = self.item()
@@ -210,7 +216,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
     def test_capacity_limit_does_not_scan_unrelated_executions(self):
         from phalanx import writers
 
-        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         item_id, execution_id = self.item()
         binding, _, _ = self.register(item_id, execution_id)
         with write_transaction(self.path) as db:
@@ -235,7 +241,7 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 db.set_progress_handler(None, 0)
 
     def test_raising_and_lowering_share_one_workspace_budget(self):
-        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         first_item, first_execution = self.item()
         first, token, _ = self.register(first_item, first_execution)
         self.ok("/v1/dispatch/settings", token, {"max_writers": 9}, 403, method="PUT")
@@ -246,9 +252,9 @@ class WriterTest(ServerFixture, unittest.TestCase):
         # A different Captain or repository cannot bypass the saved budget.
         captain = self.ok("/v1/captains", RUNNER, {"session_ref": "second", "charter_revision": "old"}, 201)
         self.register(other["id"], other["execution"]["id"], captain=captain["id"], code=409)
-        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 2}, method="PUT")
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 2, "max_building_writers": 2}, method="PUT")
         second, _, _ = self.register(other["id"], other["execution"]["id"], captain=captain["id"])
-        saved = self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")
+        saved = self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 1, "max_building_writers": 1}, method="PUT")
         self.assertEqual((saved["active_writers"], saved["max_writers"]), (2, 1))
         queued, execution = self.item()
         self.register(queued, execution, code=409)
@@ -276,9 +282,12 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 {"expected_version": self.version(item_id), "priority": "urgent"}, method="PATCH")
         with write_transaction(self.path) as db:
             db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (execution_id,))
+            dispatch.set_dispatch(db, DispatchSettings(paused=True))
         attempt = self.ok("/v1/writer/attempt", token, method="POST")
         self.assertEqual(attempt["state"]["status"], "running")
         self.assertIsNotNone(attempt["writer"]["attempt_id"])
+        following = self.submit(token, attempt, report_markdown="# Continue while paused\n")
+        self.assertEqual((following["state"]["stage"], following["state"]["status"]), ("report_review", "running"))
 
     def test_pause_replacement_ownership_and_withdrawal(self):
         item_id, execution_id = self.item()
@@ -427,6 +436,256 @@ class WriterTest(ServerFixture, unittest.TestCase):
         item = self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "Fix it", "target": target,
                                              **fields}, 201)
         return item["id"], item["execution"]["id"]
+
+    def capacity(self, token, phase, head=HEAD):
+        current = self.ok("/v1/writer", token)
+        return self.ok("/v1/writer/capacity", token, {
+            "phase": phase, "expected_revision": current["writer"]["capacity_revision"],
+            **({"handoff_head": head} if phase == "delivering" else {})})
+
+    def withdraw_binding(self, binding):
+        return self.ok(f"/v1/items/{binding['item_id']}/executions/{binding['id']}/writer/withdraw",
+                       RUNNER, {"captain_id": binding["writer"]["captain_id"],
+                                "writer_id": binding["writer"]["id"], "reason": "never launched"})
+
+    def test_five_building_ten_total_and_publication_handoff(self):
+        delivering = []
+        for _ in range(5):
+            binding, token = self.publish("ready_for_check_in")
+            self.assertFalse(binding["writer"]["building"])
+            delivering.append((binding, token))
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        status = self.ok("/v1/dispatch/settings", OWNER)
+        self.assertEqual((status["building_writers"], status["delivering_writers"],
+                          status["active_writers"]), (5, 5, 10))
+        refused, _, _ = self.register(*self.item(), code=409)
+        self.assertIn("Total capacity exhausted", refused["detail"])
+        self.withdraw_binding(delivering[0][0])
+        refused, _, _ = self.register(*self.item(), code=409)
+        self.assertIn("Building capacity exhausted", refused["detail"])
+        self.withdraw_binding(builds[0])
+        self.register(*self.item())
+
+    def test_simultaneous_new_builds_obey_five_with_spare_total(self):
+        items = [self.item() for _ in range(8)]
+        bodies = [{"expected_version": self.version(item_id), "captain_id": self.captain["id"],
+                   "runtime": "native", "nonce": token_urlsafe(16),
+                   "token_digest": intake.digest(token_urlsafe(32))} for item_id, _ in items]
+        def launch(index):
+            item_id, execution_id = items[index]
+            return self.request(f"/v1/items/{item_id}/executions/{execution_id}/writer", RUNNER, bodies[index])
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(launch, range(8)))
+        self.assertEqual(sorted(code for code, _ in results), [200] * 5 + [409] * 3)
+        self.assertTrue(all("Building capacity exhausted" in row["detail"]
+                            for code, row in results if code == 409))
+        status = self.ok("/v1/dispatch/settings", OWNER)
+        self.assertEqual((status["building_writers"], status["active_writers"]), (5, 5))
+
+    def test_delivery_rework_waits_retains_total_and_has_priority_over_new_builds(self):
+        publication, token = self.publish("ready_for_check_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        waiting = self.capacity(token, "building")
+        self.assertFalse(waiting["writer"]["building"])
+        self.assertIn("Building capacity exhausted", waiting["writer"]["capacity_wait"])
+        self.assertEqual(waiting["state"]["stage"], "delivery")
+        migrate(self.path)
+        self.withdraw_binding(builds[0])
+        refused, _, _ = self.register(*self.item(), code=409)
+        self.assertIn("waiting PR rework", refused["detail"])
+        acquired = self.capacity(token, "building")
+        self.assertTrue(acquired["writer"]["building"])
+        self.assertEqual(acquired["writer"]["id"], delivery["writer"]["id"])
+        revision = acquired["writer"]["capacity_revision"]
+        replay = self.capacity(token, "building")
+        self.assertEqual(replay["writer"]["capacity_revision"], revision)
+        released = self.capacity(token, "delivering")
+        self.assertFalse(released["writer"]["building"])
+        # A stale release cannot give away a subsequently reacquired allocation.
+        self.capacity(token, "building")
+        self.ok("/v1/writer/capacity", token,
+                {"phase": "delivering", "expected_revision": released["writer"]["capacity_revision"]}, 409)
+        self.assertTrue(self.ok("/v1/writer", token)["writer"]["building"])
+        self.capacity(token, "delivering")
+        self.register(*self.item())
+
+    def test_rework_reacquisition_is_atomic_with_competing_admissions(self):
+        publication, token = self.publish("ready_for_check_in")
+        self.submit(token, publication, pr_url=PR_URL)
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        self.capacity(token, "building")
+        self.withdraw_binding(builds[0])
+        item_id, execution_id = self.item()
+        body = {"expected_version": self.version(item_id), "captain_id": self.captain["id"],
+                "runtime": "native", "nonce": token_urlsafe(16), "token_digest": intake.digest("new")}
+        current = self.ok("/v1/writer", token)
+        acquire = {"phase": "building", "expected_revision": current["writer"]["capacity_revision"]}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            rework = pool.submit(self.request, "/v1/writer/capacity", token, acquire)
+            new = pool.submit(self.request, f"/v1/items/{item_id}/executions/{execution_id}/writer",
+                              RUNNER, body)
+        self.assertEqual(rework.result()[0], 200)
+        self.assertTrue(rework.result()[1]["writer"]["building"])
+        self.assertEqual(new.result()[0], 409)
+        self.assertEqual(self.ok("/v1/dispatch/settings", OWNER)["building_writers"], 5)
+
+    def test_rework_priority_is_fifo_and_ineligible_requests_do_not_starve_intake(self):
+        first, first_token = self.publish("ready_for_check_in")
+        first = self.submit(first_token, first, pr_url=PR_URL)
+        second, second_token = self.publish("ready_for_check_in")
+        self.submit(second_token, second, pr_url=PR_URL)
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        self.capacity(first_token, "building")
+        self.capacity(second_token, "building")
+        self.withdraw_binding(builds[0])
+        self.assertFalse(self.capacity(second_token, "building")["writer"]["building"])
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE executions SET retry_at=? WHERE id=?", (2**42, first["id"]))
+        current = self.ok("/v1/writer", first_token)
+        self.ok("/v1/writer/capacity", first_token, {
+            "phase": "building", "expected_revision": current["writer"]["capacity_revision"]}, 409)
+        self.assertTrue(self.capacity(second_token, "building")["writer"]["building"])
+        self.capacity(second_token, "delivering")
+        self.register(*self.item())
+
+    def test_delivery_observation_does_not_end_a_writer_with_unpublished_rework(self):
+        publication, token = self.publish("ready_for_check_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        self.assertTrue(self.capacity(token, "building")["writer"]["building"])
+        observed = self.observe(delivery)
+        self.assertEqual(observed["state"]["status"], "waiting_for_external")
+        self.assertTrue(self.ok("/v1/writer", token)["writer"]["building"])
+        current = self.ok("/v1/writer", token)
+        self.ok("/v1/writer/capacity", token, {
+            "phase": "delivering", "expected_revision": current["writer"]["capacity_revision"]}, 409)
+        self.capacity(token, "delivering", head=OTHER)
+        migrate(self.path)
+        self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_external")
+        drift = next(flag for flag in self.ok("/v1/writer", token)["flags"] if flag["kind"] == "head_drift")
+        self.assertIn(f"publication handoff {OTHER}", drift["reason"])
+        board = self.ok("/v1/operator/executions?kind=open", OWNER)["items"]
+        self.assertIn("publication handoff", board[0]["wait_reason"])
+        self.assertEqual(self.observe(delivery, head_sha=OTHER)["state"]["status"], "completed")
+        self.ok("/v1/writer", token, code=401)
+
+    def test_merge_is_authoritative_during_building_or_mismatched_publication_handoff(self):
+        for phase in ("building", "delivering"):
+            with self.subTest(phase=phase):
+                publication, token = self.publish("checked_in")
+                delivery = self.submit(token, publication, pr_url=PR_URL)
+                self.capacity(token, "building")
+                if phase == "delivering":
+                    self.capacity(token, "delivering", head=OTHER)
+                merged = self.observe(delivery, state="closed", merged=True, merge_commit=MERGE)
+                self.assertEqual(merged["state"]["status"], "completed")
+                self.ok("/v1/writer", token, code=401)
+                with connect(self.path) as db:
+                    self.assertIsNone(db.execute("SELECT handoff_head FROM executions WHERE id=?",
+                                                 (delivery["id"],)).fetchone()[0])
+
+    def test_withdrawal_clears_superseded_handoff_and_recovers_delivery(self):
+        publication, token = self.publish("ready_for_check_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        self.capacity(token, "building")
+        self.capacity(token, "delivering", head=OTHER)
+        self.assertEqual(self.observe(delivery)["state"]["status"], "waiting_for_external")
+        self.withdraw_binding(delivery)
+        self.assertEqual(self.observe(delivery)["state"]["status"], "completed")
+        with connect(self.path) as db:
+            self.assertIsNone(db.execute("SELECT handoff_head FROM executions WHERE id=?",
+                                         (delivery["id"],)).fetchone()[0])
+
+    def test_capacity_cli_fences_the_reviewed_head_at_publication_handoff(self):
+        publication, token = self.publish("ready_for_check_in")
+        self.submit(token, publication, pr_url=PR_URL)
+        with patch.object(work_cli, "credential", return_value=(self.url, token)), patch("builtins.print"):
+            work_cli.run_work(Namespace(work_command="capacity", phase="building"))
+            with patch.object(work_cli.subprocess, "run",
+                              return_value=subprocess.CompletedProcess([], 0, stdout=OTHER + "\n")) as git:
+                work_cli.run_work(Namespace(work_command="capacity", phase="delivering"))
+            git.assert_called_once()
+        current = self.ok("/v1/writer", token)
+        self.assertFalse(current["writer"]["building"])
+        self.assertEqual(current["writer"]["handoff_head"], OTHER)
+
+    def test_lowering_building_preserves_allocations_and_raising_wakes_rework(self):
+        publication, token = self.publish("ready_for_check_in")
+        self.submit(token, publication, pr_url=PR_URL)
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        self.ok("/v1/dispatch/settings", OWNER, {"max_building_writers": 3}, method="PUT")
+        self.assertFalse(self.capacity(token, "building")["writer"]["building"])
+        for build in builds[:2]:
+            self.withdraw_binding(build)
+        self.assertFalse(self.capacity(token, "building")["writer"]["building"])
+        self.ok("/v1/dispatch/settings", OWNER, {"max_building_writers": 4}, method="PUT")
+        self.assertTrue(self.capacity(token, "building")["writer"]["building"])
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 4}, method="PUT")
+        self.capacity(token, "delivering")
+        refused, _, _ = self.register(*self.item(), code=409)
+        self.assertIn("Total capacity exhausted", refused["detail"])
+        self.ok("/v1/dispatch/settings", OWNER, {"max_writers": 5}, method="PUT")
+        self.register(*self.item())
+
+    def test_replacement_transfers_waiting_rework_and_revokes_old_writer(self):
+        publication, token = self.publish("ready_for_check_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        waiting = self.capacity(token, "building")
+        replacement, replacement_token, _ = self.register(
+            delivery["item_id"], delivery["id"], replaces=delivery["writer"]["id"], replaced_stopped=True)
+        self.assertFalse(replacement["writer"]["building"])
+        self.assertEqual(replacement["writer"]["building_requested_at"], waiting["writer"]["building_requested_at"])
+        self.ok("/v1/writer/capacity", token, {"phase": "building", "expected_revision": 0}, 401)
+        self.withdraw_binding(builds[0])
+        self.assertTrue(self.capacity(replacement_token, "building")["writer"]["building"])
+        self.withdraw_binding(replacement)
+        self.assertEqual(self.ok("/v1/dispatch/settings", OWNER)["building_writers"], 4)
+
+    def test_recovered_self_review_cannot_claim_without_building(self):
+        publication, token = self.publish("ready_for_check_in", publication_mode="draft")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        builds = [self.register(*self.item())[0] for _ in range(5)]
+        self.observe(delivery, head_sha=OTHER, draft=True)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE executions SET ready_since=? WHERE id=?", (2**42, delivery["id"]))
+        current = self.ok("/v1/writer", token)
+        self.ok("/v1/writer/capacity", token, {
+            "phase": "building", "expected_revision": current["writer"]["capacity_revision"]}, 409)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (delivery["id"],))
+        waiting = self.ok("/v1/writer/attempt", token, method="POST")
+        self.assertEqual(waiting["state"]["stage"], "self_review")
+        self.assertIsNone(waiting["writer"]["attempt_id"])
+        self.assertFalse(waiting["writer"]["building"])
+        self.assertIn("Building capacity exhausted", waiting["writer"]["capacity_wait"])
+        self.withdraw_binding(builds[0])
+        reviewed = self.ok("/v1/writer/attempt", token, method="POST")
+        self.assertTrue(reviewed["writer"]["building"])
+        self.assertIsNotNone(reviewed["writer"]["attempt_id"])
+        published = self.submit(token, reviewed, reviewed_candidate=OTHER)
+        self.assertFalse(published["writer"]["building"])
+
+    def test_upgrade_preserves_live_writer_and_charges_conservatively_until_protocol_handoff(self):
+        publication, token = self.publish("ready_for_check_in")
+        delivery = self.submit(token, publication, pr_url=PR_URL)
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE dispatch_settings SET max_writers=5")
+            db.execute("ALTER TABLE dispatch_settings DROP COLUMN max_building_writers")
+            db.execute("DROP INDEX waiting_writer_builds")
+            db.execute("ALTER TABLE executions DROP COLUMN handoff_head")
+            for column in ("building", "building_requested_at", "capacity_revision"):
+                db.execute(f"ALTER TABLE writers DROP COLUMN {column}")
+            db.execute(f"PRAGMA user_version={len(store.MIGRATIONS) - 1}")
+        migrate(self.path)
+        migrate(self.path)
+        current = self.ok("/v1/writer", token)
+        self.assertEqual(current["writer"]["id"], delivery["writer"]["id"])
+        self.assertTrue(current["writer"]["building"])
+        status = self.ok("/v1/dispatch/settings", OWNER)
+        self.assertEqual((status["building_writers"], status["max_writers"]), (1, 5))
+        self.capacity(token, "delivering")
+        self.assertEqual(self.ok("/v1/dispatch/settings", OWNER)["building_writers"], 0)
 
     def publish(self, target, **fields):
         """Carry a writer-bound PR item through development and self-review to publication."""
@@ -602,6 +861,31 @@ class WriterTest(ServerFixture, unittest.TestCase):
                 self.assertEqual(self.observe(binding, state="closed", merged=True,
                                               merge_commit=MERGE, code=409)["version"], merged["version"])
                 self.ok("/v1/writer", token, code=401)
+
+    def test_stopped_delivery_rework_releases_only_its_own_allocation(self):
+        other, other_token, _ = self.register(*self.item())
+        binding, token = self.publish("checked_in")
+        binding = self.submit(token, binding, pr_url=PR_URL)
+        self.capacity(token, "building")
+        self.capacity(token, "delivering", head=OTHER)
+        self.capacity(token, "building")
+        route = f"/v1/items/{binding['item_id']}/executions/{binding['id']}"
+        self.ok(route + "/cancel", OWNER, {
+            "expected_version": binding["version"], "reason": "Stop local PR rework"})
+        withdrawal = {"captain_id": self.captain["id"], "writer_id": binding["writer"]["id"],
+                      "reason": "Stopped rework and reconciled effects", "stopped": True}
+        ended = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
+        replay = self.ok(route + "/writer/withdraw", RUNNER, withdrawal)
+        self.assertEqual(ended, replay)
+        self.assertEqual(ended["state"]["pending_output"], "cancelled")
+        self.assertFalse(ended["writer"]["building"])
+        self.assertIsNone(ended["writer"]["handoff_head"])
+        capacity = self.ok("/v1/dispatch/settings", OWNER)
+        self.assertEqual((capacity["building_writers"], capacity["active_writers"]), (1, 1))
+        current = self.ok("/v1/writer", other_token)
+        self.assertEqual(current["writer"]["id"], other["writer"]["id"])
+        self.assertTrue(current["writer"]["building"])
+        self.ok("/v1/writer", token, code=401)
 
     def test_a_rerun_is_delivered_only_by_the_pr_its_writer_published(self):
         binding, token = self.publish("checked_in")
@@ -1049,7 +1333,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             runtime="test", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32))))
         queued = intake.create(db, Intake(repository_id="repo", goal="Backlog", target="report"))
         db.execute("UPDATE executions SET ready_since=0 WHERE id=?", (queued["execution"]["id"],))
-        dispatch.set_dispatch(db, DispatchSettings(max_writers=1))
+        dispatch.set_dispatch(db, DispatchSettings(max_writers=1, max_building_writers=1))
         return captain, binding, queued
 
     def test_capacity_backlog_uses_assigned_writers_and_keeps_fresh_holds_visible(self):
@@ -1064,18 +1348,18 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                     self.assertEqual(backlog["kind"], "queue_backlogged")
                     self.assertEqual(backlog["execution_id"], queued["execution"]["id"])
                     self.assertEqual(backlog["item_id"], queued["id"])
-                    self.assertIn("Waiting for writer capacity: 1 of 1", backlog["reason"])
+                    self.assertIn("Total capacity exhausted", backlog["reason"])
                     self.assertIn("Captain hold: Waiting for writer capacity", backlog["reason"])
                     self.assertFalse(backlog["notify_owner"])
             # A lower limit never implies an ended writer or resets the waiting age.
-            dispatch.set_dispatch(db, DispatchSettings(max_writers=2))
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=2, max_building_writers=2))
             second = intake.create(db, Intake(repository_id="repo", goal="Second writer", target="report"))
             writers.register(db, second["id"], second["execution"]["id"], writers.Registration(
                 expected_version=second["execution"]["version"], captain_id=captain["id"],
                 runtime="test", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32))))
-            dispatch.set_dispatch(db, DispatchSettings(max_writers=1))
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=1, max_building_writers=1))
             (lowered,) = flags.captain_idle_with_work(db, datetime.now(UTC))
-            self.assertIn("2 of 1", lowered["reason"])
+            self.assertIn("Total 2/1", lowered["reason"])
             self.assertEqual(lowered["first_seen"], backlog["first_seen"])
 
     def test_queue_age_threshold_applies_to_backlog_and_overdue(self):
@@ -1085,7 +1369,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             cutoff = int((now - flags.IDLE_WITH_WORK).timestamp() * 1000)
             for maximum, kind in ((1, "queue_backlogged"), (2, "captain_idle_with_work")):
                 with self.subTest(maximum=maximum):
-                    dispatch.set_dispatch(db, DispatchSettings(max_writers=maximum))
+                    dispatch.set_dispatch(db, DispatchSettings(max_writers=maximum, max_building_writers=maximum))
                     db.execute("UPDATE executions SET ready_since=? WHERE id=?",
                                (cutoff + 1, queued["execution"]["id"]))
                     self.assertEqual(flags.captain_idle_with_work(db, now), [])
@@ -1131,7 +1415,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             self.assertEqual(flags.captain_idle_with_work(db, now), [])
             db.execute("UPDATE executions SET dependency_wait_json=NULL WHERE id=?",
                        (queued["execution"]["id"],))
-            dispatch.set_dispatch(db, DispatchSettings(max_writers=2))
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=2, max_building_writers=2))
             captains.record_action(db, queued["id"], captains.Action(
                 captain_id=captain["id"], action="held", reason="Charter sequence"))
             self.assertEqual(flags.captain_idle_with_work(db, now), [])
@@ -1141,7 +1425,20 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             dispatch.set_dispatch(db, DispatchSettings(paused=True))
             (paused,) = flags.captain_idle_with_work(db, now)
             self.assertEqual(paused["kind"], "queue_backlogged")
-            self.assertEqual(paused["reason"], "Waiting for dispatch to resume; 1 of 2 writer slots occupied")
+            self.assertEqual(paused["reason"], "Dispatch is paused; Building 1/2, Delivering 0, Total 1/2")
+
+    def test_building_backlog_does_not_infer_availability_from_spare_total(self):
+        with write_transaction(self.path) as db:
+            _, _, queued = self.backlog(db)
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=10))
+            (backlog,) = flags.captain_idle_with_work(db, datetime.now(UTC))
+            self.assertEqual(backlog["kind"], "queue_backlogged")
+            self.assertIn("Building capacity exhausted", backlog["reason"])
+            self.assertIn("Total 1/10", backlog["reason"])
+            dispatch.set_dispatch(db, DispatchSettings(max_building_writers=2))
+            (overdue,) = flags.captain_idle_with_work(db, datetime.now(UTC))
+            self.assertEqual(overdue["kind"], "captain_idle_with_work")
+            self.assertEqual(overdue["execution_id"], queued["execution"]["id"])
 
     def test_captain_liveness_drives_server_flags(self):
         now = datetime.now(UTC)

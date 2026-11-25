@@ -46,9 +46,12 @@ each writer uses its own scoped credential stored in the item's Git directory.
 
 The operator keeps a charter outside mapped repositories. On each wake, the Captain uses
 `python -m phalanx shift` commands, re-reads the charter and chooses work within its repository scope
-and lane policy. Registration atomically enforces the owner's persisted `max_writers` budget
-(initially 5) across Captains and repositories. Owners edit it under **Writer concurrency**
-in Scribe. Waiting writers count toward that budget.
+and lane policy.
+The owner's persisted Building (`max_building_writers`, initially 5) and Total (`max_writers`,
+initially 10 on new installs) limits, editable together under **Writer concurrency** in Scribe,
+apply across all Captains and repositories. Existing installs retain their approved Total until
+[coordinated activation](docs/deployment.md#two-limit-writer-activation).
+Registration enforces both limits atomically; waiting writers retain Total.
 
 Captains launch and confirm sessions through their runtime's native tools. In the Copilot
 app, writers share the configured worktrees folder project, `session_workspace`, and run
