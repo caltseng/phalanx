@@ -27,6 +27,14 @@ OWNER = "o" * 32
 RUNNER = "r" * 32
 
 
+def git(path, *args):
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    return subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", *args],
+        cwd=path, env=env, check=True, capture_output=True, text=True, encoding="utf-8",
+    ).stdout.strip()
+
+
 def claim_stage(path, item_id, token, session_ref="fixture"):
     """Register or resume a real direct writer for HTTP lifecycle tests."""
     from phalanx import intake
