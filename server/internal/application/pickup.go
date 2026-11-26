@@ -14,6 +14,7 @@ import (
 type pickupCaptain struct {
 	ID           string
 	Repositories map[string]*string
+	RawPickup    any
 }
 
 type pickupContext struct {
@@ -89,7 +90,7 @@ func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 			}
 			scope[repository] = reason
 		}
-		result.Captains = append(result.Captains, pickupCaptain{row.ID, scope})
+		result.Captains = append(result.Captains, pickupCaptain{ID: row.ID, Repositories: scope, RawPickup: value})
 	}
 	holds, err := tx.ActiveCaptainHolds(pythonStamp(now.Add(-30 * time.Minute)))
 	if err != nil {

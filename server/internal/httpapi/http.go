@@ -23,6 +23,7 @@ type Handler struct {
 	Owner    string
 	Runner   string
 	Logger   *slog.Logger
+	Home     *string
 	dispatch func() // test-only barrier at mutation dispatch, never wire/config input
 }
 
@@ -36,6 +37,7 @@ type route struct {
 	passID       string
 	repositoryID string
 	number       string
+	label        string
 	revision     string
 	method       string
 }
@@ -73,6 +75,12 @@ func match(path, method string) (route, string) {
 		return route{kind: "flag-write", method: "PUT"}, "PUT"
 	case "/v1/flags/clear":
 		return route{kind: "flag-clear", method: "POST"}, "POST"
+	case "/v1/operator/executions":
+		return route{kind: "operator-list", method: "GET"}, "GET"
+	case "/v1/operator/overview":
+		return route{kind: "operator-overview", method: "GET"}, "GET"
+	case "/v1/muster/status":
+		return route{kind: "muster-status", method: "GET"}, "GET"
 	case "/v1/dispatch/settings":
 		if method == "PUT" {
 			return route{kind: "set-dispatch", method: "PUT"}, "GET"
@@ -97,6 +105,18 @@ func match(path, method string) (route, string) {
 		return route{kind: "repositories", method: "GET"}, "POST"
 	case "/v1/items":
 		return route{kind: "intake", method: "POST"}, "POST"
+	}
+	if strings.HasPrefix(path, "/v1/operator/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/v1/operator/"), "/")
+		if len(parts) == 2 && parts[0] == "items" && parts[1] != "" {
+			return route{kind: "operator-item", itemID: parts[1], method: "GET"}, "GET"
+		}
+		if len(parts) == 2 && parts[0] == "groups" && parts[1] != "" {
+			return route{kind: "operator-group", label: parts[1], method: "GET"}, "GET"
+		}
+		if len(parts) == 3 && parts[0] == "executions" && parts[1] != "" && parts[2] == "timeline" {
+			return route{kind: "operator-timeline", executionID: parts[1], method: "GET"}, "GET"
+		}
 	}
 	if strings.HasPrefix(path, "/v1/issue-scout/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/v1/issue-scout/"), "/")
@@ -312,7 +332,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
 		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire" || route.kind == "captain-usage" ||
 		route.kind == "scout-claim" || route.kind == "scout-page" || route.kind == "scout-failure" ||
-		route.kind == "flag-write" || route.kind == "flag-clear") &&
+		route.kind == "flag-write" || route.kind == "flag-clear" || route.kind == "muster-status") &&
 		role != "owner" && role != "runner" {
 		writeJSON(w, 403, map[string]any{"detail": "Owner or runner token required"})
 		return
@@ -372,6 +392,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.repositoryID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.repositoryID, "repository_id")...)
 	}
+	if route.label != "" {
+		pathIssues = append(pathIssues, contract.ValidateLabel(route.label, "path")...)
+	}
 	var pathNumber json.Number
 	if route.number != "" {
 		var issues []contract.Issue
@@ -381,13 +404,57 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.revision != "" {
 		pathIssues = append(pathIssues, contract.ValidateRevision(route.revision)...)
 	}
-	if !bodyRoute(route.kind) && len(pathIssues) > 0 {
+	if !bodyRoute(route.kind) && len(pathIssues) > 0 && route.kind != "operator-group" && route.kind != "operator-timeline" {
 		writeJSON(w, 422, map[string]any{"detail": pathIssues})
 		return
 	}
 	var result json.RawMessage
 	var status = 200
 	switch route.kind {
+	case "operator-list", "operator-overview", "operator-item", "operator-group", "operator-timeline":
+		var request contract.OperatorQuery
+		var issues []contract.Issue
+		if route.kind == "operator-list" {
+			request, issues = contract.ValidateOperatorQuery(r.URL.Query())
+		} else if route.kind == "operator-group" || route.kind == "operator-timeline" {
+			request, issues = contract.ValidateOperatorPage(r.URL.Query())
+		}
+		issues = append(pathIssues, issues...)
+		if len(issues) > 0 {
+			writeJSON(w, 422, map[string]any{"detail": issues})
+			return
+		}
+		condition := application.ConditionalRead{Path: r.URL.Path, Query: r.URL.RawQuery, IfNoneMatch: headerText(r.Header.Get("If-None-Match"))}
+		var response application.OperatorResponse
+		switch route.kind {
+		case "operator-list":
+			response, err = h.App.OperatorList(ctx, request, condition)
+		case "operator-overview":
+			response, err = h.App.OperatorOverview(ctx, condition)
+		case "operator-item":
+			response, err = h.App.OperatorItem(ctx, route.itemID, condition)
+		case "operator-group":
+			response, err = h.App.OperatorGroup(ctx, route.label, request, condition)
+		case "operator-timeline":
+			result, err = h.App.OperatorTimeline(ctx, route.executionID, request)
+		}
+		if err != nil {
+			h.failure(w, err)
+			return
+		}
+		if response.ETag != "" {
+			w.Header().Set("ETag", response.ETag)
+			w.Header().Set("Cache-Control", "private, no-cache")
+		}
+		if response.NotModified {
+			w.WriteHeader(304)
+			return
+		}
+		if route.kind != "operator-timeline" {
+			result = response.Body
+		}
+	case "muster-status":
+		result, err = h.App.MusterStatus(ctx, h.Home)
 	case "flags":
 		result, err = h.App.Flags(ctx)
 	case "writer-current":
@@ -834,6 +901,7 @@ func (h *Handler) failure(w http.ResponseWriter, err error) {
 	var missing *application.Missing
 	var conflict *application.Conflict
 	var forbidden *application.Forbidden
+	var bad *application.BadRequest
 	switch {
 	case errors.As(err, &missing):
 		writeJSON(w, 404, map[string]any{"detail": missing.Message})
@@ -841,6 +909,8 @@ func (h *Handler) failure(w http.ResponseWriter, err error) {
 		writeJSON(w, 409, map[string]any{"detail": conflict.Message})
 	case errors.As(err, &forbidden):
 		writeJSON(w, 403, map[string]any{"detail": forbidden.Message})
+	case errors.As(err, &bad):
+		writeJSON(w, 400, map[string]any{"detail": bad.Message})
 	case sqlite.IsBusy(err):
 		w.Header().Set("Retry-After", "1")
 		writeJSON(w, 503, map[string]any{"detail": "SQLite store unavailable (" + sqlite.BusyReason(err) + "); retry the same request"})

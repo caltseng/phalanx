@@ -16,16 +16,20 @@ reconciler heartbeat/retirement and delivered-deployment retirement operations
 preserve observation deduplication and delivery/stop/rework precedence.
 Writer and scoped Captain usage observations preserve cumulative attribution,
 acquisition gaps, bounded late observations and decimal provider quantities
-without touching lifecycle or inferring billing. Native usage projections exist;
-their operator-route differential proof remains pending with the operator family.
+without touching lifecycle or inferring billing. Native usage projections are
+integrated in the scoped operator-timeline differential proof.
 Native scout settings, claim/page/failure/decision and source storage preserve
 the existing client-driven pass, lease/cursor/identity fences, fresh
 fingerprint-bound approval and atomic ordinary intake/page receipts.
 Stored and derived flag reads/writes and scoped current-writer reads are native,
 including shared pickup/liveness/capacity context, observation/head/deployment
 precedence, bounded warning families and exact elapsed-age boundaries.
+Native operator execution/item/group/timeline/overview and muster reads include
+filter-bound cursors, weak conditional validators, retained opaque pickup
+metadata, bounded candidate windows and usage projections. Scribe shell/assets
+and direct local-board transport remain unfinished.
 Native report finalization and bounded dependency refresh use the existing
-schema26 jobs. Operator/muster/Scribe routes remain unimplemented.
+schema26 jobs. Scribe shell/assets and local-board routes remain unimplemented.
 A 404 outside this slice is not API parity.
 
 ## Boundaries and pinned build
@@ -184,6 +188,7 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `usage.py` | 71 on each schema shape | Exact JSON storage, cumulative replay/monotonicity, attribution/scope, acquisition-gap retention, provided decimal quantities and late observations; every other durable table is unchanged |
 | `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |
 | `flags.py` | 72 on each schema shape | Stored flag models/update/clear, liveness/launch/progress/session/archive warnings, 30/60/strict-90 boundaries, head/handoff/CI/deployment precedence, scoped current writer and zero read/refusal effects |
+| `operator_views.py` | 79 on each schema shape | Filters, exact cursors/ETags, summaries/groups/overview, timeline causes/questions and usage projection; only the named v4 current-item default discrepancy is classified |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
 
@@ -208,7 +213,8 @@ Usage storage separately retains Python's declared JSON field order and default
 separators; it does not change canonical state, fingerprints or receipts.
 Native usage tests race duplicate observations and check preserved zero/null
 measurements, coverage gaps, exclusion of shared sessions and integer subtotal
-overflow as text. Operator projection parity is not yet claimed.
+overflow as text. Operator timeline integration has scoped differential proof;
+this does not establish complete Scribe or whole-port conformance.
 Scout unit tests inject a cursor-update failure after intake/source creation and
 require all work/source/receipts/claim state to roll back. Racing identical page
 posts retain one intake and two immutable receipts; racing Captains acquire
@@ -220,6 +226,17 @@ legacy/current fingerprints without nested transactions or receipt rewrites.
 Flag tests retain per-family 200-result limits, scoped writer isolation and
 non-null empty dependency wait markers as blockers. Shared request-local context
 does not turn flags, stale clocks or derived warning ages into lifecycle gates.
+Operator tests require an empty filtered page to continue beyond exactly 2,000
+indexed candidates, and weak validators ignore ticking ages but change at due
+deadlines and when retained opaque pickup metadata changes.
+
+`operator_defaults.py` retains fresh/retained raw wire and full-store evidence:
+P0 returns 500 and D0 returns 200 for omitted publication mode on current-item,
+list, group and timeline summaries. Only current-item was classified in the
+execution's v4 reply. The additional three read cases remain explicit
+compatibility blockers; Go currently returns 500 outside that named exception.
+No global 500-to-200 normalization, public-field restoration or durable state/
+receipt/hash rewrite is authorized by this characterization.
 
 Focused native tests additionally cover racing title revisions, report
 savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure

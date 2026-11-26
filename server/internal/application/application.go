@@ -27,6 +27,10 @@ type Forbidden struct{ Message string }
 
 func (e *Forbidden) Error() string { return e.Message }
 
+type BadRequest struct{ Message string }
+
+func (e *BadRequest) Error() string { return e.Message }
+
 type App struct {
 	Store       *sqlite.Store
 	Clock       func() time.Time

@@ -234,3 +234,29 @@ func (tx *Tx) ScoutDecision(repositoryID string, number int64, fingerprint, deci
 		WHERE repository_id=? AND number=?`, decision, now, state, "Owner "+decision, repositoryID, number)
 	return err
 }
+
+func (tx *Tx) ScoutNeedsOwner(repositories string, limit int) ([]map[string]any, error) {
+	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT repository_id,number,url,author_login,author_id,fingerprint,reason,
+		decision,decided_by,decided_at,observed_at,resume_trigger FROM issue_sources WHERE state='needs_owner'
+		AND repository_id IN(SELECT value FROM json_each(?)) ORDER BY observed_at,repository_id,number LIMIT ?`,
+		repositories, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []map[string]any{}
+	for rows.Next() {
+		var repositoryID, url, fingerprint, reason, observed, trigger string
+		var number int64
+		var author, decision, decidedBy, decidedAt *string
+		var authorID *int64
+		if err := rows.Scan(&repositoryID, &number, &url, &author, &authorID, &fingerprint, &reason,
+			&decision, &decidedBy, &decidedAt, &observed, &trigger); err != nil {
+			return nil, err
+		}
+		result = append(result, map[string]any{"repository_id": repositoryID, "number": number, "url": url,
+			"author_login": author, "author_id": authorID, "fingerprint": fingerprint, "reason": reason, "decision": decision,
+			"decided_by": decidedBy, "decided_at": decidedAt, "observed_at": observed, "resume_trigger": trigger})
+	}
+	return result, rows.Err()
+}

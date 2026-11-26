@@ -75,7 +75,7 @@ def seed(source, database):
                    ("0" * 64,))
 
 
-def serve(source, database, id_start, captain_clock=False, scout_clock=False, flags_clock=False):
+def serve(source, database, id_start, captain_clock=False, scout_clock=False, flags_clock=False, operator_clock=False):
     intake = load(source, id_start)
     if captain_clock:
         from phalanx import captains
@@ -88,6 +88,10 @@ def serve(source, database, id_start, captain_clock=False, scout_clock=False, fl
     if flags_clock:
         from phalanx import flags
         flags.datetime = intake.datetime
+    if operator_clock:
+        from phalanx import operator_api, muster_api
+        operator_api.datetime = intake.datetime
+        muster_api.datetime = intake.datetime
     for key in list(os.environ):
         if key.startswith("PHALANX_"):
             del os.environ[key]
@@ -167,6 +171,7 @@ def main():
     parser.add_argument("--captain-clock", action="store_true")
     parser.add_argument("--scout-clock", action="store_true")
     parser.add_argument("--flags-clock", action="store_true")
+    parser.add_argument("--operator-clock", action="store_true")
     args = parser.parse_args()
     if args.action == "initialize":
         load(args.source)
@@ -175,7 +180,7 @@ def main():
     elif args.action == "seed":
         seed(args.source, Path(args.target))
     elif args.action == "serve":
-        serve(args.source, Path(args.target), args.id_start, args.captain_clock, args.scout_clock, args.flags_clock)
+        serve(args.source, Path(args.target), args.id_start, args.captain_clock, args.scout_clock, args.flags_clock, args.operator_clock)
     elif args.action == "client":
         client(args.source, args.target, args.output)
     else:

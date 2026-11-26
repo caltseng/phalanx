@@ -66,8 +66,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	home := filepath.Dir(path)
 	server := &http.Server{
-		Handler:           &httpapi.Handler{App: app, Owner: "conformance-owner-only-0000000000000000", Runner: "conformance-runner-only-0000000000000000", Logger: slog.Default()},
+		Handler:           &httpapi.Handler{App: app, Owner: "conformance-owner-only-0000000000000000", Runner: "conformance-runner-only-0000000000000000", Logger: slog.Default(), Home: &home},
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

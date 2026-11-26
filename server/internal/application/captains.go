@@ -92,22 +92,9 @@ func captainViews(tx *sqlite.Tx, rows []sqlite.Captain, now time.Time) ([]json.R
 	for _, row := range current {
 		live[row.ID] = true
 	}
-	availability, err := tx.CaptainAvailability()
+	reports, err := sessionReportsSnapshot(tx)
 	if err != nil {
 		return nil, err
-	}
-	reports := map[sessionKey]string{}
-	for _, report := range availability {
-		id, runtime := "", ""
-		if report.ID != nil {
-			id = *report.ID
-		}
-		if present(report.Runtime) {
-			runtime = *report.Runtime
-		} else {
-			runtime = recordedSessionKey(report.Session, "").runtime
-		}
-		reports[recordedSessionKey(id, runtime)] = report.Availability
 	}
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -126,6 +113,27 @@ func captainViews(tx *sqlite.Tx, rows []sqlite.Captain, now time.Time) ([]json.R
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+func sessionReportsSnapshot(tx *sqlite.Tx) (map[sessionKey]string, error) {
+	availability, err := tx.CaptainAvailability()
+	if err != nil {
+		return nil, err
+	}
+	reports := map[sessionKey]string{}
+	for _, report := range availability {
+		id, runtime := "", ""
+		if report.ID != nil {
+			id = *report.ID
+		}
+		if present(report.Runtime) {
+			runtime = *report.Runtime
+		} else {
+			runtime = recordedSessionKey(report.Session, "").runtime
+		}
+		reports[recordedSessionKey(id, runtime)] = report.Availability
+	}
+	return reports, nil
 }
 
 func captainViewWithContext(row sqlite.Captain, now time.Time, live bool, reports map[sessionKey]string, details sqlite.CaptainDetails) (json.RawMessage, error) {
