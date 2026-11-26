@@ -1,12 +1,11 @@
 """Run one deterministic shard of the test suite: python tests/shard.py INDEX TOTAL.
 
 Tests are discovered as `python -m unittest discover -s tests` does, then
-assigned longest-first to the lightest shard using measured platform timings.
-Every test runs in exactly one of the TOTAL shards, including unmeasured tests.
+sorted by test ID and assigned round-robin.
+Every test runs in exactly one of the TOTAL shards.
 """
 
 import argparse
-import json
 from pathlib import Path
 import sys
 import unittest
@@ -20,22 +19,10 @@ def _flatten(suite):
             yield test
 
 
-def select(tests, index: int, total: int, timings=None) -> list:
+def select(tests, index: int, total: int) -> list:
     if not 1 <= index <= total:
         raise ValueError("INDEX must be between 1 and TOTAL")
-    timings = timings if timings is not None else {}
-
-    def estimate(test):
-        test_id = test.id()
-        return timings.get(test_id, timings.get(test_id.split(".")[0], 1.0))
-
-    shards = [[] for _ in range(total)]
-    loads = [0.0] * total
-    for test in sorted(tests, key=lambda test: (-estimate(test), test.id())):
-        lightest = min(range(total), key=lambda shard: (loads[shard], len(shards[shard]), shard))
-        shards[lightest].append(test)
-        loads[lightest] += estimate(test)
-    return sorted(shards[index - 1], key=lambda test: test.id())
+    return sorted(tests, key=lambda test: test.id())[index - 1::total]
 
 
 def main(argv=None) -> int:
@@ -47,8 +34,7 @@ def main(argv=None) -> int:
         parser.error("INDEX must be between 1 and TOTAL")
     # Import failures become failing tests here, so they still fail some shard.
     tests = list(_flatten(unittest.defaultTestLoader.discover(str(Path(__file__).parent))))
-    timings = json.loads(Path(__file__).with_name("shard_timings.json").read_text())["profiles"][sys.platform]
-    selected = select(tests, args.index, args.total, timings)
+    selected = select(tests, args.index, args.total)
     print(f"Shard {args.index}/{args.total}: {len(selected)} of {len(tests)} tests", flush=True)
     if not selected:
         print("No tests selected; use fewer shards", file=sys.stderr)
