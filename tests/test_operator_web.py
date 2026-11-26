@@ -226,7 +226,7 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
             with self.subTest(route=route), urlopen(self.url + route, timeout=REQUEST_TIMEOUT) as response:
                 self.assertEqual(response.headers.get_content_type(), "text/html")
                 self.assertIn("connect-src 'self'", response.headers["Content-Security-Policy"])
-                self.assertIn("img-src data:;", response.headers["Content-Security-Policy"])
+                self.assertIn("img-src 'self' data:;", response.headers["Content-Security-Policy"])
                 self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
                 shell = response.read().decode("utf-8")
         self.assertEqual(self.get("/operator/items/invalid")[0], 422)
@@ -254,6 +254,27 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get("/v1/owner/status", RUNNER)[0], 403)
         self.assertEqual(self.get("/v1/owner/status", OWNER), (200, {"role": "owner"}))
         self.assertEqual(self.get("/v1/operator/executions")[0], 401)
+
+    def test_shared_brand_asset_is_served_and_readme_uses_static_lockup(self):
+        directory = self.enterContext(TemporaryDirectory())
+        self.start_server(Path(directory) / "brand.sqlite3")
+        with urlopen(self.url + "/operator/assets/phalanx-brand.svg",
+                     timeout=REQUEST_TIMEOUT) as response:
+            self.assertEqual(response.headers.get_content_type(), "image/svg+xml")
+            asset = response.read().decode("utf-8")
+        from xml.etree import ElementTree
+        root = ElementTree.fromstring(asset)
+        ids = {node.attrib["id"] for node in root.iter() if "id" in node.attrib}
+        self.assertTrue({"field", "rim", "rim-cap", "chevron", "tip-outline", "shield"} <= ids)
+        for node in root.iter():
+            if node.tag.endswith("use"):
+                self.assertTrue(node.attrib["href"].startswith("#"))
+                self.assertIn(node.attrib["href"][1:], ids)
+        repo = Path(__file__).resolve().parents[1]
+        readme = (repo / "README.md").read_text(encoding="utf-8")
+        self.assertIn('src="phalanx/static/phalanx-brand.svg"', readme)
+        self.assertNotIn("<script", asset)
+        self.assertNotIn("<style", asset)
 
     def test_board_compaction_counts_survive_a_server_restart_and_legacy_heartbeat(self):
         directory = self.enterContext(TemporaryDirectory())

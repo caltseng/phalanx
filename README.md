@@ -1,8 +1,9 @@
 # Phalanx
 
-<img src="docs/phalanx-logo.svg" alt="Phalanx logo: an ivory spear-shaped mark on a crimson shield with a gold rim" width="96" height="96">
+<img src="phalanx/static/phalanx-brand.svg" alt="Phalanx — Push forward: ivory chevron on a crimson circular shield with a gold rim" width="296" height="76">
 
-**Push forward**
+The static lockup shows the resting mark. In Scribe, hover or keyboard focus advances
+the chevron upward through the rim; reduced motion retains the static mark.
 
 **Use Phalanx to delegate outcomes, not keep prompting agents.** A coding agent handles a task; Phalanx is meant to keep a queue of tasks moving across repositories—from clear acceptance criteria through implementation, review, checks and merge.
 

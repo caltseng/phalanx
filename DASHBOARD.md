@@ -4,9 +4,21 @@ Status: **accepted by Caleb** (#112). Implementation rows go into [IMPLEMENTATIO
 
 The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API routes (`/v1/operator/*`) and its code keep the `operator` name. The local board implements the home page, row anatomy, inline detail, item/execution deep links, queue/history pages, URL filters and global search described below. It follows the direct-sessions model ([docs/direct-sessions.md](docs/direct-sessions.md)): items and executions, writers, Captains and flags. Hosting and sign-in remain separate work.
 
-Phalanx's tagline is **Push forward**, shown on the connection screen and beside the
-Phalanx and Scribe names in the board header. It follows the header's existing subtitle
-styling and compact-screen behavior; the logo and hover animation are unchanged.
+Phalanx's tagline is **Push forward**, shown on the connection screen and beneath
+PHALANX, to the right of the circular shield, in the board's engraved-italic lockup.
+The home link raises the unit upward on fine-pointer hover or keyboard focus: the
+upper rim parts and the existing chevron advances through it, with a subtle formation
+trail. There is no idle animation, sideways motion, spear morph or layout shift.
+Touch navigation needs no hover; reduced motion keeps the resting mark and focus ring.
+Scribe remains a separate visible product label, including on compact screens.
+`phalanx/static/phalanx-brand.svg` owns the shared shield geometry and the README's
+static lockup (on ivory for legibility in either README theme); the dashboard
+references its parts rather than duplicating paths.
+Typography uses local Palatino/Georgia serif fallbacks, without downloaded fonts.
+
+This is a source/package adoption boundary, not a live-service rollout. Compatible
+installed-package adoption and service refresh remain Captain-coordinated under the
+[deployment guide](docs/deployment.md#standing-authority-for-compatible-upgrades).
 
 **Shipped versus planned:** PH-29a's server reads shipped in
 [#144](https://github.com/caltseng/phalanx/pull/144). The local home/inline board, server-owned

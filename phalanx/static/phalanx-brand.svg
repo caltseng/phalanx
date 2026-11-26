@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 296 76" role="img" aria-labelledby="title description">
+  <title id="title">Phalanx — Push forward</title>
+  <desc id="description">An ivory chevron on a crimson circular shield with a gold rim, beside PHALANX and its engraved italic motto.</desc>
+  <defs>
+    <g id="field"><circle cx="32" cy="32" r="29" fill="#8b1e24"/></g>
+    <g id="rim"><path d="M19 6.077 A29 29 0 1 0 45 6.077" fill="none" stroke="#b8923a" stroke-width="5"/></g>
+    <g id="rim-cap"><path d="M19 6.077 A29 29 0 0 1 45 6.077" fill="none" stroke="#b8923a" stroke-width="5"/></g>
+    <g id="tip-outline"><path d="M20 46 L32 17 L44 46" fill="none" stroke="#8b1e24" stroke-width="10" stroke-linejoin="miter"/></g>
+    <g id="chevron"><path d="M20 46 L32 17 L44 46" fill="none" stroke="#fbf7ee" stroke-width="6" stroke-linecap="square" stroke-linejoin="miter"/></g>
+    <g id="shield"><use href="#field"/><use href="#rim"/><use href="#rim-cap"/><use href="#chevron"/></g>
+  </defs>
+  <rect width="296" height="76" rx="8" fill="#fbf7ee"/>
+  <use href="#shield" x="6" y="6"/>
+  <g font-family="'Palatino Linotype', Palatino, Georgia, serif" font-weight="700">
+    <text x="84" y="34" fill="#8b1e24" font-size="28" letter-spacing="3.22">PHALANX</text>
+    <g fill="#85611d" stroke="#85611d">
+      <path d="M84 53 H111 M261 53 H288" stroke-width="1" opacity=".65"/>
+      <text x="186" y="59" text-anchor="middle" stroke="none" font-size="17" font-style="italic" letter-spacing=".595">Push forward</text>
+    </g>
+  </g>
+</svg>
