@@ -139,6 +139,16 @@ func inspect(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
 }
 
 func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) (json.RawMessage, error) {
+	var result json.RawMessage
+	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
+		var err error
+		result, err = a.intake(tx, request, key)
+		return err
+	})
+	return result, err
+}
+
+func (a *App) intake(tx *sqlite.Tx, request contract.Intake, key *string) (json.RawMessage, error) {
 	material, err := request.Material()
 	if err != nil {
 		return nil, err
@@ -152,33 +162,29 @@ func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) 
 	if err != nil {
 		return nil, err
 	}
-	var result json.RawMessage
-	err = a.Store.Write(ctx, func(tx *sqlite.Tx) error {
-		if key != nil {
-			receipt, err := tx.Receipt("intake", *key)
-			if err == nil {
-				if receipt.Digest != contract.Digest(compatible) && receipt.Digest != contract.Digest(current) {
-					return &Conflict{"Idempotency key was already used with a different request"}
-				}
-				// Do not inspect mutable item state or rewrite the receipt.
-				result = json.RawMessage(receipt.Response)
-				return nil
+	if key != nil {
+		receipt, err := tx.Receipt("intake", *key)
+		if err == nil {
+			if receipt.Digest != contract.Digest(compatible) && receipt.Digest != contract.Digest(current) {
+				return nil, &Conflict{"Idempotency key was already used with a different request"}
 			}
-			if err != sql.ErrNoRows {
-				return err
-			}
+			// Do not inspect mutable item state or rewrite the receipt.
+			return json.RawMessage(receipt.Response), nil
 		}
-		var err error
-		result, err = a.create(tx, request)
-		if err != nil {
-			return err
+		if err != sql.ErrNoRows {
+			return nil, err
 		}
-		if key != nil {
-			return tx.SaveReceipt("intake", *key, contract.Digest(compatible), string(result))
+	}
+	result, err := a.create(tx, request)
+	if err != nil {
+		return nil, err
+	}
+	if key != nil {
+		if err := tx.SaveReceipt("intake", *key, contract.Digest(compatible), string(result)); err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	return result, err
+	}
+	return result, nil
 }
 
 func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, error) {

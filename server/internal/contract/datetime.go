@@ -14,11 +14,27 @@ type AwareTime struct {
 }
 
 func (value AwareTime) MarshalJSON() ([]byte, error) {
+	return dateTimeJSON(value.Time, true)
+}
+
+type DateTime struct {
+	time.Time
+	Aware bool
+}
+
+func (value DateTime) MarshalJSON() ([]byte, error) {
+	return dateTimeJSON(value.Time, value.Aware)
+}
+
+func dateTimeJSON(value time.Time, aware bool) ([]byte, error) {
 	layout := "2006-01-02T15:04:05"
 	if value.Nanosecond() != 0 {
 		layout += ".000000"
 	}
-	return json.Marshal(value.Format(layout + "Z07:00"))
+	if aware {
+		layout += "Z07:00"
+	}
+	return json.Marshal(value.Format(layout))
 }
 
 var datetimeNumber = regexp.MustCompile(`^[+-]?(?:[0-9]+|(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)$`)
@@ -30,16 +46,31 @@ func ValidateAwareTime(value any, at []any) (AwareTime, []Issue) {
 	return result, v.issues
 }
 
-func (v *validator) datetimeError(value any, at []any, reason string, fromDate bool) AwareTime {
+func ValidateDateTime(value any, at []any) (DateTime, []Issue) {
+	v := validator{}
+	result := v.dateTime(value, at)
+	return result, v.issues
+}
+
+func (v *validator) datetimeError(value any, at []any, reason string, fromDate bool) DateTime {
 	kind, message := "datetime_parsing", "Input should be a valid datetime, "
 	if fromDate {
 		kind, message = "datetime_from_date_parsing", "Input should be a valid datetime or date, "
 	}
 	v.issue(kind, message+reason, at, value, map[string]any{"error": reason})
-	return AwareTime{}
+	return DateTime{}
 }
 
 func (v *validator) awareTime(value any, at []any) AwareTime {
+	start := len(v.issues)
+	result := v.dateTime(value, at)
+	if len(v.issues) == start && !result.Aware {
+		v.issue("timezone_aware", "Input should have timezone info", at, value, nil)
+	}
+	return AwareTime{result.Time}
+}
+
+func (v *validator) dateTime(value any, at []any) DateTime {
 	text, isText := value.(string)
 	number, isNumber := value.(json.Number)
 	if isNumber || isText && datetimeNumber.MatchString(text) {
@@ -81,11 +112,11 @@ func (v *validator) awareTime(value any, at []any) AwareTime {
 		if result.Year() > 9999 {
 			return v.datetimeError(value, at, "dates after 9999 are not supported as unix timestamps", false)
 		}
-		return AwareTime{result}
+		return DateTime{Time: result, Aware: true}
 	}
 	if !isText {
 		v.issue("datetime_type", "Input should be a valid datetime", at, value, nil)
-		return AwareTime{}
+		return DateTime{}
 	}
 	if len(text) < 10 {
 		return v.datetimeError(value, at, "input is too short", true)
@@ -128,8 +159,7 @@ func (v *validator) awareTime(value any, at []any) AwareTime {
 		if year == 0 {
 			return v.datetimeError(value, at, "year 0 is out of range", false)
 		}
-		v.issue("timezone_aware", "Input should have timezone info", at, value, nil)
-		return AwareTime{}
+		return DateTime{Time: date}
 	}
 	clock := datetimeClock.FindStringSubmatch(text[10:])
 	extra := "unexpected extra characters at the end of the input"
@@ -169,10 +199,6 @@ func (v *validator) awareTime(value any, at []any) AwareTime {
 	if year == 0 {
 		return v.datetimeError(value, at, "year 0 is out of range", false)
 	}
-	if zone == "" {
-		v.issue("timezone_aware", "Input should have timezone info", at, value, nil)
-		return AwareTime{}
-	}
-	return AwareTime{time.Date(year, time.Month(month), day, hour, minute, second, microseconds*1000,
-		time.FixedZone("", offset))}
+	return DateTime{Time: time.Date(year, time.Month(month), day, hour, minute, second, microseconds*1000,
+		time.FixedZone("", offset)), Aware: zone != ""}
 }

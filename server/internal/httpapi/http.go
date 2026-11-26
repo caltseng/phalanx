@@ -27,14 +27,17 @@ type Handler struct {
 }
 
 type route struct {
-	kind        string
-	itemID      string
-	executionID string
-	captainID   string
-	runnerID    string
-	writerID    string
-	revision    string
-	method      string
+	kind         string
+	itemID       string
+	executionID  string
+	captainID    string
+	runnerID     string
+	writerID     string
+	passID       string
+	repositoryID string
+	number       string
+	revision     string
+	method       string
 }
 
 func match(path, method string) (route, string) {
@@ -55,6 +58,12 @@ func match(path, method string) (route, string) {
 		return route{kind: "writer-capacity", method: "POST"}, "POST"
 	case "/v1/writer/usage":
 		return route{kind: "writer-usage", method: "POST"}, "POST"
+	case "/v1/issue-scout":
+		return route{kind: "scout-status", method: "GET"}, "GET"
+	case "/v1/issue-scout/settings":
+		return route{kind: "scout-settings", method: "PUT"}, "PUT"
+	case "/v1/issue-scout/claim":
+		return route{kind: "scout-claim", method: "POST"}, "POST"
 	case "/v1/dispatch/settings":
 		if method == "PUT" {
 			return route{kind: "set-dispatch", method: "PUT"}, "GET"
@@ -79,6 +88,16 @@ func match(path, method string) (route, string) {
 		return route{kind: "repositories", method: "GET"}, "POST"
 	case "/v1/items":
 		return route{kind: "intake", method: "POST"}, "POST"
+	}
+	if strings.HasPrefix(path, "/v1/issue-scout/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/v1/issue-scout/"), "/")
+		if len(parts) == 3 && parts[0] == "passes" && parts[1] != "" &&
+			(parts[2] == "page" || parts[2] == "failure") {
+			return route{kind: "scout-" + parts[2], passID: parts[1], method: "POST"}, "POST"
+		}
+		if len(parts) == 4 && parts[0] == "issues" && parts[1] != "" && parts[2] != "" && parts[3] == "decision" {
+			return route{kind: "scout-decision", repositoryID: parts[1], number: parts[2], method: "POST"}, "POST"
+		}
 	}
 	if strings.HasPrefix(path, "/v1/items/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/v1/items/"), "/")
@@ -181,7 +200,8 @@ func bodyRoute(kind string) bool {
 	case "intake", "register", "set-title", "cancel", "close-failure", "retry-finalization",
 		"writer-register", "writer-update", "writer-withdraw", "writer-progress", "writer-capacity", "set-dispatch",
 		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write",
-		"github-observation", "local-checks", "reconciler-heartbeat", "writer-usage", "captain-usage":
+		"github-observation", "local-checks", "reconciler-heartbeat", "writer-usage", "captain-usage",
+		"scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision":
 		return true
 	default:
 		return false
@@ -281,7 +301,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if (route.kind == "writer-register" || route.kind == "writer-update" || route.kind == "writer-withdraw" ||
 		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
-		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire" || route.kind == "captain-usage") &&
+		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire" || route.kind == "captain-usage" ||
+		route.kind == "scout-claim" || route.kind == "scout-page" || route.kind == "scout-failure") &&
 		role != "owner" && role != "runner" {
 		writeJSON(w, 403, map[string]any{"detail": "Owner or runner token required"})
 		return
@@ -296,7 +317,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.kind == "owner" || route.kind == "intake" || route.kind == "register" ||
 		route.kind == "title" || route.kind == "set-title" || route.kind == "cancel" ||
 		route.kind == "close-failure" || route.kind == "retry-finalization" || route.kind == "inbox" ||
-		route.kind == "set-dispatch" || route.kind == "reply" || route.kind == "steer" || route.kind == "rerun" {
+		route.kind == "set-dispatch" || route.kind == "reply" || route.kind == "steer" || route.kind == "rerun" ||
+		route.kind == "scout-settings" || route.kind == "scout-decision" {
 		required = "owner"
 	} else if route.kind == "runner" || route.kind == "github-observation" || route.kind == "local-checks" || route.kind == "reconciler-heartbeat" {
 		required = "runner"
@@ -309,7 +331,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, map[string]any{"detail": message})
 		return
 	}
-	if (route.kind == "intake" || route.kind == "set-title" || route.kind == "set-dispatch") && !sameOrigin(r) {
+	if (route.kind == "intake" || route.kind == "set-title" || route.kind == "set-dispatch" ||
+		route.kind == "scout-settings" || route.kind == "scout-decision") && !sameOrigin(r) {
 		writeJSON(w, 403, map[string]any{"detail": "Browser writes require a same-origin request"})
 		return
 	}
@@ -333,6 +356,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.writerID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.writerID, "writer_id")...)
 	}
+	if route.passID != "" {
+		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.passID, "pass_id")...)
+	}
+	if route.repositoryID != "" {
+		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.repositoryID, "repository_id")...)
+	}
+	var pathNumber json.Number
+	if route.number != "" {
+		var issues []contract.Issue
+		pathNumber, issues = contract.ValidatePathInteger(route.number, "number")
+		pathIssues = append(pathIssues, issues...)
+	}
 	if route.revision != "" {
 		pathIssues = append(pathIssues, contract.ValidateRevision(route.revision)...)
 	}
@@ -343,6 +378,50 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result json.RawMessage
 	var status = 200
 	switch route.kind {
+	case "scout-status", "scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision":
+		if bodyRoute(route.kind) && !bodyPresent {
+			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
+			return
+		}
+		var issues []contract.Issue
+		switch route.kind {
+		case "scout-status":
+			result, err = h.App.ScoutStatus(ctx)
+		case "scout-settings":
+			request, bodyIssues := contract.ValidateScoutSettings(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.ConfigureScout(ctx, request)
+			}
+		case "scout-claim":
+			request, bodyIssues := contract.ValidateScoutClaim(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.ClaimScout(ctx, request)
+			}
+		case "scout-page":
+			request, bodyIssues := contract.ValidateScoutPage(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.ScoutPage(ctx, route.passID, request)
+			}
+		case "scout-failure":
+			request, bodyIssues := contract.ValidateScoutFailure(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.ScoutFailure(ctx, route.passID, request)
+			}
+		case "scout-decision":
+			request, bodyIssues := contract.ValidateScoutDecision(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.ScoutDecision(ctx, route.repositoryID, pathNumber, request)
+			}
+		}
+		if len(issues) > 0 {
+			writeJSON(w, 422, map[string]any{"detail": issues})
+			return
+		}
 	case "writer-usage", "captain-usage":
 		if !bodyPresent {
 			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})

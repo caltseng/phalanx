@@ -18,8 +18,11 @@ Writer and scoped Captain usage observations preserve cumulative attribution,
 acquisition gaps, bounded late observations and decimal provider quantities
 without touching lifecycle or inferring billing. Native usage projections exist;
 their operator-route differential proof remains pending with the operator family.
+Native scout settings, claim/page/failure/decision and source storage preserve
+the existing client-driven pass, lease/cursor/identity fences, fresh
+fingerprint-bound approval and atomic ordinary intake/page receipts.
 Native report finalization and bounded dependency refresh use the existing
-schema26 jobs. Current-writer and global derived flags, scout and
+schema26 jobs. Current-writer and global derived flags and
 operator/Scribe routes remain unimplemented.
 A 404 outside this slice is not API parity.
 
@@ -177,6 +180,7 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `reconciliation.py` | 76 on each schema shape | Exact observation digests/timestamps, immutable local checks, heartbeat/retirement, delivery handoff/Building fencing, ready-output enrichment, stop/merge precedence and deployment retirement |
 | `datetimes.py` | 1,449 | Exact pinned aware-datetime coercion, serialization and error envelopes, including numeric precision, calendar/offset boundaries and deterministic randomized timestamps |
 | `usage.py` | 71 on each schema shape | Exact JSON storage, cumulative replay/monotonicity, attribution/scope, acquisition-gap retention, provided decimal quantities and late observations; every other durable table is unchanged |
+| `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
 
@@ -202,6 +206,14 @@ separators; it does not change canonical state, fingerprints or receipts.
 Native usage tests race duplicate observations and check preserved zero/null
 measurements, coverage gaps, exclusion of shared sessions and integer subtotal
 overflow as text. Operator projection parity is not yet claimed.
+Scout unit tests inject a cursor-update failure after intake/source creation and
+require all work/source/receipts/claim state to roll back. Racing identical page
+posts retain one intake and two immutable receipts; racing Captains acquire
+one claim, and handoff/settings supersession fence prior pages. Ordinary
+`datetime` accepts naive issue timestamps while the shared `AwareDatetime`
+contracts still require timezone information; both pinned model corpora pass.
+The common transaction-scoped intake helper retains the exact two permitted
+legacy/current fingerprints without nested transactions or receipt rewrites.
 
 Focused native tests additionally cover racing title revisions, report
 savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure

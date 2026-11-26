@@ -54,9 +54,10 @@ def requests():
     return values
 
 
-def expected(values):
+def expected(values, allow_naive=False):
     script = """
 import json, sys
+from datetime import datetime
 from pydantic import AwareDatetime, TypeAdapter, ValidationError
 values = json.load(sys.stdin)
 adapter = TypeAdapter(AwareDatetime)
@@ -72,17 +73,20 @@ for value in values:
     result.append(response)
 print(json.dumps(result))
 """
+    if allow_naive:
+        script = script.replace("TypeAdapter(AwareDatetime)", "TypeAdapter(datetime)")
     process = subprocess.run([sys.executable, "-P", "-c", script], input=json.dumps(values),
                              text=True, capture_output=True, check=True, timeout=60, cwd=h.ROOT)
     return json.loads(process.stdout)
 
 
-def differential(binary, output):
+def differential(binary, output, allow_naive=False):
     h.verify_manifest()
     h.verify_vectors()
     values = requests()
-    oracle = expected(values)
-    process = subprocess.run([str(binary)], input="".join(json.dumps(value) + "\n" for value in values),
+    oracle = expected(values, allow_naive)
+    command = [str(binary), *(['--allow-naive'] if allow_naive else [])]
+    process = subprocess.run(command, input="".join(json.dumps(value) + "\n" for value in values),
                              text=True, capture_output=True, check=True, timeout=60, cwd=h.ROOT)
     actual = [json.loads(line) for line in process.stdout.splitlines()]
     output.mkdir(parents=True, exist_ok=True)
@@ -94,15 +98,17 @@ def differential(binary, output):
     if mismatches:
         raise AssertionError(f"{len(mismatches)} datetime mismatches\n" + "\n".join(
             f"{value!r}\n{first!r}\n{second!r}" for value, first, second in mismatches[:20]))
-    print(f"{len(values)} exact pinned AwareDatetime coercion/error vectors PASS")
+    model = "datetime" if allow_naive else "AwareDatetime"
+    print(f"{len(values)} exact pinned {model} coercion/error vectors PASS")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allow-naive", action="store_true")
     args = parser.parse_args()
-    differential(args.binary.resolve(), args.output.resolve())
+    differential(args.binary.resolve(), args.output.resolve(), args.allow_naive)
 
 
 if __name__ == "__main__":
