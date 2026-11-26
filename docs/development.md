@@ -4,7 +4,40 @@
 
 Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. Before opening or updating a PR, run only the modules that cover the change, as [AGENTS.md](../AGENTS.md) describes. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Tests use the standard library and the runtime dependencies. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
 
-The [CI workflow](../.github/workflows/ci.yml) runs the same suite with the locked dependencies on every pull request and push to `main`. It covers Windows with CPython 3.12 and 3.14, and Ubuntu and macOS with CPython 3.14. Each run is split into three parallel jobs with `python tests/shard.py INDEX 3`, which deals the discovered tests round-robin so each test runs exactly once, and the single `Tests` check passes only when every shard passes.
+### CI shards and timing profiles
+
+The [CI workflow](../.github/workflows/ci.yml) runs the full unit suite with locked
+dependencies on every pull request and push to `main`: Windows/Python 3.12 (three
+shards), Linux/Python 3.14 (two), and macOS/Python 3.14 (two), plus one standalone
+envelope probe: eight test jobs. The `Tests` aggregate remains the required check
+and passes only when all shards and the probe pass.
+
+`python tests/shard.py INDEX COUNT` uses deterministic longest-first assignment with
+platform-specific runtime estimates in `tests/shard_timings.json`, not test-count
+round-robin. New tests inherit their module's estimate (one second for a new module),
+so discovery never drops unmeasured tests. Each shard still runs in test-ID order.
+The timing file links each platform's source CI run. Initial estimates use elapsed
+time between verbose test-completion timestamps; refreshed profiles use complete
+duration logs. Values are seconds, with a module mean for ordinary tests and exact-ID
+overrides for outliers above both one second and twice the module mean. Module means
+exclude those outliers.
+
+When balance drifts, refresh estimates from a green run's complete duration log on
+each target, then compare actual slowest/fastest shard runtimes and end-to-end workflow
+wall time against the baseline. CI logs all test durations to support that comparison;
+estimates alone are not performance acceptance evidence.
+
+### Shared fixtures
+
+HTTP tests use isolated API applications running in-process on real loopback sockets
+and selector event loops (avoiding Windows Proactor reset/teardown leaks), so urllib
+and CLI subprocesses still exercise HTTP, authentication and background tasks.
+Each fixture start runs a fresh application lifespan; explicit restart tests still
+stop and start it against the same database. The bootstrap backup/restore test retains
+real server-process launches to cover process boundaries and durable recovery.
+Shared Git and HTTP fixtures live in `tests/test_bootstrap.py`. Register temporary
+directories with `self.enterContext(TemporaryDirectory())` before starting a server
+so fixture cleanup stops the server before deleting its database.
 
 CLI behavior tests use `tests/cli_runner.py` to call the real entry point in process,
 capturing stdout, stderr and the exit code while restoring arguments, environment and

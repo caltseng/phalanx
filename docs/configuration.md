@@ -1,13 +1,74 @@
 # Configuration
 
 The server reads environment settings. Direct clients support explicit config paths or the
-[muster locator](../README.md#direct-muster-discovery-and-status). Record paths and credentials
+[muster locator](#direct-muster-discovery-and-status). Record paths and credentials
 privately; never initialize a second store to repair discovery.
 
 [`deploy init`](deployment.md) creates new-install templates under `~/.phalanx_muster`;
 `deploy run` and `deploy cli` use a local `deployment.json` for private environment,
 shift/reconciler paths and loopback host/port. Explicit existing locations stay valid.
 This setup never renames or upgrades live directories.
+
+## Direct muster discovery and status
+
+For an existing direct muster, discovery uses `--home <absolute directory>` first, then
+`PHALANX_HOME`, then exactly one locator: `~/.phalanx/muster.json` (`~` is the current
+user's home on Windows, macOS and Linux). Create that locator yourself, containing only:
+
+```json
+{"home": "/absolute/path/to/existing/muster"}
+```
+
+On Windows use a JSON path such as `"C:\\muster"`. Arrays, extra fields, duplicate `home`
+fields, relative paths and missing directories fail; Phalanx never scans for another
+muster or falls back after an invalid override. Discovery never initializes, migrates,
+moves or deletes state. Existing explicit config commands work without a locator.
+
+The selected directory contains `shift.json`, `charter.toml`, `reconciler.json` and
+`private.env`. The shift config can omit `charter` or use `charter.toml` (an absolute
+path to that same file also works). Other config paths, such as checkout and worktree
+mappings, should be absolute.
+
+### Private environment file
+
+`private.env` holds literal `KEY=VALUE` lines for `PHALANX_RUNNER_TOKEN`,
+`PHALANX_GITHUB_TOKEN`, optionally `PHALANX_OWNER_TOKEN`, `PHALANX_DB`,
+`PHALANX_LOCAL_BOARD`, `PHALANX_API_URL`, `PHALANX_HOME` and `PHALANX_SHIFT_CONFIG`.
+Blank lines and whole-line `#` comments are allowed; matching outer single/double
+quotes are removed, without escapes, interpolation, inline comments or shell execution.
+Duplicate/unknown keys and empty values fail. Protect this file with your OS's private-file
+permissions; never commit it. Existing environment values take precedence.
+Tokens are loaded only into the environment and never included in status output.
+
+### Status and explicit configuration
+
+```text
+python -m phalanx muster status
+python -m phalanx muster status --home <absolute directory>
+python -m phalanx shift status
+python -m phalanx reconcile
+```
+
+Without explicit configs, `shift` derives `shift.json` and the charter, and `reconcile`
+derives `reconciler.json` and its scratch directory `<muster>/reconciler` (overridable
+with `--state`). Both accept `--home`; `shift` accepts it before or after its action.
+Explicit `--config` and `PHALANX_SHIFT_CONFIG` retain their existing behavior without
+loading `private.env`; an explicit `--home` instead selects the muster layout.
+Explicit reconciler configs still need `--state`. `shift prompt` remains usable without
+any configuration.
+
+Start the intended API yourself with `PHALANX_HOME` set to this directory, alongside its
+**existing** database path and credentials. Authenticated `GET /v1/muster/status` reports
+the API's configured home identity, live Captains, registered open writers, each reconciler's
+last heartbeat/age/staleness (15 minutes), and dispatch pause. `muster status` reads this API,
+prints JSON, and fails nonzero if it is unavailable or its home identity differs. An empty
+reconciler list means none has recorded a heartbeat. Writer presence reports registration
+state; inspect native sessions separately to verify process liveness.
+
+Use the [deployment entrypoints](deployment.md#new-installation) to start services explicitly
+and runtime schedules to wake Captain/keeper sessions. Existing installs can keep explicit
+config paths and live state locations when adopting the locator. For one item's correlated
+timeline, see the [paginated API example](api.md#read-one-items-correlated-timeline).
 
 ## Environment variables
 
