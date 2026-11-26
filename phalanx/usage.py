@@ -6,7 +6,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from . import intake, writers
+from . import captains, intake, writers
 from .auth import require_coordinator, require_writer
 from .intake_api import run
 from .intake_models import Identifier, Payload
@@ -86,7 +86,8 @@ def own_observation(db, writer_id, snapshot):
 
 def captain_observation(db, item_id, execution_id, writer_id, body):
     writer = writers.bound_writer(db, item_id, execution_id, writer_id)
-    captain = writers.live_captain(db, body.captain_id)
+    captain = captains.require_acting_captain(
+        db, body.captain_id, message="An ended Captain cannot act on writers")
     repository = db.execute("SELECT repository_id FROM work_items WHERE id=?", (item_id,)).fetchone()[0]
     if repository not in json.loads(captain["pickup_json"])["repositories"]:
         raise HTTPException(403, "Usage observation is outside this Captain's repository scope")
