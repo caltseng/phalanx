@@ -112,15 +112,7 @@ Changing/removing configuration retires old signals without provider reads. Thes
 match delivered PR/head/merge commit and never change state, output or version. Closed
 executions never raise `observation_stale`. See [deployment signals](direct-path.md#post-merge-deployment-status).
 
-## Captain continuity and goal adherence
-
-The operating guide is the single reference for [Captain shifts and handoff](direct-path.md#captain-shifts-and-handoff),
-[creator-owned cleanup](direct-path.md#creator-owned-session-cleanup) and
-[retained-chat forwarding](direct-path.md#retained-chats-and-owner-message-forwarding).
-Runtime prompts implement that workflow; historical pilot/decision records are evidence,
-not competing operating instructions.
-
-### Deviation flags
+## Deviation flags
 
 Flags carry identity, reason, first-seen time and recovery, clearing when their condition
 clears. Owner-needed flags notify; informational flags do not block work.
@@ -147,18 +139,11 @@ Stale native/provider observations never authorize discarding work. See [Recover
 Only API/server-host administration opens queue storage; upgrades leave unused runtime
 files untouched and never delete live records.
 
-## Migration order
-
-The relay, numbered slots, runner-only stages and client SQLite journals are retired.
-Their implementation/removal history belongs in the [decision log](decisions.md) and
-[pilot evidence](pilots/direct-sessions.md), not a current rollout checklist.
-For existing stores, retain the explicit operator-owned
-[offline conversion contract](development.md#existing-store-conversion) and
-[reviewed adoption procedure](deployment.md#existing-runtime-reviewed-adoption-not-a-rename).
-Startup creates/checks the canonical schema; it does not convert arbitrary deployed data.
-
 ## Decisions
 
 The historical D1-D8 record and subsequent amendments live in [decisions.md](decisions.md).
 Current writer behavior is specified above and in [writer operations](writer-operations.md);
 current Captain behavior is in the [operating guide](direct-path.md#captain-shifts-and-handoff).
+Existing-store changes follow the [conversion contract](development.md#existing-store-conversion)
+and [reviewed adoption procedure](deployment.md#existing-runtime-reviewed-adoption-not-a-rename),
+not a retired-path migration checklist.

@@ -306,7 +306,7 @@ candidate/head SHA, not the execution's possibly newer revision.
 
 For example, the paginated backward-transition fixture in
 `tests/test_operator.py::test_backward_result_reasons_correlate_the_recorded_attempt_and_revision`
-includes this event (other response fields omitted):
+has this shape (other response fields omitted; the PR number is a placeholder):
 
 ```json
 {
@@ -315,7 +315,7 @@ includes this event (other response fields omitted):
   "from_stage": "self_review",
   "stage": "development",
   "reason": "changes_required; merge_conflict; at bbbbbbbbbbbb",
-  "pr_url": "https://github.com/a/b/pull/42",
+  "pr_url": "https://github.com/a/b/pull/<number>",
   "candidate": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 }
 ```

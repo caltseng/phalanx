@@ -1,6 +1,6 @@
 # Phalanx dashboard (Scribe)
 
-Status: **accepted by Caleb** (#112). Implementation rows go into [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The [Operator view](SPEC.md#operator-view) in SPEC.md remains the v1 contract. This document sets the goals, the UI principles and the target experience for the hosted dashboard.
+Status: **accepted by Caleb**. Implementation rows go into [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md). The [Operator view](SPEC.md#operator-view) in SPEC.md remains the v1 contract. This document sets the goals, the UI principles and the target experience for the hosted dashboard.
 
 The dashboard's visible name is **Scribe**. Its URL (`/operator/`), its API routes (`/v1/operator/*`) and its code keep the `operator` name. The local board implements the home page, row anatomy, inline detail, item/execution deep links, queue/history pages, URL filters and global search described below. It follows the direct-sessions model ([docs/direct-sessions.md](docs/direct-sessions.md)): items and executions, writers, Captains and flags. Hosting and sign-in remain separate work.
 
@@ -20,12 +20,10 @@ This is a source/package adoption boundary, not a live-service rollout. Compatib
 installed-package adoption and service refresh remain Captain-coordinated under the
 [deployment guide](docs/deployment.md#standing-authority-for-compatible-upgrades).
 
-**Shipped versus planned:** PH-29a's server reads shipped in
-[#144](https://github.com/caltseng/phalanx/pull/144). The local home/inline board, server-owned
+**Shipped versus planned:** PH-29a's server reads, the local home/inline board, server-owned
 Captain liveness, glyphs, merged display label and owner-authenticated `+` intake are also
-merged (#180, #201, #204 and #205). Local item/execution routes, queue/history pages,
-URL-backed filters/search and safe Markdown report rendering shipped in
-[#211](https://github.com/caltseng/phalanx/pull/211), with layout refinements in #216/#219.
+implemented. So are local item/execution routes, queue/history pages,
+URL-backed filters/search and safe Markdown report rendering.
 The groups page, hosted sign-in and later phases below remain design goals. Shipped
 features are not a claim that PH-29d performance/accessibility or owner visual acceptance
 has passed.
@@ -61,38 +59,17 @@ durations remain intact. This source change does not activate or reset a live de
 
 The dashboard is a website, reachable from the internet, where each Phalanx user can see what Phalanx is doing across their workspace's repositories, what needs them, and what it delivered. They can use it from a phone or a laptop, and later act on it there too. It serves many users across workspaces ([SPEC.md](SPEC.md#users-and-workspaces)), with Caleb as the first. It must stay fast and readable with thousands of items, tens of workers running at once, and years of history.
 
-## Worked example: Phalanx built by Phalanx
+## Workload and visual reference
 
-Phalanx's own build is the reference workload. It produced 111 PRs in 35 hours, from 21 Nov 01:15 to 22 Nov 12:32 UTC:
+The board must represent burst intake, multi-PR goals, small bookkeeping beside features,
+long-running work, review rounds, duplicate outputs and prerequisite stacks. Keep each row's
+stage, age, writer and next action visible without jumping under the pointer. Detail views
+link the primary PR, duplicates, upstream/downstream work and latest findings. Repository
+filters separate concurrent workstreams; grouping and a decision-review feed remain planned.
+Questions belong in **Needs you**, reports render as Markdown, and interrupted work remains
+visible with disconnection/recovery state and preserved history.
 
-- **Outcomes:** 110 merged, and one closed as a duplicate (#104 duplicated #103).
-- **Size:** about 28,800 lines changed.
-- **Time from open to merge:** median 8 minutes, 90th percentile 67 minutes. The longest was #81, open for 11.4 hours.
-- **Peak concurrency:** 8 open PRs at once, at 21 Nov 02:13 (#18, #20, #24, #26, #27, #28, #29 and #30).
-- **Around the PRs:**
-  - live musters on two pilot repositories;
-  - scheduled reflections;
-  - 46 logged decisions, 38 of them made by the Captain on Caleb's behalf.
-
-If every one of those had been a Phalanx work item, the dashboard would have needed to show these situations:
-
-| Situation | Example from the build | What the dashboard must show |
-| --- | --- | --- |
-| Burst intake | #4 to #10 opened within 7 minutes. | A running list with each item's stage, time in stage and writer. Rows don't jump around when new work arrives. |
-| One goal, many PRs | PH-13 shipped as #15, #22, #31, #40 and #61. PH-14a and PH-15a were each split into numbered parts. | Grouping by label, such as a plan row or campaign, with a rollup: delivered, open, and age of the oldest open item. |
-| Small bookkeeping next to features | About 25 plan and decision PRs, such as #59, #84, #99, #103, #106 and #109. | Filters and grouping so one-line docs PRs don't bury feature work. |
-| Long-running outliers | #80, #81 and #82 were each open 8 to 11 hours. #43 took 2.6 hours and changed 2,000 lines. | Age that's visible and sortable. Work that is stale past a threshold rises into **Needs you**. |
-| Review fix rounds | #105 (the 503 mapping) and #108 (the unbounded writer wait) each needed one fix round. | The revision round count and the latest findings, on the row and in the detail view. |
-| Duplicates | #104 duplicated #103. | The primary PR with a "1 duplicate" chip that links to the duplicate. |
-| Stacks and prerequisites | #111 stacked on #110, and PH-19b had to finish before PH-V1. | "Blocked by" chips on the row. The detail view lists upstream and downstream items. |
-| Breakage found after delivery | Main went red after PH-19a (#105), which led to #107 and #108. | The top bar shows default-branch CI for each repository. Later, links from a fix to the item that caused the breakage. |
-| Questions for Caleb | Confirming decision 32, and the Google OAuth client. | **Needs you** at the top: the question, the options, the proposed default and how long it has waited. |
-| Decisions made on his behalf | 38 of the 46 decisions were made by the Captain. | Later, a review feed of Captain decisions waiting for Caleb's confirmation. |
-| Field reports | Scheduled reflections, and the PH-V1 acceptance report. | Reports rendered as Markdown on the page, not raw text. |
-| Interrupted work | PH-V1 gate 4 stopped the server mid-stage and held workers past lease expiry. | A disconnected or stale banner while the server is down. After a restart, recovering items stay visible and show "recovering". History stays complete. |
-| Several repositories | phalanx, phalanx-pilot-py and phalanx-pilot-web. | A repository column and filter, with counts for each repository. |
-
-This is roughly how the home page would have looked at the peak. The stages and times are illustrative. Running work uses the selected D inline SVG three-spear formation, with a taller center spear (`[pike]` below). Its 12-by-16px row silhouette uses broad leaf heads and legible shafts; only the spears wave vertically by 2px over 2.2 seconds, staggered by .22 seconds from left to center to right. The icon frame, row and text stay still, refreshes retain the wave phase, and reduced motion leaves a static formation. Captain rows and references use the owner-selected A Roman side-profile helmet (`[helmet]` below): the approved three filled paths in a 64-by-64 viewBox, rendered at the existing em size. Live Captain marks are gold; stale marks retain attention styling, and ended/unavailable marks stay muted, with unchanged accessible state labels. Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); both stay quiet, with distinct screen-reader labels. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Informational capacity markers stay neutral, and successful deployment flags use success green. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor and need no external assets. Unmerged ready/draft outcomes use a teal handoff arrow, not a green check. Verified merged work and stored reports retain the green `✓`; human attention (`!`) is amber, failures (`✕`) red, and cancellation (`–`) muted. Transition/recovery arrows are unchanged. D1 overall dashboard visual acceptance remains open.
+The following home-page sketch is illustrative, not a live incident snapshot. Running work uses the selected D inline SVG three-spear formation, with a taller center spear (`[pike]` below). Its 12-by-16px row silhouette uses broad leaf heads and legible shafts; only the spears wave vertically by 2px over 2.2 seconds, staggered by .22 seconds from left to center to right. The icon frame, row and text stay still, refreshes retain the wave phase, and reduced motion leaves a static formation. Captain rows and references use the owner-selected A Roman side-profile helmet (`[helmet]` below): the approved three filled paths in a 64-by-64 viewBox, rendered at the existing em size. Live Captain marks are gold; stale marks retain attention styling, and ended/unavailable marks stay muted, with unchanged accessible state labels. Queued work has an outlined shield and waiting work a shield with two bars (`[shield]` below); both stay quiet, with distinct screen-reader labels. Flags use a red pole and pennant (`[flag]`): solid for owner notification, outlined otherwise, with "notifies owner" / "flag" accessible text. Informational capacity markers stay neutral, and successful deployment flags use success green. Row and detail chips use the same flags. All SVGs are em-sized, use currentColor and need no external assets. Unmerged ready/draft outcomes use a teal handoff arrow, not a green check. Verified merged work and stored reports retain the green `✓`; human attention (`!`) is amber, failures (`✕`) red, and cancellation (`–`) muted. Transition/recovery arrows are unchanged. D1 overall dashboard visual acceptance remains open.
 
 The semantic palette follows the retained Palette A reference, with the owner's latest
 gold Captain override (not the superseded purple or teal Active alternative):
@@ -125,15 +102,15 @@ CAPTAINS 1/1
 ACTIVE 4
  [pike] PH-15 Add direct GitHub check-in co…   phalanx  development   4m ago  —    busy         running
  [pike] PH-12 Preserve interrupted work…      phalanx  self review   2m ago  —    busy         running
- [pike] PH-14 Publish the reviewed primary…  phalanx  publication   1m ago  #30  busy         running
- [pike] PH-08 Persist waits, replies, rechecks phalanx  delivery      6m ago  #24  busy         CI failed; writer fixes same PR
+ [pike] PH-14 Publish the reviewed primary…  phalanx  publication   1m ago  PR   busy         running
+ [pike] PH-08 Persist waits, replies, rechecks phalanx  delivery      6m ago  PR   busy         CI failed; writer fixes same PR
 QUEUED AND WAITING 6
  [shield] PH-14 Collect GitHub observations…  phalanx  development   3m ago —    no writer    Awaiting a direct Captain
  [shield] PH-15 Record PR review evidence…    phalanx  development   9m ago —    no writer    Waiting for 1 prerequisite
  …
 RECENTLY CLOSED 25+
- ✓ PH-19 Exercise queue fairness under a st…  phalanx  Merged  closed 27s ago  #25  took 52m
- ✓ PH-17 Add bounded operator queue and tim…  phalanx  Merged  closed 9m ago   #21  took 1h 4m
+ ✓ PH-19 Exercise queue fairness under a st…  phalanx  Merged  closed 27s ago  PR   took 52m
+ ✓ PH-17 Add bounded operator queue and tim…  phalanx  Merged  closed 9m ago   PR   took 1h 4m
  …
 ```
 
@@ -216,7 +193,7 @@ It is not a Captain failure or handoff signal.
 9. **Times are honest.** Show relative times, with the absolute local time and UTC on hover. Always show the age of the data.
 10. **Neutral wording.** Say "worker chat", "runner" and "Captain", never the name of a specific agent runtime or operating system. This follows the runtime and platform neutrality rules in [AGENTS.md](AGENTS.md).
 11. **Accessible.** Full keyboard navigation, visible focus, WCAG 2.2 AA contrast, screen-reader labels, and respect for reduced motion. On the board, ↑/↓ or j/k move between rows, Enter expands a row and Escape collapses it.
-12. **Recognizably Phalanx.** Keep the phalanx visual identity from #67 as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running work's three spears wave in formation, waiting shields stay steady, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
+12. **Recognizably Phalanx.** Keep the phalanx visual identity as a restrained accent: the crimson and gold mark and wordmark. Readability comes first. Light and dark themes follow the system, and a header toggle overrides it (auto, dark, light) in local storage. Motion is small and thematic and never moves row text: the shield is raised on load and the wordmark glints, the Live dot and attention counts pulse like beacons, running work's three spears wave in formation, waiting shields stay steady, a live Captain's heart beats, changed rows get a stroke of gold ink and a seal, details unroll, and a theme change spills like ink. Looping motion stays in phase across refreshes, and none of it runs under reduced motion.
 13. **Nothing secret or third-party in the browser.** No tokens in storage, and no third-party scripts, fonts or analytics. Keep the strict CSP.
 
 Reading layouts keep expanded wait reasons, questions and approval text full-width below

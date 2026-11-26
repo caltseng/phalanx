@@ -153,6 +153,45 @@ respectively, under the existing explicit owner ordinary-target override recorde
 The Captain's closeout also records two minimal integration fixes (schema-25 initialization and
 custom contention-server process opt-out), final-head independent review and 14 green CI checks
 for #258. These are attributed closeout reports, not a new authority grant or a fresh benchmark.
-The [historical measurements, test-set evidence and remaining misses](writer-operations.md#applying-classification-to-current-timing-work)
-remain recorded as misses with accountable follow-up; merging never asserts that an unmet number
+The historical measurements below remain misses with accountable follow-up; merging never asserts that an unmet number
 passed or waives a separately explicit hard contract. Source delivery is distinct from live adoption.
+
+| Work | Historical measurement | Follow-up actor/action |
+| --- | --- | --- |
+| [#252](https://github.com/caltseng/phalanx/pull/252), `4852183e` | 10.549 s vs under-10 s; [run 45646662719](https://github.com/caltseng/phalanx/actions/runs/45646662719); one probe and 313 expected unit IDs | Captain coordinates remaining shift-CLI diagnosis. |
+| [#253](https://github.com/caltseng/phalanx/pull/253), `7e231933` | Windows 3.14/shard 3: 128 s vs 125.4 s, 38.76% vs 40%; five other reductions passed; [run 45652410596](https://github.com/caltseng/phalanx/actions/runs/45652410596) | API writer retains 321-ID comparison; Captain tracks 2.6 s residual. |
+| [#258](https://github.com/caltseng/phalanx/pull/258), CLI-only evidence | Windows shift/writer 3.482/3.234 s (3.12), 2.919/3.423 s (3.14), vs under-2 s; [run 45649550659](https://github.com/caltseng/phalanx/actions/runs/45649550659) | CLI writer reports frozen 326-ID combined diagnostic; Captain tracks residual latency. |
+
+## Direct-session pilot acceptance
+
+The coordinating owner-operator accepted the combined PH-DS4 evidence on November 24:
+a natural handoff with the PH-DS5 writer active, a keeper restart while a different PR
+was open, and subsequent verified delivery. This is not a claim that one PR spanned both
+events or that all PH-DS5 recovery cases passed. Sources:
+[#186](https://github.com/caltseng/phalanx/pull/186),
+[#196](https://github.com/caltseng/phalanx/pull/196),
+[#198](https://github.com/caltseng/phalanx/pull/198),
+[#207](https://github.com/caltseng/phalanx/pull/207),
+[#208](https://github.com/caltseng/phalanx/pull/208) and
+[#209](https://github.com/caltseng/phalanx/pull/209).
+An initial reconciler failure required rollback and a fix; ready-only outputs were later
+enriched by observed owner merges. The accepted report distinguished API/GitHub reads from
+coordinator-supplied drill details, and read-time flags were not a complete historical audit.
+The relay/client-journal removals shipped separately; timing exceptions and remaining
+live drills were not waived by those merges.
+
+## GitHub provider research
+
+The initial [lifecycle report](https://github.com/caltseng/phalanx/pull/2) used read-only
+inspection of [the first PR](https://github.com/caltseng/phalanx/pull/1) to corroborate
+merged-state decoding, merge-parent correlation and an empty check/status case.
+It did not verify live promotion, preview races, lost-write recovery or merge queues.
+Current provider constraints are summarized in [the provider reference](pilots/github-lifecycle.md);
+the retired runner's claim/journal procedure is not a supported operating path.
+
+## Documentation maintenance scope
+
+The current Captain designated the documentation-cleanup writer as the narrow plan-maintenance
+session for removing historical PR/revision references from `IMPLEMENTATION_PLAN.md`, preserving
+row status, acceptance and order. The separate queued plan-collapse/dashboard-trim work retains
+its broader scope. This changes neither operating authority nor deployment state.

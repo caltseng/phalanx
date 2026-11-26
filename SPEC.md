@@ -233,14 +233,8 @@ revision-bound findings, `needs_input` with question/handoff, or `failed` with r
 partial artifacts. Only the server applies transitions and closes the execution. Report
 review and storage always reference the exact immutable draft revision.
 
-### Captain shifts and continuity
-
-An operator-owned charter defines goal, repository scope, authority, escalation and stop
-conditions. The single operating reference is [Captain shifts and handoff](docs/direct-path.md#captain-shifts-and-handoff),
-including progress accountability, reinforcement, recovery and creator-owned cleanup.
-The [API reference](docs/api.md#captain-workflow-reinforcement) defines reinforcement and
-telemetry fields; [retained-chat forwarding](docs/direct-path.md#retained-chats-and-owner-message-forwarding)
-defines off-shift routing. Native prompts implement these rules, not separate policy.
+Captain operation follows [the single shift/handoff reference](docs/direct-path.md#captain-shifts-and-handoff);
+the [API reference](docs/api.md#captain-workflow-reinforcement) defines reinforcement and telemetry fields.
 
 ## Settings and dispatch gates
 

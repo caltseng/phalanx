@@ -65,17 +65,16 @@ startup never replays schema history or rewrites records.
 The service owner, not a writer or startup hook, owns activation. Do not run this
 against live state or reset a queue. Rehearse on an operator-supplied snapshot first:
 
-1. The service owner retains the reviewed schema-24 (or already converted schema-25) snapshot at an explicitly documented
+1. The service owner retains a reviewed supported-source snapshot at an explicitly documented
    archive path, makes it read-only, and retains its source revision as the rollback/archive
-   pair. The deployed shape was initialized at `b981351b6f9e652f592aafcaa2b8b2f8db426964`,
-   then received the usage/title additions from `6cf538ed84a96f407ab1f4fd1f5ae2f239bd84a4`.
-   In particular its attempts still carry retired NOT NULL lease columns.
+   pair. Supported schema-24 sources carry retired NOT NULL attempt lease columns;
+   schema-25 sources have already removed them.
    Take that backup with the pinned deployed schema-24 environment and the explicit
    existing `PHALANX_DB`: `python -P -m phalanx server backup <snapshot>`.
    Do not use the target schema-26 admin command to open a schema-24/25 source.
 2. From the reviewed target checkout, use the configured checks interpreter to run
    `python -m scripts.convert_store <snapshot> <new-database>`. Both paths must be
-   operator-selected; the destination must not exist. This explicit one-off tool uses
+   operator-selected; the destination must not exist. This explicit offline converter uses
    SQLite backup for a consistent input, builds the canonical schema, disables triggers
    only while copying, and copies every retained table/column without changing values.
    It rejects unexpected tables/columns and never writes to the source.

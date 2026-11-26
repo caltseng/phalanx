@@ -54,12 +54,8 @@ continuity and retained-instruction receipts separately. **Source merge is not a
 result.** Notify the current Captain after a successful rollout for bounded reconciliation
 and eligible-capacity refill; this grants no capacity increase.
 
-The Dispatch overdue interval is a loaded API constant: merging its 60-minute value
-does not update an already-running API. Coordinate adoption with the existing sole
-service operator using the reviewed compatible-upgrade procedure above, not an
-in-memory monkeypatch or blind restart. Verify the loaded revision and affected flag
-boundaries separately from the source merge; backlog/pickup warnings and hold expiry
-remain at 30 minutes.
+Dispatch overdue is a loaded 60-minute API constant; verify adoption through the reviewed
+upgrade, never monkeypatch. Backlog/pickup warnings and holds remain 30 minutes.
 
 ## New installation
 
@@ -119,13 +115,11 @@ retire preexisting launchers with their owner.
 Configure the API and reconciler tasks with Normal process priority (Task Scheduler priority 5), not the
 default priority 7 (BelowNormal). Verify the actual listener **and** virtual-environment
 launcher with `Get-Process -Id <verified-PID>` (`PriorityClass`, `BasePriority`) and inspect
-the exact owning task's `Settings.Priority`. A database-free authenticated status request
-can stall under sustained Normal-priority host work; fast database probes or occasional
-health responses do not rule that out.
+the exact owning task's `Settings.Priority`.
 
 The API and reconciler entrypoints promote only their own inherited Idle/BelowNormal Windows process to
 Normal before serving or reconciling and log the correction. They preserve Normal/higher classes, never
-chooses High/Realtime and fails visibly if Windows rejects the operation. Other platforms,
+choose High/Realtime and fail visibly if Windows rejects the operation. Other platforms,
 CLI commands and writers are unchanged. Keep the supervisors correct too;
 the services do not edit tasks or other processes.
 
@@ -135,13 +129,9 @@ tree; Windows tree cleanup and direct-child reap each have a five-second limit. 
 timeout and cleanup errors surface to the caller, including unchecked ref probes.
 Only the documented absent-ref exit counts as absence. A failed reconciler item keeps its
 last-known observation (which can become stale), logs the error and does not stop other
-items from being observed. These bounds do not prove host-load latency by themselves.
-
-For an incident, verify exact task/process ownership before the operator changes only that
-API task and its live listener/launcher to Normal. No restart, schema conversion or queue
-mutation is needed. Preserve other task settings and record authenticated controls and
-genuine writer reads/writes before/after under comparable load. Priority and `/health` alone
-do not prove bounded admission or same-writer continuity.
+items from being observed. Priority, `/health` and Git timeout bounds alone do not prove
+host-load latency, bounded admission or same-writer continuity; verify affected authenticated
+operations under comparable load.
 
 ## Environment and local shims
 
@@ -207,55 +197,25 @@ Use explicit authenticated status when muster-home identity is not configured. D
 update a writer's environment underneath it, delete runtime data or import retired client
 SQLite state.
 
-Preserve existing saved Total limits and conservative Building allocations until the
-current capacity protocol is deployed and understood by retained writers. Editing,
-self-review and substantial tests require granted Building; waiting/publishing alone does
-not. Never infer release from a stage label or raise an old single limit to 10 first.
-The owner separately authorizes an atomic settings change after verifying protocol receipts
-and actual Building/Delivering/Total counts. Lowering limits or capacity waits never kill
-writers. See [dispatch settings](../SPEC.md#settings-and-dispatch-gates).
+Adoption preserves the saved dispatch limits and actual writer allocations. Capacity-setting
+changes are separate owner actions through [dispatch settings](../SPEC.md#settings-and-dispatch-gates),
+not a deployment default or an inference from stage labels.
 
 ## Coordination-policy adoption boundary
 
-Check-in changes source only. The authorized operator installs the reviewed package/API and
-rehearsed schema before using new routes or generated prompts. Existing charters, schedules,
-kickoffs and retained conversations are not rewritten by a merge. Correct stale private
-policy under its existing owner while preserving unrelated authority, explicit output
-ceilings and genuine GitHub required reviewers/protections.
+Source check-in does not install code, convert a schema or refresh retained conversations.
+Use the upgrade procedure above before relying on new routes or generated instructions.
+Instruction/CLI-only changes do not inherently require a service restart; inspect the actual
+diff and preserve unrelated installed changes.
 
-Relay changed canonical prompt sections verbatim through supported messaging and record
-recipient, revision and receipt. Captain workflow refresh follows the
-[shift and handoff rules](direct-path.md#captain-shifts-and-handoff); do not acknowledge
-unread workflow or revive ended sessions for adoption. Writer-template placeholders must
-be expanded appropriately for that existing writer, not relayed as literal instructions or
-regenerated by reserving a second writer.
+Existing sessions need explicit instruction delivery through supported messaging. Relay
+reviewed canonical sections verbatim, expand placeholders for the recipient's configured
+commands, and record recipient, revision and acknowledged receipt. A printed worker template
+is not a fresh kickoff: never reserve a second writer to refresh instructions or contact an
+ended writer. Captain refresh follows [the operating guide](direct-path.md#captain-shifts-and-handoff).
+Private charters and schedules remain under their existing owner; preserve unrelated authority,
+output ceilings and repository protections.
 
-Preserve unrelated installed hotfixes and prompt edits. Instruction/CLI-only changes need
-no service restart by themselves; evaluate the actual diff rather than inferring a schema
-change. For [control-plane continuity](writer-operations.md#control-plane-outages), relay the
-canonical outage section together with its capacity/merge clauses. Deferred Phalanx evidence
-stays pending until authenticated receipts and actual GitHub reconciliation are verified:
-a sent message is not acknowledged adoption.
-
-Report adoption as partial until code/schema, external configuration and retained-instruction
-receipts are verified. No engine independent-review predicate, native event bus or new
-scheduler is implied: material notifications use existing messaging and bounded reconciliation,
-with scheduled wakes as fallback.
-
-For Captain outage-continuity instruction-only adoption, relay the canonical outage section and
-keeper native-verification rules to the current verified Captain and existing keeper. Add the
-guard to their existing automation prompts without changing cadence, bindings or authority;
-record readback/receipts, including any in-flight keeper that captured the old prompt.
-Do not start a Captain for policy adoption.
-
-When an unrelated schema upgrade prevents package deployment, an authorized operator may apply
-an independently reviewed **outage-only prompt patch** to the exact installed baseline: back up
-affected prompts, verify baseline/no conflicting edits, apply only reviewed hunks and verify
-installed `shift prompt captain|keeper|forwarding` output plus packaged `wake` through the same
-prompt loader (`wake` is not a CLI prompt choice). Privately record baseline revision, patch digest,
-file hashes and recipient receipts separately from source merge. Keep API Python code,
-database/schema/config/credentials, services, writers, capacity and schedules unchanged.
-Old server stale/no-live recovery text remains undeployed until compatible API adoption;
-the explicit prompt guard overrides that launch advice. Preserve the direct owner guard in
-automations/conversations if backup prompts must be restored; do not silently restore rejected
-outage-handoff behavior.
+Keep package/schema verification, external configuration and retained-instruction receipts
+separate. Adoption remains partial until the applicable receipts are verified; a sent message
+is not readback, and deferred control-plane evidence still requires authenticated reconciliation.
