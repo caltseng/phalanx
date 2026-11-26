@@ -21,7 +21,7 @@ For transport failures use the worker's [outage protocol](phalanx/prompts/worker
 Direct clients discover the existing muster via `--home`, `PHALANX_HOME`, then the single
 per-user `~/.phalanx/muster.json` locator. Discovery is read-only: never initialize or migrate
 state to repair discovery. Authenticated `muster status` reads identity, Captains, writers,
-reconciler freshness and pause. See [layout and precedence](README.md#direct-muster-discovery-and-status).
+reconciler freshness and pause. See [layout and precedence](docs/configuration.md#direct-muster-discovery-and-status).
 
 Separate, explicit `deploy init` writes credential-free new-install templates under
 `~/.phalanx_muster` by default, refusing an existing directory. Versioned foreground

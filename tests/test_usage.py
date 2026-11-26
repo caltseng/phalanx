@@ -270,10 +270,9 @@ class UsageTest(ServerFixture, unittest.TestCase):
         snapshot["sequence"] = 2
         path.write_text(json.dumps(snapshot), encoding="utf-8")
         config = {"base_url": self.url, "runtime": "native-app"}
-        api = lambda route, **options: work_cli.request(self.url, RUNNER, route, **options)
         with (patch.object(shift, "load_config", return_value=config),
               patch.object(shift, "load_charter", return_value={}),
-              patch.object(shift, "API", return_value=api), redirect_stdout(StringIO())):
+              patch.dict("os.environ", PHALANX_RUNNER_TOKEN=RUNNER), redirect_stdout(StringIO())):
             shift.run_shift(Namespace(shift_command="usage", config=path, home=None, captain=self.captain,
                                       item=self.item, execution=self.execution, writer=self.writer, file=path))
         observed = self.detail()["usage"]["execution"]["tokens"]

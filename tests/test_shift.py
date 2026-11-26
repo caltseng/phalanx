@@ -13,8 +13,9 @@ import unittest
 from unittest import mock
 
 from phalanx import captains, shift, workspaces
+from phalanx.api_client import APIClient
 from phalanx.store import initialize, write_transaction
-from phalanx.work_cli import credential, request
+from phalanx.work_cli import credential
 
 from cli_runner import run_cli
 from test_bootstrap import OWNER, RUNNER, ServerFixture, git
@@ -356,7 +357,8 @@ class CharterTest(unittest.TestCase):
         config = {"base_url": "https://muster.example.test:8443/team/"}
         with (mock.patch.object(shift, "load_config", return_value=config),
               mock.patch.object(shift, "load_charter", return_value={}),
-              mock.patch.object(shift, "API"),
+              mock.patch.dict(os.environ, PHALANX_RUNNER_TOKEN=RUNNER),
+              mock.patch.object(shift, "APIClient"),
               mock.patch.object(shift, "status", return_value={"items": []}),
               mock.patch("builtins.print") as output):
             shift.run_shift(Namespace(shift_command="status", config="shift.json", captain=None))
@@ -413,7 +415,7 @@ class ShiftFixture(ServerFixture):
         patch = mock.patch.dict(os.environ, {"PHALANX_RUNNER_TOKEN": RUNNER})
         patch.start()
         self.addCleanup(patch.stop)
-        self.api = shift.API(self.config)
+        self.api = APIClient(self.config["base_url"], RUNNER).call
         self.charter = shift.load_charter(self.config)
 
     def item(self, repository="repo", **options):
@@ -589,7 +591,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         for text in (str(worktree), writer["nonce"], "Write the report", "- Cite files", "python -m phalanx work"):
             self.assertIn(text, launched["kickoff"])
         base_url, token = credential(worktree)
-        self.assertEqual(request(base_url, token, "/v1/writer")["writer"]["id"], writer["id"])
+        self.assertEqual(APIClient(base_url, token).call("/v1/writer")["writer"]["id"], writer["id"])
 
         replay = shift.launch(self.api, self.config, self.charter, captain, item["id"])
         self.assertEqual((replay["writer"]["id"], replay["writer"]["nonce"]), (writer["id"], writer["nonce"]))
@@ -874,7 +876,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         worktree = Path(replay["worktree"])
         self.assertFalse(shift.credential_path(worktree).with_name(shift.PENDING).exists())
         base_url, token = credential(worktree)
-        self.assertEqual(request(base_url, token, "/v1/writer")["writer"], original)
+        self.assertEqual(APIClient(base_url, token).call("/v1/writer")["writer"], original)
         with closing(sqlite3.connect(self.database)) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM writers").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
@@ -971,7 +973,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         path = shift.credential_path(worktree)
         saved = path.read_bytes()
         base_url, token = credential(worktree)
-        binding = request(base_url, token, "/v1/writer")
+        binding = APIClient(base_url, token).call("/v1/writer")
         status = shift.status(self.api, self.charter)
         with closing(sqlite3.connect(self.database)) as db:
             writers = db.execute("SELECT * FROM writers").fetchall()
@@ -983,7 +985,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
             shift.launch(self.api, config, self.charter, captain, item["id"],
                          replaces=launched["writer"]["id"])
         manager.assert_not_called()
-        self.assertEqual(request(base_url, token, "/v1/writer"), binding)
+        self.assertEqual(APIClient(base_url, token).call("/v1/writer"), binding)
         after = shift.status(self.api, self.charter)
         for field in ("active_writers", "building_writers"):
             self.assertEqual(after[field], status[field])
@@ -999,11 +1001,11 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         captain = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
         launched = shift.launch(self.api, self.config, self.charter, captain, self.item()["id"])
         base_url, token = credential(Path(launched["worktree"]))
-        binding = request(base_url, token, "/v1/writer")
+        binding = APIClient(base_url, token).call("/v1/writer")
         for evidence in ({"report_markdown": "# Report\n"},
                          {"report_revision": hashlib.sha256(b"# Report\n").hexdigest()},
                          {"report_revision": hashlib.sha256(b"# Report\n").hexdigest()}):
-            binding = request(base_url, token,
+            binding = APIClient(base_url, token).call(
                               f"/v1/items/{binding['item_id']}/executions/{binding['id']}/result",
                               body={"attempt_id": binding["writer"]["attempt_id"],
                                     "stage": binding["state"]["stage"], "expected_version": binding["version"],
@@ -1055,7 +1057,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
                 shift.launch(self.api, self.config, self.charter, captain, item["id"], replaces=replaces)
             self.assertEqual(live.read_bytes(), before)
         base_url, token = credential(worktree)
-        self.assertEqual(request(base_url, token, "/v1/writer")["writer"]["id"], launched["writer"]["id"])
+        self.assertEqual(APIClient(base_url, token).call("/v1/writer")["writer"]["id"], launched["writer"]["id"])
         replay = shift.launch(self.api, self.config, self.charter, first, item["id"])
         self.assertEqual(replay["writer"]["id"], launched["writer"]["id"])
         self.assertEqual(live.read_bytes(), before)
@@ -1286,14 +1288,14 @@ class ShiftArchiveTest(ShiftFixture, unittest.TestCase):
         if push:
             git(worktree, "push", "-q", "origin", "HEAD")
         base_url, token = credential(worktree)
-        binding = request(base_url, token, "/v1/writer")
+        binding = APIClient(base_url, token).call("/v1/writer")
         report = "# Finished\n"
         while binding["state"]["status"] not in ("completed", "failed", "cancelled"):
             body = {"attempt_id": binding["writer"]["attempt_id"], "stage": binding["state"]["stage"],
                     "expected_version": binding["version"], "outcome": "succeeded"}
             body.update({"report_markdown": report} if body["stage"] == "report_drafting"
                         else {"report_revision": hashlib.sha256(report.encode()).hexdigest()})
-            binding = request(base_url, token, f"/v1/items/{item['id']}/executions/{binding['id']}/result",
+            binding = APIClient(base_url, token).call(f"/v1/items/{item['id']}/executions/{binding['id']}/result",
                               body=body)
         return captain, item["id"], worktree
 

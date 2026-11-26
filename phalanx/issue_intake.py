@@ -8,13 +8,13 @@ from .intake_models import Intake
 from .pr_models import github_issue_key
 
 
-def ingest_issue(api_request, base_url, repository_id, number, target, *, key=None, publication_mode="ready"):
+def ingest_issue(api, repository_id, number, target, *, key=None, publication_mode="ready"):
     if not os.environ.get("PHALANX_OWNER_TOKEN"):
         raise ValueError("PHALANX_OWNER_TOKEN is required for this command")
     token = os.environ.get("PHALANX_GITHUB_TOKEN", "")
     if not token:
         raise ValueError("Set PHALANX_GITHUB_TOKEN in the local environment to read GitHub issues")
-    repositories = api_request(base_url, "/v1/repositories")
+    repositories = api("/v1/repositories")
     registered = next((row for row in repositories if row["id"] == repository_id), None)
     if registered is None:
         raise ValueError("Repository not registered; register its expected remote before importing")
@@ -33,8 +33,7 @@ def ingest_issue(api_request, base_url, repository_id, number, target, *, key=No
                      context_links=[issue.url], publication_mode=publication_mode)
     # Keep issue edits from silently creating another item after an uncertain POST.
     key = key or github_issue_key(repository_id, repository, number)
-    return api_request(base_url, "/v1/items", key=key,
-                       body=payload.model_dump(mode="json"))
+    return api("/v1/items", key=key, body=payload.model_dump(mode="json"))
 
 
 def _check_size(goal):

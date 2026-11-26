@@ -13,6 +13,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store, work_cli, writers
+from phalanx.api_client import APIClient
 from phalanx.dispatch_api import DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.pr_models import DEPLOYMENT_WINDOW
@@ -590,15 +591,17 @@ class WriterTest(ServerFixture, unittest.TestCase):
         for error in (ConnectionRefusedError("refused"), TimeoutError("timed out"),
                       ConnectionResetError("connection lost")):
             with self.subTest(error=type(error).__name__):
-                with patch.object(work_cli, "api_request", side_effect=error):
+                api = APIClient(self.url, "writer-token")
+                with patch.object(api.opener, "open", side_effect=error):
                     with self.assertRaisesRegex(ValueError, "acceptance is unknown.*not a stop"):
-                        work_cli.request(self.url, "writer-token", "/v1/writer/progress", body={"note": "Done"})
+                        api.call("/v1/writer/progress", body={"note": "Done"})
         for status in (401, 403, 409, 503):
             with self.subTest(status=status):
                 error = HTTPError(self.url, status, "Rejected", {}, None)
-                with patch.object(work_cli, "api_request", side_effect=error):
+                api = APIClient(self.url, "writer-token")
+                with patch.object(api.opener, "open", side_effect=error):
                     with self.assertRaisesRegex(ValueError, f"HTTP {status}:") as failure:
-                        work_cli.request(self.url, "writer-token", "/v1/writer")
+                        api.call("/v1/writer")
                     self.assertNotIn("not a stop", str(failure.exception))
 
     def test_lost_result_reply_reconciles_accepted_attempt_without_replaying_next_stage(self):
@@ -606,22 +609,24 @@ class WriterTest(ServerFixture, unittest.TestCase):
         binding, token, _ = self.register(item_id, execution_id)
         attempt = binding["writer"]["attempt_id"]
         payload = {"outcome": "succeeded", "report_markdown": "# Reviewed later\n"}
-        original = work_cli.api_request
+        api = APIClient(self.url, token)
+        original = api.opener.open
 
         def lose_reply(*args, **options):
             response = original(*args, **options)
-            if args[2].endswith("/result"):
+            if args[0].full_url.endswith("/result"):
+                response.close()
                 raise TimeoutError("reply lost after acceptance")
             return response
 
-        with patch.object(work_cli, "api_request", side_effect=lose_reply):
+        with patch.object(api.opener, "open", side_effect=lose_reply):
             with self.assertRaisesRegex(ValueError, "acceptance is unknown"):
-                work_cli.post_result(self.url, token, attempt, payload)
+                work_cli.post_result(api.call, attempt, payload)
         current = self.ok("/v1/writer", token)
         self.assertEqual(current["state"]["stage"], "report_review")
         self.assertNotEqual(current["writer"]["attempt_id"], attempt)
         with self.assertRaisesRegex(ValueError, "is not open"):
-            work_cli.post_result(self.url, token, attempt, payload)
+            work_cli.post_result(api.call, attempt, payload)
         route = f"/v1/items/{item_id}/executions/{execution_id}/result"
         body = {"attempt_id": attempt, "stage": binding["state"]["stage"],
                 "expected_version": binding["version"], **payload}
