@@ -451,7 +451,8 @@ class ReconcilerPassTest(unittest.TestCase):
 
         def git_call(path, *args, **kwargs):
             if args[0] == "fetch":
-                kwargs["timeout"] = 0.1
+                with patch("phalanx.git.GIT_TIMEOUT_SECONDS", 0.1):
+                    return run_git(path, *args, error=ReconcilerError, **kwargs)
             return run_git(path, *args, error=ReconcilerError, **kwargs)
 
         try:
