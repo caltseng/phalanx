@@ -219,13 +219,12 @@ def new_execution(db, item_id, target, *, previous_id=None):
     request = json.loads(item["request_json"])
     mode = PublicationMode(request.get("publication_mode", PublicationMode.READY))
     state_json = encode(asdict(start(target, mode)))
-    affinity = request.get("runner_affinity") or ""
     db.execute(
         """INSERT INTO executions (id, item_id, previous_id, version, state_json,
-               created_at, updated_at, queue_repository, queue_affinity, queue_priority, ready_since)
-           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)""",
+               created_at, updated_at, queue_repository, queue_priority, ready_since)
+           VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)""",
         (execution_id, item_id, previous_id, state_json, now, now, item["repository_id"],
-         affinity, PRIORITY[request.get("priority", "normal")],
+         PRIORITY[request.get("priority", "normal")],
          int(clock.timestamp() * 1000)),
     )
     record(db, execution_id, 1, "rerun" if previous_id else "intake", {}, state_json, now)
@@ -241,9 +240,8 @@ def create(db, payload):
         raise Missing("Repository not registered")
     item_id = uuid4().hex
     request = payload.model_dump(mode="json", exclude={"dependencies"})
-    for name in ("runner_affinity", "label"):
-        if request[name] is None:
-            del request[name]
+    if request["label"] is None:
+        del request["label"]
     db.execute("INSERT INTO work_items VALUES (?, ?, ?, ?)",
                (item_id, payload.repository_id, encode(request), timestamp()))
     if payload.dependencies:
@@ -277,7 +275,7 @@ def steer(db, item_id, execution_id, payload):
                        "or acceptance-criteria-only changes during an attempt-free delivery wait. "
                        "Resolve the active execution or rerun it first.")
 
-    if not edits or any(value is None for name, value in edits.items() if name not in ("runner_affinity", "label")):
+    if not edits or any(value is None for name, value in edits.items() if name != "label"):
         raise Conflict("Steering requires at least one edit. Use an empty list to clear list fields.")
     state_json = row["state_json"]
     if "target" in edits:
@@ -296,11 +294,9 @@ def steer(db, item_id, execution_id, payload):
     now = timestamp()
     db.execute("UPDATE work_items SET request_json=? WHERE id=?", (encode(request), item_id))
     db.execute(
-        """UPDATE executions SET version=?, state_json=?, updated_at=?, queue_priority=?,
-               queue_affinity=?
+        """UPDATE executions SET version=?, state_json=?, updated_at=?, queue_priority=?
            WHERE id=?""",
-        (row["version"] + 1, state_json, now, PRIORITY[request.get("priority", "normal")],
-         request.get("runner_affinity") or "", execution_id),
+        (row["version"] + 1, state_json, now, PRIORITY[request.get("priority", "normal")], execution_id),
     )
     record(db, execution_id, row["version"] + 1, "steer",
            {"before": previous, "after": edits, "steered_by": payload.steered_by}, state_json, now)

@@ -444,13 +444,22 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         self.assertEqual(self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")[0], 200)
         decision(queued, "capacity", "Total capacity exhausted")
 
-    def test_pickup_reports_mapping_affinity_and_persistent_runtime_trust_blocks(self):
+    def test_pickup_prioritizes_later_urgent_intake_and_preserves_fifo_within_priority(self):
+        captain = shift.start(self.api, self.charter, "priority-captain", config=self.config)["captain"]["id"]
+        low = self.item(priority="low")
+        normal = self.item()
+        urgent = self.item(priority="urgent")
+        later = self.item()
+        status = shift.status(self.api, self.charter, captain)
+        self.assertEqual(status["pickup_candidates"], [urgent["id"], normal["id"], later["id"], low["id"]])
+        launched = shift.launch(self.api, self.config, self.charter, captain, status["pickup_candidates"][0])
+        self.assertEqual(launched["item_id"], urgent["id"])
+        self.assertEqual(launched["status"], "running")
+        self.assertEqual(self.api(f"/v1/items/{normal['id']}")["execution"]["state"]["status"], "queued")
+
+    def test_pickup_reports_mapping_and_persistent_runtime_trust_blocks(self):
         captain = shift.start(self.api, self.charter, "readiness-captain", config=self.config)["captain"]["id"]
         item = self.item()
-        affinity = self.item(runner_affinity="another-runner")
-        board = self.api(f"/v1/operator/items/{affinity['id']}")["item"]
-        self.assertEqual(board["pickup"]["code"], "affinity")
-        self.assertIn("another-runner", board["wait_reason"])
         shift.heartbeat(self.api, self.charter, captain, config=self.config,
                         repository_blocks=[("repo", "Owner trust approval required for shared workspace")])
         shift.heartbeat(self.api, self.charter, captain, config=self.config)

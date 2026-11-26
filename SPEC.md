@@ -46,7 +46,7 @@ absent refs or refresh a reconciler observation; unrelated items continue throug
 
 - An item has ID, registered repository, goal, output type (`report` or `pull_request`),
   timestamps, and one current execution. Optional fields include context, acceptance
-  criteria, target branch, grouping label, priority, affinity and dependencies.
+  criteria, target branch, grouping label, priority and dependencies.
 - Owners can set a short item display title independently of its immutable work scope.
   An append-only, revision-fenced title audit applies to running and completed work without
   changing execution versions, attempts, writers or outputs; clearing it restores the
@@ -139,7 +139,7 @@ End each created PR description with
 
 1. Authenticated owner intake files the item. Missing prerequisites keep it queued with
    a visible reason. Normal intake in a charter repository is eligible by default without
-   naming its ID in charter notes. A shared pickup projection exposes scope, affinity,
+   naming its ID in charter notes. A shared pickup projection exposes scope,
    checkout/trust, hold, dependency, pause and capacity reasons in Captain discovery and Scribe.
    Eligible unbound intake must not disappear behind an unavailable scheduler or a prose allow-list.
 2. The Captain re-reads its charter and API/GitHub/native session state. It chooses named
@@ -290,10 +290,9 @@ defines off-shift routing. Native prompts implement these rules, not separate po
   permits them. Owner settings persist across reload/restart; charter concurrency keys are
   rejected. No delivery quota, per-stage limits or alternate authoritative settings exist.
 - Pause blocks new registrations/attempts while existing progress/results continue.
-- Captains consider repo mappings, charter scope, affinity, dependencies and retry time.
-  Rank eligible work by urgent/normal/low priority aged toward urgent, then oldest ready
-  time and stable item ID. A new stage gets a new clock; blocked/retrying work does not
-  accrue runnable age prematurely.
+- Captains consider repo mappings, charter scope, dependencies and retry time.
+  Pickup candidates rank eligible work by urgent/normal/low intake priority, preserving
+  execution creation order and stable execution ID within each priority.
 - Never infer server admission from board counts. The server checks current durable
   prerequisites and fencing atomically at registration/attempt time.
 

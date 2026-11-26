@@ -38,7 +38,6 @@ class Intake(Payload):
     acceptance_criteria: list[Text] = Field(default_factory=list, max_length=50)
     target_branch: Text | None = None
     priority: Literal["low", "normal", "urgent"] = "normal"
-    runner_affinity: Identifier | None = None
     label: Label | None = None
     dependencies: list[Prerequisite] = Field(default_factory=list, max_length=100)
     publication_mode: PublicationMode = PublicationMode.READY
@@ -65,7 +64,6 @@ class Steering(Versioned):
     context_links: list[Text] | None = Field(default=None, max_length=50)
     acceptance_criteria: list[Text] | None = Field(default=None, max_length=50)
     priority: Literal["low", "normal", "urgent"] | None = None
-    runner_affinity: Identifier | None = None
     label: Label | None = None
     dependencies: list[Prerequisite] | None = Field(default=None, max_length=100)
     target: Target | None = None

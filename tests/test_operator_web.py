@@ -21,14 +21,13 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         self.start_server(Path(directory) / "local-settings.sqlite3", PHALANX_LOCAL_BOARD="1")
         api = "/v1/dispatch/settings"
         board = "/operator/api/dispatch/settings"
-        self.assertEqual(self.request(api, OWNER, {"paused": True, "aging_seconds": 99},
+        self.assertEqual(self.request(api, OWNER, {"paused": True},
                                       method="PUT")[0], 200)
         self.assertEqual(self.get(board)[1]["max_writers"], 10)
         headers = {"Origin": self.url, "Sec-Fetch-Site": "same-origin"}
         status, saved = self.request(board, body={"max_writers": 2, "max_building_writers": 1},
                                      headers=headers, method="PUT")
-        self.assertEqual((status, saved["max_writers"], saved["paused"], saved["aging_seconds"]),
-                         (200, 2, True, 99))
+        self.assertEqual((status, saved["max_writers"], saved["paused"]), (200, 2, True))
         self.assertEqual(saved["max_building_writers"], 1)
         self.assertEqual(self.request(board, body={"max_building_writers": 3},
                                       headers=headers, method="PUT")[0], 409)

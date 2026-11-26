@@ -107,7 +107,7 @@ def captain_idle_with_work(db, now, *, current=None):
     occupied, maximum = capacity["active_writers"], capacity["max_writers"]
     result = []
     for row in db.execute(
-            """SELECT execution.*, queue_repository AS repository_id, queue_affinity AS runner_affinity
+            """SELECT execution.*, queue_repository AS repository_id
                FROM executions AS execution
                WHERE status = 'queued' AND ready_since <= ? AND dependency_wait_json IS NULL
                  AND NOT EXISTS (SELECT 1 FROM writers
