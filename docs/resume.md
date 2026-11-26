@@ -2,7 +2,7 @@
 
 Use the recorded muster directory, absolute `PHALANX_DB` path, API URL, existing credentials,
 shift config, charter and repository mappings. Never regenerate tokens or initialize another
-database to recover. The optional [muster locator](../README.md#direct-muster-discovery-and-status)
+database to recover. The optional [muster locator](configuration.md#direct-muster-discovery-and-status)
 only finds existing configuration.
 
 For an install already using [tracked deployment tooling](deployment.md), resume with

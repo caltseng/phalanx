@@ -6,7 +6,7 @@ This guide sets up a **new** install: it creates tokens, a database, client conf
 
 The server reads `PHALANX_DB` and its tokens from the environment. Direct `shift` and
 `reconcile` support explicit `--config` paths (the reconciler also needs `--state`), or the
-optional [per-user muster locator](../README.md#direct-muster-discovery-and-status):
+optional [per-user muster locator](configuration.md#direct-muster-discovery-and-status):
 `--home`, then `PHALANX_HOME`, then `~/.phalanx/muster.json`. It only finds existing
 configuration; it never creates or migrates state. Pick one muster directory now and record
 these in a private local runbook outside the repository:

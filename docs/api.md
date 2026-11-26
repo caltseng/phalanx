@@ -11,7 +11,7 @@ enabled. It returns `status`, `identity.home` (the API's resolved `PHALANX_HOME`
 not configured), live `captains`, registered open `writers`, `reconcilers` with `last_seen`,
 `age_seconds` and `stale`, `dispatch_paused`, and `observed_at`. It is a read-only snapshot,
 contains no credentials and performs no local client database reads. See
-[muster discovery and status](../README.md#direct-muster-discovery-and-status).
+[muster discovery and status](configuration.md#direct-muster-discovery-and-status).
 
 ## Current Captain routing
 
