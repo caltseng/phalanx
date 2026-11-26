@@ -7,13 +7,14 @@ from .captains import active_holds, live_captains
 from .transitions import Stage
 
 
-def context(db, now, *, capacity=None):
+def context(db, now, *, capacity=None, live=None):
+    live = live_captains(db, now) if live is None else live
     capacity = dispatch.settings(db) if capacity is None else capacity
     rework = dispatch.first_rework(db)
     return {
         "captains": [{"id": key, **json.loads(row["pickup_json"])}
-                     for key, row in sorted(live_captains(db, now).items()) if row["state"] == "active"],
-        "holds": active_holds(db, now),
+                     for key, row in sorted(live.items()) if row["state"] == "active"],
+        "holds": active_holds(db, now, live=live),
         "capacity": capacity,
         "rework": rework,
         "admission": {stage: dispatch.admission_wait(db, stage, capacity=capacity, rework=rework)

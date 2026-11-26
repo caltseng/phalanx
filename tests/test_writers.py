@@ -49,6 +49,29 @@ class WriterTest(ServerFixture, unittest.TestCase):
         item = self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "Write it", "target": "report"}, 201)
         return item["id"], item["execution"]["id"]
 
+    def test_captain_and_flags_routes_share_batched_reads(self):
+        counts = []
+        operation = captains.captains
+
+        def counted(db, limit):
+            statements = []
+            db.set_trace_callback(statements.append)
+            result = operation(db, limit)
+            counts.append(len(statements))
+            return result
+
+        for count in (1, 9):
+            if count > 1:
+                for index in range(count - 1):
+                    self.ok("/v1/captains", RUNNER, {
+                        "session_ref": f"captain-{index}", "charter_revision": "c1"}, 201)
+            with patch.object(captains, "captains", side_effect=counted):
+                self.assertEqual(len(self.ok("/v1/captains?limit=100", OWNER)["captains"]), count)
+            with patch.object(flags, "live_captains", wraps=captains.live_captains) as live:
+                self.ok("/v1/flags", OWNER)
+                self.assertEqual(live.call_count, 1)
+        self.assertEqual(counts[0], counts[1])
+
     def test_writer_flags_are_scoped_and_capacity_is_read_once(self):
         registered = [self.register(*self.item())[:2] for _ in range(3)]
         now = datetime.now(UTC)
@@ -1796,6 +1819,117 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
     def kinds(self, now):
         with connect(self.path) as db:
             return {(flag["kind"], flag["source"]) for flag in flags.all_flags(db, now)["flags"]}
+
+    def test_captain_list_batches_details_and_preserves_each_captains_results(self):
+        with write_transaction(self.path) as db:
+            captain, binding, _ = self.backlog(db)
+            db.execute("UPDATE writers SET session_id='ended-session', ended_at=?, end_reason='done'",
+                       (intake.timestamp(),))
+            captains.record_archive(db, captains.SessionArchive(
+                session_id="ended-session", outcome="blocked", reason="Preserve work", reported_by="test"))
+            statements = []
+            db.set_trace_callback(statements.append)
+            first = captains.captains(db, 100)["captains"]
+            baseline = len(statements)
+            db.set_trace_callback(None)
+            for index in range(8):
+                captains.register(db, captains.CaptainRegistration(
+                    session_ref=f"successor-{index}", charter_revision="c1", parent_id=captain["id"]))
+            statements.clear()
+            db.set_trace_callback(statements.append)
+            listed = captains.captains(db, 100)["captains"]
+            db.set_trace_callback(None)
+            self.assertEqual(len(statements), baseline)
+            for entry in listed:
+                expected = captains.view(db, captains.captain_row(db, entry["id"]))
+                self.assertEqual(entry, expected)
+            original = next(row for row in listed if row["id"] == captain["id"])
+            self.assertEqual(len(original["successors"]), 8)
+            self.assertEqual(original["cleanup_pending"], 1)
+            self.assertEqual(original["ended_writers"][0]["id"], binding["writer"]["id"])
+            self.assertEqual(first[0]["ended_writers"], original["ended_writers"])
+
+    def test_captain_ended_writers_limit_is_per_captain_with_archive_ordering(self):
+        with write_transaction(self.path) as db:
+            captain, binding, _ = self.backlog(db)
+            other = captains.register(db, captains.CaptainRegistration(
+                session_ref="other", charter_revision="c1"))
+            db.execute("UPDATE writers SET ended_at=?", (intake.timestamp(),))
+            template = dict(db.execute("SELECT * FROM writers WHERE id=?", (binding["writer"]["id"],)).fetchone())
+            expected = {}
+            for owner in (captain["id"], other["id"]):
+                for index in range(102):
+                    key = f"{owner}-{index:03}"
+                    writer = dict(template, id=key, captain_id=owner, session_id=key, nonce=key, token_digest=key)
+                    db.execute(f"INSERT INTO writers ({','.join(writer)}) VALUES ({','.join('?' for _ in writer)})",
+                               tuple(writer.values()))
+                expected[owner] = [f"{owner}-{index:03}" for index in range(1, 101)]
+                for index, outcome in ((0, "archived"), (101, "blocked")):
+                    captains.record_archive(db, captains.SessionArchive(
+                        session_id=f"{owner}-{index:03}", outcome=outcome, reason="Cleanup", reported_by="test"))
+            for row in captains.captains(db, 100)["captains"]:
+                self.assertEqual([writer["id"] for writer in row["ended_writers"]], expected[row["id"]])
+                self.assertEqual(row["cleanup_pending"], 101)
+
+    def test_flags_reuse_one_live_captains_snapshot(self):
+        with write_transaction(self.path) as db:
+            captain, _, _ = self.backlog(db)
+            now = datetime.now(UTC)
+            for live in (captains.live_captains(db, now), {}):
+                with self.subTest(live=bool(live)), ExitStack() as stack:
+                    reads = [stack.enter_context(patch(
+                        f"phalanx.{module}.live_captains", return_value=live))
+                        for module in ("captains", "flags", "pickup")]
+                    result = flags.all_flags(db, now)["flags"]
+                    self.assertEqual(sum(read.call_count for read in reads), 1)
+                    self.assertEqual("no_live_captain" in {row["kind"] for row in result}, not bool(live))
+
+    def test_session_flags_batch_archive_lookups(self):
+        with write_transaction(self.path) as db:
+            captain = captains.register(db, captains.CaptainRegistration(session_ref="chat", charter_revision="c1"))
+            counts = []
+            for count in (1, 10):
+                sessions = [captains.Session(id=f"session-{index}", name="Unregistered") for index in range(count)]
+                captains.heartbeat(db, captain["id"], captains.Heartbeat(
+                    charter_revision="c1", wake_count=1, state="active", sessions=sessions))
+                statements = []
+                db.set_trace_callback(statements.append)
+                result = flags.session_flags(db, datetime.now(UTC))
+                db.set_trace_callback(None)
+                counts.append(len(statements))
+                self.assertEqual(len(result), count)
+            self.assertEqual(counts[0], counts[1])
+            captains.record_archive(db, captains.SessionArchive(
+                session_id="session-0", outcome="refused", reason="Runtime refusal", reported_by="test"))
+            self.assertEqual(len(flags.session_flags(db, datetime.now(UTC))), 9)
+
+    def test_overdue_flags_batch_latest_actions_and_break_timestamp_ties(self):
+        with write_transaction(self.path) as db:
+            captain, binding, queued = self.backlog(db)
+            now = datetime.now(UTC)
+            db.execute("UPDATE attempts SET started_at=?", ((now - timedelta(hours=2)).isoformat(),))
+            for reason in ("Old action", "Newest action"):
+                captains.record_action(db, binding["item_id"], captains.Action(
+                    captain_id=captain["id"], action="assessed", reason=reason))
+            db.execute("UPDATE captain_actions SET created_at=?", (now.isoformat(),))
+            statements = []
+            db.set_trace_callback(statements.append)
+            result = flags.active_overdue(db, now, [])
+            db.set_trace_callback(None)
+            baseline = len(statements)
+            self.assertIn("Newest action", result[0]["reason"])
+            self.assertNotIn("Old action", result[0]["reason"])
+            dispatch.set_dispatch(db, DispatchSettings(max_writers=2, max_building_writers=2))
+            writers.register(db, queued["id"], queued["execution"]["id"], writers.Registration(
+                expected_version=queued["execution"]["version"], captain_id=captain["id"],
+                runtime="test", nonce=token_urlsafe(16), token_digest=intake.digest(token_urlsafe(32))))
+            db.execute("UPDATE attempts SET started_at=?", ((now - timedelta(hours=2)).isoformat(),))
+            statements.clear()
+            db.set_trace_callback(statements.append)
+            result = flags.active_overdue(db, now, [])
+            db.set_trace_callback(None)
+            self.assertEqual(len(result), 2)
+            self.assertEqual(len(statements), baseline)
 
     def backlog(self, db):
         intake.register(db, "repo", "https://github.com/e/r.git")

@@ -152,9 +152,9 @@ def live_captains(db, now):
         if is_live(row, now)}
 
 
-def active_holds(db, now):
+def active_holds(db, now, *, live=None):
     """Current-version holds remain advisory and expire with their Captain or after 30 minutes."""
-    live = live_captains(db, now)
+    live = live_captains(db, now) if live is None else live
     if not live:
         return {}
     return {
@@ -196,7 +196,48 @@ def availability_reports(db):
     }
 
 
-def view(db, row, now=None, session_reports=None, live=None):
+def captain_details(db, captain_ids):
+    """Load list details in batches, retaining the per-Captain ended-writer limit."""
+    details = {key: {"open_intents": [], "successors": [], "cleanup_pending": 0, "ended_writers": []}
+               for key in captain_ids}
+    if not details:
+        return details
+    placeholders = ",".join("?" for _ in details)
+    parameters = tuple(details)
+    for row in db.execute(
+            f"""SELECT captain_id, id AS writer_id, item_id, execution_id, nonce, created_at FROM writers
+                WHERE captain_id IN ({placeholders}) AND confirmed_at IS NULL
+                  AND abandoned_at IS NULL AND ended_at IS NULL ORDER BY created_at, id""", parameters):
+        entry = dict(row)
+        details[entry.pop("captain_id")]["open_intents"].append(entry)
+    for row in db.execute(
+            f"SELECT parent_id, id FROM captains WHERE parent_id IN ({placeholders}) ORDER BY created_at, id",
+            parameters):
+        details[row["parent_id"]]["successors"].append(row["id"])
+    for row in db.execute(
+            f"""SELECT w.captain_id, count(*) AS pending
+                FROM writers w LEFT JOIN session_archives a ON a.session_id=w.session_id
+                WHERE w.captain_id IN ({placeholders}) AND w.session_id IS NOT NULL
+                  AND (w.ended_at IS NULL OR a.outcome IS NULL OR a.outcome='blocked')
+                GROUP BY w.captain_id""", parameters):
+        details[row["captain_id"]]["cleanup_pending"] = row["pending"]
+    for row in db.execute(
+            f"""SELECT * FROM (
+                    SELECT w.captain_id, w.id, w.item_id, w.execution_id, w.session_id, w.ended_at, w.end_reason,
+                           a.outcome AS archive_outcome, a.reason AS archive_reason,
+                           row_number() OVER (
+                               PARTITION BY w.captain_id ORDER BY a.updated_at, w.ended_at, w.id) AS position
+                    FROM writers w LEFT JOIN session_archives a ON a.session_id=w.session_id
+                    WHERE w.captain_id IN ({placeholders}) AND w.ended_at IS NOT NULL
+                      AND w.session_id IS NOT NULL AND (a.outcome IS NULL OR a.outcome='blocked'))
+                WHERE position <= 100 ORDER BY captain_id, position""", parameters):
+        entry = dict(row)
+        entry.pop("position")
+        details[entry.pop("captain_id")]["ended_writers"].append(entry)
+    return details
+
+
+def view(db, row, now=None, session_reports=None, live=None, details=None):
     now = now or datetime.now(UTC)
     live = live_captains(db, now) if live is None else live
     return {
@@ -211,18 +252,8 @@ def view(db, row, now=None, session_reports=None, live=None):
         "handoff_note": row["handoff_note"], "created_at": row["created_at"],
         "heartbeat_at": row["heartbeat_at"], "ending_at": row["ending_at"], "live": row["id"] in live,
         "stale": row["state"] != "ended" and row["id"] not in live,
-        "open_intents": open_intents(db, row["id"]),
-        "successors": [successor["id"] for successor in db.execute(
-            "SELECT id FROM captains WHERE parent_id=? ORDER BY created_at, id", (row["id"],))],
+        **(captain_details(db, [row["id"]])[row["id"]] if details is None else details),
         "successor_name": successor_name(row["id"]),
-        "cleanup_pending": cleanup_pending(db, row["id"]),
-        "ended_writers": [dict(writer) for writer in db.execute(
-            """SELECT w.id, w.item_id, w.execution_id, w.session_id, w.ended_at, w.end_reason,
-                      a.outcome AS archive_outcome, a.reason AS archive_reason
-               FROM writers w LEFT JOIN session_archives a ON a.session_id=w.session_id
-               WHERE w.captain_id=? AND w.ended_at IS NOT NULL AND w.session_id IS NOT NULL
-                 AND (a.outcome IS NULL OR a.outcome='blocked')
-               ORDER BY a.updated_at, w.ended_at, w.id LIMIT 100""", (row["id"],))],
     }
 
 
@@ -301,7 +332,8 @@ def captains(db, limit):
     ).fetchall()
     reports = availability_reports(db)
     live = live_captains(db, now)
-    return {"captains": [view(db, row, now, reports, live) for row in rows]}
+    details = captain_details(db, [row["id"] for row in rows])
+    return {"captains": [view(db, row, now, reports, live, details[row["id"]]) for row in rows]}
 
 
 def current_captain(db):

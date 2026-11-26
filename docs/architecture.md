@@ -62,6 +62,11 @@ persisted waits, prerequisites, retained-writer queue controls and unconfirmed l
 waits take precedence in that order. The projection reuses the request-local context
 and performs no additional reads.
 
+Captain list details (intents, successors, cleanup counts and ended writers) use
+page-wide queries, with the 100-ended-writer limit applied separately to each Captain.
+Flags share one request-local live-Captain snapshot with pickup and hold decisions;
+native-session archive membership and latest overdue-work actions are also read in batches.
+
 Execution clients never open the queue database. `server backup` and `server restore`
 are explicit **server-host-only administration**, not an alternative client state path.
 The API and reconciler reuse the storage-free [own-process priority helper](../phalanx/priority.py);
