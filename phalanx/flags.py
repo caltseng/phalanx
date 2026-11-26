@@ -26,6 +26,7 @@ Subject = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{0,100}$")]
 LAUNCH_UNCONFIRMED = timedelta(minutes=10)
 NO_PROGRESS = timedelta(hours=2)
 ACTIVE_OVERDUE = timedelta(minutes=90)
+DISPATCH_OVERDUE = timedelta(minutes=60)
 DERIVED_LIMIT = 200
 
 router = APIRouter(prefix="/v1")
@@ -121,14 +122,17 @@ def captain_idle_with_work(db, now, *, current=None):
             reason = decision["reason"]
             recovery = decision["trigger"]
         else:
+            if row["ready_since"] > int((now - DISPATCH_OVERDUE).timestamp() * 1000):
+                continue
             kind = "captain_idle_with_work"
-            reason = ("Dispatch overdue: runnable for 30 min with no registered writer; "
+            reason = ("Dispatch overdue: runnable for 60 min with no registered writer; "
                       f"{occupied} of {maximum} writer slots occupied")
             recovery = "A Captain launches it, or records a valid dependency, sequence or hold reason"
         if row["id"] in holds:
             reason += f". Captain hold: {holds[row['id']]}"
         result.append(flag(kind, reason, recovery,
-             datetime.fromtimestamp(row["ready_since"] / 1000, UTC) + IDLE_WITH_WORK,
+             datetime.fromtimestamp(row["ready_since"] / 1000, UTC)
+             + (DISPATCH_OVERDUE if kind == "captain_idle_with_work" else IDLE_WITH_WORK),
              item_id=row["item_id"], execution_id=row["id"], notify_owner=kind == "pickup_blocked"))
         if len(result) >= DERIVED_LIMIT:
             break

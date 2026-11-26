@@ -159,7 +159,7 @@ not on source merge.
    Discovery/launch honor holds, which explain waits/suppress idle flags, not prove progress.
    Clear satisfied holds through supported controls. Existing dependency/pause/capacity exclusions
    need no duplicate hold; absent charter IDs are no reason. Otherwise launch eligible work or
-   explain its wait; the existing 30-minute dispatch-overdue budget needs no second timer.
+   explain its wait; the 60-minute dispatch-overdue budget needs no second timer.
 5. **Record sessions/focus.** Run `phx shift heartbeat --captain <id> --focus <acted-on items>`.
    Include `--session <native ID> "<name>"` for every unarchived Phalanx session identified above;
    for verified writer nonces add `--session-writer <ID> <full nonce>`, never credentials.

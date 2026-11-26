@@ -54,6 +54,13 @@ continuity and retained-instruction receipts separately. **Source merge is not a
 result.** Notify the current Captain after a successful rollout for bounded reconciliation
 and eligible-capacity refill; this grants no capacity increase.
 
+The Dispatch overdue interval is a loaded API constant: merging its 60-minute value
+does not update an already-running API. Coordinate adoption with the existing sole
+service operator using the reviewed compatible-upgrade procedure above, not an
+in-memory monkeypatch or blind restart. Verify the loaded revision and affected flag
+boundaries separately from the source merge; backlog/pickup warnings and hold expiry
+remain at 30 minutes.
+
 ## New installation
 
 Install the package and locked dependencies as in [Install Phalanx](install.md), then run:

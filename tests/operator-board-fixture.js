@@ -55,7 +55,7 @@
     { kind: "queue_backlogged", itemId: "item-queue", executionId: "queue", reason: "Waiting for writer capacity: 5 of 5 writer slots occupied",
       recovery: "Wait for a registered writer to finish or release its slot", firstSeen: hourAgo, notifyOwner: false },
     { kind: "captain_idle_with_work", itemId: "item-overdue", executionId: "overdue",
-      reason: "Dispatch overdue: runnable for 30 min; 1 of 5 writer slots occupied",
+      reason: "Dispatch overdue: runnable for 60 min; 1 of 5 writer slots occupied",
       recovery: "A Captain launches it", firstSeen: hourAgo, notifyOwner: false },
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
     { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true },
