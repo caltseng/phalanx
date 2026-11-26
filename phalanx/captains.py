@@ -131,6 +131,13 @@ def captain_row(db, captain_id):
     return row
 
 
+def require_acting_captain(db, captain_id, *, message="An ended Captain cannot act"):
+    row = captain_row(db, captain_id)
+    if row["state"] == "ended":
+        raise intake.Conflict(message)
+    return row
+
+
 def gone_at(row):
     """When a Captain stops counting as live: a missed heartbeat, or a handoff that ran too long."""
     if row["state"] == "ended":
@@ -362,8 +369,7 @@ def current_captain(db):
 
 def record_action(db, item_id, payload):
     """Put a Captain's action and its reason on the item's current execution timeline."""
-    if captain_row(db, payload.captain_id)["state"] == "ended":
-        raise intake.Conflict("An ended Captain cannot act")
+    require_acting_captain(db, payload.captain_id)
     execution = intake.current_execution(db, item_id)
     action_id = uuid4().hex
     db.execute("INSERT INTO captain_actions VALUES (?, ?, ?, ?, ?, ?, ?)",

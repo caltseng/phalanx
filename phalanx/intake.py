@@ -19,8 +19,6 @@ from .transitions import (
 
 STATE = TypeAdapter(Execution)
 PRIORITY = {"low": 0, "normal": 1, "urgent": 2}
-REWORK_STAGES = {Stage.SELF_REVIEW}
-REWORK_TARGETS = {Stage.DEVELOPMENT}
 # Rework rounds allowed between owner replies.
 REWORK_LIMIT = 10
 # Development rounds allowed on identical findings before they count as no progress.
@@ -322,14 +320,13 @@ def rerun(db, item_id, execution_id, payload):
 
 def _stalled_rework(db, execution_id, next_state):
     """Return an owner question when published-PR rework stops making progress."""
-    stages = sorted(REWORK_STAGES)
     rounds = [findings for findings, in db.execute(
-        f"""SELECT json_extract(state_json, '$.findings') FROM transition_history
+        """SELECT json_extract(state_json, '$.findings') FROM transition_history
            WHERE execution_id=? AND event=? AND json_extract(state_json, '$.stage') = ?
-             AND json_extract(details_json, '$.stage') IN ({','.join('?' * len(stages))})
+             AND json_extract(details_json, '$.stage') = ?
              AND version > COALESCE((SELECT MAX(version) FROM transition_history
                                      WHERE execution_id=? AND event=?), 0)""",
-        (execution_id, Event.RESULT, *sorted(REWORK_TARGETS), *stages, execution_id, Event.REPLY),
+        (execution_id, Event.RESULT, Stage.DEVELOPMENT, Stage.SELF_REVIEW, execution_id, Event.REPLY),
     )]
     findings = next_state.findings
     if rounds.count(findings) >= REPEAT_LIMIT:
@@ -349,7 +346,7 @@ def apply(db, row, state, event, *, details, attempt_id=None, retry_at=None, **o
         next_state = decide(state, event, **options)
     except ValueError as error:
         raise Conflict(str(error)) from error
-    if (event == Event.RESULT and state.stage in REWORK_STAGES and next_state.stage in REWORK_TARGETS
+    if (event == Event.RESULT and state.stage == Stage.SELF_REVIEW and next_state.stage == Stage.DEVELOPMENT
             and next_state.findings):
         question = _stalled_rework(db, row["id"], next_state)
         if question is not None:

@@ -58,19 +58,13 @@ class CharterTest(unittest.TestCase):
         self.assertEqual(self.charter(CHARTER.replace('["repo"]', '["repo", "other"]'))["repositories"],
                          ["repo", "other"])
 
-    def test_charter_rejects_writer_limits_with_dispatch_settings_guidance(self):
-        for field in ("max_writers", "max_building_writers"):
+    def test_charter_rejects_unsupported_shift_settings(self):
+        for field in ("max_writers", "max_building_writers", "max_wakes", "max_compactions", "unknown"):
             for value in ("5", "0", "true", '"4"'):
                 with self.subTest(field=field, value=value), self.assertRaisesRegex(
                         shift.ShiftError,
-                        "concurrency moved to dispatch settings; remove it from the charter"):
+                        r"Charter \[shift\] takes a positive integer max_hours"):
                     self.charter(CHARTER + f"[shift]\n{field} = {value}\n")
-
-    def test_charter_rejects_retired_count_limits_with_elapsed_time_guidance(self):
-        for field in ("max_wakes", "max_compactions"):
-            with self.subTest(field=field), self.assertRaisesRegex(
-                    shift.ShiftError, "rotation is elapsed-time only; remove"):
-                self.charter(CHARTER + f"[shift]\n{field} = 5\n")
 
     def test_rotation_is_due_at_24_elapsed_hours_regardless_of_counts_or_queue_stop_prose(self):
         charter = self.charter(CHARTER)
@@ -144,7 +138,8 @@ class CharterTest(unittest.TestCase):
 
     def test_kickoff_names_the_current_executions_target_not_the_original_request(self):
         item = {"id": "item", "repository_id": "repo", "target": "checked_in", "goal": "Rerun for review",
-                "execution": {"id": "execution", "state": {"target": "ready_for_check_in"}}}
+                "execution": {"id": "execution", "state": {
+                    "target": "ready_for_check_in", "publication_mode": "ready"}}}
         prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
         self.assertIn("Target: ready_for_check_in", prompt)
         self.assertNotIn("Target: checked_in", prompt)
@@ -166,7 +161,8 @@ class CharterTest(unittest.TestCase):
                                   ("ready_for_check_in", "checked_in")):
             with self.subTest(original=original, current=current):
                 item = {"id": "item", "repository_id": "repo", "target": original, "goal": "Deliver",
-                        "execution": {"id": "execution", "state": {"target": current}}}
+                        "execution": {"id": "execution", "state": {
+                            "target": current, "publication_mode": "ready"}}}
                 prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "release")
                 publication = " ".join(prompt.split("- `publication`:", 1)[1].split(
                     "- `delivery`:", 1)[0].split())
@@ -182,7 +178,8 @@ class CharterTest(unittest.TestCase):
 
     def test_merge_decision_defines_review_sources_and_visible_wait_without_inventing_a_gate(self):
         item = {"id": "item", "repository_id": "repo", "goal": "Deliver",
-                "execution": {"id": "execution", "state": {"target": "checked_in"}}}
+                "execution": {"id": "execution", "state": {
+                    "target": "checked_in", "publication_mode": "ready"}}}
         prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
         decision = " ".join(prompt.split("## Merge decision (publication and delivery)", 1)[1].split(
             "## PR title convention", 1)[0].split())
@@ -203,7 +200,8 @@ class CharterTest(unittest.TestCase):
     def test_autonomy_policy_survives_kickoff_wake_and_keeper_handoff(self):
         worker = shift.kickoff(
             {"id": "item", "repository_id": "repo", "goal": "Deliver",
-             "execution": {"id": "execution", "state": {"target": "checked_in"}}},
+             "execution": {"id": "execution", "state": {
+                 "target": "checked_in", "publication_mode": "ready"}}},
             "worktree", "nonce", "phx work", "main")
         for name, prompt in (("worker", worker),):
             text = " ".join(prompt.split())
@@ -233,7 +231,8 @@ class CharterTest(unittest.TestCase):
         worker = shift.kickoff(
             {"id": "item", "repository_id": "repo", "goal": "Deliver ordinary improvement",
              "acceptance_criteria": ["Aspirational 40% improvement; two rounds, report misses"],
-             "execution": {"id": "execution", "state": {"target": "checked_in"}}},
+             "execution": {"id": "execution", "state": {
+                 "target": "checked_in", "publication_mode": "ready"}}},
             "worktree", "nonce", "phx work", "main")
         text = " ".join(worker.split())
         for clause in ("test-set identity", "remaining numeric miss", "no redundant approval",

@@ -244,7 +244,8 @@ Interpret charter authority under the [Captain workflow](../phalanx/prompts/capt
 and execution delivery under the [worker policy](../phalanx/prompts/worker.md#merge-decision-publication-and-delivery).
 
 `shift charter` validates the file and returns its SHA-256 revision; each heartbeat
-re-reads it. Concurrency keys are rejected in charters: configure persisted Building/Total
+re-reads it. `[shift]` accepts only a positive integer `max_hours`; unsupported keys receive
+the same validation error. Configure persisted Building/Total
 limits through Scribe or the owner dispatch settings API. See [dispatch settings](../SPEC.md#settings-and-dispatch-gates)
 and [writer capacity operations](writer-operations.md). Capacity exhaustion is a normal wait,
 not authority to raise limits, stop writers or infer Building from spare Total.
