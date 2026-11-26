@@ -47,17 +47,7 @@ Read-only remote-main pinning changed no checkout. Evidence/test activity used t
 
 ### 2.3 Historical provenance relevant to the port
 
-| Pin | What it proves; how used |
-| --- | --- |
-| `106888c33dc84f984a703bd0a6ab06bbccc85137` | Narrow intake default-null receipt preservation; retain exact dual fingerprint, not a generalized legacy decoder |
-| `466136e0b540d8f49c822fc0566ba6196d16813b` / P0 (#306) | Removal of broad compatibility/duplicated guards; do not revive retired request aliases or bootstrap schema upgrader |
-| `87ea577f381fca08390a9853385975feb4dab15a` | Interrupted reader cleanup and worker-independent busy response; basis for admission/error acceptance |
-| `513f1907b76cee2a5e7f37c700bacfd039489fdb` | Windows own-process Normal priority correction; performance measurement must include service scheduling |
-| `89e5c2665dc42b9f567cbaa9e8bd2edbcf12753f` | Already-authorized writer work continues through API outages; do not add online-work permission dependency |
-| `8a7e09c269a2ca01dddbeb165c7d27f2df028ab4` | Safe stopping while delivery has no attempt, during questions and queued replies |
-| `cd85001fed389140583764da3d564d46f10a4ecb` | Captain outage identity preservation; failure is not automatic replacement permission |
-| `694c0d6067ed7942bf4aaf4989e1247db41c7923`, `ce2fab5f05073107d779859c493871ca789726a2` | Durable scouting and explicit-handoff page fences |
-| `2e2976d762e6347a5f68a70fbbf6c7a5d2c5605a`, `5413d5c` | Source optimization: narrower issue/history lookups and batched Captain details; preserve bounded projections rather than reintroducing N+1 reads |
+The complete original pin/evidence table is retained in the [decision log's HTTP migration historical evidence](decisions.md#http-migration-historical-evidence). Repository documentation keeps PR history in that historical log, not in operating/design guidance. This relocation preserves every original row and its attribution; it is not a new owner decision.
 
 These are local repository history pins, not deployment receipts or new permissions. Historical PH-19/PH-DS5 numbers and decision 87's unmatched claim mix are not a Go baseline. Measure an identical manifest and successful-claim mix before drawing a performance conclusion.
 
@@ -485,6 +475,8 @@ The preceding review and test results belong to the original report. They are no
 For this documentation check-in, fetched `origin/main` and checkout `HEAD` both resolved to P0 (`9af29396b37f86816fd274e01632164a47718a57`) on 2026-11-26. There was no source drift at that observation. Appendix A remains the pinned P0/R0 inventory, not a newly generated deployment inventory. Recheck current main before merging and retain any later source-drift assessment with the PR evidence.
 
 The SQL inventory in section 5 now spells out all 30 actual table names from `phalanx/schema.py`; the original shorthand obscured `issue_sources` and `dependency_audit`. This is a documentation correction, not a schema change. The D11 development-guide receipt discrepancy remains explicit: the specific intake exception in `SPEC.md` and `intake.replayable` takes precedence over the guide's general "no old-digest fallback" wording. D13/D14 remain behavior-versus-policy distinctions, not silently tightened authorization or merge gates. The six original review improvements remain intact.
+
+Initial check-in CI rejected historical PR references outside `docs/decisions.md` under the existing history-free documentation guard. Section 2.3's complete historical evidence table was therefore relocated unchanged into that log and linked here; no history was deleted, reference disguised, or guard relaxed. The documentation revision requires fresh exact-head independent review and CI after this organizational correction.
 
 Independent, non-author specification/documentation review must name the exact final Git head, scope, reviewer identity and verdict, with resolved findings; that evidence is recorded separately in the documentation PR and execution artifacts. Required CI and the actual merge are likewise attached to that head rather than retroactively attributed to the original report. Approval is only for preserving a collaborative draft in the repository, not a Go implementation or service adoption.
 

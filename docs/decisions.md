@@ -195,3 +195,19 @@ The current Captain designated the documentation-cleanup writer as the narrow pl
 session for removing historical PR/revision references from `IMPLEMENTATION_PLAN.md`, preserving
 row status, acceptance and order. The separate queued plan-collapse/dashboard-trim work retains
 its broader scope. This changes neither operating authority nor deployment state.
+
+## HTTP migration historical evidence
+
+This is historical source evidence from the original [HTTP migration draft](http-server-migration.md#23-historical-provenance-relevant-to-the-port), not a new decision or implementation/deployment approval. The original report's section 2.3 table is preserved here unchanged so historical PR references remain in the repository's decision log.
+
+| Pin | What it proves; how used |
+| --- | --- |
+| `106888c33dc84f984a703bd0a6ab06bbccc85137` | Narrow intake default-null receipt preservation; retain exact dual fingerprint, not a generalized legacy decoder |
+| `466136e0b540d8f49c822fc0566ba6196d16813b` / P0 (#306) | Removal of broad compatibility/duplicated guards; do not revive retired request aliases or bootstrap schema upgrader |
+| `87ea577f381fca08390a9853385975feb4dab15a` | Interrupted reader cleanup and worker-independent busy response; basis for admission/error acceptance |
+| `513f1907b76cee2a5e7f37c700bacfd039489fdb` | Windows own-process Normal priority correction; performance measurement must include service scheduling |
+| `89e5c2665dc42b9f567cbaa9e8bd2edbcf12753f` | Already-authorized writer work continues through API outages; do not add online-work permission dependency |
+| `8a7e09c269a2ca01dddbeb165c7d27f2df028ab4` | Safe stopping while delivery has no attempt, during questions and queued replies |
+| `cd85001fed389140583764da3d564d46f10a4ecb` | Captain outage identity preservation; failure is not automatic replacement permission |
+| `694c0d6067ed7942bf4aaf4989e1247db41c7923`, `ce2fab5f05073107d779859c493871ca789726a2` | Durable scouting and explicit-handoff page fences |
+| `2e2976d762e6347a5f68a70fbbf6c7a5d2c5605a`, `5413d5c` | Source optimization: narrower issue/history lookups and batched Captain details; preserve bounded projections rather than reintroducing N+1 reads |
