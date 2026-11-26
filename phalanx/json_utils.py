@@ -1,7 +1,11 @@
-"""JSON decoding and atomic writes for host configuration and credentials."""
+"""Shared JSON output, decoding and atomic writes."""
 
 import json
 import os
+
+
+def print_json(data, *, indent=2, flush=False):
+    print(json.dumps(data, indent=indent), flush=flush)
 
 
 def write_json(path, data, *, indent=None, newline=False):

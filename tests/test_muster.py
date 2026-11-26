@@ -113,17 +113,17 @@ class LocatorTest(unittest.TestCase):
         self.files()
         response = {"status": "ok", "identity": {"home": str(self.home)},
                     "captains": [], "writers": [], "reconcilers": [], "dispatch_paused": False}
-        with patch.object(muster.API, "call", return_value=response):
+        with patch.object(muster.APIClient, "call", return_value=response):
             output = io.StringIO()
             with redirect_stdout(output):
                 muster.run_muster(Namespace(home=str(self.home)))
             self.assertEqual(json.loads(output.getvalue())["identity"], response["identity"])
             self.assertNotIn(RUNNER, output.getvalue())
         response["identity"]["home"] = str(self.root)
-        with patch.object(muster.API, "call", return_value=response):
+        with patch.object(muster.APIClient, "call", return_value=response):
             with self.assertRaisesRegex(muster.MusterError, "identity does not match"):
                 muster.run_muster(Namespace(home=str(self.home)))
-        with patch.object(muster.API, "call", side_effect=reconciler.ReconcilerError(RUNNER)):
+        with patch.object(muster.APIClient, "call", side_effect=muster.APIError(RUNNER)):
             with self.assertRaises(muster.MusterError) as caught:
                 muster.run_muster(Namespace(home=str(self.home)))
             self.assertNotIn(RUNNER, str(caught.exception))

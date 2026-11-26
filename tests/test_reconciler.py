@@ -13,13 +13,14 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from phalanx import intake
+from phalanx.api_client import APIClient, APIError
 from phalanx.git import run_git
 from phalanx.intake_models import Intake
 from phalanx.local_checks import kill_tree
 from phalanx.github import CommitChecks, GitHubError, PullRequest
 from phalanx.github_checks import CheckCollection
 from phalanx.pr_models import DEPLOYMENT_WINDOW
-from phalanx.reconciler import API, Reconciler, ReconcilerError
+from phalanx.reconciler import Reconciler, ReconcilerError
 from phalanx.reconciliation import heartbeat, observation_flags, reconciler_stale
 from phalanx.validation import GateResult, GateState
 from phalanx.workspaces import any_file_lock
@@ -191,12 +192,12 @@ class ReconcilerStaleTest(unittest.TestCase):
 
 
 class APITest(unittest.TestCase):
-    def test_a_dropped_connection_is_a_reconciler_error(self):
-        api = API("http://localhost:1", "token")
+    def test_a_dropped_connection_is_an_api_error(self):
+        api = APIClient("http://localhost:1", "token")
         for error in (ConnectionResetError("reset"), RemoteDisconnected("closed"), IncompleteRead(b"")):
             with self.subTest(error=error), patch.object(api.opener, "open", side_effect=error), \
-                    self.assertRaisesRegex(ReconcilerError, "Phalanx API unavailable"):
-                api.call("/flags")
+                    self.assertRaisesRegex(APIError, "Phalanx API unavailable"):
+                api.call("/v1/flags")
 
 
 def pull_request(head, branch, *, state="open", draft=False, merged=False, mergeable=True):
@@ -218,9 +219,9 @@ class FakeAPI:
 
     def call(self, path, body=None):
         self.calls.append(path)
-        if path == "/repositories":
+        if path == "/v1/repositories":
             return [{"id": repo, "remote": remote} for repo, remote in self.remotes.items()]
-        if path.startswith("/operator/executions?"):
+        if path.startswith("/v1/operator/executions?"):
             rows = self.closed if "kind=closed" in path else self.executions
             if "outcome=ready_for_check_in" in path:
                 rows = [row for row in rows if row.get("outcome") == "ready_for_check_in"]
@@ -228,10 +229,10 @@ class FakeAPI:
         if path.endswith("/heartbeat"):
             self.heartbeats.append(body)
             return {}
-        if path == "/flags":
+        if path == "/v1/flags":
             return {"flags": self.flags}
         if path.endswith("/github-observation"):
-            self.posts.append((path.split("/")[2], body))
+            self.posts.append((path.split("/")[3], body))
             return {"recorded": True, "local_checks_recorded": self.checked}
         if path.endswith("/local-checks"):
             self.local_checks.append(body)
@@ -283,7 +284,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         self.start_server(self.path)
 
     def test_pass_uses_execution_pages_for_report_target_branch_and_draft_mode(self):
-        api = API(self.url, RUNNER)
+        api = APIClient(self.url, RUNNER)
         self.assertEqual(self.request("/v1/repositories", OWNER, {
             "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
         status, item = self.request("/v1/items", OWNER, {
@@ -302,7 +303,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         with patch.object(api, "call", wraps=api.call) as calls:
             self.assertEqual(reconciler.run_pass(), {"observed": 1, "checked": 0, "errors": []})
         paths = [call.args[0] for call in calls.call_args_list]
-        self.assertFalse(any(path.startswith("/items/") and path.count("/") == 2 for path in paths), paths)
+        self.assertFalse(any(path.startswith("/v1/items/") and path.count("/") == 3 for path in paths), paths)
         observation, = [call.args[1] for call in calls.call_args_list
                         if call.args[0].endswith("/github-observation")]
         self.assertEqual(observation["target_base"], "release")
@@ -310,7 +311,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
         self.assertNotIn("checks", observation)
 
     def test_real_operator_summary_advances_a_merged_ready_execution_to_checked_in(self):
-        api = API(self.url, RUNNER)
+        api = APIClient(self.url, RUNNER)
         self.assertEqual(self.request("/v1/repositories", OWNER, {
             "id": "repo", "remote": "https://github.com/example/repo"})[0], 200)
         config = {"reconciler_id": "local", "repositories": {"repo": {"base_branch": "main"}}}
@@ -329,7 +330,7 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                                (json.dumps(asdict(ready)),
                                 item["execution"]["id"]))
                 initialize(self.path)
-                rows = api.call("/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]
+                rows = api.call("/v1/operator/executions?kind=closed&outcome=ready_for_check_in")["items"]
                 self.assertEqual(len(rows), 1)
                 self.assertEqual(rows[0]["output"], {"kind": "pr", "url": primary})
                 merged = replace(pull_request(merged_head, item_branch(item["id"]), state="closed"),
@@ -344,10 +345,10 @@ class ClosedReadyReconcilerTest(ServerFixture, unittest.TestCase):
                     compare.assert_called_once_with(HEAD, merged_head)
                 else:
                     compare.assert_not_called()
-                done = api.call("/operator/executions?kind=closed&outcome=checked_in")["items"]
+                done = api.call("/v1/operator/executions?kind=closed&outcome=checked_in")["items"]
                 row = next(row for row in done if row["id"] == item["execution"]["id"])
                 self.assertEqual(row["delivery"]["merge_commit"], BASE)
-                output = api.call(f"/items/{item['id']}")["execution"]["state"]["final_output"]
+                output = api.call(f"/v1/items/{item['id']}")["execution"]["state"]["final_output"]
                 self.assertEqual(output["revision"]["head"], merged_head)
 
 
@@ -504,7 +505,7 @@ class ReconcilerPassTest(unittest.TestCase):
 
         api.calls.clear()
         self.assertEqual(reconciler.run_pass()["errors"], [])
-        self.assertNotIn("/items/two", api.calls)
+        self.assertNotIn("/v1/items/two", api.calls)
         self.now += 61
         self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
 
@@ -542,7 +543,7 @@ class ReconcilerPassTest(unittest.TestCase):
                 api.calls.clear()
                 self.assertEqual(len(reconciler.run_pass()["errors"]), 1)
                 self.assertEqual(api.posts, [])
-                self.assertNotIn("/items/two", api.calls)
+                self.assertNotIn("/v1/items/two", api.calls)
                 self.assertGreater(reconciler.backoff["repo"], self.now)
 
     def test_a_merge_into_the_target_is_posted_with_how_and_when_it_merged(self):
@@ -653,8 +654,8 @@ class ReconcilerPassTest(unittest.TestCase):
 
         api.call = call
         self.assertEqual(self.reconciler(api).run_pass(), {"observed": 0, "checked": 0, "errors": []})
-        self.assertNotIn("/items/deployed", api.calls)
-        self.assertNotIn("/items/expired", api.calls)
+        self.assertNotIn("/v1/items/deployed", api.calls)
+        self.assertNotIn("/v1/items/expired", api.calls)
         self.config["repositories"]["repo"].pop("post_merge_check")
         self.reconciler(api).run_pass()
         self.assertEqual(api.heartbeats[-1]["deployment_checks"], {"repo": None})

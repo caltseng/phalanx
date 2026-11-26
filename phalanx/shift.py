@@ -19,9 +19,10 @@ import tomllib
 import unicodedata
 from urllib.parse import quote, urlencode
 
-from .work_cli import CREDENTIAL, request
+from .api_client import APIClient
+from .work_cli import CREDENTIAL
 from .git import run_git
-from .json_utils import write_json as _write_credential
+from .json_utils import print_json, write_json as _write_credential
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 from .display_text import reason_text, short_title
 from .session_links import session_reference
@@ -109,17 +110,6 @@ def load_charter(config):
     return {**charter, "shift": {**SHIFT_DEFAULTS, **shift},
             "revision": hashlib.sha256(data).hexdigest(),
             "path": str(path)}
-
-
-class API:
-    def __init__(self, config):
-        self.base_url = config["base_url"]
-        self.token = os.environ.get("PHALANX_RUNNER_TOKEN")
-        if not self.token:
-            raise ShiftError("Set PHALANX_RUNNER_TOKEN for Captain commands")
-
-    def __call__(self, route, **options):
-        return request(self.base_url, self.token, route, **options)
 
 
 def _q(value):
@@ -610,14 +600,19 @@ def run_shift(args):
     config = load_config(args.config, home=home)
     charter = load_charter(config)
     if args.shift_command == "charter":
-        result = charter
-    elif args.shift_command == "wake":
-        result = wake(API(config), charter, args.captain, config=config)
+        print_json(charter)
+        return
+    token = os.environ.get("PHALANX_RUNNER_TOKEN")
+    if not token:
+        raise ShiftError("Set PHALANX_RUNNER_TOKEN for Captain commands")
+    api = APIClient(config["base_url"], token).call
+    if args.shift_command == "wake":
+        result = wake(api, charter, args.captain, config=config)
     elif args.shift_command == "ack-reinforcement":
-        result = API(config)(f"/v1/captains/{_q(args.captain)}/reinforcement",
+        result = api(f"/v1/captains/{_q(args.captain)}/reinforcement",
                              method="PUT", body={"interval": args.interval})
     elif args.shift_command == "start":
-        result = start(API(config), charter, args.session_ref, args.parent, runtime=config["runtime"], config=config)
+        result = start(api, charter, args.session_ref, args.parent, runtime=config["runtime"], config=config)
     elif args.shift_command == "heartbeat":
         if args.no_sessions and (args.sessions or args.session_writer or args.session_availability):
             raise ShiftError("Pass --session or --no-sessions, not both")
@@ -632,37 +627,37 @@ def run_shift(args):
             if session_id not in by_id or availability not in ("present", "missing", "deleted"):
                 raise ShiftError("--session-availability requires a matching --session and present, missing or deleted")
             by_id[session_id]["availability"] = availability
-        result = heartbeat(API(config), charter, args.captain, wake=args.wake, state=args.state,
+        result = heartbeat(api, charter, args.captain, wake=args.wake, state=args.state,
                            focus=args.focus, sessions=sessions, handoff_note=args.handoff_note,
                            compaction_count=args.compaction_count, config=config,
                            repository_blocks=args.repository_blocked or (),
                            repository_ready=args.repository_ready or ())
     elif args.shift_command == "status":
-        result = {**status(API(config), charter, args.captain),
+        result = {**status(api, charter, args.captain),
                   "dashboard_url": config["base_url"].rstrip("/") + "/operator/"}
     elif args.shift_command == "current":
-        result = API(config)("/v1/captains/current")
+        result = api("/v1/captains/current")
     elif args.shift_command == "action":
-        result = API(config)(f"/v1/items/{_q(args.item)}/captain-actions", body={
+        result = api(f"/v1/items/{_q(args.item)}/captain-actions", body={
             "captain_id": args.captain, "action": args.action, "reason": args.reason})
     elif args.shift_command == "handoff":
         command = config.get("shift_command") or f"python -m phalanx shift --config {Path(args.config).resolve()}"
-        result = handoff(API(config), charter, args.captain, args.note, command)
+        result = handoff(api, charter, args.captain, args.note, command)
     elif args.shift_command == "retire-reconciler":
-        result = API(config)(f"/v1/reconcilers/{_q(args.runner_id)}", method="DELETE")
+        result = api(f"/v1/reconcilers/{_q(args.runner_id)}", method="DELETE")
     elif args.shift_command == "archive-check":
-        result = archive_check(API(config), config, charter, args.session, args.by, item_id=args.item,
+        result = archive_check(api, config, charter, args.session, args.by, item_id=args.item,
                                worktree=args.worktree, no_worktree=args.no_worktree)
     elif args.shift_command == "archive-result":
-        result = archive_result(API(config), args.session, args.outcome, args.reason, args.by)
+        result = archive_result(api, args.session, args.outcome, args.reason, args.by)
     elif args.shift_command == "launch":
-        result = launch(API(config), config, charter, args.captain, args.item, replaces=args.replaces)
+        result = launch(api, config, charter, args.captain, args.item, replaces=args.replaces)
     elif args.shift_command == "usage":
         from .usage_models import Snapshot
         snapshot = Snapshot.model_validate_json(args.file.read_text(encoding="utf-8"))
         route = (f"/v1/items/{_q(args.item)}/executions/{_q(args.execution)}"
                  f"/writers/{_q(args.writer)}/usage")
-        result = API(config)(route, body={
+        result = api(route, body={
             "captain_id": args.captain, "snapshot": snapshot.model_dump(mode="json")})
     elif args.shift_command == "writer":
         body = {"captain_id": args.captain, "writer_id": args.writer}
@@ -671,9 +666,9 @@ def run_shift(args):
                 body[field] = getattr(args, field)
         if args.abandon:
             body["abandon"] = True
-        result = API(config)(_writer_route(args), body=body, method="PATCH")
+        result = api(_writer_route(args), body=body, method="PATCH")
     else:
-        result = API(config)(_writer_route(args, "/withdraw"), body={
+        result = api(_writer_route(args, "/withdraw"), body={
             "captain_id": args.captain, "writer_id": args.writer, "reason": args.reason,
             "stopped": args.stopped})
-    print(json.dumps(result, indent=2))
+    print_json(result)

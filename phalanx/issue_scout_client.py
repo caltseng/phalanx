@@ -1,20 +1,20 @@
 """One bounded scouting page per existing Captain wake; no scheduler or local journal."""
 
-import http.client
 import os
 
+from .api_client import APIError
 from .github import GitHubClient, GitHubError, github_repository
 
 
 def scout(api, captain_id):
     try:
         return _scout(api, captain_id)
-    except (OSError, ValueError, http.client.HTTPException):
+    except APIError:
         # A scouting outage must not turn a successfully heartbeating Captain into a
         # failed/replacement shift. Never include a response body in diagnostics.
         try:
             current = api("/v1/issue-scout")
-        except (OSError, ValueError, http.client.HTTPException):
+        except APIError:
             current = {"state": "failed", "last_pass": None}
         return {**current, "observation_error": "api",
                 "resume_trigger": "Next Captain wake reconciles the durable claim/cursor; do not replace the Captain"}

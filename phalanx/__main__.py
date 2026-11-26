@@ -1,26 +1,19 @@
 import argparse
-import json
 import os
 from pathlib import Path
 import sqlite3
 from urllib.parse import quote, urlencode
 
-from .api_client import APIError
+from .api_client import APIClient
 from .deployment import add_deploy_command, run_deploy
 from .github import GitHubError
 from .issue_intake import ingest_issue
+from .json_utils import print_json
 from .muster import add_muster_command, run_muster
 from .reconciler import ReconcilerError, add_reconcile_command, run_reconcile
 from .shift import add_shift_command, run_shift
 from .workspaces import WorkspaceError
-from .work_cli import add_work_command, request, run_work
-
-
-def api_request(base_url, route, *, body=None, key=None):
-    token = os.environ.get("PHALANX_OWNER_TOKEN", "")
-    if not token:
-        raise ValueError("PHALANX_OWNER_TOKEN is required for this command")
-    return request(base_url, token, route, body=body, key=key, timeout=10)
+from .work_cli import add_work_command, run_work
 
 
 TARGET_HELP = ("checked_in (default) merges the PR once GitHub's required reviews and checks pass, "
@@ -110,6 +103,11 @@ def main() -> None:
     add_deploy_command(commands)
     args = parser.parse_args()
     try:
+        if args.command in {"register", "intake", "ingest-issue", "inbox", "reply", "cancel", "inspect"}:
+            token = os.environ.get("PHALANX_OWNER_TOKEN")
+            if not token:
+                raise ValueError("PHALANX_OWNER_TOKEN is required for this command")
+            api = APIClient(args.api_url, token, timeout=10).call
         if args.command == "deploy":
             if args.deploy_command == "run" and args.service == "server":
                 from .server_admin import serve
@@ -133,7 +131,7 @@ def main() -> None:
                 runner_token=os.environ.get("PHALANX_RUNNER_TOKEN"),
                 github_token=os.environ.get("PHALANX_GITHUB_TOKEN"),
             )
-            print(json.dumps(result, indent=2))
+            print_json(result)
             if not result["complete"]:
                 raise SystemExit(1)
         elif args.command == "work":
@@ -146,9 +144,9 @@ def main() -> None:
         elif args.command == "muster":
             run_muster(args)
         elif args.command == "register":
-            result = api_request(args.api_url, "/v1/repositories",
-                                 body={"id": args.repository, "remote": args.remote})
-            print(json.dumps(result, indent=2))
+            result = api("/v1/repositories",
+                         body={"id": args.repository, "remote": args.remote})
+            print_json(result)
         elif args.command == "intake":
             body = {"repository_id": args.repository, "goal": args.goal, "target": args.target,
                     "context_links": args.context, "acceptance_criteria": args.accept,
@@ -157,42 +155,42 @@ def main() -> None:
                 body["dependencies"] = args.after
             if args.label is not None:
                 body["label"] = args.label
-            result = api_request(args.api_url, "/v1/items", key=args.key, body=body)
-            print(json.dumps(result, indent=2))
+            result = api("/v1/items", key=args.key, body=body)
+            print_json(result)
         elif args.command == "ingest-issue":
-            result = ingest_issue(api_request, args.api_url, args.repository, args.number,
+            result = ingest_issue(api, args.repository, args.number,
                                   args.target, key=args.key, publication_mode=args.publication_mode)
-            print(json.dumps(result, indent=2))
+            print_json(result)
         elif args.command == "inbox":
             query = {"limit": args.limit, "after_time": args.after_time}
             if args.after_id:
                 query["after_id"] = args.after_id
-            result = api_request(args.api_url, "/v1/owner/inbox?" + urlencode(query))
-            print(json.dumps(result, indent=2))
+            result = api("/v1/owner/inbox?" + urlencode(query))
+            print_json(result)
         elif args.command == "reply":
             item = quote(args.item_id, safe="")
             execution = quote(args.execution_id, safe="")
-            result = api_request(
-                args.api_url, f"/v1/items/{item}/executions/{execution}/reply", key=args.key,
+            result = api(
+                f"/v1/items/{item}/executions/{execution}/reply", key=args.key,
                 body={"expected_version": args.version, "answer": args.answer,
                       "answered_by": args.answered_by},
             )
-            print(json.dumps(result, indent=2))
+            print_json(result)
         elif args.command == "cancel":
             item = quote(args.item_id, safe="")
-            execution = api_request(args.api_url, f"/v1/items/{item}")["execution"]
+            execution = api(f"/v1/items/{item}")["execution"]
             # The key is bound to the version read, so a retried request is idempotent and a
             # retry after the state moved fails visibly on the stale version instead.
-            result = api_request(
-                args.api_url, f"/v1/items/{item}/executions/{quote(execution['id'], safe='')}/cancel",
+            result = api(
+                f"/v1/items/{item}/executions/{quote(execution['id'], safe='')}/cancel",
                 key=f"cancel-{execution['id']}-{execution['version']}",
                 body={"expected_version": execution["version"], "reason": args.reason},
             )
-            print(json.dumps(result, indent=2))
+            print_json(result)
         else:
-            result = api_request(args.api_url, f"/v1/items/{quote(args.item_id, safe='')}")
-            print(json.dumps(result, indent=2))
-    except (OSError, ValueError, sqlite3.Error, APIError, WorkspaceError, GitHubError,
+            result = api(f"/v1/items/{quote(args.item_id, safe='')}")
+            print_json(result)
+    except (OSError, ValueError, sqlite3.Error, WorkspaceError, GitHubError,
             ReconcilerError) as error:
         parser.exit(1, f"phalanx: {error}\n")
 

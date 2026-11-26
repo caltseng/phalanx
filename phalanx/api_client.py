@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-class APIError(RuntimeError):
+class APIError(ValueError):
     pass
 
 
@@ -27,44 +27,38 @@ def validate_api_url(base_url):
         raise ValueError("Use HTTPS or a loopback HTTP API URL without credentials")
 
 
-def request(base_url, token, route, *, body=None, method=None, key=None, timeout=30, opener=None):
-    validate_api_url(base_url)
-    headers = {"Authorization": f"Bearer {token}"}
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-    if key:
-        headers["Idempotency-Key"] = key
-    call = Request(base_url.rstrip("/") + route, headers=headers, method=method,
-                   data=None if body is None else json.dumps(body).encode())
-    with (opener or build_opener(NoRedirect())).open(call, timeout=timeout) as response:
-        return json.load(response)
-
-
 class APIClient:
-    error = APIError
-    timeout = 10
-    detailed_errors = False
-
-    def __init__(self, base_url, token):
+    def __init__(self, base_url, token, *, timeout=30):
         try:
             validate_api_url(base_url)
         except ValueError as exc:
-            raise self.error(str(exc)) from None
+            raise APIError(str(exc)) from None
+        if not token:
+            raise APIError("Set PHALANX_OWNER_TOKEN or PHALANX_RUNNER_TOKEN, "
+                           "or register this worktree's writer credential")
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.timeout = timeout
         self.opener = build_opener(NoRedirect())
 
-    def call(self, path, body=None):
+    def call(self, route, body=None, *, method=None, key=None):
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if key:
+            headers["Idempotency-Key"] = key
+        call = Request(self.base_url + route, headers=headers, method=method,
+                       data=None if body is None else json.dumps(body).encode("utf-8"))
         try:
-            return request(self.base_url, self.token, "/v1" + path, body=body,
-                           timeout=self.timeout, opener=self.opener)
+            with self.opener.open(call, timeout=self.timeout) as response:
+                return json.load(response)
         except HTTPError as exc:
             with exc:
-                detail = (": " + exc.read()[:500].decode("utf-8", errors="replace")
-                          if self.detailed_errors else "")
-            prefix = "Phalanx " if self.detailed_errors else ""
-            raise self.error(f"{prefix}API returned HTTP {exc.code} for {path}{detail}") from None
+                detail = exc.read().decode("utf-8", errors="replace")
+            raise APIError(f"Phalanx API returned HTTP {exc.code}: {detail} (for {route})") from exc
         except (OSError, HTTPException, ValueError) as exc:
-            message = (f"Phalanx API unavailable for {path}: {exc!r}" if self.detailed_errors
-                       else f"API response unavailable for {path}")
-            raise self.error(message) from None
+            raise APIError(
+                f"Phalanx API unavailable for {route}: {exc}. "
+                "Any mutation's acceptance is unknown; reconcile status before retrying. "
+                "This is not a stop or an authorization response."
+            ) from exc

@@ -8,8 +8,6 @@ from unittest.mock import patch
 from phalanx.api_client import APIClient, APIError, NoRedirect
 from phalanx.github import CommitChecks, GitHubClient
 from phalanx.onboarding import discover_ready_checks, onboard
-from phalanx.reconciler import API, ReconcilerError
-from phalanx.work_cli import request
 from test_bootstrap import OWNER, RUNNER, ServerFixture, git
 
 
@@ -97,18 +95,15 @@ class OnboardingTests(ServerFixture, unittest.TestCase):
 class DiscoveryTests(unittest.TestCase):
     def test_api_clients_share_url_validation_and_refuse_redirects(self):
         for url in ("http://example.com", "https://u:p@example.com", "https://example.com?x=1"):
-            for client, error in ((APIClient, APIError), (API, ReconcilerError)):
-                with self.subTest(url=url, client=client), self.assertRaises(error):
-                    client(url, "token")
-            with self.assertRaises(ValueError):
-                request(url, "token", "/v1/items")
+            with self.subTest(url=url), self.assertRaises(APIError):
+                APIClient(url, "token")
         for code in (301, 302, 303, 307, 308):
             self.assertIsNone(NoRedirect().redirect_request(None, None, code, "", {}, "https://other"))
 
     def test_writer_transport_preserves_method_body_key_and_timeout(self):
         with patch("phalanx.api_client.build_opener") as opener:
             opener.return_value.open.return_value = io.BytesIO(b'{"ok": true}')
-            self.assertEqual(request("http://[::1]:8000/", "token", "/v1/writer",
+            self.assertEqual(APIClient("http://[::1]:8000/", "token").call("/v1/writer",
                                      body={"phase": "building"}, method="PATCH", key="retry"), {"ok": True})
         call = opener.return_value.open.call_args
         sent = call.args[0]
@@ -117,6 +112,21 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual((sent.get_header("Authorization"), sent.get_header("Idempotency-key")),
                          ("Bearer token", "retry"))
         self.assertEqual(call.kwargs["timeout"], 30)
+
+    def test_transport_preserves_unicode_and_reports_invalid_responses(self):
+        payload = {"note": "\u6f22\u5b57 \U0001f6e1"}
+        with patch("phalanx.api_client.build_opener") as opener:
+            opener.return_value.open.return_value = io.BytesIO(
+                json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+            self.assertEqual(APIClient("http://localhost:8000", "token", timeout=10).call(
+                "/v1/items", payload), payload)
+            sent = opener.return_value.open.call_args
+            self.assertEqual(json.loads(sent.args[0].data.decode("utf-8")), payload)
+            self.assertEqual(sent.kwargs["timeout"], 10)
+            for data in (b"not json", b'"\xff"'):
+                opener.return_value.open.return_value = io.BytesIO(data)
+                with self.subTest(data=data), self.assertRaisesRegex(APIError, "acceptance is unknown"):
+                    APIClient("http://localhost:8000", "token").call("/v1/items", payload)
 
     def test_proposes_deduplicated_ready_checks_from_base_tip(self):
         tip = "a" * 40

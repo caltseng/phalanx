@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from .json_utils import unique_object
-from .reconciler import API, ReconcilerError
+from .api_client import APIClient, APIError
+from .json_utils import print_json, unique_object
 
 
 class MusterError(ValueError):
@@ -116,10 +116,10 @@ def run_muster(args):
     from .shift import load_config
     config = load_config(path, home=home)
     # This client intentionally uses the no-redirect API transport.
-    api = API(config["base_url"], os.environ.get("PHALANX_RUNNER_TOKEN"))
+    api = APIClient(config["base_url"], os.environ.get("PHALANX_RUNNER_TOKEN"))
     try:
-        result = api.call("/muster/status")
-    except ReconcilerError:
+        result = api.call("/v1/muster/status")
+    except APIError:
         raise MusterError("Muster status unavailable: API unreachable, authentication failed, "
                           "or this server does not support /v1/muster/status; "
                           "check the selected shift config and private environment") from None
@@ -127,4 +127,4 @@ def run_muster(args):
     if not isinstance(reported, str) or Path(reported) != home:
         raise MusterError("API muster identity does not match the selected directory; "
                           "start the intended API with PHALANX_HOME set to that directory")
-    print(json.dumps({"home": str(home), "api_url": api.base_url, **result}, indent=2))
+    print_json({"home": str(home), "api_url": api.base_url, **result})
