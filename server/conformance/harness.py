@@ -112,6 +112,7 @@ def vector_manifest():
     import datetimes
     import usage
     import scout
+    import flags
 
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
@@ -153,6 +154,8 @@ def vector_manifest():
                           "request_count": len(usage.cases())},
                 "scout": {"request_ids": [case["id"] for case in scout.cases()],
                           "request_count": len(scout.cases())},
+                "flags": {"request_ids": [case["id"] for case in flags.cases()],
+                          "request_count": len(flags.cases())},
                 "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},
                 "numbers": {"request_count": len(numeric_requests), "request_sha256": digest(numeric_bytes)},
             },

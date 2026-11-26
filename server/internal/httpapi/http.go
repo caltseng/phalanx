@@ -52,6 +52,8 @@ func match(path, method string) (route, string) {
 		return route{kind: "inbox", method: "GET"}, "GET"
 	case "/v1/writer/attempt":
 		return route{kind: "writer-attempt", method: "POST"}, "POST"
+	case "/v1/writer":
+		return route{kind: "writer-current", method: "GET"}, "GET"
 	case "/v1/writer/progress":
 		return route{kind: "writer-progress", method: "POST"}, "POST"
 	case "/v1/writer/capacity":
@@ -64,6 +66,13 @@ func match(path, method string) (route, string) {
 		return route{kind: "scout-settings", method: "PUT"}, "PUT"
 	case "/v1/issue-scout/claim":
 		return route{kind: "scout-claim", method: "POST"}, "POST"
+	case "/v1/flags":
+		if method == "GET" {
+			return route{kind: "flags", method: "GET"}, "PUT"
+		}
+		return route{kind: "flag-write", method: "PUT"}, "PUT"
+	case "/v1/flags/clear":
+		return route{kind: "flag-clear", method: "POST"}, "POST"
 	case "/v1/dispatch/settings":
 		if method == "PUT" {
 			return route{kind: "set-dispatch", method: "PUT"}, "GET"
@@ -201,7 +210,7 @@ func bodyRoute(kind string) bool {
 		"writer-register", "writer-update", "writer-withdraw", "writer-progress", "writer-capacity", "set-dispatch",
 		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write",
 		"github-observation", "local-checks", "reconciler-heartbeat", "writer-usage", "captain-usage",
-		"scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision":
+		"scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision", "flag-write", "flag-clear":
 		return true
 	default:
 		return false
@@ -302,13 +311,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if (route.kind == "writer-register" || route.kind == "writer-update" || route.kind == "writer-withdraw" ||
 		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
 		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire" || route.kind == "captain-usage" ||
-		route.kind == "scout-claim" || route.kind == "scout-page" || route.kind == "scout-failure") &&
+		route.kind == "scout-claim" || route.kind == "scout-page" || route.kind == "scout-failure" ||
+		route.kind == "flag-write" || route.kind == "flag-clear") &&
 		role != "owner" && role != "runner" {
 		writeJSON(w, 403, map[string]any{"detail": "Owner or runner token required"})
 		return
 	}
 	if (route.kind == "writer-attempt" || route.kind == "writer-progress" || route.kind == "writer-capacity" ||
-		route.kind == "writer-result" || route.kind == "writer-stop" || route.kind == "writer-usage") &&
+		route.kind == "writer-result" || route.kind == "writer-stop" || route.kind == "writer-usage" || route.kind == "writer-current") &&
 		role != "writer" {
 		writeJSON(w, 403, map[string]any{"detail": "Writer token required"})
 		return
@@ -378,6 +388,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result json.RawMessage
 	var status = 200
 	switch route.kind {
+	case "flags":
+		result, err = h.App.Flags(ctx)
+	case "writer-current":
+		result, err = h.App.CurrentWriter(ctx, writerID)
+	case "flag-write", "flag-clear":
+		if !bodyPresent {
+			writeJSON(w, 422, map[string]any{"detail": missingBody()})
+			return
+		}
+		if route.kind == "flag-write" {
+			request, issues := contract.ValidateFlag(input, keys)
+			if len(issues) > 0 {
+				writeJSON(w, 422, map[string]any{"detail": issues})
+				return
+			}
+			result, err = h.App.RaiseFlag(ctx, request)
+		} else {
+			request, issues := contract.ValidateFlagKey(input, keys)
+			if len(issues) > 0 {
+				writeJSON(w, 422, map[string]any{"detail": issues})
+				return
+			}
+			result, err = h.App.ClearFlag(ctx, request)
+		}
 	case "scout-status", "scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision":
 		if bodyRoute(route.kind) && !bodyPresent {
 			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})

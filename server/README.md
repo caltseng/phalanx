@@ -21,9 +21,11 @@ their operator-route differential proof remains pending with the operator family
 Native scout settings, claim/page/failure/decision and source storage preserve
 the existing client-driven pass, lease/cursor/identity fences, fresh
 fingerprint-bound approval and atomic ordinary intake/page receipts.
+Stored and derived flag reads/writes and scoped current-writer reads are native,
+including shared pickup/liveness/capacity context, observation/head/deployment
+precedence, bounded warning families and exact elapsed-age boundaries.
 Native report finalization and bounded dependency refresh use the existing
-schema26 jobs. Current-writer and global derived flags and
-operator/Scribe routes remain unimplemented.
+schema26 jobs. Operator/muster/Scribe routes remain unimplemented.
 A 404 outside this slice is not API parity.
 
 ## Boundaries and pinned build
@@ -181,6 +183,7 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `datetimes.py` | 1,449 | Exact pinned aware-datetime coercion, serialization and error envelopes, including numeric precision, calendar/offset boundaries and deterministic randomized timestamps |
 | `usage.py` | 71 on each schema shape | Exact JSON storage, cumulative replay/monotonicity, attribution/scope, acquisition-gap retention, provided decimal quantities and late observations; every other durable table is unchanged |
 | `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |
+| `flags.py` | 72 on each schema shape | Stored flag models/update/clear, liveness/launch/progress/session/archive warnings, 30/60/strict-90 boundaries, head/handoff/CI/deployment precedence, scoped current writer and zero read/refusal effects |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
 
@@ -214,6 +217,9 @@ one claim, and handoff/settings supersession fence prior pages. Ordinary
 contracts still require timezone information; both pinned model corpora pass.
 The common transaction-scoped intake helper retains the exact two permitted
 legacy/current fingerprints without nested transactions or receipt rewrites.
+Flag tests retain per-family 200-result limits, scoped writer isolation and
+non-null empty dependency wait markers as blockers. Shared request-local context
+does not turn flags, stale clocks or derived warning ages into lifecycle gates.
 
 Focused native tests additionally cover racing title revisions, report
 savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure

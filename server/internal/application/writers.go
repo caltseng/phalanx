@@ -29,24 +29,29 @@ func buildingWait(tx *sqlite.Tx, writerID string) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var reason string
+	if capacity.Paused || capacity.BuildingWriters >= capacity.MaxBuildingWriters {
+		return buildingReason(capacity, nil, writerID), nil
+	}
+	first, err := tx.FirstRework(time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	return buildingReason(capacity, first, writerID), nil
+}
+
+func buildingReason(capacity sqlite.DispatchSettings, first *string, writerID string) *string {
+	reason := ""
 	if capacity.Paused {
 		reason = "Dispatch is paused"
 	} else if capacity.BuildingWriters >= capacity.MaxBuildingWriters {
 		reason = fmt.Sprintf("Building capacity exhausted: %d/%d", capacity.BuildingWriters, capacity.MaxBuildingWriters)
-	} else {
-		first, err := tx.FirstRework(time.Now().UnixMilli())
-		if err != nil {
-			return nil, err
-		}
-		if first != nil && *first != writerID {
-			reason = "Building capacity reserved for waiting PR rework writer " + *first
-		}
+	} else if first != nil && *first != writerID {
+		reason = "Building capacity reserved for waiting PR rework writer " + *first
 	}
 	if reason == "" {
-		return nil, nil
+		return nil
 	}
-	return &reason, nil
+	return &reason
 }
 
 func admissionWait(tx *sqlite.Tx, stage Stage) (*string, error) {
@@ -69,6 +74,10 @@ func admissionWait(tx *sqlite.Tx, stage Stage) (*string, error) {
 }
 
 func binding(tx *sqlite.Tx, writer sqlite.WriterRecord) (json.RawMessage, error) {
+	return bindingWithContext(tx, writer, nil)
+}
+
+func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *pickupContext) (json.RawMessage, error) {
 	execution, err := tx.Execution(writer.ItemID, writer.ExecutionID)
 	if err != nil {
 		return nil, err
@@ -99,7 +108,11 @@ func binding(tx *sqlite.Tx, writer sqlite.WriterRecord) (json.RawMessage, error)
 	}
 	var capacityWait *string
 	if present(writer.BuildingRequestedAt) && !writer.Building {
-		capacityWait, err = buildingWait(tx, writer.ID)
+		if current == nil {
+			capacityWait, err = buildingWait(tx, writer.ID)
+		} else {
+			capacityWait = buildingReason(current.Capacity, current.Rework, writer.ID)
+		}
 		if err != nil {
 			return nil, err
 		}
