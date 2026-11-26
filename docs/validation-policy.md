@@ -59,6 +59,8 @@ Remove checks that do not apply rather than configuring a non-executable entry.
 
 ## GitHub checks
 
+The GitHub reader supports github.com only, using its fixed REST and GraphQL endpoints.
+
 Each phase allows at most 100 requirements. A requirement has an exact nonblank `name`
 (at most 255 characters, no surrounding whitespace), `kind` (`check_run` or `status`),
 optional positive `app_id`, and boolean `use_merge_sha` and

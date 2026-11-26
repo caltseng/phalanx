@@ -451,7 +451,8 @@ class ReconcilerPassTest(unittest.TestCase):
 
         def git_call(path, *args, **kwargs):
             if args[0] == "fetch":
-                kwargs["timeout"] = 0.1
+                with patch("phalanx.git.GIT_TIMEOUT_SECONDS", 0.1):
+                    return run_git(path, *args, error=ReconcilerError, **kwargs)
             return run_git(path, *args, error=ReconcilerError, **kwargs)
 
         try:
@@ -552,7 +553,8 @@ class ReconcilerPassTest(unittest.TestCase):
                       {"repo": "https://github.com/example/repo"})
         reconciler = self.reconciler(api)
         for parents, on_branch, method in (((BASE, HEAD), False, "merge"), ((BASE,), True, "squash_or_rebase"),
-                                           ((BASE,), False, None)):
+                                           ((BASE,), False, None), ((HEAD, BASE), True, None),
+                                           ((), True, None)):
             with self.subTest(method=method):
                 self.github["repo"] = FakeGitHub([merged], parents=parents, on_branch=on_branch)
                 api.posts.clear()

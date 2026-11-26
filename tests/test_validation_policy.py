@@ -1,12 +1,14 @@
 from dataclasses import asdict
 import json
 from pathlib import Path
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock, patch
 
-from phalanx.local_checks import LocalCheck
-from phalanx.validation import CheckKind, RequiredCheck
+from phalanx.local_checks import LocalCheck, run_check
+from phalanx.validation import CheckKind, PreCheck, PreOutcome, RequiredCheck
 from phalanx.validation_policy import (
     PublishedValidationPolicy, ValidationPolicyError, load_validation_policy,
 )
@@ -48,6 +50,36 @@ class ValidationPolicyTests(unittest.TestCase):
             "name": "deploy-smoke", "kind": CheckKind.CHECK_RUN, "app_id": None,
             "use_merge_sha": False, "require_execution": True,
         })
+
+    def test_local_check_returns_outcome_and_failure_reason(self):
+        for script, outcome, reason in (
+            ("pass", PreOutcome.PASSED, ""),
+            ("import sys; print('broken'); sys.exit(3)", PreOutcome.FAILED,
+             "Exited with status 3\n\nOutput tail:\nbroken"),
+        ):
+            with self.subTest(script=script):
+                check = LocalCheck(PreCheck("tests"), (sys.executable, "-I", "-c", script))
+                self.assertEqual(run_check(check, self.path.parent), (outcome, reason))
+
+    def test_local_check_timeout_preserves_failure_detection_and_cleanup(self):
+        check = LocalCheck(PreCheck("tests"), (sys.executable, "-I", "-c", "pass"))
+        for output, detail in ((b"still running\n", ", no failure identified"),
+                               (b"FAIL: test_example\n", " with failures")):
+            process = Mock()
+            process.wait.side_effect = subprocess.TimeoutExpired(check.argv, check.timeout_seconds)
+
+            def launch(*args, **kwargs):
+                kwargs["stdout"].write(output)
+                return process
+
+            with self.subTest(output=output), \
+                    patch("phalanx.local_checks.subprocess.Popen", side_effect=launch), \
+                    patch("phalanx.local_checks.kill_tree") as cleanup:
+                outcome, reason = run_check(check, self.path.parent)
+                self.assertEqual(outcome, PreOutcome.FAILED)
+                self.assertEqual(reason, f"Timed out after 60 seconds{detail}\n\n"
+                                 f"Output tail:\n{output.decode().strip()}")
+                cleanup.assert_called_once_with(process)
 
     def test_unavailable_policy_never_becomes_explicit_empty(self):
         empty = self.load()
