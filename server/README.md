@@ -26,11 +26,13 @@ including shared pickup/liveness/capacity context, observation/head/deployment
 precedence, bounded warning families and exact elapsed-age boundaries.
 Native operator execution/item/group/timeline/overview and muster reads include
 filter-bound cursors, weak conditional validators, retained opaque pickup
-metadata, bounded candidate windows and usage projections. Scribe shell/assets
-and direct local-board transport remain unfinished.
+metadata, bounded candidate windows and usage projections. Native Scribe shell/
+assets and direct local-board transport retain CSP, exact file/range/conditional
+behavior and narrowly wired owner actions. Existing documentation URLs serve
+byte-pinned identical P0/D0 generated schema/HTML, not a Python runtime proxy.
 Native report finalization and bounded dependency refresh use the existing
-schema26 jobs. Scribe shell/assets and local-board routes remain unimplemented.
-A 404 outside this slice is not API parity.
+schema26 jobs. Every pinned public operation is inventoried; complete whole-port
+fault/race/framework/rollback and final delivery proof still remain required.
 
 ## Boundaries and pinned build
 
@@ -189,6 +191,9 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |
 | `flags.py` | 72 on each schema shape | Stored flag models/update/clear, liveness/launch/progress/session/archive warnings, 30/60/strict-90 boundaries, head/handoff/CI/deployment precedence, scoped current writer and zero read/refusal effects |
 | `operator_views.py` | 79 on each schema shape | Filters, exact cursors/ETags, summaries/groups/overview, timeline causes/questions and usage projection; only the named v4 current-item default discrepancy is classified |
+| `operator_defaults.py` | 24 on each schema shape | Explicit v4/v9 named read omissions, ready/draft/null preservation, malformed-state refusal and exact complete D0 responses with zero read effects |
+| `scribe.py` | 90 on each schema shape and authority mode | Canonical unchanged assets/CSP, file/range/conditional/HEAD behavior, documentation URLs and direct local-board/owner/proxy/host/origin boundaries |
+| `route_models.py` | All 66 operations / 51 schemas on each shape | Complete pinned generated request-schema comparison and actual read/refusal wire/store inventory; not a substitute for each family’s positive/fault corpus |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
 
@@ -238,6 +243,12 @@ effects. The 24-case corpus matches complete D0 responses, preserving explicit
 ready/draft/null values and malformed-state refusal. No other 500 normalization,
 public-field restoration or durable state/receipt/hash rewrite is authorized.
 Qualified independent exact-final-head review must cover each classification.
+
+Static proof exports canonical immutable Git blob bytes. Windows checkout CRLF
+conversion is retained as separate source evidence, not normalized out of HTTP
+responses; fixture copies serve the exact canonical bytes with a shared synthetic
+mtime. No live/package-owned asset is rewritten. Production packaging/launch
+adoption remains separately authorized and must preserve the pinned asset bytes.
 
 Focused native tests additionally cover racing title revisions, report
 savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure

@@ -75,7 +75,7 @@ def seed(source, database):
                    ("0" * 64,))
 
 
-def serve(source, database, id_start, captain_clock=False, scout_clock=False, flags_clock=False, operator_clock=False):
+def serve(source, database, id_start, captain_clock=False, scout_clock=False, flags_clock=False, operator_clock=False, local_board=False):
     intake = load(source, id_start)
     if captain_clock:
         from phalanx import captains
@@ -96,7 +96,7 @@ def serve(source, database, id_start, captain_clock=False, scout_clock=False, fl
         if key.startswith("PHALANX_"):
             del os.environ[key]
     os.environ.update(PHALANX_DB=str(database), PHALANX_OWNER_TOKEN=OWNER,
-                      PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0",
+                      PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="1" if local_board else "0",
                       PHALANX_HOME=str(database.parent))
     os.environ["USERPROFILE"] = os.environ["HOME"] = str(database.parent)
     from phalanx.api import create_app
@@ -163,7 +163,7 @@ def lock_probe(source, database, hold):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("initialize", "seed", "serve", "client", "lock", "hold-lock"))
+    parser.add_argument("action", choices=("initialize", "seed", "serve", "client", "lock", "hold-lock", "schema", "contract-docs"))
     parser.add_argument("source", type=Path)
     parser.add_argument("target")
     parser.add_argument("--output", type=Path)
@@ -172,6 +172,7 @@ def main():
     parser.add_argument("--scout-clock", action="store_true")
     parser.add_argument("--flags-clock", action="store_true")
     parser.add_argument("--operator-clock", action="store_true")
+    parser.add_argument("--local-board", action="store_true")
     args = parser.parse_args()
     if args.action == "initialize":
         load(args.source)
@@ -180,9 +181,30 @@ def main():
     elif args.action == "seed":
         seed(args.source, Path(args.target))
     elif args.action == "serve":
-        serve(args.source, Path(args.target), args.id_start, args.captain_clock, args.scout_clock, args.flags_clock, args.operator_clock)
+        serve(args.source, Path(args.target), args.id_start, args.captain_clock, args.scout_clock, args.flags_clock, args.operator_clock, args.local_board)
     elif args.action == "client":
         client(args.source, args.target, args.output)
+    elif args.action == "schema":
+        load(args.source)
+        from phalanx.api import create_app
+        Path(args.target).write_text(json.dumps(create_app().openapi(), sort_keys=True), encoding="utf-8")
+    elif args.action == "contract-docs":
+        load(args.source)
+        import asyncio
+        from phalanx.api import create_app
+        from starlette.requests import Request
+        app = create_app()
+        target = Path(args.target)
+        target.mkdir(parents=True, exist_ok=True)
+        files = {"/openapi.json": "openapi.json", "/docs": "docs.html",
+                 "/docs/oauth2-redirect": "oauth2.html", "/redoc": "redoc.html"}
+        for route in app.routes:
+            if getattr(route, "path", None) not in files:
+                continue
+            request = Request({"type": "http", "app": app, "path": route.path, "root_path": "",
+                               "scheme": "http", "server": ("127.0.0.1", 1), "headers": [], "query_string": b""})
+            response = asyncio.run(route.endpoint(request))
+            (target / files[route.path]).write_bytes(response.body)
     else:
         lock_probe(args.source, Path(args.target), args.action == "hold-lock")
 

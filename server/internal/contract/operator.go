@@ -81,6 +81,12 @@ func ValidateLabel(value, locationType string) []Issue {
 	return v.issues
 }
 
+func ValidateBoardIdentifier(value, name string) []Issue {
+	v := validator{}
+	v.text(value, []any{"path", name}, false, 0, 0, `^[0-9a-f]{32}$`)
+	return v.issues
+}
+
 func EncodeCursor(scope string, key []any) (string, error) {
 	data, err := Canonical([]any{json.Number("1"), scope, key})
 	if err != nil {

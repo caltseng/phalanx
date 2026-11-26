@@ -19,27 +19,30 @@ import (
 )
 
 type Handler struct {
-	App      *application.App
-	Owner    string
-	Runner   string
-	Logger   *slog.Logger
-	Home     *string
-	dispatch func() // test-only barrier at mutation dispatch, never wire/config input
+	App             *application.App
+	Owner           string
+	Runner          string
+	Logger          *slog.Logger
+	Home            *string
+	LocalBoard      bool
+	AssetsDirectory string
+	dispatch        func() // test-only barrier at mutation dispatch, never wire/config input
 }
 
 type route struct {
-	kind         string
-	itemID       string
-	executionID  string
-	captainID    string
-	runnerID     string
-	writerID     string
-	passID       string
-	repositoryID string
-	number       string
-	label        string
-	revision     string
-	method       string
+	kind            string
+	itemID          string
+	executionID     string
+	captainID       string
+	runnerID        string
+	writerID        string
+	passID          string
+	repositoryID    string
+	number          string
+	label           string
+	boardIdentifier bool
+	revision        string
+	method          string
 }
 
 func match(path, method string) (route, string) {
@@ -81,6 +84,22 @@ func match(path, method string) (route, string) {
 		return route{kind: "operator-overview", method: "GET"}, "GET"
 	case "/v1/muster/status":
 		return route{kind: "muster-status", method: "GET"}, "GET"
+	case "/operator/api/repositories":
+		return route{kind: "board-repositories", method: "GET"}, "GET"
+	case "/operator/api/items":
+		return route{kind: "board-intake", method: "POST"}, "POST"
+	case "/operator/api/dispatch/settings":
+		if method == "PUT" {
+			return route{kind: "board-set-dispatch", method: "PUT"}, "GET"
+		}
+		return route{kind: "board-dispatch", method: "GET"}, "GET"
+	case "/operator/", "/operator/queue", "/operator/history":
+		return route{kind: "operator-shell", method: "GET"}, "GET"
+	case "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc":
+		if method == "HEAD" {
+			return route{kind: "documentation", method: "HEAD"}, "GET, HEAD"
+		}
+		return route{kind: "documentation", method: "GET"}, "GET, HEAD"
 	case "/v1/dispatch/settings":
 		if method == "PUT" {
 			return route{kind: "set-dispatch", method: "PUT"}, "GET"
@@ -105,6 +124,27 @@ func match(path, method string) (route, string) {
 		return route{kind: "repositories", method: "GET"}, "POST"
 	case "/v1/items":
 		return route{kind: "intake", method: "POST"}, "POST"
+	}
+	if strings.HasPrefix(path, "/operator/assets/") {
+		return route{kind: "operator-asset", method: method}, ""
+	}
+	if strings.HasPrefix(path, "/operator/items/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/operator/items/"), "/")
+		if len(parts) == 1 && parts[0] != "" {
+			return route{kind: "operator-shell", itemID: parts[0], boardIdentifier: true, method: "GET"}, "GET"
+		}
+	}
+	if strings.HasPrefix(path, "/operator/executions/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/operator/executions/"), "/")
+		if len(parts) == 1 && parts[0] != "" {
+			return route{kind: "operator-shell", executionID: parts[0], boardIdentifier: true, method: "GET"}, "GET"
+		}
+	}
+	if strings.HasPrefix(path, "/operator/api/issue-scout/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/operator/api/issue-scout/"), "/")
+		if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == "decision" {
+			return route{kind: "board-scout-decision", repositoryID: parts[0], number: parts[1], method: "POST"}, "POST"
+		}
 	}
 	if strings.HasPrefix(path, "/v1/operator/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/v1/operator/"), "/")
@@ -230,7 +270,8 @@ func bodyRoute(kind string) bool {
 		"writer-register", "writer-update", "writer-withdraw", "writer-progress", "writer-capacity", "set-dispatch",
 		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write",
 		"github-observation", "local-checks", "reconciler-heartbeat", "writer-usage", "captain-usage",
-		"scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision", "flag-write", "flag-clear":
+		"scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision", "flag-write", "flag-clear",
+		"board-intake", "board-set-dispatch", "board-scout-decision":
 		return true
 	default:
 		return false
@@ -242,6 +283,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.kind == "" {
 		// Starlette's trailing-slash redirect is performed before dependencies.
 		path := strings.TrimRight(r.URL.Path, "/")
+		if path == r.URL.Path {
+			path += "/"
+		}
 		if path != r.URL.Path {
 			other, _ := match(path, r.Method)
 			if other.kind != "" {
@@ -261,6 +305,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != route.method {
 		w.Header().Set("Allow", allowed)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "Method Not Allowed"})
+		return
+	}
+	if route.kind == "documentation" {
+		h.serveDocumentation(w, r)
+		return
+	}
+	if route.kind == "operator-shell" || route.kind == "operator-asset" {
+		var issues []contract.Issue
+		if route.boardIdentifier {
+			if route.itemID != "" {
+				issues = contract.ValidateBoardIdentifier(route.itemID, "item_id")
+			} else {
+				issues = contract.ValidateBoardIdentifier(route.executionID, "execution_id")
+			}
+		}
+		if len(issues) > 0 {
+			writeJSON(w, 422, map[string]any{"detail": issues})
+			return
+		}
+		h.serveAsset(w, r, route.kind == "operator-shell")
 		return
 	}
 	// Python dispatched sync work continues even when the socket disconnects,
@@ -314,7 +378,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	role, writerID, err := h.authenticate(ctx, r, route.itemID, route.executionID)
+	var role, writerID string
+	var err error
+	if (boardRead(route.kind) || boardAction(route.kind)) && h.localBoardAuthority(r) {
+		role = "local"
+	} else {
+		role, writerID, err = h.authenticate(ctx, r, route.itemID, route.executionID)
+	}
 	if err != nil {
 		h.failure(w, err)
 		return
@@ -327,6 +397,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if role == "out_of_scope" {
 		writeJSON(w, 403, map[string]any{"detail": "This writer token is scoped to another item"})
 		return
+	}
+	if boardAction(route.kind) {
+		if role == "local" && !localBoardOrigin(r) {
+			writeJSON(w, 403, map[string]any{"detail": "Local dashboard actions require a same-origin request"})
+			return
+		}
+		if role != "local" && role != "owner" {
+			writeJSON(w, 403, map[string]any{"detail": "Owner token required"})
+			return
+		}
 	}
 	if (route.kind == "writer-register" || route.kind == "writer-update" || route.kind == "writer-withdraw" ||
 		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
@@ -362,7 +442,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if (route.kind == "intake" || route.kind == "set-title" || route.kind == "set-dispatch" ||
-		route.kind == "scout-settings" || route.kind == "scout-decision") && !sameOrigin(r) {
+		route.kind == "scout-settings" || route.kind == "scout-decision" || route.kind == "board-intake" ||
+		route.kind == "board-set-dispatch" || route.kind == "board-scout-decision") && !sameOrigin(r) {
 		writeJSON(w, 403, map[string]any{"detail": "Browser writes require a same-origin request"})
 		return
 	}
@@ -389,7 +470,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.passID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.passID, "pass_id")...)
 	}
-	if route.repositoryID != "" {
+	if route.repositoryID != "" && route.kind != "board-scout-decision" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.repositoryID, "repository_id")...)
 	}
 	if route.label != "" {
@@ -410,6 +491,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var result json.RawMessage
 	var status = 200
+	switch route.kind {
+	case "board-repositories":
+		route.kind = "repositories"
+	case "board-intake":
+		route.kind = "intake"
+	case "board-dispatch":
+		route.kind = "dispatch"
+	case "board-set-dispatch":
+		route.kind = "set-dispatch"
+	case "board-scout-decision":
+		route.kind = "scout-decision"
+	}
 	switch route.kind {
 	case "operator-list", "operator-overview", "operator-item", "operator-group", "operator-timeline":
 		var request contract.OperatorQuery

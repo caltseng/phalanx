@@ -115,11 +115,14 @@ def vector_manifest():
     import flags
     import operator_views
     import operator_defaults
+    import scribe
+    import route_models
 
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
               ROOT / "server" / ".gitattributes",
               HERE / "golden-fresh.json", HERE / "golden-retained.json"]
+    paths += sorted((ROOT / "server" / "internal" / "httpapi" / "contract-docs").glob("*"))
     tests = []
     for path in paths:
         if path.name.endswith("_test.go"):
@@ -164,6 +167,12 @@ def vector_manifest():
                 "operator_defaults": {"request_ids": [case["id"] for case in operator_defaults.cases()],
                                       "request_count": len(operator_defaults.cases()),
                                       "classification_versions": [4, 9]},
+                "scribe": {"request_ids": [case["id"] for case in scribe.cases()],
+                           "request_count": len(scribe.cases()), "local_board_modes": [False, True],
+                           "assets": list(scribe.ASSETS)},
+                "route_models": {"operation_ids": [case["id"] for case in route_models.inventory()[1]],
+                                 "operation_count": len(route_models.inventory()[1]),
+                                 "model_count": len(route_models.inventory()[0]["components"]["schemas"])},
                 "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},
                 "numbers": {"request_count": len(numeric_requests), "request_sha256": digest(numeric_bytes)},
             },
