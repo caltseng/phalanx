@@ -294,7 +294,7 @@ def _success(state: Execution, evidence: Evidence) -> Execution:
     raise ValueError("Unsupported successful stage result")
 
 
-def _changes(state: Execution, evidence: Evidence, wait: Wait | None) -> Execution:
+def _changes(state: Execution, evidence: Evidence) -> Execution:
     stage = state.stage
     _require(stage not in WRITER_PR_STAGES,
              "Push fixes to the open PR; publication and delivery take no changes_required")
@@ -374,7 +374,7 @@ def decide(
     if outcome is Outcome.SUCCEEDED:
         return _success(state, evidence)
     if outcome is Outcome.CHANGES_REQUIRED:
-        return _changes(state, evidence, wait)
+        return _changes(state, evidence)
     if outcome is Outcome.FAILED and retry_allowed:
         return _queue(state)
     _require(outcome in {Outcome.NEEDS_INPUT, Outcome.FAILED}, "Missing stage outcome")

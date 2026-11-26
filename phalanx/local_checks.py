@@ -41,8 +41,8 @@ class LocalCheck:
             raise ValueError("A Windows check command needs an executable (.exe)")
 
 
-def run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str, bool]:
-    """Return the outcome, reason, and whether it only timed out with no failure identified."""
+def run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str]:
+    """Return the outcome and reason, including timeout and failure details."""
     env = {key: value for key, value in os.environ.items()
            if not key.upper().startswith(("GIT_", "PHALANX_"))}
     # A file, unlike a pipe, cannot fill up and block the check or its children.
@@ -53,26 +53,25 @@ def run_check(check: LocalCheck, path: Path) -> tuple[PreOutcome, str, bool]:
                                        start_new_session=os.name != "nt")
         except OSError as exc:
             raise CheckCommandError(f"Repair the configured check command (OS error {exc.errno})") from None
-        timed_out = False
         try:
             returncode = process.wait(timeout=check.timeout_seconds)
             reason = f"Exited with status {returncode}" if returncode else ""
         except subprocess.TimeoutExpired:
             kill_tree(process)
             output.seek(0)
-            timed_out = not any(_FAILURE.match(line) for line in output)
+            no_failure = not any(_FAILURE.match(line) for line in output)
             returncode = None
             reason = (f"Timed out after {check.timeout_seconds} seconds"
-                      + (", no failure identified" if timed_out else " with failures"))
+                      + (", no failure identified" if no_failure else " with failures"))
         except BaseException:
             # An interrupt must not leave the check tree running in a worktree about to be removed.
             kill_tree(process)
             raise
         if returncode == 0:
-            return PreOutcome.PASSED, "", False
+            return PreOutcome.PASSED, ""
         output.seek(max(0, output.seek(0, os.SEEK_END) - OUTPUT_TAIL_BYTES))
         tail = output.read().decode("utf-8", errors="replace").strip()
-    return PreOutcome.FAILED, f"{reason}\n\nOutput tail:\n{tail}" if tail else reason, timed_out
+    return PreOutcome.FAILED, f"{reason}\n\nOutput tail:\n{tail}" if tail else reason
 
 
 def kill_tree(process: subprocess.Popen) -> None:

@@ -540,7 +540,8 @@ class ReconcilerPassTest(unittest.TestCase):
                       {"repo": "https://github.com/example/repo"})
         reconciler = self.reconciler(api)
         for parents, on_branch, method in (((BASE, HEAD), False, "merge"), ((BASE,), True, "squash_or_rebase"),
-                                           ((BASE,), False, None)):
+                                           ((BASE,), False, None), ((HEAD, BASE), True, None),
+                                           ((), True, None)):
             with self.subTest(method=method):
                 self.github["repo"] = FakeGitHub([merged], parents=parents, on_branch=on_branch)
                 api.posts.clear()
