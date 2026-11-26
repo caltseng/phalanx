@@ -65,12 +65,7 @@ def decision(row, now, current):
                            "An updated Captain heartbeat publishes the current charter and readiness")
         return blocked("out_of_scope", f"Repository {row['repository_id']} is outside active Captain charter scope",
                        "The owner assigns a Captain whose charter includes this repository")
-    affinity = row["runner_affinity"]
-    mapped = [captain for captain in scoped if not affinity or captain["runner_id"] == affinity]
-    if not mapped:
-        return blocked("affinity", f"Waiting for runner affinity {affinity}",
-                       "An authorized Captain on the assigned runner heartbeats")
-    reasons = [captain["repositories"][row["repository_id"]] for captain in mapped]
+    reasons = [captain["repositories"][row["repository_id"]] for captain in scoped]
     if all(reason is not None for reason in reasons):
         return blocked("repository_blocked", "; ".join(dict.fromkeys(reasons)),
                        "Resolve the checkout mapping or owner trust blocker; heartbeat readiness")
@@ -78,6 +73,6 @@ def decision(row, now, current):
     if waiting:
         return blocked("capacity", waiting, "Capacity becomes available; a Captain retries admission")
     return {"eligible": True, "code": "eligible", "reason": None,
-            "captain_ids": [captain["id"] for captain in mapped
+            "captain_ids": [captain["id"] for captain in scoped
                             if captain["repositories"][row["repository_id"]] is None],
             "trigger": "A Captain launches this item's writer"}

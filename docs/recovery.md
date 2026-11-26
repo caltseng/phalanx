@@ -10,7 +10,7 @@ to recover. Read the API, GitHub and native session state before repeating an ex
 | Empty queue after restart | Check the recorded absolute `PHALANX_DB` path. Stop a server pointed at the wrong file. |
 | Port already bound | Keep the intended existing API. Run exactly one server per database, even across ports. |
 | HTTP 503 with `Retry-After: 1` | Retry the identical idempotent request after the storage outage clears. |
-| Queued intake has no writer | Read its shared `pickup` decision in `shift status` or Scribe. In-scope authorized intake needs no per-item charter edit. Launch eligible work; resolve the concrete dependency, hold, affinity, readiness, pause or capacity reason for excluded work. |
+| Queued intake has no writer | Read its shared `pickup` decision in `shift status` or Scribe. In-scope authorized intake needs no per-item charter edit. Launch eligible work; resolve the concrete dependency, hold, readiness, pause or capacity reason for excluded work. |
 | Captain pickup scope/readiness is uninitialized | An updated current Captain heartbeat must publish real charter scope and local readiness. Do not infer permanent exclusion or readiness from an empty rollout snapshot. |
 | `launch_unconfirmed` | Native create/confirm has not been verified for ten minutes. The wait is visible immediately; recover each wake, not only after this alert. Search fresh full native inventory for the full nonce, confirm a match, or safely replay the same reservation as below. A timeout does not prove no launch. |
 | `writer_stopped`, `writer_error`, `no_progress`, `worker_overdue` | Inspect the exact native session and worktree. Resume it or safely replace it; silence alone never authorizes stopping. |

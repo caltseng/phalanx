@@ -147,7 +147,7 @@ already-open question cannot be replaced or renewed by another result.
 
 An owner can include `dependencies` in `POST /v1/items`. Each entry names an `upstream_id` and a `milestone` of `report`, `ready_for_check_in` or `checked_in` (the default). Prerequisites may belong to other repositories. Item inspection includes configured links and the execution's `unmet_dependencies`, with an explanation for each wait.
 
-An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with `expected_version` and changes to `goal`, `context_links`, `acceptance_criteria`, `priority`, `runner_affinity` or `dependencies`. Omitted fields keep their values. An empty list clears a list field, and `null` clears runner affinity. The patch accepts `Idempotency-Key`. Stale versions and executions outside the queued state return HTTP 409.
+An owner can send `PATCH /v1/items/{item_id}/executions/{execution_id}` with `expected_version` and changes to `goal`, `context_links`, `acceptance_criteria`, `priority` or `dependencies`. Omitted fields keep their values. An empty list clears a list field. The patch accepts `Idempotency-Key`. Stale versions and executions outside the queued state return HTTP 409.
 
 The same patch accepts `target` changes between `ready_for_check_in` and `checked_in`, with
 `steered_by: "owner"` (default) or `"captain"` recorded alongside the before/after values in the
@@ -186,7 +186,7 @@ never advance work or affect capacity. The existing operator timeline response i
 
 | Method and path | Request and behavior |
 | --- | --- |
-| `GET /v1/dispatch/settings` | Board-authenticated read of `paused`, `aging_seconds`, canonical `max_building_writers` (Building, initially 5), `max_writers` (Total, initially 10 on new installs), `building_writers`, `delivering_writers` and `active_writers` (Total usage). Existing stores retain their approved Total until activation. Local read-only board access also permits this read. |
+| `GET /v1/dispatch/settings` | Board-authenticated read of `paused`, canonical `max_building_writers` (Building, initially 5), `max_writers` (Total, initially 10 on new installs), `building_writers`, `delivering_writers` and `active_writers` (Total usage). Existing stores retain their approved Total until activation. Local read-only board access also permits this read. |
 | `PUT /v1/dispatch/settings` | Owner changes any settings above except derived counts; omitted fields are preserved. Both limits must be strict integers 1..2147483647, with Building <= Total against the saved pair (409 for an incoherent pair). Set both in one request for an atomic pair update. Null, unknown fields and aliases are rejected. Browser writes must be same-origin. Returns saved settings and usage. Pause stops new registrations/attempts/acquisitions; existing progress/results remain accepted. Lowering never ends writers or revokes existing allocations. |
 | `POST /v1/items/{item}/executions/{execution}/writer` | Captain registers a named writer intent, expected version, nonce and token digest. Atomically enforces Total and, for building work, Building; no caller-supplied limit. Replacement requires the current writer ID and stopped attestation; transfers its allocation and pending request, revoking the old identity. |
 | `PATCH /v1/items/{item}/executions/{execution}/writer` | Captain confirms the native session ID/link for its registered intent. |
@@ -207,17 +207,18 @@ Both `phx work status` and `next` expose it; claiming an attempt does not change
 Unbound queued items include `pickup` (`eligible`, `code`, `reason`, `trigger`, and eligible
 `captain_ids`). `wait_reason` is the same concrete exclusion reason, or null when eligible;
 `next_action` then calls for Captain dispatch. Decisions use live active Captain scope/readiness,
-persisted dependencies/holds/retry, affinity and canonical dispatch capacity.
+persisted dependencies/holds/retry and canonical dispatch capacity.
 No live scope and an uninitialized Captain snapshot have distinct explicit wait reasons,
 never scope inferred from a charter hash.
 
 Captain registration and heartbeat accept `pickup` with `repositories` mapping charter
-repository IDs to null (ready) or a concrete readiness blocker, and optional `runner_id`.
+repository IDs to null (ready) or a concrete readiness blocker.
 Heartbeat omission preserves the snapshot; normal `shift` commands republish it from the charter
 and local verification. An empty snapshot grants no scope. Snapshots expire with Captain liveness.
 Only trusted coordinator callers can publish them. Item IDs in charter prose are not required.
-Captains select named eligible items, taking dependencies, priority aging and retry time into
-account. Views expose `ready_since_ms`, `retry_at_ms` and `retry_count`. A stopped writer
+Captain pickup candidates rank eligible items by intake `priority` (`urgent`, `normal`, `low`),
+then execution creation time and ID; operator summaries include that priority. Views expose
+`ready_since_ms`, `retry_at_ms` and `retry_count`. A stopped writer
 is replaced only after its native session and local work are accounted for. No timed expiry
 alone authorizes replacement.
 

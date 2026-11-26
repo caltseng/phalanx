@@ -237,7 +237,7 @@ class Probe:
             for repository in GENERAL + LANES:
                 intake.register(db, repository, f"https://github.com/example/{repository}.git")
             dispatch.set_dispatch(db, DispatchSettings(
-                paused=False, aging_seconds=config.aging_seconds,
+                paused=False,
                 max_writers=self.writer_capacity, max_building_writers=self.writer_capacity))
 
         now_ms = int(time.time() * 1000)

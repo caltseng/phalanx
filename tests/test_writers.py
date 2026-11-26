@@ -1891,18 +1891,17 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             now = datetime.now(UTC)
             cutoff = int((now - flags.IDLE_WITH_WORK).timestamp() * 1000)
             cases = (
-                ("uninitialized", {}, ""),
-                ("out_of_scope", {"other": None}, ""),
-                ("repository_blocked", {"repo": "Owner trust approval required"}, ""),
-                ("affinity", {"repo": None}, "assigned-runner"),
+                ("uninitialized", {}),
+                ("out_of_scope", {"other": None}),
+                ("repository_blocked", {"repo": "Owner trust approval required"}),
             )
-            for code, repositories, affinity in cases:
+            for code, repositories in cases:
                 with self.subTest(code=code):
                     captains.heartbeat(db, captain["id"], captains.Heartbeat(
                         charter_revision="c1", wake_count=1, state="active",
                         pickup=captains.Pickup(repositories=repositories)))
-                    db.execute("UPDATE executions SET ready_since=?, queue_affinity=? WHERE id=?",
-                               (cutoff + 1, affinity, item["execution"]["id"]))
+                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                               (cutoff + 1, item["execution"]["id"]))
                     self.assertEqual(flags.captain_idle_with_work(db, now), [])
                     db.execute("UPDATE executions SET ready_since=? WHERE id=?",
                                (cutoff, item["execution"]["id"]))

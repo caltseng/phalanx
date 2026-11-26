@@ -361,18 +361,16 @@ retained Captains must actually read the canonical workflow, not acknowledge it 
 ### Intake routing and charter lanes
 
 Intake defaults to `checked_in`; explicit ready-only and report targets are preserved.
-Historical `runner_affinity: "direct-hold"` excluded the old runner before PH-DS5
-part 1; there is now no queue claim scheduler or special direct-hold gate.
 Normal owner-authenticated intake through either `POST /v1/items` or Scribe's **+** enters
 Captain pickup by default when its repository is in the charter's `repositories`.
 An item need not be named in charter notes, lanes or a handoff. No per-item charter edit
 is needed. An out-of-scope repository remains excluded.
 
 Captain start/heartbeat publishes a small `pickup` snapshot: repository scope derived from
-the current charter, verified checkout readiness, optional `runner_id` from the shift config,
-and concrete runtime blockers. The API does not read local charter files or checkout paths.
-Pinned intake requires a matching `runner_id`; unpinned intake can use any ready scoped Captain.
+the current charter, verified checkout readiness and concrete runtime blockers.
+The API does not read local charter files or checkout paths.
 `shift status --captain ID` exposes `pickup_candidates`, the discovery list to launch,
+ordered by urgent/normal/low intake priority and FIFO within each priority,
 and each unbound queued item's `pickup` decision. `excluded_items` exposes out-of-scope work
 with its reason, never as a launch candidate. Scribe and operator API reads use the same
 server decision and `wait_reason`. Named writer registration remains a trusted low-level
@@ -391,7 +389,7 @@ Existing persisted dependencies, dispatch pause, retry, Building/Total capacity 
 preference remain authoritative waits. Eligible intake with no writer and no exclusion
 uses the existing 30-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
 and pause use `queue_backlogged`, without another dispatch budget. Scope, uninitialized
-authority, affinity and repository/trust blockers use `pickup_blocked` on the same budget,
+authority and repository/trust blockers use `pickup_blocked` on the same budget,
 with the shared decision's reason/recovery and owner notification. This is not a
 `captain_idle_with_work` handoff signal.
 
