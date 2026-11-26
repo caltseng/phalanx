@@ -313,7 +313,13 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             transition(db, 10, 5, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
         later = self.page(f"{route}?limit=2&cursor={first['next_cursor']}")
         self.assertEqual(later["attempt"], "attempt")
+        self.assertEqual(later["item"]["stage_owner"], later["attempt"])
         self.assertEqual([row["version"] for row in later["events"]], [2, 1])
+        with write_transaction(self.path) as db:
+            db.execute("UPDATE attempts SET ended_at=? WHERE id='attempt'", (LATEST,))
+        ended = self.page(route)
+        self.assertIsNone(ended["attempt"])
+        self.assertIsNone(ended["item"]["stage_owner"])
         self.assertEqual(self.get(f"{BOARD}/{identifier(11)}/timeline?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])

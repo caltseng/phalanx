@@ -99,11 +99,6 @@ def load_charter(config):
                 and all(isinstance(entry, str) and entry.strip() for entry in value)):
             raise ShiftError(f"Charter {key} must be a non-empty list of text")
     shift = charter.get("shift", {})
-    if isinstance(shift, dict) and {"max_writers", "max_building_writers"} & shift.keys():
-        raise ShiftError("Charter [shift] concurrency moved to dispatch settings; remove it from the charter")
-    if isinstance(shift, dict) and {"max_wakes", "max_compactions"} & shift.keys():
-        raise ShiftError("Captain rotation is elapsed-time only; remove max_wakes and max_compactions "
-                         "from charter [shift] and use max_hours")
     if not isinstance(shift, dict) or set(shift) - set(SHIFT_DEFAULTS) or not all(
             type(value) is int and value > 0 for value in shift.values()):
         raise ShiftError("Charter [shift] takes a positive integer max_hours")
@@ -261,7 +256,7 @@ def _read_credential(path):
 
 def kickoff(item, worktree, nonce, work_command, base, checks_environment=None):
     criteria = item.get("acceptance_criteria") or []
-    mode = item["execution"]["state"].get("publication_mode", "ready")
+    mode = item["execution"]["state"]["publication_mode"]
     if mode == "draft":
         publication = (
             f"open one draft PR with an explicit base (`gh pr create --draft --base {base}`). "

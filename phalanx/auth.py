@@ -65,13 +65,19 @@ def is_local(request: Request) -> bool:
     return loopback and bool(LOCAL_HOST.fullmatch(request.headers.get("host", "")))
 
 
+def has_local_board_authority(
+    request: Request, authorization: HTTPAuthorizationCredentials | None,
+) -> bool:
+    return ("authorization" not in request.headers and authorization is None
+            and request.app.state.local_board and is_local(request))
+
+
 def authenticate_board_read(
     request: Request,
     authorization: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> Role | Literal["local"]:
     """Read-only board routes skip the token when the server opted into a local board."""
-    if ("authorization" not in request.headers and authorization is None
-            and request.app.state.local_board and is_local(request)):
+    if has_local_board_authority(request, authorization):
         return "local"
     return authenticate(request, authorization)
 
@@ -96,8 +102,7 @@ def require_board_owner(
     authorization: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
 ) -> Role | Literal["local"]:
     """Grant only explicitly wired dashboard actions direct local authority."""
-    if ("authorization" not in request.headers and authorization is None
-            and request.app.state.local_board and is_local(request)):
+    if has_local_board_authority(request, authorization):
         origin = request.headers.get("origin")
         site = request.headers.get("sec-fetch-site")
         expected = f"{request.url.scheme}://{request.headers['host']}"

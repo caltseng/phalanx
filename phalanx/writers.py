@@ -107,13 +107,6 @@ def binding(db, writer, *, current=None):
     }
 
 
-def live_captain(db, captain_id):
-    captain = captains.captain_row(db, captain_id)
-    if captain["state"] == "ended":
-        raise intake.Conflict("An ended Captain cannot act on writers")
-    return captain
-
-
 def claim_next(db, writer, *, continued_from=None):
     """Open the current stage's attempt when the execution is queued and ready, else bind none."""
     row = intake.execution_row(db, writer["item_id"], writer["execution_id"])
@@ -210,7 +203,8 @@ def register(db, item_id, execution_id, payload):
                 payload.replaces):
             raise intake.Conflict("This nonce was already used for a different registration")
         return binding(db, replay)
-    live_captain(db, payload.captain_id)
+    captains.require_acting_captain(db, payload.captain_id,
+                                  message="An ended Captain cannot act on writers")
     if db.execute("SELECT paused FROM dispatch_settings WHERE id=1").fetchone()["paused"]:
         raise intake.Conflict("Dispatch is paused. No new writers are registered until it resumes")
     _, state = intake.check_current(db, item_id, execution_id, payload.expected_version)
@@ -266,7 +260,7 @@ def authorize(db, writer, captain_id):
 
     Returns the Captain that owns the writer afterwards.
     """
-    live_captain(db, captain_id)
+    captains.require_acting_captain(db, captain_id, message="An ended Captain cannot act on writers")
     if writer["captain_id"] == captain_id or writer["confirmed_at"] is not None:
         return writer["captain_id"]
     owner = captains.captain_row(db, writer["captain_id"])

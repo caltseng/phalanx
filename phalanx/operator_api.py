@@ -310,7 +310,7 @@ def summary(row, now, context):
         "label": row["label"],
         "target": state["target"],
         "target_branch": row["target_branch"],
-        "publication_mode": state.get("publication_mode", "ready"),
+        "publication_mode": state["publication_mode"],
         "repository_id": row["repository_id"],
         "created_at": row["created_at"],
         "active_started_at": row["active_started_at"],
@@ -684,10 +684,6 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
         ).fetchone()
         if execution is None:
             raise HTTPException(404, "Execution not found")
-        attempt = db.execute(
-            "SELECT id FROM attempts WHERE execution_id = ? AND ended_at IS NULL",
-            (execution_id,),
-        ).fetchone()
         relatives = db.execute(
             """SELECT previous_id,
                       (SELECT id FROM executions AS later WHERE later.previous_id = execution.id) AS next_id
@@ -786,7 +782,7 @@ def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, curs
     return {
         "item": {**summary(execution, now, context), **work_brief},
         "usage": usage,
-        "attempt": attempt["id"] if attempt else None,
+        "attempt": execution["stage_owner"],
         "previous_execution_id": relatives["previous_id"],
         "next_execution_id": relatives["next_id"],
         "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
