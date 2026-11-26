@@ -11,6 +11,14 @@ capturing stdout, stderr and the exit code while restoring arguments, environmen
 working directory after each call. The isolated deployment lifecycle test retains
 `python -m phalanx` subprocess coverage for startup, restart and exclusive ownership.
 
+HTTP unit tests use `ServerFixture` with a fresh in-process app by default; pass `app=`
+for fixture routes or `in_process=False, script=` for a deliberately separate server.
+Do not patch the shared `SERVER_PROCESS` constant. Contention regressions use short
+fault timeouts, then restore normal admission bounds before concurrent recovery;
+the standalone envelope probe retains real-process production-bound coverage.
+Operator tests seed only the rows they need, keeping the large keyset-paging dataset
+in the deep-paging case.
+
 `tests/operator-create-fixture.html` exercises the real shell/client with mocked transport,
 including owner connections (`?owner`) and tokenless local mode. For the real-API flow, use
 an isolated temporary database/server bound to loopback with `PHALANX_LOCAL_BOARD=1` and

@@ -17,6 +17,30 @@
     captain_idle_with_work: "Dispatch overdue" };
   const absolute = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
   const { h, safeUrl } = window.PhalanxOperatorHelpers;
+  const BRAND_ASSET = new URL("phalanx-brand.svg", document.currentScript.src).href;
+
+  function brand() {
+    function svg(tag, props, ...children) {
+      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      for (const [key, value] of Object.entries(props)) node.setAttribute(key, value);
+      node.append(...children);
+      return node;
+    }
+    const use = (id, props = {}) => svg("use", { href: BRAND_ASSET + "#" + id, ...props });
+    const shield = svg("svg", { class: "brand-shield", viewBox: "0 0 64 64",
+      "aria-hidden": "true", focusable: "false" },
+    use("shield", { class: "brand-rank brand-rank-two" }),
+    use("shield", { class: "brand-rank brand-rank-one" }),
+    use("field"), use("rim"), use("rim-cap", { class: "brand-rim-cap" }),
+    svg("g", { class: "brand-crest" }, use("tip-outline", { class: "brand-tip-outline" }), use("chevron")));
+    return h("div", { class: "brand" },
+      h("h1", { tabindex: "-1" },
+        h("a", { class: "brand-lockup", href: "/operator/", "aria-label": "Phalanx — Push forward" },
+          shield, h("span", { class: "brand-letters", "aria-hidden": "true" },
+            h("span", { class: "brand-name", text: "PHALANX" }),
+            h("span", { class: "brand-motto", text: "Push forward" })))),
+      h("span", { class: "faint sub", text: "Scribe" }));
+  }
 
   function label(value) {
     return DISPLAY_LABEL[value] || (value ? String(value).replaceAll("_", " ") : "unknown");
@@ -309,9 +333,7 @@
       h("button", { type: "submit", text: "Search" }));
     const actions = h("div", { class: "actions", role: "group", "aria-label": "Board controls" }, create);
     const header = h("header", { class: "bar" },
-      h("div", { class: "brand" }, h("span", { class: "mark", "aria-hidden": "true" }),
-        h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" }),
-        h("span", { class: "faint sub", text: "Push forward" })),
+      brand(),
       health, navigation, actions, counts);
     const disclosures = [];
     function disclosure(kind, name, content, activeCount) {

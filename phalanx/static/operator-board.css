@@ -67,14 +67,40 @@ body { margin: 0; }
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--line);
 }
-.brand { display: flex; align-items: baseline; gap: .5rem; white-space: nowrap; }
-.brand h1 {
-  margin: 0; font-size: 15px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
+.brand { display: flex; align-items: center; gap: .75rem; white-space: nowrap; }
+.brand h1 { margin: 0; font-size: inherit; }
+.phalanx-board .brand-lockup {
+  display: inline-grid; grid-template-columns: 54px auto; align-items: center; gap: 12px;
+  padding: 14px 0 8px; color: var(--accent); text-decoration: none;
+  font-family: "Palatino Linotype", Palatino, Georgia, serif; font-weight: 700;
 }
+.phalanx-board .brand-lockup:hover { text-decoration: none; }
+.brand-shield { display: block; width: 54px; height: 54px; overflow: visible; }
+.brand-letters { position: relative; }
+.brand-name { display: block; font-size: 25px; line-height: 1.1; letter-spacing: .115em; }
+.brand-motto {
+  display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 8px;
+  color: var(--captain); font-size: 17px; font-style: italic; line-height: 1.1; letter-spacing: .035em;
+}
+.brand-motto::before, .brand-motto::after { content: ""; height: 1px; flex: 1; background: currentColor; opacity: .65; }
 .brand .sub { font-size: 12px; }
-.mark {
-  align-self: center; width: 20px; height: 20px; flex: none;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%238b1e24' stroke='%23b8923a' stroke-width='5'/%3E%3Cpath d='M20 46L32 17L44 46' fill='none' stroke='%23fbf7ee' stroke-width='6'/%3E%3C/svg%3E") center / contain no-repeat;
+.brand-rank, .brand-tip-outline { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .brand-shield, .brand-letters { transition: transform 420ms cubic-bezier(.2,.8,.2,1); }
+  .brand-crest { transition: transform 520ms cubic-bezier(.3,.05,.15,1); }
+  .brand-rim-cap { transition: transform 420ms ease-out, opacity 420ms ease-out; }
+  .brand-tip-outline { transition: opacity 350ms ease-out; }
+  .brand-rank { transition: transform 550ms ease-out, opacity 550ms ease-out; }
+  .brand-lockup:focus { --brand-rise: -5px; --brand-crest: -16px; --brand-cap: -7px; --brand-open: 0; --brand-tip: 1; --brand-rank-one: .23; --brand-rank-two: .11; }
+  @media (hover: hover) and (pointer: fine) {
+    .brand-lockup:hover { --brand-rise: -5px; --brand-crest: -16px; --brand-cap: -7px; --brand-open: 0; --brand-tip: 1; --brand-rank-one: .23; --brand-rank-two: .11; }
+  }
+  .brand-shield, .brand-letters { transform: translateY(var(--brand-rise, 0px)); }
+  .brand-crest { transform: translateY(var(--brand-crest, 0px)); }
+  .brand-rim-cap { transform: translateY(var(--brand-cap, 0px)); opacity: var(--brand-open, 1); }
+  .brand-tip-outline { opacity: var(--brand-tip, 0); }
+  .brand-rank-one { opacity: var(--brand-rank-one, 0); transform: translateY(calc(var(--brand-rise, 0px) * -1.4)); }
+  .brand-rank-two { opacity: var(--brand-rank-two, 0); transform: translateY(calc(var(--brand-rise, 0px) * -3.4)); }
 }
 .health { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
 .health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); }
@@ -328,7 +354,6 @@ body { margin: 0; }
   .captains .line > .stat:first-of-type { margin-left: 1.55rem; }
   .detail { padding-left: .9rem; }
   .bar { gap: .3rem .9rem; }
-  .brand .sub { display: none; }
   .board-navigation { margin-left: 0; }
   .health { margin-left: auto; }
   .actions { gap: .15rem; }
@@ -403,14 +428,6 @@ body { margin: 0; }
  * the page clock) to stay in phase across rebuilds, and one-shot effects start at --since.
  */
 @media (prefers-reduced-motion: no-preference) {
-  /* The shield is raised when the board mounts and tilts on hover. */
-  .mark {
-    animation: raise .8s cubic-bezier(.2, 1.4, .4, 1) backwards;
-    transition: transform .3s cubic-bezier(.3, 1.6, .5, 1);
-  }
-  .brand:hover .mark { transform: rotate(-12deg) scale(1.08); }
-  @keyframes raise { from { opacity: 0; transform: translateY(6px) rotate(-35deg) scale(.4); } }
-
   /* Torches: the Live dot and attention counts send out a slow ring. */
   .h-live .dot { --pulse: var(--ok); animation: beacon 2.4s ease-out var(--clock, 0s) infinite; }
   .count.t-attn { --pulse: var(--attn); animation: beacon 2.4s ease-out var(--clock, 0s) infinite; }
@@ -465,21 +482,5 @@ body { margin: 0; }
   @keyframes inkspill {
     from { clip-path: circle(0 at var(--ink-x, 100%) var(--ink-y, 0)); }
     to { clip-path: circle(var(--ink-r, 150vmax) at var(--ink-x, 100%) var(--ink-y, 0)); }
-  }
-}
-
-/* Light catches the bronze lettering now and then. Text stays solid between glints. */
-@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  @supports (background-clip: text) or (-webkit-background-clip: text) {
-    .brand h1 {
-      background: linear-gradient(105deg, var(--accent) 42%, var(--captain) 50%, var(--accent) 58%) 100% 0 / 300% 100% no-repeat;
-      -webkit-background-clip: text; background-clip: text;
-      -webkit-text-fill-color: transparent;
-      animation: glint 9s ease-in-out 1s infinite;
-    }
-    @keyframes glint {
-      0% { background-position: 100% 0; }
-      14%, 100% { background-position: 0 0; }
-    }
   }
 }

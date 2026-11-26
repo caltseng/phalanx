@@ -54,6 +54,9 @@ continuity and retained-instruction receipts separately. **Source merge is not a
 result.** Notify the current Captain after a successful rollout for bounded reconciliation
 and eligible-capacity refill; this grants no capacity increase.
 
+Dispatch overdue is a loaded 60-minute API constant; verify adoption through the reviewed
+upgrade, never monkeypatch. Backlog/pickup warnings and holds remain 30 minutes.
+
 ## New installation
 
 Install the package and locked dependencies as in [Install Phalanx](install.md), then run:

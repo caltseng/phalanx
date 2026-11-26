@@ -93,7 +93,10 @@ Configured-author open issues enter ordinary intake with the normal merged targe
 source URL and an explicit untrusted-context criterion. Pauses, both capacity limits,
 repository readiness, dependencies and later steering apply through existing dispatch.
 Existing issue keys and historical goal/context URL links, including completed, failed
-and cancelled work, are reconciled before intake. Edits, closure or reopening never
+and cancelled work, are reconciled on first sighting. Later observations reuse the retained
+source binding and check stable manual-intake keys only while unlinked, without rescanning
+work history. Add historical goal/context links before the first sighting; use manual
+`ingest-issue` with its default issue key for later imports. Edits, closure or reopening never
 change that work or automatically create a rerun. Historical work with **no issue URL
 or source identity** cannot be reliably inferred: add the source link to authorized
 queued work before activation or reconcile it explicitly with the owner.
@@ -310,9 +313,9 @@ A hold never reserves capacity. Captain discovery and `shift launch` respect act
 record the predecessor item ID and actual lane/owner constraint, not merely "not listed".
 Existing persisted dependencies, dispatch pause, retry, Building/Total capacity and PR-rework
 preference remain authoritative waits. Eligible intake with no writer and no exclusion
-uses the existing 30-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
-and pause use `queue_backlogged`, without another dispatch budget. Scope, uninitialized
-authority and repository/trust blockers use `pickup_blocked` on the same budget,
+uses the 60-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
+and pause retain the 30-minute `queue_backlogged` budget. Scope, uninitialized
+authority and repository/trust blockers retain `pickup_blocked` on that 30-minute budget,
 with the shared decision's reason/recovery and owner notification. This is not a
 `captain_idle_with_work` handoff signal.
 

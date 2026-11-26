@@ -102,7 +102,7 @@ class InProcessServer(uvicorn.Server):
 
 
 class ServerFixture:
-    def start_server(self, path, *, in_process=True, **environment):
+    def start_server(self, path, *, in_process=True, script=SERVER_PROCESS, app=None, **environment):
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -112,7 +112,7 @@ class ServerFixture:
         env.update(environment)
         if in_process:
             server = InProcessServer(uvicorn.Config(
-                create_app(), host="127.0.0.1", port=port, log_config=None,
+                app if app is not None else create_app(), host="127.0.0.1", port=port, log_config=None,
                 log_level="error", access_log=False,
                 timeout_graceful_shutdown=5, timeout_keep_alive=0,
             ))
@@ -135,7 +135,7 @@ class ServerFixture:
         log = path.with_suffix(".log")
         with log.open("w") as output:
             server = subprocess.Popen(
-                [sys.executable, "-c", SERVER_PROCESS, str(port)],
+                [sys.executable, "-c", script, str(port)],
                 env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
             )
         self.addCleanup(self.stop_server, server)
@@ -203,7 +203,7 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             saved = Path(directory) / "backup.sqlite3"
             restored = Path(directory) / "restored.sqlite3"
             with self.subTest("HTTP roles and live backup"):
-                server = self.start_server(path, in_process=False)
+                server = self.start_server(path)
                 try:
                     for role, correct, wrong in (("owner", OWNER, RUNNER), ("runner", RUNNER, OWNER)):
                         route = f"/v1/{role}/status"
@@ -223,40 +223,11 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 finally:
                     self.stop_server(server)
 
-            with self.subTest("in-process servers isolate state and restore the environment"):
-                before = dict(os.environ)
-                with patch("test_bootstrap.subprocess.Popen", wraps=subprocess.Popen) as spawn:
-                    first = self.start_server(Path(directory) / "first.sqlite3",
-                                              PHALANX_LOCAL_BOARD="1")
-                    first_url = self.url
-                    second = self.start_server(Path(directory) / "second.sqlite3")
-                second_url = self.url
-                try:
-                    self.assertTrue(dict(os.environ) == before,
-                                    "In-process fixtures must restore the process environment")
-                    self.assertFalse(any(
-                        call.args[0][:3] == [sys.executable, "-c", SERVER_PROCESS]
-                        for call in spawn.call_args_list
-                    ), "In-process fixtures must not launch an API server process")
-                    self.assertEqual(self.get("/operator/api/repositories")[0], 401)
-                    self.url = first_url
-                    self.assertEqual(self.get("/operator/api/repositories"), (200, []))
-                    self.assertEqual(self.request("/v1/repositories", OWNER, {
-                        "id": "isolated", "remote": "https://github.com/example/project.git",
-                    })[0], 200)
-                    self.url = second_url
-                    self.assertEqual(self.get("/v1/repositories", OWNER), (200, []))
-                    self.stop_server(first)
-                    self.assertEqual(self.get("/health"), (200, {"status": "ok"}))
-                finally:
-                    self.stop_server(first)
-                    self.stop_server(second)
-
             self.run_cli(restored, "restore", saved)
             self.run_cli(path, "restore", saved, success=False)
             for db_path, expected in ((path, ["durable", "after snapshot"]), (restored, ["durable"])):
                 with self.subTest(path=db_path.name):
-                    server = self.start_server(db_path, in_process=False)
+                    server = self.start_server(db_path)
                     try:
                         with connect(db_path) as db:
                             self.assertEqual([row[0] for row in db.execute("SELECT value FROM sample ORDER BY rowid")],
@@ -322,24 +293,25 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "reads.sqlite3"
             initialize(path)
-            stop = time.monotonic() + 3
+            start = threading.Barrier(8)
 
             def write(_):
-                while time.monotonic() < stop:
+                start.wait(timeout=WAIT_SECONDS)
+                for _ in range(4):
                     with write_transaction(path) as db:
                         # Hold the exclusive lock like a slow commit flush, then hand straight off.
                         db.execute("COMMIT")
                         db.execute("BEGIN EXCLUSIVE")
-                        time.sleep(0.08)
+                        time.sleep(0.002)
 
             def read(_):
                 slowest = 0.0
-                while time.monotonic() < stop:
+                start.wait(timeout=WAIT_SECONDS)
+                for _ in range(24):
                     started = time.monotonic()
                     with read_transaction(path) as db:
                         db.execute("PRAGMA user_version").fetchone()
                     slowest = max(slowest, time.monotonic() - started)
-                    time.sleep(0.02)
                 return slowest
 
             with ThreadPoolExecutor(max_workers=8) as pool:
@@ -351,9 +323,11 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
     def test_reader_starts_before_writers_queued_past_the_timeout(self):
         gate, order, release = store._Gate(), [], threading.Event()
+        held = threading.Event()
 
         def hold():
             with gate.write():
+                held.set()
                 release.wait(WAIT_SECONDS)
 
         def write():
@@ -364,14 +338,15 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             with gate.read_start():
                 order.append("read")
 
-        with patch.object(store, "BUSY_TIMEOUT", 1.0), ThreadPoolExecutor(max_workers=8) as pool:
+        with patch.object(store, "BUSY_TIMEOUT", 0.01), ThreadPoolExecutor(max_workers=8) as pool:
             running = pool.submit(hold)
-            time.sleep(0.1)
+            self.assertTrue(held.wait(WAIT_SECONDS))
             writers = [pool.submit(write) for _ in range(5)]
+            self.until(lambda: gate.writers == 5)
             # Under a deep write backlog, queued writers have already waited longer than the bound.
-            time.sleep(1.2)
+            time.sleep(0.03)
             reader = pool.submit(read)
-            time.sleep(0.1)
+            self.until(lambda: gate.queued == 1)
             release.set()
             for future in (running, reader, *writers):
                 future.result(timeout=WAIT_SECONDS)
@@ -379,9 +354,11 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
 
     def test_reader_waits_out_a_write_longer_than_the_busy_timeout(self):
         gate, release = store._Gate(), threading.Event()
+        held = threading.Event()
 
         def hold():
             with gate.write():
+                held.set()
                 release.wait(WAIT_SECONDS)
 
         def read():
@@ -389,11 +366,13 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
                 return "read"
 
         # A write turn may wait up to the busy timeout to begin and again to commit.
-        with patch.object(store, "BUSY_TIMEOUT", 0.2), ThreadPoolExecutor(max_workers=2) as pool:
+        with patch.object(store, "BUSY_TIMEOUT", 0.01), ThreadPoolExecutor(max_workers=2) as pool:
             running = pool.submit(hold)
-            time.sleep(0.1)
+            self.assertTrue(held.wait(WAIT_SECONDS))
             reader = pool.submit(read)
-            time.sleep(0.5)
+            self.until(lambda: gate.queued == 1)
+            time.sleep(0.03)
+            self.assertFalse(reader.done())
             release.set()
             running.result(timeout=WAIT_SECONDS)
             self.assertEqual(reader.result(timeout=WAIT_SECONDS), "read")
@@ -409,19 +388,19 @@ class BootstrapTest(ServerFixture, unittest.TestCase):
             with gate.read_start():
                 order.append("read")
 
-        def until(predicate):
-            deadline = time.monotonic() + WAIT_SECONDS
-            while not predicate():
-                self.assertLess(time.monotonic(), deadline)
-                time.sleep(0.01)
-
         with ThreadPoolExecutor(max_workers=2) as pool:
             with gate.read_start():
                 writer = pool.submit(write)
-                until(lambda: gate.writers == 1)
+                self.until(lambda: gate.writers == 1)
                 reader = pool.submit(read)
-                until(lambda: gate.queued == 1)
+                self.until(lambda: gate.queued == 1)
                 self.assertEqual(order, [])
             writer.result(timeout=WAIT_SECONDS)
             reader.result(timeout=WAIT_SECONDS)
         self.assertEqual(order, ["write", "read"])
+
+    def until(self, predicate):
+        deadline = time.monotonic() + WAIT_SECONDS
+        while not predicate():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.001)

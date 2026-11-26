@@ -91,6 +91,8 @@ latency deadline or forced transaction termination. Backup can also outwait the 
 See [transaction guidance](development.md#route-permissions-and-transactions) and
 [contention regressions](../tests/test_contention.py). Service adoption remains operator-owned
 under [deployment safeguards](deployment.md#standing-authority-for-compatible-upgrades).
+Unit tests shorten fault waits, not safety semantics; [the standalone probe](../tests/envelope_probe.py)
+owns production timing/load evidence.
 
 ## Intake and supported commands
 

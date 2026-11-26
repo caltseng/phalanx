@@ -55,7 +55,7 @@
     { kind: "queue_backlogged", itemId: "item-queue", executionId: "queue", reason: "Waiting for writer capacity: 5 of 5 writer slots occupied",
       recovery: "Wait for a registered writer to finish or release its slot", firstSeen: hourAgo, notifyOwner: false },
     { kind: "captain_idle_with_work", itemId: "item-overdue", executionId: "overdue",
-      reason: "Dispatch overdue: runnable for 30 min; 1 of 5 writer slots occupied",
+      reason: "Dispatch overdue: runnable for 60 min; 1 of 5 writer slots occupied",
       recovery: "A Captain launches it", firstSeen: hourAgo, notifyOwner: false },
     { kind: "head_drift", executionId: "run", reason: "Head moved", recovery: "Reconcile", firstSeen: now, notifyOwner: false },
     { kind: "no_live_captain", reason: "No Captain heartbeat", recovery: "Start a Captain", firstSeen: now, notifyOwner: true },
@@ -263,6 +263,57 @@
 
   try {
     await tick();
+    const lockup = root.querySelector(".brand-lockup");
+    const crest = lockup.querySelector(".brand-crest");
+    const cap = lockup.querySelector(".brand-rim-cap");
+    const motto = lockup.querySelector(".brand-motto");
+    const name = lockup.querySelector(".brand-name");
+    const reducedBrand = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const box = node => {
+      const { x, y, width, height } = node.getBoundingClientRect();
+      return { x, y, width, height };
+    };
+    const restingBox = box(lockup);
+    assert(lockup.getAttribute("href") === "/operator/" &&
+      lockup.getAttribute("aria-label") === "Phalanx — Push forward",
+    "Brand is a labeled keyboard-accessible home link, not an inert animation control");
+    assert(root.querySelector(".brand .sub").textContent === "Scribe" &&
+      getComputedStyle(root.querySelector(".brand .sub")).display !== "none",
+    "Scribe remains a visible product label on every viewport");
+    assert(motto.getBoundingClientRect().top > name.getBoundingClientRect().bottom &&
+      motto.getBoundingClientRect().left >= lockup.querySelector("svg").getBoundingClientRect().right,
+    "Motto remains below PHALANX and to the right of the shield");
+    assert(getComputedStyle(motto).fontStyle === "italic" &&
+      getComputedStyle(motto, "::before").height === "1px" &&
+      getComputedStyle(motto, "::after").height === "1px", "Engraved italic retains its fine rules");
+    assert([...lockup.querySelectorAll("use")].every(node =>
+      node.getAttribute("href").includes("phalanx-brand.svg#")) &&
+      !lockup.querySelector("path"), "All shield instances reuse the canonical SVG");
+    assert(lockup.getAnimations({ subtree: true }).length === 0, "Brand has no idle animation");
+    lockup.focus({ preventScroll: true });
+    await new Promise(resolve => setTimeout(resolve, 650));
+    const crestStyle = getComputedStyle(crest);
+    assert(JSON.stringify(box(lockup)) === JSON.stringify(restingBox), "Focus motion never shifts layout");
+    if (reducedBrand) {
+      assert(crestStyle.transform === "none" && getComputedStyle(cap).opacity === "1" &&
+        getComputedStyle(lockup.querySelector(".brand-rank-one")).opacity === "0" &&
+        lockup.getAnimations({ subtree: true }).length === 0,
+      "Actual reduced-motion preference preserves the static resting shield without transitions");
+    } else {
+      const transform = new DOMMatrixReadOnly(crestStyle.transform);
+      assert(transform.m41 === 0 && transform.m42 === -16 &&
+        getComputedStyle(cap).opacity === "0" &&
+        getComputedStyle(lockup.querySelector(".brand-tip-outline")).opacity === "1" &&
+        +getComputedStyle(lockup.querySelector(".brand-rank-one")).opacity === .23,
+      "Keyboard focus advances the existing chevron UP through the parted rim with formation trail");
+    }
+    if (lockup.matches(":focus-visible")) {
+      assert(getComputedStyle(lockup).outlineStyle !== "none", "Keyboard focus remains visible");
+    }
+    lockup.blur();
+    await new Promise(resolve => setTimeout(resolve, 650));
+    result.dataset.brand = JSON.stringify({ reduced: reducedBrand, width: innerWidth,
+      lockup: restingBox, motto: box(motto), motion: "upward-only", layoutShift: false });
     assert(root.querySelector(".health").textContent.includes("Connecting") &&
       !root.querySelector(".h-live"), "Live waits for every initial read, including overview");
     overviewReady = true;

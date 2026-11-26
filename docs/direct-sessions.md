@@ -120,7 +120,7 @@ clears. Owner-needed flags notify; informational flags do not block work.
 | Flag | Condition / recovery |
 | --- | --- |
 | `captain_stale`, `no_live_captain` | Captain liveness/recovery follows the [continuity rules](direct-path.md#captain-shifts-and-handoff). |
-| `captain_idle_with_work` | Runnable unassigned work for 30 minutes with admission available, dispatch on and no deliberate hold; launch or refresh a justified hold. |
+| `captain_idle_with_work` | Runnable unassigned work for 60 minutes with admission available, dispatch on and no deliberate hold; launch or refresh a justified hold. |
 | `queue_backlogged` | Unassigned work waiting 30 minutes on Building/Total, PR-fix preference or pause; informational, including with a hold. |
 | `pickup_blocked` | Unassigned work waiting 30 minutes on scope/authority or checkout/trust; notify with the shared pickup reason/recovery, not a Captain-failure signal. |
 | `launch_unconfirmed` | Unconfirmed for ten minutes; recover the same reservation by full nonce as above. |

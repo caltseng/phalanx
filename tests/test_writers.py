@@ -1865,20 +1865,33 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             self.assertIn("Total 2/1", lowered["reason"])
             self.assertEqual(lowered["first_seen"], backlog["first_seen"])
 
-    def test_queue_age_threshold_applies_to_backlog_and_overdue(self):
+    def test_queue_age_threshold_preserves_backlog_and_delays_only_dispatch_overdue(self):
         with write_transaction(self.path) as db:
             _, _, queued = self.backlog(db)
             now = datetime.now(UTC)
-            cutoff = int((now - flags.IDLE_WITH_WORK).timestamp() * 1000)
-            for maximum, kind in ((1, "queue_backlogged"), (2, "captain_idle_with_work")):
+            for maximum, kind, minutes in ((1, "queue_backlogged", 30), (2, "captain_idle_with_work", 60)):
                 with self.subTest(maximum=maximum):
+                    cutoff = int((now - timedelta(minutes=minutes)).timestamp() * 1000)
                     dispatch.set_dispatch(db, DispatchSettings(max_writers=maximum, max_building_writers=maximum))
-                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
-                               (cutoff + 1, queued["execution"]["id"]))
-                    self.assertEqual(flags.captain_idle_with_work(db, now), [])
-                    db.execute("UPDATE executions SET ready_since=? WHERE id=?",
-                               (cutoff, queued["execution"]["id"]))
-                    self.assertEqual(flags.captain_idle_with_work(db, now)[0]["kind"], kind)
+                    for delta in (1, 0, -1):
+                        with self.subTest(delta=delta):
+                            ready_since = cutoff + delta
+                            db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                                       (ready_since, queued["execution"]["id"]))
+                            warnings = flags.captain_idle_with_work(db, now)
+                            self.assertEqual(len(warnings), int(delta <= 0))
+                            if warnings:
+                                self.assertEqual(warnings[0]["kind"], kind)
+                                self.assertEqual(warnings[0]["first_seen"],
+                                                 (datetime.fromtimestamp(ready_since / 1000, UTC)
+                                                  + timedelta(minutes=minutes)).isoformat(timespec="microseconds"))
+                                if maximum == 2:
+                                    self.assertIn("runnable for 60 min", warnings[0]["reason"])
+                    if maximum == 2:
+                        db.execute("UPDATE executions SET ready_since=? WHERE id=?",
+                                   (int((now - timedelta(minutes=30)).timestamp() * 1000),
+                                    queued["execution"]["id"]))
+                        self.assertEqual(flags.captain_idle_with_work(db, now), [])
 
     def test_owner_action_pickup_blockers_remain_visible_after_the_existing_queue_budget(self):
         from phalanx.operator_api import SUMMARY, dispatch_context, summary
@@ -1933,7 +1946,8 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertEqual(overdue["kind"], "captain_idle_with_work")
         self.assertIn("Dispatch overdue", overdue["reason"])
         self.assertIn("0 of 1", overdue["reason"])
-        self.assertEqual(overdue["first_seen"], backlog["first_seen"])
+        self.assertEqual(datetime.fromisoformat(overdue["first_seen"]),
+                         datetime.fromisoformat(backlog["first_seen"]) + timedelta(minutes=30))
         status, _ = self.request(
             f"/v1/items/{queued['id']}/executions/{queued['execution']['id']}/writer", RUNNER, {
                 "expected_version": queued["execution"]["version"], "captain_id": captain["id"],
@@ -1992,7 +2006,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.kinds(now), set())
         later = now + captains.STALE + timedelta(seconds=1)
         self.assertEqual(self.kinds(later), {("no_live_captain", "server"), ("captain_stale", "server")})
-        idle = now + flags.IDLE_WITH_WORK + timedelta(seconds=1)
+        idle = now + flags.DISPATCH_OVERDUE + timedelta(seconds=1)
         with write_transaction(self.path) as db:
             db.execute("UPDATE captains SET heartbeat_at=?", (idle.isoformat(timespec="microseconds"),))
         self.assertEqual(self.kinds(idle), {("captain_idle_with_work", "server")})
