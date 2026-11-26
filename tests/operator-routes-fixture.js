@@ -526,6 +526,15 @@
         app.doc.querySelector("#operator-board").getBoundingClientRect().top;
       heights.push({ width, height: headerHeight });
       assert(headerHeight <= maxHeight, "Complete default header/control area stays compact at " + width + "px");
+      const lockup = app.doc.querySelector(".brand-lockup");
+      lockup.focus({ preventScroll: true });
+      await new Promise(resolve => setTimeout(resolve, 650));
+      // Canonical tip-outline: 10px stroke, with 12-by-29 chevron legs in a 64px viewBox.
+      const tipOverhang = 5 * Math.hypot(12, 29) / 12 *
+        lockup.querySelector(".brand-shield").getBoundingClientRect().width / 64;
+      assert(lockup.querySelector(".brand-tip-outline").getBoundingClientRect().top >= tipOverhang,
+        "Focused rim-break stroke stays inside the viewport at " + width + "px");
+      lockup.blur();
       const controls = [...app.doc.querySelectorAll(".bar .brand-lockup, .bar .actions > button, .bar .actions > details > summary, .board-navigation a")]
         .filter(control => control.getBoundingClientRect().height);
       assert(controls.every(control => {

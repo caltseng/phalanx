@@ -61,8 +61,8 @@ body { margin: 0; }
 /* Top bar: identity, freshness, counts. */
 .bar {
   position: sticky; top: 0; z-index: 2;
-  display: flex; flex-wrap: wrap; align-items: center; gap: .3rem 1rem;
-  padding: .3rem 0; margin-bottom: .5rem;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0 1rem;
+  padding: .3rem 0; margin-bottom: 0;
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(6px);
   border-bottom: 1px solid var(--line);
@@ -71,7 +71,7 @@ body { margin: 0; }
 .brand h1 { display: flex; margin: 0; font-size: inherit; }
 .phalanx-board .brand-lockup {
   display: inline-grid; grid-template-columns: 54px auto; align-items: center; gap: 12px;
-  padding: 0; color: var(--accent); text-decoration: none;
+  padding: 12px 0 0; color: var(--accent); text-decoration: none;
   font-family: "Palatino Linotype", Palatino, Georgia, serif; font-weight: 700;
 }
 .phalanx-board .brand-lockup:hover { text-decoration: none; }
@@ -189,6 +189,7 @@ body { margin: 0; }
 
 /* Sections. */
 .sec { margin: .9rem 0 0; }
+.sections > .sec:first-child { margin-top: .4rem; }
 .sec h2 {
   display: flex; align-items: center; gap: .5rem; margin: 0 0 .25rem; padding: 0 .25rem;
   font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
@@ -353,7 +354,7 @@ body { margin: 0; }
   .line > .dur { display: inline; }
   .captains .line > .stat:first-of-type { margin-left: 1.55rem; }
   .detail { padding-left: .9rem; }
-  .bar { gap: .15rem .9rem; }
+  .bar { gap: 0 .9rem; }
   .board-navigation { margin-left: 0; }
   .health { margin-left: auto; }
   .actions { gap: .15rem; }
