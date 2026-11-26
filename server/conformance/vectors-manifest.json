@@ -162,7 +162,7 @@
     "server/conformance/oracle.py": "c0e9fca9869d2e01bf3eb74b05e4a3dba804b1e299095acf087da304eb0ab7a8",
     "server/go.mod": "fa2e86a53c75a6763cec03cc324d52fcea59ddd31e8389692dda25ca93a077a9",
     "server/go.sum": "3acecbf3c96a1526d4e225ba7f019e2a0a8c710d4fe258557d9cbf8e121ee94b",
-    "server/.gitattributes": "2112f8b3e9df2f50ed6935e7858d4507a72f0047189f3f4abb4bf05fde5273a0",
+    "server/.gitattributes": "e3bdab20aad75d5588fa4737cee8859c322c183bf673ccf645128b0a21cf8690",
     "server/conformance/golden-fresh.json": "9b832a00de1f150bf64449867b1b74e59be6dd857280a96ede4de50cbdc6c6c6",
     "server/conformance/golden-retained.json": "48463bc3706972b94b7465bae0a6c45a2d556ad5b1411a2cbad90ca806314f5f"
   }
