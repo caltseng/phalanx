@@ -1,12 +1,17 @@
 # Phalanx decisions
 
-These are design calls for Phalanx. Most are best guesses the Captain made without asking Caleb; Caleb reviews them and may override any one. The **Decided by** column separates the two:
+These are design calls for Phalanx. The Captain records best guesses for the repository
+owner's review; the owner may override them. The **Decided by** column records the actual
+decision-maker, not a required operator identity. Historical entries retain their attribution:
 
 - **Caleb**: Caleb made the call explicitly. Agents don't change it without asking him.
 - **Captain**: an agent's best guess, open to Caleb's override.
 - **Captain; confirmed, approved or amended by Caleb**: the agent proposed it and Caleb explicitly accepted or changed it.
 
-Mark a row Caleb only for his explicit decision. To override, edit the row, set Decided by to Caleb and note the change. The Captain appends new decisions as it makes them. Worker questions it answers are also recorded on the item as `answered_by: captain`.
+Attribute an owner decision only to the owner who explicitly made it. Agents do not change
+explicit owner decisions without asking the owner. For an owner override, edit the row,
+record that decision-maker and note the change. The Captain appends new decisions as it
+makes them. Worker questions it answers are also recorded on the item as `answered_by: captain`.
 
 **Historical mechanisms:** PH-DS5 has removed the prior transport, scheduler, reservation,
 PR-stage executor and client SQLite journal implementations. Earlier rows remain as decision

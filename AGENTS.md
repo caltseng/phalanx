@@ -6,12 +6,13 @@
 - Implement against the current Markdown spec in small, independently reviewable PRs. Track completed slices and remaining integration in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 - Feature PRs don't edit IMPLEMENTATION_PLAN.md. The Captain or plan session batches status and ordering updates after merges.
 - Branch new work from `main`. Stack only when the code truly depends on an unmerged PR.
-- The Captain answers owner and design questions on Phalanx development with a best guess and logs each in [docs/decisions.md](docs/decisions.md) for Caleb's review. Record who decided each row, and don't change a decision Caleb made explicitly without asking him. Ask Caleb only for missing authority or credentials.
+- The Captain answers owner and design questions on Phalanx development with a best guess and logs each in [docs/decisions.md](docs/decisions.md) for the repository owner's review. Record who decided each row, and don't change an explicit owner decision without asking the owner. Ask the owner only for missing authority or credentials.
 
 ## Design priorities
 
 - Prioritize reliable delivery and simplicity. Choose the smallest design that keeps state correct and lets interrupted work resume. Design and test for a large queue and many concurrent workers on one machine. Multi-device execution and handoff are P2.
-- Prioritize simplicity. Don't add database migrations, legacy-schema support or backwards-compatibility machinery unless Caleb asks for it: change the schema, API or format directly and update its callers. This doesn't permit deleting or resetting live data, and checks, trust and authorization still apply.
+- Prioritize simplicity. Don't add database migrations, legacy-schema support or backwards-compatibility machinery unless the owner asks for it: change the schema, API or format directly and update its callers. This doesn't permit deleting or resetting live data, and checks, trust and authorization still apply.
+- Keep Phalanx usable by others, not coupled to any individual's identity. Use roles in operating instructions and operator-configured identities, credentials, paths and repository mappings rather than personal defaults. Preserve identity verification, authorization, privacy and ownership checks, including the configured issue-scout author identity. Historical attribution and canonical project URLs are not personal configuration.
 - Add abstractions, services, settings, and gates when they solve a concrete problem. Keep constraints scoped to the operation that needs them, and leave teams and runtimes room to work within their own repo’s requirements.
 - Aim for end-to-end autonomy from dispatch through delivery. Set up standing permissions and credentials for routine, in-scope operations so they can run without interactive permission prompts. Respect repository rules and external approval gates. Surface missing access as an actionable blocker when it prevents delivery.
 - Default to self-resolution. Run checks, diagnose failures, retry transient errors, fix routine conflicts, and address actionable review feedback independently. Escalate when human judgment materially affects the outcome, authority is genuinely missing, or further attempts cannot make progress.
@@ -23,7 +24,7 @@
 - Keep working until you really can't anymore. Keep the registered writer on its item through runnable delivery stages until completion or a genuine blocker, external wait, safe stop or cancel. Each stage has its own fenced attempt. Waits retain the writer and context; completion ends it. This never waives checks, trust, permissions, fencing or cancellation.
 - API transport alone must not gate already-authorized development, validation, publication or check-in under the same live writer's verified held allocation. Make best-effort updates, distinguish actual effects from missing receipts, and reconcile through existing fenced/idempotent controls. Never infer new admission/capacity, ignore known stop/401/ended credentials or lift ready-only/report/draft ceilings. See [control-plane outages](docs/writer-operations.md#control-plane-outages).
 - Keep the muster moving when one item is blocked. Try a different scoped recovery when it can help, isolate the affected work, and continue dispatching unrelated eligible stages within capacity.
-- Never fail silently. Give every wait or failure a visible reason and a recovery path. Notify Caleb when a blocker needs his attention. Every closed execution records exactly one verified PR or stored Markdown report, including a failure or cancellation report when the requested deliverable could not be produced.
+- Never fail silently. Give every wait or failure a visible reason and a recovery path. Notify the owner when a blocker needs their attention. Every closed execution records exactly one verified PR or stored Markdown report, including a failure or cancellation report when the requested deliverable could not be produced.
 - Two PRs are better than zero. Reuse a matching PR when found. After a bounded search, retry uncertain PR creation rather than lose delivery. Record one primary PR and surface any duplicates. Reconcile an uncertain merge before retrying and check in only the verified primary PR.
 
 ## Architecture
@@ -32,7 +33,7 @@
 - Keep queue state, attempts, work history and reports behind the API. Keep checkout mappings and Git credentials local. Captains register native writers; each writer uses its scoped credential from the item's Git directory, never the Captain's runner token.
 - Stay runtime-neutral. Phalanx must work with any agent runtime that can run visible worker sessions, such as Codex, GitHub Copilot CLI or the GitHub Copilot app, and Claude Code. Don't encode a preferred runtime, or one runtime's tools, names or behavior, in the core, specs, plan, branch names or tests. Captains use their runtime's native session tools and the shared writer registration and result contracts. Preserve enough handoff context to resume with a fresh agent after a reply or interruption.
 - Stay platform-neutral on the client side. The CLI, Captain sessions, reconciler and local checks must work on Windows, macOS, and Linux. Use portable paths, processes, signals, file locking and shells, and keep OS-specific behavior behind small, tested branches. CI must cover each supported OS. The server only needs to run where it is hosted.
-- Build for many users. Phalanx will serve people other than Caleb, in workspaces on a shared server ([SPEC.md](SPEC.md#users-and-workspaces)). Don't assume a single owner in the API, data model, dashboard or copy:
+- Build for many users, alone or in teams, in workspaces on a shared server ([SPEC.md](SPEC.md#users-and-workspaces)). Don't assume a single owner in the API, data model, dashboard or copy:
   - Scope new server state to a workspace.
   - Attribute requests and actions to a user or runner identity.
   - Keep each user's Git credentials on their own runner.
@@ -49,7 +50,7 @@
 ## Working in repositories
 
 - Verify the checkout and its working-tree state before editing. Preserve existing changes. For work dispatched to another repo, follow that repo’s applicable instructions and keep the work scoped to the item.
-- Use `phalanx/` for new topic branches unless Caleb or the target repo specifies otherwise. Run checks appropriate to the change and report any gaps.
+- Use `phalanx/` for new topic branches unless the owner or the target repo specifies otherwise. Run checks appropriate to the change and report any gaps.
 - Before you open or update a Phalanx PR, run only the tests that cover the change, one module at a time with `python -m unittest discover -s tests -p test_x.py`. The full suite runs in GitHub CI and gates the merge. Run:
   - every changed test module;
   - every test module that imports a changed `phalanx/` module;
