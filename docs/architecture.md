@@ -12,6 +12,10 @@ numbered slots, runner-only PR executors and client SQLite journals are retired.
 Historical decisions and pilot
 results referring to them are not instructions for a second execution path.
 
+The separate [Go foundation](../server/README.md) is a disposable, partial
+HTTP/application/SQLite implementation with pinned P0/D0 conformance fixtures.
+It is not a deployment entrypoint or a replacement for the running Python API.
+
 ## Components and ownership
 
 ```mermaid

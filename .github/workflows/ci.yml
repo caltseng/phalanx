@@ -89,16 +89,95 @@ jobs:
           path: envelope.json
           if-no-files-found: error
 
-  # The single required check covers every unit-test shard and the standalone probe.
+  go-foundation:
+    name: Go foundation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    env:
+      GOTOOLCHAIN: local
+      GOENV: "off"
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: server/go.sum
+
+      - name: Build and check the pinned foundation
+        working-directory: server
+        run: |
+          go version
+          go mod verify
+          go build -trimpath -buildvcs=false ./...
+          go vet ./...
+          go test ./...
+
+      - name: Race-check admission, storage, and HTTP operations
+        if: runner.os != 'Windows'
+        working-directory: server
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: Provision the exact disposable Python/SQLite oracle
+        if: runner.os == 'Windows'
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "python-oracle-20261110.tar.gz"
+          Invoke-WebRequest "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10%2B20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz" -OutFile $archive
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne "32b6cf90a03e2bc15fda8d2ab7ff78c4870f138887d612932650ce764efaab8f") { throw "Oracle archive checksum mismatch" }
+          $root = Join-Path $env:RUNNER_TEMP "phalanx-oracle-20261110"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          tar -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $root "python\python.exe"
+          & $python -c "import platform,sqlite3; print(platform.python_version(),sqlite3.sqlite_version); assert platform.python_version()=='3.14.10'; assert sqlite3.sqlite_version=='3.53.1'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m venv (Join-Path $root "venv")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $root "venv\Scripts\python.exe"
+          "PHALANX_CONFORMANCE_PYTHON=$python" >> $env:GITHUB_ENV
+
+      - name: Install pinned disposable Python oracle dependencies
+        if: runner.os == 'Windows'
+        run: '& $env:PHALANX_CONFORMANCE_PYTHON -m pip install -r requirements.lock'
+
+      - name: Compare immutable P0 and D0 oracles and sole-instance locks
+        if: runner.os == 'Windows'
+        run: |
+          Set-Location server
+          go build -trimpath -buildvcs=false -o "$env:RUNNER_TEMP\conformance-server.exe" ./cmd/conformance-server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location ..
+          & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\harness.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\conformance-proof"
+
+      - name: Preserve exact synthetic wire and durable evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v6
+        with:
+          name: go-conformance-windows
+          path: ${{ runner.temp }}/conformance-proof
+          if-no-files-found: error
+
+  # The single required check covers Python safety, the probe, and Go conformance.
   tests:
     name: Tests
     if: always()
-    needs: [test, envelope]
+    needs: [test, envelope, go-foundation]
     runs-on: ubuntu-latest
     steps:
       - name: Require every test shard and the envelope probe to pass
-        if: needs.test.result != 'success' || needs.envelope.result != 'success'
+        if: needs.test.result != 'success' || needs.envelope.result != 'success' || needs.go-foundation.result != 'success'
         run: |
           echo "::error::Test shards finished with result: ${{ needs.test.result }}"
           echo "::error::Envelope probe finished with result: ${{ needs.envelope.result }}"
+          echo "::error::Go foundation finished with result: ${{ needs.go-foundation.result }}"
           exit 1
