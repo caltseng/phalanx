@@ -17,12 +17,12 @@ class GitExecutionTest(unittest.TestCase):
     def test_hung_checkout_probe_bounds_caller_and_stops_only_owned_tree(self):
         with TemporaryDirectory() as root:
             root = Path(root)
-            ready, survived, unrelated = root / "ready", root / "survived", root / "unrelated"
-            child = ("import pathlib, time; "
-                     f"pathlib.Path({str(ready)!r}).touch(); time.sleep(2); "
-                     f"pathlib.Path({str(survived)!r}).touch()")
-            script = ("import pathlib, subprocess, sys, time; "
-                      f"subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(60)")
+            ready, unrelated = root / "ready", root / "unrelated"
+            child = ("import pathlib, sys; "
+                     f"pathlib.Path({str(ready)!r}).touch(); sys.stdin.buffer.read()")
+            script = ("import subprocess, sys; "
+                      f"child = subprocess.Popen([sys.executable, '-c', {child!r}], stdin=subprocess.PIPE); "
+                      "child.wait()")
             original = subprocess.Popen
             processes = []
             launched = []
@@ -30,7 +30,7 @@ class GitExecutionTest(unittest.TestCase):
             def launch(argv, **kwargs):
                 if argv[0] != "git":
                     return original(argv, **kwargs)
-                process = original([sys.executable, "-c", script], **kwargs)
+                process = original([sys.executable, "-c", script], **dict(kwargs, stdout=subprocess.PIPE))
                 processes.append(process)
                 deadline = time.monotonic() + WAIT_SECONDS
                 while not ready.exists() and time.monotonic() < deadline:
@@ -40,8 +40,9 @@ class GitExecutionTest(unittest.TestCase):
                 return process
 
             sentinel = original([sys.executable, "-c",
-                                 "import pathlib, time; time.sleep(3); "
-                                 f"pathlib.Path({str(unrelated)!r}).touch()"])
+                                 "import pathlib, sys; sys.stdin.buffer.read(1); "
+                                 f"pathlib.Path({str(unrelated)!r}).touch()"],
+                                stdin=subprocess.PIPE)
             try:
                 manager = WorkspaceManager(root, "https://github.com/example/repo", root.parent / "work")
                 with patch("phalanx.git.subprocess.Popen", side_effect=launch), \
@@ -50,10 +51,10 @@ class GitExecutionTest(unittest.TestCase):
                         manager.verify_checkout()
                 self.assertLess(time.monotonic() - launched[0], 2 * CLEANUP_TIMEOUT_SECONDS + 5)
                 self.assertIsNotNone(processes[0].poll())
-                time.sleep(2.1)
-                sentinel.wait(timeout=WAIT_SECONDS)
+                # EOF proves no descendant retained the inherited pipe after cleanup.
+                self.assertEqual(processes[0].communicate(timeout=WAIT_SECONDS)[0], b"")
+                sentinel.communicate(b"x", timeout=WAIT_SECONDS)
                 self.assertTrue(unrelated.exists())
-                self.assertFalse(survived.exists(), "Git's helper survived tree cleanup")
             finally:
                 for process in [*processes, sentinel]:
                     if process.poll() is None:
@@ -62,6 +63,8 @@ class GitExecutionTest(unittest.TestCase):
                         else:
                             process.kill()
                         process.wait(timeout=WAIT_SECONDS)
+                    if process.stdout:
+                        process.stdout.close()
 
     def test_files_preserve_bytes_stdin_and_git_environment_isolation(self):
         original = subprocess.Popen
