@@ -11,11 +11,42 @@ from fastapi import HTTPException, Request
 from phalanx import captains
 from phalanx.auth import require_board_owner
 from phalanx.store import write_transaction
+from phalanx.session_links import session_target
 
 from test_bootstrap import OWNER, REQUEST_TIMEOUT, RUNNER, ServerFixture
 
 
 class OperatorWebTest(ServerFixture, unittest.TestCase):
+    def test_recorded_session_links_resolve_once_without_guessing_or_replacing_invalid_urls(self):
+        identity = "12345678-1234-1234-1234-123456789abc"
+        copilot = "ghapp://sessions/" + identity
+        codex = "codex://threads/" + identity
+        self.assertEqual(session_target(identity=identity, runtime="copilot-app")["url"], copilot)
+        self.assertEqual(session_target(identity=identity, runtime="codex")["url"], codex)
+        self.assertEqual(session_target(codex)["url"], codex)
+        self.assertEqual(session_target(identity, runtime="codex")["url"], codex)
+        self.assertEqual(session_target("https://example.com/chat")["url"], "https://example.com/chat")
+        for reference in (
+            identity, "javascript:alert(1)", "file:///tmp/chat", "unknown://sessions/" + identity,
+            copilot + "?run=1", copilot + "#x", "ghapp://sessions/../" + identity,
+            "ghapp://user@sessions/" + identity, copilot + "/", "ghapp://sessions/%31" + identity,
+            " " + copilot, "https://user:pass@example.com/chat", "https://[bad",
+            "https://example.com/\\chat", "https://example.com:bad/chat", "/operator/new",
+            "codex://threads/not-a-thread", codex,
+        ):
+            with self.subTest(reference=reference):
+                self.assertIsNone(session_target(
+                    reference, runtime="copilot-app", identity=identity, explicit_url=True)["url"])
+        for args in ({"identity": identity}, {"reference": identity},
+                     {"runtime": "copilot-cli", "identity": identity},
+                     {"reference": copilot, "identity": "other"}):
+            self.assertIsNone(session_target(**args)["url"])
+        for availability in ("missing", "deleted"):
+            self.assertEqual(session_target(copilot, availability=availability),
+                             {"url": None, "reason": "session " + availability})
+        self.assertIn("unverified", session_target(copilot)["reason"])
+        self.assertIn("present", session_target(copilot, availability="present")["reason"])
+
     def test_local_dashboard_settings_share_authority_and_canonical_validation(self):
         directory = self.enterContext(TemporaryDirectory())
         self.start_server(Path(directory) / "local-settings.sqlite3", PHALANX_LOCAL_BOARD="1")
@@ -205,7 +236,8 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         with write_transaction(path) as db:
             for kind in ("live", "stale", "ended"):
                 row = captains.register(db, captains.CaptainRegistration(
-                    session_ref=kind, charter_revision="test"))
+                    session_ref=("codex://threads/12345678-1234-1234-1234-123456789abc"
+                                 if kind == "live" else kind), charter_revision="test"))
                 ids[kind] = row["id"]
             db.execute("UPDATE captains SET heartbeat_at=? WHERE id=?",
                        ((now - captains.STALE - timedelta(seconds=1)).isoformat(), ids["stale"]))
@@ -217,6 +249,36 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         self.assertEqual({key: row["live"] for key, row in rows.items()}, expected)
         self.assertEqual([rows[ids[kind]]["stale"] for kind in ids], [False, True, False])
         self.assertEqual([rows[ids[kind]]["live"] for kind in ids], [True, False, False])
+        self.assertEqual(rows[ids["live"]]["session_link"]["url"],
+                         "codex://threads/12345678-1234-1234-1234-123456789abc")
+        self.assertIsNone(rows[ids["ended"]]["session_link"]["url"])
+
+    def test_board_writer_link_uses_recorded_host_and_keeps_invalid_url_unavailable(self):
+        from test_bootstrap import claim_stage
+
+        directory = self.enterContext(TemporaryDirectory())
+        path = Path(directory) / "writer-links.sqlite3"
+        self.start_server(path, PHALANX_LOCAL_BOARD="1")
+        self.assertEqual(self.request("/v1/repositories", OWNER, {
+            "id": "example", "remote": "https://github.com/example/project.git",
+        })[0], 200)
+        status, item = self.request("/v1/items", OWNER, {
+            "repository_id": "example", "goal": "Recorded writer link",
+        })
+        self.assertEqual(status, 201)
+        claim_stage(path, item["id"], "x" * 32)
+        identity = "12345678-1234-1234-1234-123456789abc"
+        with write_transaction(path) as db:
+            db.execute("UPDATE writers SET runtime='codex', session_id=?", (identity,))
+        row = self.get("/v1/operator/executions?limit=1")[1]["items"][0]
+        self.assertEqual(row["writer"]["session_link"], {
+            "url": "codex://threads/" + identity,
+            "reason": "recorded session; existence unverified",
+        })
+        with write_transaction(path) as db:
+            db.execute("UPDATE writers SET session_url=?", ("ghapp://sessions/" + identity,))
+        row = self.get("/v1/operator/executions?limit=1")[1]["items"][0]
+        self.assertIsNone(row["writer"]["session_link"]["url"])
 
     def test_shell_and_assets_preserve_api_authentication(self):
         directory = self.enterContext(TemporaryDirectory())

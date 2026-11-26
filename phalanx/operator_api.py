@@ -19,7 +19,7 @@ from .intake import report as stored_report
 from .intake_api import run
 from .intake_models import LABEL_PATTERN, Identifier
 from .operator_schema import ACTIVE_STARTED_AT, CLOSED, INPUT_RANK, OPEN
-from .session_links import session_key
+from .session_links import session_key, session_target
 from .store import read_transaction
 from .transitions import Stage, Status
 
@@ -356,6 +356,11 @@ def summary(row, now, context):
             "runtime": row["writer_runtime"], "ended_at": row["writer_ended_at"],
             "captain_id": row["writer_captain_id"], "session_id": row["writer_session_id"],
             "session_url": row["writer_session_url"], "last_progress_at": row["writer_progress_at"],
+            "session_link": session_target(
+                row["writer_session_url"], runtime=row["writer_runtime"],
+                identity=row["writer_session_id"], explicit_url=bool(row["writer_session_url"]),
+                availability=context.get("session_reports", {}).get(
+                    session_key(row["writer_session_id"], row["writer_runtime"]), "unverified")),
             "progress_note": row["writer_progress_note"],
             "nonce": row["writer_nonce"], "created_at": row["writer_created_at"],
             "confirmed_at": row["writer_confirmed_at"], "abandoned_at": row["writer_abandoned_at"],

@@ -4,7 +4,7 @@
   const ID = /^[0-9a-f]{32}$/;
   const CURSOR = /^[A-Za-z0-9_-]{1,512}$/;
   const EXECUTIONS = "/v1/operator/executions";
-  const { safeUrl } = window.PhalanxOperatorHelpers;
+  const { safeUrl, readSignal } = window.PhalanxOperatorHelpers;
 
   const filters = new URLSearchParams(location.search);
   const FILTERS = ["repository", "label", "status", "stage", "outcome", "q", "closed_after"];
@@ -97,9 +97,7 @@
           state: row.writer.state,
           runtime: row.writer.runtime,
           captainId: row.writer.captain_id,
-          sessionId: row.writer.session_id,
-          sessionUrl: row.writer.session_url,
-          sessionAvailability: row.writer.session_availability,
+          sessionLink: row.writer.session_link,
           lastProgressAt: row.writer.last_progress_at,
           progressNote: row.writer.progress_note
         } : null
@@ -108,8 +106,8 @@
 
     function captain(row) {
       return {
-        id: row.id, sessionRef: row.session_ref, state: row.state, live: row.live === true,
-        sessionAvailability: row.session_availability,
+        id: row.id, state: row.state, live: row.live === true,
+        sessionLink: row.session_link,
         stale: row.stale === true, heartbeatAt: row.heartbeat_at, wakeCount: row.wake_count,
         compactionCount: Number.isSafeInteger(row.compaction_count) && row.compaction_count >= 0
           ? row.compaction_count : null,
@@ -279,7 +277,7 @@
       const current = ++generation;
       status.textContent = "Loading capacity...";
       try {
-        const value = await source.capacity(AbortSignal.timeout(12000));
+        const value = await source.capacity(readSignal());
         if (disposed || generation !== current) return;
         display(value);
         status.textContent = "";
@@ -391,7 +389,7 @@
       const current = ++generation;
       status.textContent = "Loading registered repositories...";
       try {
-        const rows = await source.repositories(AbortSignal.timeout(12000));
+        const rows = await source.repositories(readSignal());
         if (disposed || generation !== current || !modal.open) return;
         const selected = repository.value;
         repository.replaceChildren(...rows.map(row => {
@@ -518,7 +516,7 @@
     dialog.showModal();
     document.querySelector("#operator-report-body").scrollTop = 0;
     try {
-      const signal = AbortSignal.any([request.signal, AbortSignal.timeout(12000)]);
+      const signal = readSignal(request.signal);
       const markdown = await source.report(output, signal);
       if (reportRead === request && dialog.open) {
         reportStatus.textContent = "";
@@ -573,7 +571,7 @@
     status.textContent = "Checking owner access…";
     try {
       const source = client(token);
-      const access = await source.owner(AbortSignal.timeout(12000));
+      const access = await source.owner(readSignal());
       if (access.role !== "owner") throw new Error("Owner access required.");
       show(source);
       disconnect.hidden = false;
@@ -590,7 +588,7 @@
     // A local board opens without a token; otherwise the server returns 401 and the form appears.
     const source = client(null);
     try {
-      await source.boardAccess(AbortSignal.timeout(12000));
+      await source.boardAccess(readSignal());
       show(source);
     } catch (error) {
       form.hidden = false;
