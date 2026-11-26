@@ -101,8 +101,8 @@ Run the same CI configuration locally with:
 python tests\envelope_probe.py --executions 1000 --fanout 60 --throttled 2 --captains 2 --max-writers 2 --duration 20 --throttle-seconds 4 --outage-seconds 3 --aging-seconds 10 --json-out envelope.json
 ```
 
-[#209](https://github.com/caltseng/phalanx/pull/209) records the first part-1 direct default-scale
-comparison and decision 87's authenticated timing exception: invariant/fault checks passed,
+Decision 87 records the first part-1 direct default-scale comparison and its timing exception:
+invariant/fault checks passed,
 but PH-19a latency, free-writer delay and due-event-drain timing targets remain missed and
 tracked under PH-26. Its exit 0 must not be described as passing those timing targets.
 

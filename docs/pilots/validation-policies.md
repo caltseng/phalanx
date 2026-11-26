@@ -52,8 +52,7 @@ and set `"validation_policy"` in the reconciler config to that path. Before use:
 ## Sources
 
 Each entry comes from the repository's `AGENTS.md`, `.github/workflows/ci.yml`
-and its `main` ruleset, checked against the check runs on `main`
-(pilot-py `38480d5`, pilot-web `096591a`) with
+and its `main` ruleset. Verify current check runs on the intended revision with
 `gh api repos/caltseng/REPO/commits/SHA/check-runs`.
 
 - **Local checks.** pilot-py runs `python -m unittest discover -s tests -v`

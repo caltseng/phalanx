@@ -42,8 +42,6 @@ the GitHub observation interface; trusted reconciler checks use
 ### Merge decision before auto-merge
 
 Follow [Merge decision](../phalanx/prompts/worker.md#merge-decision-publication-and-delivery).
-The [PR #251 reproduction](https://github.com/caltseng/phalanx/pull/255) is historical
-evidence for the ordering, not another approval contract.
 
 ## Bounded performance work
 
@@ -60,18 +58,7 @@ stops and finalization are refused. Repeating an open question is also refused.
 The owner inbox/Scribe exposes the question; an authenticated versioned reply queues the
 same stage and populates `last_reply`.
 
-### Applying classification to current timing work
-
-The owner classified #252 (envelope), #253 (API) and #258 (CLI) as ordinary optimization;
-their numeric misses remain historical evidence, not achieved targets or current dispositions.
-The [decision-94 closeout](decisions.md#ordinary-performance-case-closeout-decision-94)
-records verified merges. Preserve these source measurements:
-
-| Work | Historical measurement | Follow-up actor/action |
-| --- | --- | --- |
-| [#252](https://github.com/caltseng/phalanx/pull/252), `4852183e` | 10.549 s vs under-10 s; [run 45646662719](https://github.com/caltseng/phalanx/actions/runs/45646662719); one probe and 313 expected unit IDs | Captain coordinates remaining shift-CLI diagnosis. |
-| [#253](https://github.com/caltseng/phalanx/pull/253), `7e231933` | Windows 3.14/shard 3: 128 s vs 125.4 s, 38.76% vs 40%; five other reductions passed; [run 45652410596](https://github.com/caltseng/phalanx/actions/runs/45652410596) | API writer retains 321-ID comparison; Captain tracks 2.6 s residual. |
-| [#258](https://github.com/caltseng/phalanx/pull/258), CLI-only evidence | Windows shift/writer 3.482/3.234 s (3.12), 2.919/3.423 s (3.14), vs under-2 s; [run 45649550659](https://github.com/caltseng/phalanx/actions/runs/45649550659) | CLI writer reports frozen 326-ID combined diagnostic; Captain tracks residual latency. |
+### Versioned acceptance-criteria steering
 
 An authorized operator reads fresh authenticated item state before editing criteria:
 
@@ -88,16 +75,9 @@ not an old partial edit. Retry an uncertain PATCH with its exact body/`Idempoten
 or inspect timeline first; on 409 reread state. Never refresh only version against stale
 criteria, edit storage or fake a result/rerun. Verify receipt version, timeline before/after
 and unchanged writer/allocations; relay accepted scope to the retained writer.
-Older APIs retain queued-only behavior: see [deployment boundary](deployment.md#coordination-policy-adoption-boundary).
-
-### Retained-session activation
-
-Install the reviewed package through the deployment procedure. Retained chats do not
-automatically reload prompts: relay changed canonical sections verbatim with the writer's
-configured `$work` substituted, and verify receipt. `shift prompt worker` prints a template,
-not a new kickoff; do not send unexpanded `$publication` or rerun `shift launch` to refresh it.
-Do not revive/contact ended writers. Captain adoption follows
-[shift reinforcement](../phalanx/prompts/captain.md#every-wake).
+Verify installed route support before steering; [deployment](deployment.md#coordination-policy-adoption-boundary)
+owns package and retained-instruction adoption. Historical timing cases belong in the
+[decision log](decisions.md#ordinary-performance-case-closeout-decision-94).
 
 ## Host state
 

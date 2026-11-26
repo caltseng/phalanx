@@ -1,7 +1,6 @@
 # Relay-free direct-session architecture
 
-This implementation map was audited against `main` at `641dbb7` (November 24, 2026).
-It describes shipped code, not proof that a particular installation has deployed it.
+This implementation map describes shipped code, not proof that a particular installation has deployed it.
 [SPEC.md](../SPEC.md) defines the product,
 [STATE_MACHINE.md](../STATE_MACHINE.md) owns transitions, and
 [direct sessions](direct-sessions.md) specifies the coordination contract.
@@ -9,9 +8,8 @@ It describes shipped code, not proof that a particular installation has deployed
 **Relay-free does not mean server-free.** The retired relay was the Captain chat
 transport used by the old scheduling loop. The FastAPI HTTP API and Scribe dashboard
 are still running components. The old `captain`, `relay` and `attended*` CLI paths,
-numbered slots, runner-only PR executors and client SQLite journals were removed in
-[#209](https://github.com/caltseng/phalanx/pull/209) and
-[#214](https://github.com/caltseng/phalanx/pull/214). Historical decisions and pilot
+numbered slots, runner-only PR executors and client SQLite journals are retired.
+Historical decisions and pilot
 results referring to them are not instructions for a second execution path.
 
 ## Components and ownership
@@ -79,74 +77,20 @@ queue, offline transitions or admission bypass.
 
 ### SQLite contention and request threads
 
-The store keeps DELETE journaling, `synchronous=EXTRA`, short transactions and SQLite's
-two-second busy timeout. Its process-local gate alternates writers with waiting read
-starts. Admission now has a separate four-second bound (one SQLite begin/commit turn),
-including time spent behind other in-process requests. Expired waiters remove their
-queue counts and raise a busy `sqlite3.OperationalError`; the API's existing contention
-handler returns **503**, `Retry-After: 1`, and an instruction to retry the same request.
-This is an admission bound, not a deadline that interrupts an admitted transaction or
-a claim that arbitrary application work/IO completes within four seconds. SQLite
-still owns cross-process locking, commit durability and rollback on connection close.
-Writer/result fencing and idempotency are unchanged; preserve the original retry key.
+SQLite uses DELETE journaling, `synchronous=EXTRA`, short transactions and a two-second
+busy timeout. The process-local gate alternates writers with waiting read batches;
+admission has a separate four-second bound. Timed-out/interrupted waiters remove their
+queue counts. Contention returns **503**, `Retry-After: 1`; retry the original request/key
+under unchanged writer/result fences.
 
-An isolated comparison of deployed `6cf538ed84a96f407ab1f4fd1f5ae2f239bd84a4`
-and main `629788a` (unchanged through `fca085a`) found identical **unbounded**
-`Condition.wait_for` calls before
-SQLite was reached. Holding one gate turn, then queuing a read and write on a
-two-thread executor, kept both workers occupied and a database-free status job queued
-beyond SQLite's two-second timeout. The bounded gate frees those workers with busy
-errors while the original holder remains held. This demonstrates a starvation path,
-not proof that it was the sole cause of any particular live outage. The already-merged
-request-local query reductions in #263 reduce load but do not bound gate admission.
-
-`tests/test_contention.py` exercises timeout cleanup and reuse, logged dependency
-refresh retry from its retained durable audit, and real HTTP writer progress, capacity,
-result and reconciler heartbeat requests with a deliberately reduced two-thread pool.
-It checks health/auth responsiveness while a gate turn remains held, retryable failures,
-concurrent recovery without restart, exact result replay/stale-result rejection,
-integrity, DELETE/EXTRA and preserved configured 10-Building/20-Total settings.
-The HTTP fixture fills those actual allocations, refuses a 21st writer and resumes
-progress for all 20 retained writers after contention clears.
-No larger thread pool, database reset, new journal mode or watchdog is involved.
-
-**Additional failure paths:** interrupting `read_start` while waiting previously left a
-queued reader behind; the next completed write converted it into an admitted reader that
-would never exit, making later writes time out. Cleanup now removes the reader from its
-current queue even if a write handed off the read batch just before interruption.
-Separately, a synchronous contention exception handler needed another AnyIO request-worker
-slot after SQLite had already failed. Saturating those slots prevented delivery of an
-already-determined 503. The JSON-only handler now runs on the event loop, without moving
-SQLite there. The regression holds a real external EXCLUSIVE lock, waits through SQLite's
-production two-second busy timeout, and requires the 503 within five seconds while all
-request-worker slots remain borrowed.
-
-The same module also drives 20 concurrent writer/control requests against an external
-RESERVED lock with unchanged production admission/busy timeouts and the normal request
-pool. Progress, capacity, results and reconciler heartbeats must return retryable failures
-within a 15-second batch deadline, while owner authentication and health succeed. After
-unlocking, all 20 original writers resume. Failed requests preserve full writer, attempt,
-execution and transition-history rows; result replay, fencing and capacity checks still
-apply. A held read snapshot separately forces COMMIT to time out and verifies rollback.
-Background prerequisite refresh and report finalization retain their durable intents
-through external writer contention. These tests establish bounded recovery for those
-faults, not a general latency guarantee under arbitrary overload.
-
-**Remaining limits:** gate admission and SQLite lock waits have separate budgets; worker
-queueing, authentication and route transactions can add them. SQLite's busy timeout is
-not a wall-clock deadline for SQL execution, filesystem calls or fsync. An admitted slow
-transaction is not forcibly interrupted. Canceling an async task or losing the HTTP
-connection cannot retract an already-running synchronous transaction: it may still commit.
-Normal exception/cancellation unwinding closes the connection and rolls back an unfinished
-transaction. The online backup API can also wait on a held database beyond a busy timeout.
-No new watchdog, forced thread termination or durability downgrade is introduced.
-
-**Adoption boundary:** deployments at `6cf538e` or `629788a` do not contain this
-bounded-admission change. It takes effect only when the service owner adopts the reviewed
-API/store revision containing it through the existing safe deployment procedure.
-It adds no schema change and does not authorize service restarts, live database access,
-concurrency-setting changes or deployment by an item writer. Any separately required
-store-format adoption must follow its own record-preserving operator procedure.
+SQLite stays in request workers, not the event loop; the JSON-only contention handler
+is async so it needs no additional worker slot. Cancellation/disconnection cannot retract
+a running transaction, which may commit; unfinished transactions roll back on connection
+close. Gate, SQLite, worker-queue and route waits can accumulate: these are not an overall
+latency deadline or forced transaction termination. Backup can also outwait the busy timeout.
+See [transaction guidance](development.md#route-permissions-and-transactions) and
+[contention regressions](../tests/test_contention.py). Service adoption remains operator-owned
+under [deployment safeguards](deployment.md#standing-authority-for-compatible-upgrades).
 
 ## Intake and supported commands
 

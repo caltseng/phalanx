@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from shutil import copytree
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -265,6 +266,28 @@ class CharterTest(unittest.TestCase):
                     occurrences.setdefault(line.strip(), set()).add(str(path.relative_to(root)))
         duplicates = {line: sorted(files) for line, files in occurrences.items() if len(files) > 1}
         self.assertEqual(duplicates, {})
+
+    def test_operating_docs_stay_concise_and_history_free(self):
+        root = Path(__file__).resolve().parents[1]
+        for name, limit in (("writer-operations.md", 2300), ("deployment.md", 1800)):
+            with self.subTest(document=name):
+                text = (root / "docs" / name).read_text(encoding="utf-8")
+                self.assertLessEqual(len(text.split()), limit)
+        architecture = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
+        sqlite_section = architecture.split("### SQLite contention and request threads\n", 1)[1]
+        self.assertLessEqual(len(sqlite_section.split("\n## ", 1)[0].split()), 150)
+        documents = sorted((root / "docs").rglob("*.md")) + sorted(root.glob("*.md"))
+        continuity_sections = []
+        for path in documents:
+            if path.name == "decisions.md":
+                continue
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(document=str(path.relative_to(root))):
+                self.assertNotRegex(text, r"/pull/\d+\b|(?<![\w`])#\d+\b")
+            for heading in re.findall(r"^#{1,6} (.+)$", text, re.MULTILINE):
+                if re.search(r"captain.*(?:shifts|handoff|continuity)", heading, re.IGNORECASE):
+                    continuity_sections.append((path.relative_to(root).as_posix(), heading))
+        self.assertEqual(continuity_sections, [("docs/direct-path.md", "Captain shifts and handoff")])
 
     def test_outage_continuity_preserves_confirmed_capacity_and_explicit_ceilings(self):
         for target, mode in (("checked_in", "ready"), ("ready_for_check_in", "ready"),
