@@ -137,6 +137,7 @@ checks and shared fixtures, use [Develop Phalanx](docs/development.md).
 - [Writer operations](docs/writer-operations.md): publication, validation flags and delivery.
 - [Recovery](docs/recovery.md): writer replacement, troubleshooting, backup and restore.
 - [Architecture](docs/architecture.md): implementation map and ownership diagrams.
+- [HTTP server migration draft](docs/http-server-migration.md): compatibility specification for collaborative review; no implementation or deployment approval.
 - [API reference](docs/api.md): routes, scoped attempts and correlated timelines.
 - [Develop Phalanx](docs/development.md): tests, CI, fixtures and transactions.
 - [Validation policy](docs/validation-policy.md): trusted local checks and required GitHub checks.
