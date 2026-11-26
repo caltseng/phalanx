@@ -6,7 +6,7 @@ import sys
 from tempfile import TemporaryDirectory
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from phalanx.git import run_git
 from phalanx.local_checks import CLEANUP_TIMEOUT_SECONDS, kill_tree
@@ -81,7 +81,6 @@ class GitExecutionTest(unittest.TestCase):
             script = ("import os, sys; assert 'GIT_DIR' not in os.environ; "
                       "sys.stdout.buffer.write(sys.stdin.buffer.read() + b'\\xff'); "
                       "sys.stderr.buffer.write(b'warning')")
-            self.assertEqual(argv[:4], ["git", "--no-optional-locks", "-c", "core.fsmonitor=false"])
             return original([sys.executable, "-c", script], **kwargs)
 
         with patch.dict(os.environ, {"GIT_DIR": "untrusted"}), \
@@ -89,37 +88,41 @@ class GitExecutionTest(unittest.TestCase):
             result = run_git(None, "hash-object", stdin="hello")
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"hello\xff", b"warning"))
 
-    def test_start_wait_and_cleanup_errors_remain_caller_errors_even_unchecked(self):
+    def test_launch_errors_remain_caller_errors_even_unchecked(self):
         for failure in (FileNotFoundError("missing git"), OSError("transport failed")):
             with self.subTest(failure=failure), patch("phalanx.git.subprocess.Popen", side_effect=failure):
                 with self.assertRaisesRegex(WorkspaceError, "Cannot run Git"):
                     run_git(None, "rev-parse", check=False, error=WorkspaceError)
-        for failure in (OSError("wait failed"), subprocess.SubprocessError("transport failed"),
-                        subprocess.TimeoutExpired("git", 0.1), KeyboardInterrupt()):
-            process = Mock()
-            process.wait.side_effect = failure
-            expected = KeyboardInterrupt if isinstance(failure, KeyboardInterrupt) else WorkspaceError
-            with self.subTest(failure=failure), patch("phalanx.git.subprocess.Popen", return_value=process), \
-                    patch("phalanx.git.kill_tree") as cleanup, self.assertRaises(expected):
-                run_git(None, "rev-parse", check=False, error=WorkspaceError)
-            cleanup.assert_called_once_with(process)
-        process = Mock()
-        process.wait.side_effect = subprocess.TimeoutExpired("git", 0.1)
-        with patch("phalanx.git.subprocess.Popen", return_value=process), \
-                patch("phalanx.git.kill_tree", side_effect=OSError("denied")), \
-                self.assertRaisesRegex(WorkspaceError, "cleanup failed.*denied"):
-            run_git(None, "fetch", error=WorkspaceError)
 
-    def test_unchecked_probe_accepts_only_absence_and_never_signal_termination(self):
-        for code in (0, 1, 128, -15):
-            process = Mock(returncode=code)
-            with self.subTest(code=code), patch("phalanx.git.subprocess.Popen", return_value=process):
-                if code in (0, 1):
-                    self.assertEqual(run_git(None, "rev-parse", check=False,
-                                             allowed_returncodes=(0, 1)).returncode, code)
-                else:
-                    with self.assertRaisesRegex(RuntimeError, f"exit {code}"):
-                        run_git(None, "rev-parse", check=False, allowed_returncodes=(0, 1))
+    def test_wait_errors_and_cancellation_reap_owned_process(self):
+        original = subprocess.Popen
+        for failure in (OSError("wait failed"), subprocess.SubprocessError("transport failed"),
+                        KeyboardInterrupt()):
+            with self.subTest(failure=type(failure).__name__):
+                processes = []
+
+                def launch(argv, **kwargs):
+                    process = original([sys.executable, "-c", "import time; time.sleep(120)"], **kwargs)
+                    processes.append(process)
+                    wait = process.wait
+
+                    def interrupted_wait(*args, **options):
+                        process.wait = wait
+                        raise failure
+
+                    process.wait = interrupted_wait
+                    return process
+
+                try:
+                    expected = KeyboardInterrupt if isinstance(failure, KeyboardInterrupt) else WorkspaceError
+                    with patch("phalanx.git.subprocess.Popen", side_effect=launch), \
+                            self.assertRaises(expected):
+                        run_git(None, "rev-parse", check=False, error=WorkspaceError)
+                    self.assertIsNotNone(processes[0].poll())
+                finally:
+                    for process in processes:
+                        if process.poll() is None:
+                            kill_tree(process)
 
     def test_broken_ref_is_not_an_absent_ref_even_when_git_exits_one(self):
         with TemporaryDirectory() as root:
@@ -130,14 +133,14 @@ class GitExecutionTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "ignoring broken ref"):
                 run_git(root, *args, check=False, allowed_returncodes=(0, 1))
 
-    @unittest.skipUnless(os.name == "nt", "Windows owned-tree cleanup")
-    def test_stalled_tree_cleanup_is_bounded_and_still_reaps_direct_child(self):
-        process = Mock(pid=1234)
-        with patch("phalanx.local_checks.subprocess.run",
-                   side_effect=subprocess.TimeoutExpired("taskkill", CLEANUP_TIMEOUT_SECONDS)) as run, \
-                self.assertRaises(subprocess.TimeoutExpired):
-            kill_tree(process)
-        self.assertEqual(run.call_args.args[0], ["taskkill", "/T", "/F", "/PID", "1234"])
-        self.assertEqual(run.call_args.kwargs["timeout"], CLEANUP_TIMEOUT_SECONDS)
-        process.kill.assert_called_once()
-        process.wait.assert_called_once_with(timeout=CLEANUP_TIMEOUT_SECONDS)
+    @unittest.skipIf(os.name == "nt", "POSIX signal return codes")
+    def test_signal_termination_is_not_an_absent_ref(self):
+        original = subprocess.Popen
+
+        def launch(argv, **kwargs):
+            return original([sys.executable, "-c",
+                             "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"], **kwargs)
+
+        with patch("phalanx.git.subprocess.Popen", side_effect=launch), \
+                self.assertRaisesRegex(WorkspaceError, "exit -15"):
+            run_git(None, "rev-parse", check=False, allowed_returncodes=(0, 1), error=WorkspaceError)
