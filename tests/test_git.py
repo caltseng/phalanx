@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import socket
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -15,16 +16,21 @@ from timing import WAIT_SECONDS
 
 class GitExecutionTest(unittest.TestCase):
     def test_hung_checkout_probe_bounds_caller_and_stops_only_owned_tree(self):
-        with TemporaryDirectory() as root:
+        with TemporaryDirectory() as root, socket.socket() as listener:
             root = Path(root)
-            ready, unrelated = root / "ready", root / "unrelated"
-            child = ("import pathlib, sys; "
-                     f"pathlib.Path({str(ready)!r}).touch(); sys.stdin.buffer.read()")
+            unrelated = root / "unrelated"
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            listener.settimeout(WAIT_SECONDS)
+            child = ("import socket; "
+                     f"connection = socket.create_connection({listener.getsockname()!r}); "
+                     "connection.sendall(b'r'); connection.recv(1)")
             script = ("import subprocess, sys; "
-                      f"child = subprocess.Popen([sys.executable, '-c', {child!r}], stdin=subprocess.PIPE); "
+                      f"child = subprocess.Popen([sys.executable, '-c', {child!r}]); "
                       "child.wait()")
             original = subprocess.Popen
             processes = []
+            connections = []
             launched = []
 
             def launch(argv, **kwargs):
@@ -32,10 +38,10 @@ class GitExecutionTest(unittest.TestCase):
                     return original(argv, **kwargs)
                 process = original([sys.executable, "-c", script], **dict(kwargs, stdout=subprocess.PIPE))
                 processes.append(process)
-                deadline = time.monotonic() + WAIT_SECONDS
-                while not ready.exists() and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                self.assertTrue(ready.exists(), "helper fixture did not start")
+                connection, _ = listener.accept()
+                connections.append(connection)
+                connection.settimeout(WAIT_SECONDS)
+                self.assertEqual(connection.recv(1), b"r")
                 launched.append(time.monotonic())
                 return process
 
@@ -52,10 +58,12 @@ class GitExecutionTest(unittest.TestCase):
                 self.assertLess(time.monotonic() - launched[0], 2 * CLEANUP_TIMEOUT_SECONDS + 5)
                 self.assertIsNotNone(processes[0].poll())
                 # EOF proves no descendant retained the inherited pipe after cleanup.
-                self.assertEqual(processes[0].communicate(timeout=WAIT_SECONDS)[0], b"")
+                self.assertEqual(processes[0].communicate(timeout=CLEANUP_TIMEOUT_SECONDS)[0], b"")
                 sentinel.communicate(b"x", timeout=WAIT_SECONDS)
                 self.assertTrue(unrelated.exists())
             finally:
+                for connection in connections:
+                    connection.close()
                 for process in [*processes, sentinel]:
                     if process.poll() is None:
                         if process in processes:
