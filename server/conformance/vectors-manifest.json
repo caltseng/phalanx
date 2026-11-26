@@ -877,6 +877,39 @@
       "request_count": 79,
       "semantic_exception": "operator-current-item/absent-publication-mode"
     },
+    "operator_defaults": {
+      "request_ids": [
+        "operator-current-item/omitted",
+        "operator-current-item/ready",
+        "operator-current-item/draft",
+        "operator-current-item/null",
+        "operator-current-item/missing-target",
+        "operator-current-item/invalid-wait",
+        "operator-list/omitted",
+        "operator-list/ready",
+        "operator-list/draft",
+        "operator-list/null",
+        "operator-list/missing-target",
+        "operator-list/invalid-wait",
+        "operator-group/omitted",
+        "operator-group/ready",
+        "operator-group/draft",
+        "operator-group/null",
+        "operator-group/missing-target",
+        "operator-group/invalid-wait",
+        "operator-timeline/omitted",
+        "operator-timeline/ready",
+        "operator-timeline/draft",
+        "operator-timeline/null",
+        "operator-timeline/missing-target",
+        "operator-timeline/invalid-wait"
+      ],
+      "request_count": 24,
+      "classification_versions": [
+        4,
+        9
+      ]
+    },
     "decisions": {
       "request_count": 11298,
       "request_sha256": "29da5096c1c001fe6423a471a4339fe134e94131d1729b0e97667e9c3e8e59cf"
@@ -967,7 +1000,7 @@
     "server/internal/application/inbox.go": "7e06fa66924a40887e28afa52e5ece956f073945f447d485d070a6b87b06afa3",
     "server/internal/application/lifecycle.go": "88542a855b580ea62faeb0c41eda0941228df902580c2cbd57f3397b0ed35f47",
     "server/internal/application/observation_flags.go": "9049bfb3a0478cad0e92c005ec4ac8afe9f0c707a61bf59e3cb1bba729228989",
-    "server/internal/application/operator.go": "41556ceb90ebcd70cab008cd12a0742d33abde09dac0494d9385baa30ae7578d",
+    "server/internal/application/operator.go": "d9652b5852be7e5d36e19777b92d37f9f785aaa184bf2e809d801f3d149d8155",
     "server/internal/application/operator_repr.go": "0404690a91176f2a2baae5c841dbcc14b87a1bd197a5d2924f248ae654917bec",
     "server/internal/application/operator_test.go": "c00fa6fc754dcd5f804b1b449c7a061917e5f481969fcf3c9b83253b76a53200",
     "server/internal/application/pickup.go": "5d17df4eac377ed5a1b56d895d75a363e516c1a860a55e3d1726228b1266aa6b",
@@ -1044,11 +1077,11 @@
     "server/conformance/datetimes.py": "bc39e852c0fc8e2b3dc86f747a1c48b04dae767292a96549b45cf7cf227ec6a4",
     "server/conformance/decisions.py": "759a0e459d4c870ce2132b6ca55ed7feda09189d8254b9fd077629fa1d77c397",
     "server/conformance/flags.py": "91b89a7cf0ff3a9fba636c3afac3b4b00066ccefd6ce2762844f251ba5521b30",
-    "server/conformance/harness.py": "e7a147051b8bddfe0d576b96f20376280298f61e9e2fe5347c73c812a4f5078e",
+    "server/conformance/harness.py": "f5c1ba2dc0ed98353f629cb8eb8daadf4986ca8180b52ec50eb3d0c5ecd7da90",
     "server/conformance/history.py": "42c51c6d1120e7906486095383690332e4fd6d1fc724701b3b4c1f04b3af0700",
     "server/conformance/inbox.py": "bd82a37d28efcafa1d12bce1e18513c9d2b1eb84ae29007d69c49c56aef25563",
     "server/conformance/numbers.py": "d17b9a8d0f8ed24dea7bf17a8f18fbac9d8781b99aa717e5e995ac06db425f4e",
-    "server/conformance/operator_defaults.py": "4572503555fc279af437ea3e6f7fe898eb128db1d840a2854af85b8d95ef4b62",
+    "server/conformance/operator_defaults.py": "6cb7daedc429c7d06fbc589fc73f800a369383373d60b295f639406bec11050c",
     "server/conformance/operator_views.py": "40eb808536d28d3a009a5448409f6295a2625d77dc7e15b51eb6416e8be44f9b",
     "server/conformance/oracle.py": "00bae03568e5e40693bc391d3a64669a9950d11e7f469abe6763183e85a59d97",
     "server/conformance/reconciliation.py": "283bd0c44aca4aec6b150e3d020b6182de93165a72e7c7c53ebd0cd506625288",

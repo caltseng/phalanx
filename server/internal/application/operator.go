@@ -148,7 +148,7 @@ func operatorPull(row sqlite.OperatorRow) any {
 		"head_sha": row.PRHeadSHA, "head_ci": ci, "additions": row.PRAdditions, "deletions": row.PRDeletions}
 }
 
-func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorContext, allowMissingMode bool) (map[string]any, error) {
+func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorContext) (map[string]any, error) {
 	value, _, err := contract.Decode([]byte(row.StateJSON))
 	if err != nil {
 		return nil, err
@@ -157,8 +157,9 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	if !ok {
 		return nil, errors.New("Stored execution state is not an object")
 	}
-	if _, present := fields["publication_mode"]; !present && !allowMissingMode {
-		return nil, errors.New("Stored publication mode is missing outside the classified current-item case")
+	mode, exists := fields["publication_mode"]
+	if !exists {
+		mode = "ready"
 	}
 	state, err := readState([]byte(row.StateJSON))
 	if err != nil {
@@ -287,7 +288,7 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	return map[string]any{
 		"id": row.ID, "item_id": row.ItemID, "version": row.Version, "title": title, "goal": row.Goal,
 		"priority": []string{"low", "normal", "urgent"}[priority], "label": row.Label, "target": state.Target,
-		"target_branch": row.TargetBranch, "publication_mode": state.PublicationMode, "repository_id": row.RepositoryID,
+		"target_branch": row.TargetBranch, "publication_mode": mode, "repository_id": row.RepositoryID,
 		"created_at": row.CreatedAt, "active_started_at": row.ActiveStartedAt, "active_age_seconds": activeAge,
 		"stage_started_at": stageStarted, "stage": row.Stage, "status": row.Status, "revision_round": row.RevisionRound,
 		"last_advanced_at": row.LastAdvancedAt, "last_progress_at": row.UpdatedAt, "wait_reason": waitReason, "pickup": decision,
@@ -555,7 +556,7 @@ func (a *App) OperatorList(ctx context.Context, request contract.OperatorQuery, 
 		}
 		items := []map[string]any{}
 		for _, row := range rows {
-			item, err := operatorSummary(row, now, current, false)
+			item, err := operatorSummary(row, now, current)
 			if err != nil {
 				return err
 			}
@@ -615,7 +616,7 @@ func (a *App) OperatorItem(ctx context.Context, itemID string, condition Conditi
 		if err != nil {
 			return err
 		}
-		item, err := operatorSummary(row, now, current, true)
+		item, err := operatorSummary(row, now, current)
 		if err != nil {
 			return err
 		}
@@ -804,7 +805,7 @@ func (a *App) OperatorGroup(ctx context.Context, label string, request contract.
 		var first, lastClosed, oldestOpen *string
 		items := []map[string]any{}
 		for _, row := range rows {
-			item, err := operatorSummary(row, now, current, false)
+			item, err := operatorSummary(row, now, current)
 			if err != nil {
 				return err
 			}
@@ -1028,7 +1029,7 @@ func (a *App) OperatorTimeline(ctx context.Context, executionID string, request 
 		if err != nil {
 			return err
 		}
-		item, err := operatorSummary(execution, now, current, false)
+		item, err := operatorSummary(execution, now, current)
 		if err != nil {
 			return err
 		}

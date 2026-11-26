@@ -114,6 +114,7 @@ def vector_manifest():
     import scout
     import flags
     import operator_views
+    import operator_defaults
 
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
@@ -160,6 +161,9 @@ def vector_manifest():
                 "operator": {"request_ids": [case["id"] for case in operator_views.cases()],
                              "request_count": len(operator_views.cases()),
                              "semantic_exception": "operator-current-item/absent-publication-mode"},
+                "operator_defaults": {"request_ids": [case["id"] for case in operator_defaults.cases()],
+                                      "request_count": len(operator_defaults.cases()),
+                                      "classification_versions": [4, 9]},
                 "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},
                 "numbers": {"request_count": len(numeric_requests), "request_sha256": digest(numeric_bytes)},
             },

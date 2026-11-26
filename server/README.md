@@ -230,13 +230,14 @@ Operator tests require an empty filtered page to continue beyond exactly 2,000
 indexed candidates, and weak validators ignore ticking ages but change at due
 deadlines and when retained opaque pickup metadata changes.
 
-`operator_defaults.py` retains fresh/retained raw wire and full-store evidence:
-P0 returns 500 and D0 returns 200 for omitted publication mode on current-item,
-list, group and timeline summaries. Only current-item was classified in the
-execution's v4 reply. The additional three read cases remain explicit
-compatibility blockers; Go currently returns 500 outside that named exception.
-No global 500-to-200 normalization, public-field restoration or durable state/
-receipt/hash rewrite is authorized by this characterization.
+`operator_defaults.py` retains fresh/retained raw wire and full-store evidence.
+The execution's v4 reply classifies only current-item omission; its separate v9
+reply explicitly adds list/group/timeline omission. These four named read cases
+expect P0 500 versus D0/Go 200 with the documented ready default and zero durable
+effects. The 24-case corpus matches complete D0 responses, preserving explicit
+ready/draft/null values and malformed-state refusal. No other 500 normalization,
+public-field restoration or durable state/receipt/hash rewrite is authorized.
+Qualified independent exact-final-head review must cover each classification.
 
 Focused native tests additionally cover racing title revisions, report
 savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure
