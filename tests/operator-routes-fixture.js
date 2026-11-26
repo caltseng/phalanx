@@ -526,7 +526,7 @@
         app.doc.querySelector("#operator-board").getBoundingClientRect().top;
       heights.push({ width, height: headerHeight });
       assert(headerHeight <= maxHeight, "Complete default header/control area stays compact at " + width + "px");
-      const controls = [...app.doc.querySelectorAll(".bar .actions > button, .bar .actions > details > summary, .board-navigation a")]
+      const controls = [...app.doc.querySelectorAll(".bar .brand-lockup, .bar .actions > button, .bar .actions > details > summary, .board-navigation a")]
         .filter(control => control.getBoundingClientRect().height);
       assert(controls.every(control => {
         const box = control.getBoundingClientRect();

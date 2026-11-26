@@ -68,10 +68,10 @@ body { margin: 0; }
   border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: .75rem; white-space: nowrap; }
-.brand h1 { margin: 0; font-size: inherit; }
+.brand h1 { display: flex; margin: 0; font-size: inherit; }
 .phalanx-board .brand-lockup {
   display: inline-grid; grid-template-columns: 54px auto; align-items: center; gap: 12px;
-  padding: 14px 0 8px; color: var(--accent); text-decoration: none;
+  padding: 0; color: var(--accent); text-decoration: none;
   font-family: "Palatino Linotype", Palatino, Georgia, serif; font-weight: 700;
 }
 .phalanx-board .brand-lockup:hover { text-decoration: none; }
@@ -353,7 +353,7 @@ body { margin: 0; }
   .line > .dur { display: inline; }
   .captains .line > .stat:first-of-type { margin-left: 1.55rem; }
   .detail { padding-left: .9rem; }
-  .bar { gap: .3rem .9rem; }
+  .bar { gap: .15rem .9rem; }
   .board-navigation { margin-left: 0; }
   .health { margin-left: auto; }
   .actions { gap: .15rem; }
@@ -419,6 +419,8 @@ body { margin: 0; }
 .actions .new-item { min-width: 44px; }
 #operator-create :disabled { opacity: .65; cursor: default; }
 @media (max-width: 480px) {
+  .bar { column-gap: .2rem; }
+  .counts { column-gap: .25rem; }
   #operator-create .create-options { grid-template-columns: 1fr; }
 }
 
