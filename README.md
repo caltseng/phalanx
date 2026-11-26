@@ -2,6 +2,8 @@
 
 <img src="docs/phalanx-logo.svg" alt="Phalanx logo: an ivory spear-shaped mark on a crimson shield with a gold rim" width="96" height="96">
 
+**Push forward**
+
 **Use Phalanx to delegate outcomes, not keep prompting agents.** A coding agent handles a task; Phalanx is meant to keep a queue of tasks moving across repositories—from clear acceptance criteria through implementation, review, checks and merge.
 
 Its value is durable ownership: work shouldn’t disappear when a chat ends, a Captain changes, CI fails or a decision blocks progress. You should see what’s moving, what’s genuinely blocked and what needs you.
