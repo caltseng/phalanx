@@ -10,8 +10,7 @@ GIT_TIMEOUT_SECONDS = 60
 
 
 def run_git(path, *args, check=True, stdin=None, error=RuntimeError,
-            timeout=None, allowed_returncodes=None):
-    timeout = GIT_TIMEOUT_SECONDS if timeout is None else timeout
+            allowed_returncodes=None):
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
     command = ["git", "--no-optional-locks", "-c", "core.fsmonitor=false", *args]
     try:
@@ -27,7 +26,7 @@ def run_git(path, *args, check=True, stdin=None, error=RuntimeError,
                 start_new_session=os.name != "nt",
             )
             try:
-                process.wait(timeout=timeout)
+                process.wait(timeout=GIT_TIMEOUT_SECONDS)
             except BaseException as exc:
                 try:
                     kill_tree(process)
@@ -35,7 +34,7 @@ def run_git(path, *args, check=True, stdin=None, error=RuntimeError,
                     raise error(f"Git {args[0]} cleanup failed in {path} after "
                                 f"{type(exc).__name__}: {cleanup}") from cleanup
                 if isinstance(exc, subprocess.TimeoutExpired):
-                    raise error(f"Git {args[0]} timed out after {timeout} seconds in {path}") from exc
+                    raise error(f"Git {args[0]} timed out after {GIT_TIMEOUT_SECONDS} seconds in {path}") from exc
                 raise
             output.seek(0)
             stderr.seek(0)

@@ -11,7 +11,7 @@ concurrency settings. The HTTP API/Scribe server remains the supported direct-se
 architecture. Groups UI, hosted sign-in, multi-user roles and later phases are proposals.
 Source features do not certify D1 performance/accessibility or owner visual acceptance.
 Installed-package/service adoption requires separate [deployment evidence](docs/deployment.md#standing-authority-for-compatible-upgrades).
-The compact 100px header repair is pending, not installed/live acceptance.
+The compact-header source contract below is not installed/live acceptance.
 
 ## Goal
 
@@ -127,7 +127,10 @@ focuses its first control, and Escape restores trigger focus (dropdown first).
 Applied state remains visible in text/badges; unapplied edits survive panel closure.
 Filter triggers show value/Any and expose existing exact-match text fields.
 Writer settings reparent the host's same native disclosure, never duplicate its write path.
-The pending compact-header repair does not certify a default-height target or D1.
+The toolbar retains top clearance for the upward rim break while removing bottom
+padding, row spacing and the inline-heading baseline gap. Its complete default header
+keeps the 100px budget at 1280px without scaling the shield or engraved typography.
+This source contract does not certify live adoption or overall D1 acceptance.
 
 ### Home
 

@@ -174,39 +174,22 @@ class GitHubClient:
         repo: str,
         *,
         token: str,
-        api_url: str = "https://api.github.com",
-        graphql_url: str | None = None,
-        api_version: str = "2022-11-28",
         transport: Transport = _send,
-        timeout: float = 30,
     ):
-        self._api_url = api_url.rstrip("/")
-        # GitHub Enterprise Server uses /api/v3 and /api/graphql.
-        self._graphql_url = graphql_url or (
-            self._api_url.removesuffix("/v3") + "/graphql"
-        )
-        for endpoint in (self._api_url, self._graphql_url):
-            url = urlsplit(endpoint)
-            if (
-                url.scheme != "https" or not url.hostname or url.username is not None
-                or url.query or url.fragment
-            ):
-                raise ValueError("GitHub endpoints must be HTTPS URLs without credentials or query")
         if not token.strip() or "\r" in token or "\n" in token:
             raise ValueError("a local GitHub token is required")
         for segment in (owner, repo):
             if segment in ("", ".", "..") or "/" in segment or "\\" in segment:
                 raise ValueError("owner and repo must be separate path segments")
         self._repository = f"{owner}/{repo}"
-        self._repo_url = f"{self._api_url}/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
+        self._repo_url = f"https://api.github.com/repos/{quote(owner, safe='')}/{quote(repo, safe='')}"
         self._headers = {
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {token}",
             "User-Agent": "Phalanx",
-            "X-GitHub-Api-Version": api_version,
+            "X-GitHub-Api-Version": "2022-11-28",
         }
         self._transport = transport
-        self._timeout = timeout
 
     @property
     def repository(self) -> str:
@@ -220,7 +203,7 @@ class GitHubClient:
             body = json.dumps(payload).encode()
         request = Request(url, data=body, headers=headers, method=method)
         try:
-            response = self._transport(request, self._timeout)
+            response = self._transport(request, 30)
         except (OSError, http.client.HTTPException) as error:
             raise GitHubError(
                 operation, f"transport failure ({type(error).__name__})",
@@ -283,7 +266,7 @@ class GitHubClient:
 
     def authenticated_user(self) -> dict:
         operation = "verify scouting identity"
-        data, _ = self._request(operation, "GET", f"{self._api_url}/user")
+        data, _ = self._request(operation, "GET", "https://api.github.com/user")
         if (not isinstance(data, dict) or type(data.get("id")) is not int or data["id"] < 1
                 or not isinstance(data.get("login"), str)
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}", data["login"])):
@@ -333,9 +316,7 @@ class GitHubClient:
         return issues, len(data) == 30
 
     def _issue_web_url(self, number: int) -> str:
-        endpoint = urlsplit(self._api_url)
-        host = "github.com" if endpoint.netloc == "api.github.com" else endpoint.netloc
-        return f"https://{host}/{self._repository}/issues/{number}"
+        return f"https://github.com/{self._repository}/issues/{number}"
 
     def issue_comments(self, number: int) -> Iterator[IssueComment]:
         if type(number) is not int or number < 1:
@@ -435,7 +416,7 @@ class GitHubClient:
         owner, name = self._repository.split("/")
         feedback, after = [], None
         for page in range(page_limit):
-            data, _ = self._request(operation, "POST", self._graphql_url, payload={
+            data, _ = self._request(operation, "POST", "https://api.github.com/graphql", payload={
                 "query": query, "variables": {"owner": owner, "name": name, "number": number, "after": after}})
             try:
                 if data.get("errors"):
@@ -526,15 +507,15 @@ class GitHubClient:
         raise GitHubError(operation, "invalid comparison response")
 
 
-def merge_method(github, merge_commit: str, head: str, base_ref: str) -> tuple[str | None, tuple[str, ...]]:
-    """How GitHub merged a PR whose final head is ``head``, with the merge commit's parents.
+def merge_method(github, merge_commit: str, head: str, base_ref: str) -> str | None:
+    """How GitHub merged a PR whose final head is ``head``.
 
     "merge" when the merge commit's second parent is the head, "squash_or_rebase" when it is a
     single-parent commit on the base branch, else None. GitHub doesn't say which method it used.
     """
     parents = github.get_commit_parents(merge_commit)
     if len(parents) == 2 and parents[1] == head:
-        return "merge", parents
+        return "merge"
     if len(parents) == 1 and github.is_on_branch(merge_commit, base_ref):
-        return "squash_or_rebase", parents
-    return None, parents
+        return "squash_or_rebase"
+    return None

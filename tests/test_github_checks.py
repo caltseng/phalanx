@@ -28,8 +28,7 @@ class GitHubCollectionTests(unittest.TestCase):
     def setUp(self):
         self.responses = deque()
         self.urls = []
-        self.client = GitHubClient("owner", "repo", token="fake", api_url=API,
-                                   transport=self.send)
+        self.client = GitHubClient("owner", "repo", token="fake", transport=self.send)
 
     def send(self, request, timeout):
         self.assertEqual(request.method, "GET")

@@ -12,7 +12,7 @@ from phalanx.github import (
 HEAD = "a" * 40
 BASE = "b" * 40
 MERGE = "c" * 40
-API = "https://github.example/api/v3"
+API = "https://api.github.com"
 
 
 def response(data, *, status=200, next_url=None):
@@ -24,7 +24,7 @@ def pull(number=7, *, head="phalanx/topic", base="main", draft=True, merged=Fals
     return {
         "number": number,
         "node_id": f"PR_{number}",
-        "html_url": f"https://github.example/owner/repo/pull/{number}",
+        "html_url": f"https://github.com/owner/repo/pull/{number}",
         "state": "closed" if merged else "open",
         "draft": draft,
         "merged": merged,
@@ -42,8 +42,7 @@ class GitHubClientTests(unittest.TestCase):
     def setUp(self):
         self.responses = deque()
         self.requests = []
-        self.client = GitHubClient("owner", "repo", token="fake", api_url=API,
-                                   transport=self.send)
+        self.client = GitHubClient("owner", "repo", token="fake", transport=self.send)
 
     def send(self, request, timeout):
         self.requests.append(request)
@@ -66,7 +65,7 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual((result.additions, result.deletions), (17, 3))
 
     def test_issue_snapshot_and_paginated_comments_preserve_sources(self):
-        issue_url = "https://github.example/Owner/Repo/issues/7"
+        issue_url = "https://github.com/Owner/Repo/issues/7"
         self.responses.extend([
             response({"number": 7, "html_url": issue_url, "title": "Fix this", "body": None}),
             response([{"id": 1, "html_url": issue_url + "#issuecomment-1",
@@ -86,10 +85,10 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(self.requests[0].full_url, f"{API}/repos/owner/repo/issues/7")
 
     def test_issue_reads_reject_pr_wrong_identity_and_invalid_provider_fields(self):
-        issue = {"number": 7, "html_url": "https://github.example/owner/repo/issues/7",
+        issue = {"number": 7, "html_url": "https://github.com/owner/repo/issues/7",
                  "title": "Fix this", "body": "Context"}
         for edit in ({"pull_request": {}}, {"number": 8}, {"number": True},
-                     {"html_url": "https://github.example/other/repo/issues/7"},
+                     {"html_url": "https://github.com/other/repo/issues/7"},
                      {"title": ""}, {"body": []}):
             with self.subTest(edit=edit):
                 self.responses.append(response(issue | edit))
@@ -169,6 +168,7 @@ class GitHubClientTests(unittest.TestCase):
         self.responses.extend([page([thread("T1", True)], "c1"), page([thread("T2", False)], "c2")])
         feedback = self.client.get_actionable_feedback(7, page_limit=2)
         self.assertEqual([node for node, _ in feedback], ["R1", "T2"])
+        self.assertEqual([r.full_url for r in self.requests], [f"{API}/graphql"] * 2)
         self.assertEqual([json.loads(r.data)["variables"]["after"] for r in self.requests], [None, "c1"])
 
     def test_checks_and_statuses_use_sha_and_paginate_independently(self):

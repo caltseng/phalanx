@@ -222,7 +222,7 @@ class Reconciler:
             if pull.merged and pull.merge_commit_sha and pull.base_ref == base:
                 # The server records how and when the PR merged with the delivery.
                 if execution.get("outcome") != "checked_in":
-                    body["pr"]["merge_method"], _ = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
+                    body["pr"]["merge_method"] = merge_method(github, pull.merge_commit_sha, pull.head_sha, base)
                 body["pr"]["merged_at"] = pull.merged_at
                 if execution.get("outcome") == "ready_for_check_in":
                     verified_head = execution["output_revision"]["head"]
@@ -335,7 +335,7 @@ class Reconciler:
                 self.heartbeat()
                 try:
                     with self.heartbeating():
-                        outcome, reason, _ = run_check(check, scratch)
+                        outcome, reason = run_check(check, scratch)
                 except CheckCommandError as error:
                     outcome, reason = PreOutcome.FAILED, str(error)
                 if outcome != PreOutcome.PASSED:
