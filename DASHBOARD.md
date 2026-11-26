@@ -157,7 +157,7 @@ It is not a Captain failure or handoff signal.
 
 ## Who uses it
 
-- **v1 hosted:** a single workspace, with Caleb as its owner. He signs in with Google ([PH-27](IMPLEMENTATION_PLAN.md)) against an email allowlist. The owner token still works as a fallback, and for the CLI and API.
+- **v1 hosted:** a single workspace with an operator-configured owner, not a hard-coded person or account. The owner signs in with Google ([PH-27](IMPLEMENTATION_PLAN.md)) against a configured email allowlist. The owner token still works as a fallback, and for the CLI and API.
 - **Multi-user:** people sign in and see the workspaces they belong to, with a workspace switcher, and each workspace's own repositories, runners and items. A user's role decides what they can do:
   - viewers can only read;
   - members file work, reply and act on items;
@@ -476,7 +476,7 @@ reads current server values; charter settings cannot undo dashboard edits.
 - The home page renders in under a second.
 - Every row has a reason.
 - Every link resolves.
-- Caleb reviews screenshots at phone and laptop sizes.
+- The repository owner or their designated reviewer reviews screenshots at phone and laptop sizes.
 
 ## Design questions
 

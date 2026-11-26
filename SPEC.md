@@ -1,8 +1,8 @@
 # Phalanx design spec
 
 Phalanx lets users dispatch work across registered repositories and carry it through to a
-Markdown report or pull request. Caleb is the first user; the design must also serve other
-people and teams. Agents run on machines with the relevant checkouts and credentials.
+Markdown report or pull request. The design must serve independent users and teams without
+depending on any individual's identity. Agents run on machines with the relevant checkouts and credentials.
 Favor a small API, recoverable execution and flexible work items.
 
 **Running architecture:** [direct sessions](docs/direct-sessions.md), native Captain chats,

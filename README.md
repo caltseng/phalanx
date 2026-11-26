@@ -32,6 +32,11 @@ Phalanx is runtime-neutral. Codex, GitHub Copilot CLI or app, Claude Code, and o
 with visible sessions can follow the [direct-session contract](docs/direct-sessions.md).
 The CLI, Captain/writer clients and reconciler support Windows, macOS and Linux.
 
+Phalanx is identity-neutral: each operator configures their own identities, credentials,
+paths and repository mappings. No particular person or account is required. Configured
+identity verification and ownership checks still apply; project links and historical
+credits do not select an operator identity.
+
 ## Architecture
 
 | Component | Responsibility |
