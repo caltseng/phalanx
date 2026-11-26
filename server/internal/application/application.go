@@ -24,9 +24,10 @@ type Conflict struct{ Message string }
 func (e *Conflict) Error() string { return e.Message }
 
 type App struct {
-	Store *sqlite.Store
-	Clock func() time.Time
-	ID    func() (string, error)
+	Store       *sqlite.Store
+	Clock       func() time.Time
+	ID          func() (string, error)
+	afterIntent func() // test-only barrier after the intent commits, never wire/config input
 }
 
 func New(store *sqlite.Store) *App {
@@ -176,23 +177,6 @@ func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) 
 	return result, err
 }
 
-type initialState struct {
-	Target               string  `json:"target"`
-	Stage                string  `json:"stage"`
-	Status               string  `json:"status"`
-	Candidate            *string `json:"candidate"`
-	PrimaryPR            *string `json:"primary_pr"`
-	ReportDraft          *string `json:"report_draft"`
-	Wait                 any     `json:"wait"`
-	Stopping             *string `json:"stopping"`
-	PendingOutput        *string `json:"pending_output"`
-	ReadyRevision        any     `json:"ready_revision"`
-	FinalOutput          any     `json:"final_output"`
-	ReportReviewFindings *string `json:"report_review_findings"`
-	Findings             *string `json:"findings"`
-	PublicationMode      string  `json:"publication_mode"`
-}
-
 func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, error) {
 	if _, err := tx.Repository(request.RepositoryID); err != nil {
 		if err == sql.ErrNoRows {
@@ -219,39 +203,8 @@ func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, e
 	if err := tx.InsertItem(sqlite.Item{ID: itemID, RepositoryID: request.RepositoryID, Request: text, CreatedAt: timestamp(a.Clock())}); err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
-	for _, dependency := range request.Dependencies {
-		if dependency.UpstreamID == itemID {
-			return nil, &Conflict{"A work item cannot depend on itself"}
-		}
-		if seen[dependency.UpstreamID] {
-			return nil, &Conflict{"Duplicate prerequisite " + dependency.UpstreamID}
-		}
-		seen[dependency.UpstreamID] = true
-		upstream, err := tx.CurrentExecution(dependency.UpstreamID)
-		if err == sql.ErrNoRows {
-			return nil, &Missing{"Work item not found"}
-		}
-		if err != nil {
-			return nil, err
-		}
-		var state dependencyState
-		if err := json.Unmarshal(upstream.State, &state); err != nil {
-			return nil, err
-		}
-		if (state.Target == "report") != (dependency.Milestone == "report") {
-			return nil, &Conflict{"Prerequisite " + dependency.UpstreamID + " has an incompatible output type"}
-		}
-		cycle, err := tx.Cycle(dependency.UpstreamID, itemID)
-		if err != nil {
-			return nil, err
-		}
-		if cycle {
-			return nil, &Conflict{"Prerequisite " + dependency.UpstreamID + " would create a dependency cycle"}
-		}
-	}
-	for _, dependency := range request.Dependencies {
-		if err := tx.InsertLink(itemID, sqlite.Link{UpstreamID: dependency.UpstreamID, Milestone: dependency.Milestone}); err != nil {
+	if len(request.Dependencies) > 0 {
+		if err := replaceDependencies(tx, itemID, request.Dependencies); err != nil {
 			return nil, err
 		}
 	}
@@ -259,17 +212,13 @@ func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, e
 	if err != nil {
 		return nil, err
 	}
-	stage := "development"
-	if request.Target == "report" {
-		stage = "report_drafting"
-	}
-	state, err := contract.Canonical(initialState{Target: request.Target, Stage: stage, Status: "queued", PublicationMode: request.PublicationMode})
+	state, err := contract.Canonical(Start(Target(request.Target), PublicationMode(request.PublicationMode)))
 	if err != nil {
 		return nil, err
 	}
 	now := a.Clock()
 	priority := map[string]int{"low": 0, "normal": 1, "urgent": 2}[request.Priority]
-	if err := tx.InsertExecution(executionID, itemID, state, timestamp(now), request.RepositoryID, priority, now.UnixMilli()); err != nil {
+	if err := tx.InsertExecution(executionID, itemID, state, timestamp(now), request.RepositoryID, priority, now.UnixMilli(), nil); err != nil {
 		return nil, err
 	}
 	unmet, err := unmetDependencies(tx, itemID)

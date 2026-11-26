@@ -21,6 +21,11 @@ import (
 )
 
 func fixtureApp(t *testing.T) *application.App {
+	app, _ := fixtureAppDatabase(t)
+	return app
+}
+
+func fixtureAppDatabase(t *testing.T) (*application.App, string) {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", "conformance", "golden-fresh.json"))
 	if err != nil {
@@ -60,7 +65,7 @@ func fixtureApp(t *testing.T) *application.App {
 	if _, err := app.Register(context.Background(), contract.Registration{ID: "fixture", Remote: "https://github.com/example/fixture.git"}); err != nil {
 		t.Fatal(err)
 	}
-	return app
+	return app, path
 }
 
 func deadline(t *testing.T, ch <-chan struct{}) {

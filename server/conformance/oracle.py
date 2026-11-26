@@ -75,8 +75,12 @@ def seed(source, database):
                    ("0" * 64,))
 
 
-def serve(source, database, id_start):
-    load(source, id_start)
+def serve(source, database, id_start, captain_clock=False):
+    intake = load(source, id_start)
+    if captain_clock:
+        from phalanx import captains
+        captains.datetime = intake.datetime
+        captains.uuid4 = intake.uuid4
     for key in list(os.environ):
         if key.startswith("PHALANX_"):
             del os.environ[key]
@@ -153,6 +157,7 @@ def main():
     parser.add_argument("target")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--id-start", type=int, default=0)
+    parser.add_argument("--captain-clock", action="store_true")
     args = parser.parse_args()
     if args.action == "initialize":
         load(args.source)
@@ -161,7 +166,7 @@ def main():
     elif args.action == "seed":
         seed(args.source, Path(args.target))
     elif args.action == "serve":
-        serve(args.source, Path(args.target), args.id_start)
+        serve(args.source, Path(args.target), args.id_start, args.captain_clock)
     elif args.action == "client":
         client(args.source, args.target, args.output)
     else:

@@ -98,6 +98,17 @@ def verify_manifest():
 
 
 def vector_manifest():
+    import cancellation
+    import decisions
+    import history
+    import inbox
+    import numbers
+    import writers
+    import results
+    import steering
+    import captains
+    import archives
+
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
               ROOT / "server" / ".gitattributes",
@@ -107,7 +118,31 @@ def vector_manifest():
         if path.name.endswith("_test.go"):
             tests += [str(path.relative_to(ROOT)).replace(os.sep, "/") + ":" + name
                       for name in re.findall(r"^func (Test\w+)\(", path.read_text(encoding="utf-8"), re.M)]
+    domain_requests = [{**request, "id": str(index)} for index, request in enumerate(decisions.corpus())]
+    domain_bytes = "".join(json.dumps(request, separators=(",", ":")) + "\n" for request in domain_requests).encode()
+    numeric_requests = list(numbers.cases())
+    numeric_bytes = ("\n".join(numeric_requests) + "\n").encode()
     return {"request_ids": [case["id"] for case in cases()], "request_count": len(cases()),
+            "additional_corpora": {
+                "history": {"request_ids": [case["id"] for case in history.cases()],
+                            "request_count": len(history.cases())},
+                "cancellation": {"request_ids": [case["id"] for case in cancellation.cases()],
+                                 "request_count": len(cancellation.cases())},
+                "inbox": {"request_ids": [case["id"] for case in inbox.cases()],
+                          "request_count": len(inbox.cases())},
+                "writers": {"request_ids": [case["id"] for case in writers.cases()],
+                            "request_count": len(writers.cases())},
+                "results": {"request_ids": [case["id"] for case in results.cases()],
+                            "request_count": len(results.cases())},
+                "steering": {"request_ids": [case["id"] for case in steering.cases()],
+                             "request_count": len(steering.cases())},
+                "captains": {"request_ids": [case["id"] for case in captains.cases()],
+                             "request_count": len(captains.cases())},
+                "archives": {"request_ids": [case["id"] for case in archives.cases()],
+                             "request_count": len(archives.cases())},
+                "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},
+                "numbers": {"request_count": len(numeric_requests), "request_sha256": digest(numeric_bytes)},
+            },
             "implementations": ["P0", "D0", "Go"], "schema_shapes": ["fresh", "retained"],
             "go_tests": tests, "go_test_count": len(tests),
             "files": {str(path.relative_to(ROOT)).replace(os.sep, "/"): digest(path.read_bytes())
@@ -659,7 +694,7 @@ def differential(binary, output, freeze=False):
         switch_and_fault_checks(binary, root, sources, output)
         busy_checks(binary, root, sources, output)
     if freeze:
-        (HERE / "vectors-manifest.json").write_text(json.dumps(vector_manifest(), indent=2), encoding="utf-8")
+        (HERE / "vectors-manifest.json").write_text(json.dumps(vector_manifest(), indent=2), encoding="utf-8", newline="\n")
 
 
 @contextmanager
@@ -685,7 +720,16 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--freeze", action="store_true")
     parser.add_argument("--freeze-manifest", action="store_true")
+    parser.add_argument("--record-vectors", action="store_true")
     args = parser.parse_args()
+    if args.record_vectors:
+        verify_manifest()
+        previous = json.loads((HERE / "vectors-manifest.json").read_text(encoding="utf-8"))
+        for name in ("golden-fresh.json", "golden-retained.json"):
+            if previous["files"]["server/conformance/" + name] != digest((HERE / name).read_bytes()):
+                raise AssertionError("Recording new vectors cannot change immutable foundation goldens")
+        (HERE / "vectors-manifest.json").write_text(json.dumps(vector_manifest(), indent=2), encoding="utf-8", newline="\n")
+        return
     if args.freeze_manifest:
         (HERE / "manifest.json").write_text(json.dumps(source_manifest(), indent=2), encoding="utf-8")
         return

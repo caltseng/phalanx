@@ -87,26 +87,23 @@ type Execution struct {
 }
 
 func (tx *Tx) CurrentExecution(id string) (Execution, error) {
-	row := tx.conn.QueryRowContext(tx.ctx, `SELECT id, previous_id, version, created_at, updated_at, state_json,
-		ready_since, retry_at, retry_count, coalesce(dependency_wait_json, '[]')
-		FROM executions AS current WHERE item_id=?
+	row := tx.conn.QueryRowContext(tx.ctx, "SELECT "+executionColumns+` FROM executions AS current WHERE item_id=?
 		AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id=current.id)`, id)
-	var result Execution
-	var state, dependencies string
-	err := row.Scan(&result.ID, &result.PreviousID, &result.Version, &result.CreatedAt, &result.UpdatedAt, &state, &result.ReadySince, &result.RetryAt, &result.RetryCount, &dependencies)
-	result.State = json.RawMessage(state)
-	result.UnmetDependencies = json.RawMessage(dependencies)
-	return result, err
+	return scanExecution(row)
 }
 
-func (tx *Tx) InsertExecution(id, itemID, state, now, repository string, priority int, readySince int64) error {
+func (tx *Tx) InsertExecution(id, itemID, state, now, repository string, priority int, readySince int64, previousID *string) error {
 	_, err := tx.conn.ExecContext(tx.ctx, `INSERT INTO executions
 		(id, item_id, previous_id, version, state_json, created_at, updated_at, queue_repository, queue_priority, ready_since)
-		VALUES (?, ?, NULL, 1, ?, ?, ?, ?, ?, ?)`, id, itemID, state, now, now, repository, priority, readySince)
+		VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`, id, itemID, previousID, state, now, now, repository, priority, readySince)
 	if err != nil {
 		return err
 	}
-	_, err = tx.conn.ExecContext(tx.ctx, "INSERT INTO transition_history VALUES (?, 1, NULL, 'intake', '{}', ?, ?)", id, state, now)
+	event := "intake"
+	if previousID != nil {
+		event = "rerun"
+	}
+	_, err = tx.conn.ExecContext(tx.ctx, "INSERT INTO transition_history VALUES (?, 1, NULL, ?, '{}', ?, ?)", id, event, state, now)
 	return err
 }
 

@@ -4,17 +4,25 @@
 [HTTP server migration specification](../docs/http-server-migration.md).
 It does not replace the Python service, alter deployment entrypoints, discover
 operator configuration, migrate a database, or change Python clients/reconciler/Scribe.
-Only `/health`, the owner/runner role probes, repository registration/listing,
-owner intake, and scoped item reads are implemented. Other routes, background
-finalization/refresh, board authority, complete state transitions, and deployment
-shutdown/rollback remain subsequent work. A 404 outside this slice is not API parity.
+Implemented HTTP operations are `/health`, the owner/runner role probes,
+repository registration/listing, owner intake, scoped item reads, display-title
+reads/writes, execution history/timeline, draft reads, owner cancel/close-failure,
+owner inbox, owner retry-finalization, dispatch settings, writer
+registration/update/withdrawal, writer attempt/progress and writer capacity.
+Writer result/stop-confirmed, owner reply, stored-report reads, steering/rerun,
+Captain registration/heartbeat/reinforcement/current routing and session-archive
+reads/writes are also implemented.
+Native report finalization and bounded dependency refresh use the existing
+schema26 jobs. Current-writer flags, reconciliation, scout, usage and
+operator/Scribe routes remain unimplemented.
+A 404 outside this slice is not API parity.
 
 ## Boundaries and pinned build
 
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
 owns immutable intake receipts and transaction orchestration; `internal/sqlite`
 owns SQL, per-transaction connections, PRAGMAs, admission, and commit outcomes.
-`internal/contract` is the narrowly scoped presence/validation/canonical encoding
+`internal/contract` is the presence/validation/canonical encoding
 boundary. `internal/instancelock` holds the Python-compatible database-adjacent OS
 lock for the entire test-server lifetime. There is no production `serve` command.
 
@@ -142,3 +150,51 @@ deadline or production drain deadline is inferred from admission bounds.
 Package-switch rehearsal here is only for this slice on synthetic fresh/retained
 data. It is not full-route D0 -> Go -> D0 rollout/rollback approval, filesystem
 power-loss proof, Scribe parity, production adoption, or a performance/SLO claim.
+
+## Native domain extension evidence (in development)
+
+The immutable foundation's 114 vectors and both golden files are unchanged.
+Additional conformance entrypoints reuse its exact public source exports,
+runtime checks, full typed-store snapshots, representation-only comparator and
+fresh/retained fixtures. They do not refreeze the Python oracle:
+
+| Corpus | Cases per implementation | Evidence |
+| --- | ---: | --- |
+| `history.py` | 51 on each schema shape | Item/execution-scoped history/timeline/draft errors; title audit/replay/clear/stale revisions, unbounded strict integers, Unicode, role/origin, repeated trailing-slash redirects and first-matched-route `Allow` behavior |
+| `cancellation.py` | 26 on each schema shape | Owner stop, immutable pending-intent receipt replay, final Markdown, writer termination, version and role refusals |
+| `inbox.py` | 52 on each schema shape | Ordered input waits/questions, strict time/ID cursors, last duplicate query values, exact integer coercion/size guards, authorization precedence and zero read effects |
+| `writers.py` | 52 on each schema shape | Existing allocations, nonce replay, claim/progress, native-session confirmation, stopped withdrawal, capacity revisions/handoff, strict dispatch settings and preserved limits |
+| `results.py` | 32 on each schema shape | Report/PR results, review/storage receipts, same-writer continuation through owner questions/replies |
+| `steering.py` | 22 on each schema shape | Version-fenced owner steering and rerun, exact receipt replay and unchanged scope on refusals |
+| `captains.py` | 41 on each schema shape | Lifecycle, current routing, reinforcement, session field-error ordering, preserved null/duplicate first-seen values and missing-key refusal |
+| `archives.py` | 14 on each schema shape | Active-ownership refusal, immutable terminal archive outcomes and authorization |
+| `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
+| `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
+
+Build `cmd/conformance-decisions` and `cmd/conformance-json` with the configured
+Go prefix. Run their corresponding Python corpus with `--binary` and `--output`
+outside the checkout, just like the HTTP harness. `history.py` and
+`cancellation.py` and `inbox.py` take the existing conformance-server binary.
+`vectors-manifest.json` binds each extra corpus, source files and Go tests.
+`harness.py --record-vectors` is an explicit source/test-manifest authoring
+operation: it verifies the unchanged oracle/source pins and refuses changed
+foundation golden bytes. It is not a golden-update or mismatch-normalization path.
+
+Captain list views load liveness, session observations and four detail queries
+once per page, retaining each Captain's 100-ended-writer limit and full cleanup
+count. A two-Captain fixture checks count, ordering and independent limits.
+
+Focused native tests additionally cover racing title revisions, report
+savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure
+stall, owner retry, exact UTF-8 report storage, and resuming existing durable
+finalization intents after reopening the store. Background work drains an
+already dispatched bounded batch before the disposable adapter releases its
+instance lock; it does not introduce a production shutdown deadline.
+
+These are partial implementation proofs, **not full workflow/API conformance**.
+Pure decision parity does not prove transactional writer/claim/capacity
+continuation. Complete finalization/dependency race/fault and package-switch
+coverage, all remaining route/model families, exact-head independent review,
+fresh required CI and the separately authorized release/adoption work remain
+required. No server-launch adapter, live configuration, schema, credential,
+Python CLI/reconciler or Scribe asset was changed.

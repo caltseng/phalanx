@@ -59,6 +59,9 @@ func run() error {
 	var counter atomic.Uint64
 	counter.Store(*idStart)
 	app.ID = func() (string, error) { return fmt.Sprintf("%032x", counter.Add(1)), nil }
+	if err := app.StartReconciliation(context.Background()); err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
@@ -69,6 +72,16 @@ func run() error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	jobsContext, stopJobs := context.WithCancel(context.Background())
+	jobsDone := make(chan struct{})
+	go func() {
+		defer close(jobsDone)
+		app.RunBackground(jobsContext, slog.Default())
+	}()
+	defer func() {
+		stopJobs()
+		<-jobsDone
+	}()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	inputClosed := make(chan error, 1)
