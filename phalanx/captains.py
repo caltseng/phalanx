@@ -12,7 +12,7 @@ from . import intake
 from .auth import authenticate_board_read, require_coordinator
 from .intake_api import Key, run
 from .intake_models import Identifier, Payload, Text
-from .session_links import session_id as native_session_id, session_key
+from .session_links import session_id as native_session_id, session_key, session_target
 
 
 # A Captain whose last heartbeat is older than this is stale (D5).
@@ -240,11 +240,13 @@ def captain_details(db, captain_ids):
 def view(db, row, now=None, session_reports=None, live=None, details=None):
     now = now or datetime.now(UTC)
     live = live_captains(db, now) if live is None else live
+    availability = (availability_reports(db) if session_reports is None else session_reports).get(
+        session_key(row["session_ref"]), "unverified")
     return {
         "id": row["id"], "session_ref": row["session_ref"], "charter_revision": row["charter_revision"],
         "pickup": json.loads(row["pickup_json"]),
-        "session_availability": (availability_reports(db) if session_reports is None else session_reports).get(
-            session_key(row["session_ref"]), "unverified"),
+        "session_availability": availability,
+        "session_link": session_target(row["session_ref"], availability=availability),
         "parent_id": row["parent_id"], "state": row["state"], "wake_count": row["wake_count"],
         "compaction_count": row["compaction_count"],
         "reinforcement": reinforcement(row, now),

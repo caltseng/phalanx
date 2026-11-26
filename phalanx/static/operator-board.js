@@ -7,7 +7,6 @@
   const REFRESH_MS = 15000;
   const TICK_MS = 5000;
   const STALE_MS = 45000;
-  const READ_TIMEOUT_MS = 12000;
   const CHANGED_MS = 2400;
   const THEME_KEY = "phalanx-board-theme";
   const STAGES = ["development", "self_review", "publication", "delivery",
@@ -16,16 +15,10 @@
   const DISPLAY_LABEL = { checked_in: "Merged", queue_backlogged: "Queue backlogged",
     captain_idle_with_work: "Dispatch overdue" };
   const absolute = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });
-  const { h, safeUrl } = window.PhalanxOperatorHelpers;
+  const { h, svg, safeUrl, readSignal } = window.PhalanxOperatorHelpers;
   const BRAND_ASSET = new URL("phalanx-brand.svg", document.currentScript.src).href;
 
   function brand() {
-    function svg(tag, props, ...children) {
-      const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
-      for (const [key, value] of Object.entries(props)) node.setAttribute(key, value);
-      node.append(...children);
-      return node;
-    }
     const use = (id, props = {}) => svg("use", { href: BRAND_ASSET + "#" + id, ...props });
     const shield = svg("svg", { class: "brand-shield", viewBox: "0 0 64 64",
       "aria-hidden": "true", focusable: "false" },
@@ -88,32 +81,8 @@
       "aria-label": [context, text, stamp(time)].filter(Boolean).join(" · "), text });
   }
 
-  function sessionTarget(record = {}) {
-    if (["missing", "deleted"].includes(record.sessionAvailability)) {
-      return { url: null, reason: "session " + record.sessionAvailability };
-    }
-    const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
-    const prefixes = new Map([["copilot-app", "ghapp://sessions/"], ["codex", "codex://threads/"]]);
-    const reference = record.sessionUrl || record.sessionRef;
-    const prefix = prefixes.get(record.runtime);
-    let url = null;
-    if (reference) {
-      const native = new RegExp("^(ghapp://sessions/|codex://threads/)(" + uuid + ")$").exec(reference);
-      if (native && (!prefix || prefix === native[1]) &&
-          (!record.sessionId || record.sessionId.toLowerCase() === native[2].toLowerCase())) {
-        url = reference;
-      } else if (typeof reference === "string" && /^https:\/\/[^\s\\]+$/.test(reference)) {
-        url = safeUrl(reference, { httpsOnly: true });
-      } else if (!record.sessionUrl && prefix && new RegExp("^" + uuid + "$").test(reference) &&
-          (!record.sessionId || record.sessionId.toLowerCase() === reference.toLowerCase())) {
-        url = prefix + reference;
-      }
-    } else if (prefix && new RegExp("^" + uuid + "$").test(record.sessionId || "")) {
-      url = prefix + record.sessionId;
-    }
-    return { url, reason: !url ? "session unavailable: host or identity unknown, or invalid link"
-      : record.sessionAvailability === "present" ? "session last reported present"
-        : "recorded session; existence unverified" };
+  function sessionTarget(record) {
+    return record?.sessionLink || { url: null, reason: "session unavailable" };
   }
 
   function sessionNode(record, props, ...children) {
@@ -144,18 +113,15 @@
   }
 
   function mark(kind) {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    for (const [key, value] of Object.entries({
+    const icon = svg("svg", {
       viewBox: "0 0 16 16", width: "1em", height: "1em", "aria-hidden": "true",
       focusable: "false", class: "status-mark mark-" + kind
-    })) svg.setAttribute(key, value);
+    });
     const path = (d, attrs = {}) => {
-      const node = document.createElementNS(svg.namespaceURI, "path");
-      for (const [key, value] of Object.entries({ d, ...attrs })) node.setAttribute(key, value);
-      svg.append(node);
+      icon.append(svg("path", { d, ...attrs }));
     };
     if (kind === "run") {
-      svg.setAttribute("viewBox", "0 0 12 16");
+      icon.setAttribute("viewBox", "0 0 12 16");
       path("M2 4.5C1.9 5.8 .2 6.7 .6 7.9L2 9.3 3.4 7.9C3.8 6.7 2.1 5.8 2 4.5ZM1.4 8.8H2.6V14.5H1.4Z",
         { class: "spear spear-left", fill: "currentColor" });
       path("M10 4.5C9.9 5.8 8.2 6.7 8.6 7.9L10 9.3 11.4 7.9C11.8 6.7 10.1 5.8 10 4.5ZM9.4 8.8H10.6V14.5H9.4Z",
@@ -163,7 +129,7 @@
       path("M6 2.5C5.8 4.2 3.8 5.5 4.3 7L6 8.6 7.7 7C8.2 5.5 6.2 4.2 6 2.5ZM5.3 8H6.7V15H5.3Z",
         { class: "spear spear-center", fill: "currentColor" });
     } else if (kind === "captain") {
-      svg.setAttribute("viewBox", "0 0 64 64");
+      icon.setAttribute("viewBox", "0 0 64 64");
       path("M7 29C4 15 15 3 31 3C43 3 52 9 57 17L50 22C43 14 35 12 28 15C21 18 19 23 19 29Z",
         { fill: "currentColor" });
       path("M17 33C17 23 24 17 33 17C44 17 50 24 50 34V36H37V43L46 47L41 61L24 52L29 37H16Z",
@@ -184,7 +150,7 @@
         { fill: "none", stroke: "currentColor", "stroke-width": "1.5" });
       if (kind === "wait") path("M5 6H11M5 9H11", { stroke: "currentColor", "stroke-width": "1.5" });
     }
-    return svg;
+    return icon;
   }
 
   function tone(item) {
@@ -228,16 +194,11 @@
       refresh: "M13 6a5.5 5.5 0 1 0 .4 4M13 2v4H9",
       create: "M8 2v12M2 8h12"
     };
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    for (const [key, value] of Object.entries({
+    return svg("svg", {
       viewBox: "0 0 16 16", width: "18", height: "18", "aria-hidden": "true", focusable: "false",
       fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round",
       "stroke-linejoin": "round"
-    })) svg.setAttribute(key, value);
-    const path = document.createElementNS(svg.namespaceURI, "path");
-    path.setAttribute("d", paths[kind]);
-    svg.append(path);
-    return svg;
+    }, svg("path", { d: paths[kind] }));
   }
 
   /**
@@ -250,9 +211,9 @@
    * waitReason?, nextAction?, resumeTrigger?, retryAt? (epoch ms), primaryPrUrl?, closedAt?,
    * outcome?, output?: {kind: "pr"|"report", url?},
    * delivery?: {mergeCommit, method?, mergedAt?} once GitHub shows the PR merged,
-   * writer?: {state, runtime, captainId, sessionId?, sessionUrl?, lastProgressAt?, progressNote?}.
+   * writer?: {state, runtime, captainId, sessionLink: {url, reason}, lastProgressAt?, progressNote?}.
    * Optional source.flags({signal}) resolves to {flags: [{kind, itemId?, executionId?, captainId?, reason,
-   * recovery, firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionRef,
+   * recovery, firstSeen, notifyOwner}]}, and source.captains({signal}) to {captains: [{id, sessionLink,
    * state, live, stale, heartbeatAt, wakeCount, compactionCount?, charterRevision?, focus, handoffNote?}]}.
    * source.detail({id, cursor, limit, signal}) resolves to
    * {item, attempt?, nextAction?, question?, dependencies?, events, nextCursor}.
@@ -289,6 +250,7 @@
     let readFrame = null;
     let clearConcurrency;
     const reportOutputs = new WeakMap();
+    const scoutIssues = new WeakMap();
 
     const announce = h("p", { class: "sr-only", role: "status" });
     const health = h("div", { class: "health" });
@@ -336,6 +298,24 @@
       brand(),
       health, navigation, actions, counts);
     const disclosures = [];
+    const popovers = [];
+    function closePopover(popover, focus = false) {
+      if (popover.panel.tagName === "DETAILS") popover.panel.open = false;
+      else {
+        popover.panel.hidden = true;
+        popover.trigger.setAttribute("aria-expanded", "false");
+        for (const dropdown of popover.panel.querySelectorAll("details")) dropdown.open = false;
+      }
+      if (focus) {
+        popover.trigger.focus();
+        popover.trigger.classList.add("tooltip-dismissed");
+      }
+    }
+    function closeOutside(event) {
+      for (const popover of popovers) {
+        if (!popover.panel.contains(event.target) && !popover.trigger.contains(event.target)) closePopover(popover);
+      }
+    }
     function disclosure(kind, name, content, activeCount) {
       const description = name + (activeCount ? " (" + activeCount + " applied)" : "");
       const trigger = toolButton(kind, description);
@@ -345,31 +325,18 @@
       trigger.setAttribute("aria-expanded", "false");
       trigger.classList.toggle("is-active", Boolean(activeCount));
       if (activeCount) trigger.append(h("span", { class: "tool-badge", "aria-hidden": "true", text: activeCount }));
-      const close = () => {
-        panel.hidden = true;
-        trigger.setAttribute("aria-expanded", "false");
-        for (const dropdown of panel.querySelectorAll("details")) dropdown.open = false;
-      };
+      const popover = { panel, trigger };
+      popovers.push(popover);
       trigger.addEventListener("click", () => {
         const opening = panel.hidden;
-        for (const other of disclosures) other.close();
+        for (const other of disclosures) closePopover(other);
         if (opening) {
           panel.hidden = false;
           trigger.setAttribute("aria-expanded", "true");
           content.querySelector("input:not([type=hidden]), summary")?.focus();
         }
       });
-      const onEscape = event => {
-        if (event.key !== "Escape" || event.defaultPrevented) return;
-        event.preventDefault();
-        event.stopPropagation();
-        close();
-        trigger.focus();
-        trigger.classList.add("tooltip-dismissed");
-      };
-      panel.addEventListener("keydown", onEscape);
-      trigger.addEventListener("keydown", onEscape);
-      disclosures.push({ close });
+      disclosures.push(popover);
       actions.append(trigger);
       header.append(panel);
     }
@@ -389,6 +356,7 @@
         const summary = h("summary", {}, label(name) + ": ", selected);
         const dropdown = h("details", { class: "filter-dropdown" }, summary,
           h("div", { class: "filter-panel" }, h("label", {}, label(name) + " ", input)));
+        popovers.push({ panel: dropdown, trigger: summary });
         const update = () => {
           selected.textContent = input.value.trim() || "Any";
           summary.title = label(name) + ": " + selected.textContent;
@@ -400,13 +368,6 @@
           for (const other of filters.querySelectorAll("details")) {
             if (other !== dropdown) other.open = false;
           }
-        });
-        dropdown.addEventListener("keydown", event => {
-          if (event.key !== "Escape" || !dropdown.open) return;
-          event.preventDefault();
-          event.stopPropagation();
-          dropdown.open = false;
-          summary.focus();
         });
         filters.append(dropdown);
       }
@@ -427,36 +388,27 @@
         if (child !== summary) settingsPanel.append(child);
       }
       concurrency.append(settingsPanel);
-      const close = () => { concurrency.open = false; };
+      const popover = { panel: concurrency, trigger: summary };
+      popovers.push(popover);
       const onClick = event => {
         event.preventDefault();
         const opening = !concurrency.open;
-        for (const other of disclosures) other.close();
+        for (const other of disclosures) closePopover(other);
         concurrency.open = opening;
       };
       const onToggle = () => {
         if (concurrency.open) concurrency.querySelector("input:not(:disabled)")?.focus();
         else if (concurrency.contains(document.activeElement)) summary.focus();
       };
-      const onEscape = event => {
-        if (event.key !== "Escape" || !concurrency.open) return;
-        event.preventDefault();
-        event.stopPropagation();
-        close();
-        summary.focus();
-        summary.classList.add("tooltip-dismissed");
-      };
       summary.addEventListener("click", onClick);
       concurrency.addEventListener("toggle", onToggle);
-      concurrency.addEventListener("keydown", onEscape);
       clearConcurrency = () => {
         clearDescription();
         summary.removeEventListener("click", onClick);
         concurrency.removeEventListener("toggle", onToggle);
-        concurrency.removeEventListener("keydown", onEscape);
         settingsPanel.replaceWith(...settingsPanel.childNodes);
       };
-      disclosures.push({ close });
+      disclosures.push(popover);
       actions.append(concurrency);
     }
     actions.append(theme, refresh);
@@ -510,13 +462,10 @@
       if (disposed || target.request) return undefined;
       const current = new AbortController();
       target.request = current;
-      let timer;
       try {
-        const deadline = new Promise((_, reject) => {
-          timer = setTimeout(() => reject(new Error("Read timed out")), READ_TIMEOUT_MS);
-        });
-        const data = await Promise.race([read(current.signal), deadline]);
-        if (current.signal.aborted) return undefined;
+        const signal = readSignal(current.signal);
+        const data = await read(signal);
+        signal.throwIfAborted();
         if (target.failed || !target.updated || target.snapshot !== data) renderRead();
         target.snapshot = data;
         target.failed = false;
@@ -529,7 +478,6 @@
         }
         return undefined;
       } finally {
-        clearTimeout(timer);
         current.abort();
         if (target.request === current) target.request = null;
       }
@@ -982,24 +930,20 @@
       const nav = h("nav", { class: "pager", "aria-label": name + " pages" });
       if (target.cursors[0] !== null) {
         const first = h("button", { type: "button", class: "ghost", text: "First page",
-          "data-focus": "first:" + kind });
-        first.addEventListener("click", () => {
-          target.cursors = [null, target.cursors.at(-1)];
-          changePage(kind, false);
-        });
+          "data-focus": "first:" + kind, "data-page": kind, "data-direction": "first" });
         nav.append(first);
       }
       if (target.cursors.length > 1) {
         const newer = h("button", { type: "button", class: "ghost", "data-focus": "newer:" + kind,
-          "aria-label": "Previous " + name + " page", text: "‹ Newer" });
-        newer.addEventListener("click", () => changePage(kind, false));
+          "aria-label": "Previous " + name + " page", text: "‹ Newer",
+          "data-page": kind, "data-direction": "newer" });
         nav.append(newer);
       }
       if (target.cursors.length > 1 || target.next) nav.append(h("span", { class: "faint", text: "page " + target.cursors.length }));
       if (target.next) {
         const older = h("button", { type: "button", class: "ghost", "data-focus": "older:" + kind,
-          "aria-label": "Next " + name + " page", text: "More ›" });
-        older.addEventListener("click", () => changePage(kind, true));
+          "aria-label": "Next " + name + " page", text: "More ›",
+          "data-page": kind, "data-direction": "older" });
         nav.append(older);
       }
       return nav.childElementCount ? nav : null;
@@ -1031,10 +975,6 @@
         const oldest = Math.min(...members.map(flag => epoch(flag.firstSeen) ?? now));
         const group = h("details", { class: "fgroup t-" + (notify ? "attn" : informational ? "info" : kind === "deployed" ? "ok" : "wait"), "data-kind": kind });
         if (state.flagGroups.has(kind)) group.open = true;
-        group.addEventListener("toggle", () => {
-          if (group.open) state.flagGroups.add(kind);
-          else state.flagGroups.delete(kind);
-        });
         const reasons = [...new Set(members.map(flag => flag.reason))];
         group.append(h("summary", { class: "line", "data-focus": "flag:" + kind },
           flagGlyph(notify, informational),
@@ -1162,43 +1102,34 @@
           class: "warn", text: "Detail update failed. Showing the previous contents."
         }));
       }
-      const needRows = needs.map(item => itemRow(item, "open", index, now));
-      const needContent = h("div", {});
-      const scoutNeeds = state.overview.scoutNeeds || [];
-      for (const issue of scoutNeeds) {
-        const row = h("div", { class: "block" },
-          h("a", { href: safeUrl(issue.url, { httpsOnly: true }), text: issue.repository_id + " #" + issue.number }),
-          h("p", { text: "Author: " + (issue.author_login || "deleted user") + ". " + issue.reason }));
-        const message = h("p", { role: "status" });
-        const controls = [];
-        for (const decision of ["approved", "declined"]) {
-          const button = h("button", { type: "button", text: decision === "approved" ? "Approve intake" : "Decline" });
-          button.addEventListener("click", async () => {
-            for (const control of controls) control.disabled = true;
-            try {
-              await source.decideScout(issue, decision);
-              message.textContent = decision === "approved"
-                ? "Approved. The next scouting pass rechecks the issue before intake; no work queued yet."
-                : "Declined. No work queued.";
-              await loadOverview();
-            } catch (error) {
-              message.textContent = error.message;
-              for (const control of controls) control.disabled = false;
-            }
-          });
-          controls.push(button);
-          row.append(button);
+      if (page === "home" && enabled.open) {
+        const needRows = needs.map(item => itemRow(item, "open", index, now));
+        const needContent = h("div", {});
+        const scoutNeeds = state.overview.scoutNeeds || [];
+        for (const issue of scoutNeeds) {
+          const row = h("div", { class: "block" },
+            h("a", { href: safeUrl(issue.url, { httpsOnly: true }), text: issue.repository_id + " #" + issue.number }),
+            h("p", { text: "Author: " + (issue.author_login || "deleted user") + ". " + issue.reason }));
+          const message = h("p", { role: "status" });
+          const controls = [];
+          for (const decision of ["approved", "declined"]) {
+            const button = h("button", { type: "button", text: decision === "approved" ? "Approve intake" : "Decline",
+              "data-scout": decision, "data-focus": "scout:" + issue.repository_id + ":" + issue.number + ":" + decision });
+            scoutIssues.set(button, { issue, controls, message });
+            controls.push(button);
+            row.append(button);
+          }
+          row.append(message);
+          needContent.append(row);
         }
-        row.append(message);
-        needContent.append(row);
+        if (looseNotify.length) needContent.append(h("div", { class: "rows flags" }, flagGroups(looseNotify, titles, now)));
+        needContent.append(needRows.length || !looseNotify.length
+          ? list(needRows, state.open.updated ? "No work needing you on this page." : "Loading…", "items") : "");
+        sections.push(section("needs", "Needs you", pageCount(needs.length + looseNotify.length + scoutNeeds.length),
+          needs.length + looseNotify.length + scoutNeeds.length ? "attn" : "", needContent));
       }
-      if (looseNotify.length) needContent.append(h("div", { class: "rows flags" }, flagGroups(looseNotify, titles, now)));
-      needContent.append(needRows.length || !looseNotify.length
-        ? list(needRows, state.open.updated ? "No work needing you on this page." : "Loading…", "items") : "");
-      sections.push(section("needs", "Needs you", pageCount(needs.length + looseNotify.length + scoutNeeds.length),
-        needs.length + looseNotify.length + scoutNeeds.length ? "attn" : "", needContent));
       const scout = state.overview.scout;
-      if (scout) {
+      if (page === "home" && scout) {
         const pass = scout.last_pass;
         sections.push(section("issue-scout", "GitHub issue scouting", scout.state,
           scout.state === "failed" ? "attn" : "",
@@ -1212,13 +1143,13 @@
             + (pass && !pass.completed_at ? ". Durable cursor: repository " + pass.repository_index + ", page " + pass.page : "")
           })));
       }
-      if (enabled.flags) {
+      if (page === "home" && enabled.flags) {
         sections.push(section("flags", "Flags", otherFlags.length,
           otherFlags.some(flag => !["queue_backlogged", "deployed"].includes(flag.kind)) ? "wait" : "",
           otherFlags.length ? h("div", { class: "rows flags" }, flagGroups(otherFlags, titles, now))
             : h("p", { class: "empty", text: state.flags.failed ? "Flags unavailable." : "No flags. Nothing has drifted." })));
       }
-      if (enabled.captains) {
+      if (page === "home" && enabled.captains) {
         const live = state.captains.rows.filter(captain => captain.live).length;
         const current = state.captains.rows.filter(captain => captain.state !== "ended")
           .sort((a, b) => Number(b.live) - Number(a.live));
@@ -1229,54 +1160,51 @@
           const group = h("details", { class: "ended-captains", open: state.endedOpen });
           group.append(h("summary", { "data-focus": "ended-captains", text: "Ended (" + ended.length + ")" }),
             list(ended.map(captain => captainRow(captain, titles, now)), "", "captains"));
-          group.addEventListener("toggle", () => { if (group.isConnected) state.endedOpen = group.open; });
           content.append(group);
         }
         sections.push(section("captains", "Captains", live + "/" + state.captains.rows.length, live ? "" : "attn",
           content));
       }
-      sections.push(section("active", "Active", pageCount(active.length), "",
+      if (page === "home" && enabled.open) sections.push(section("active", "Active", pageCount(active.length), "",
         list(active.map(item => itemRow(item, "open", index, now)), "No active work on this page.", "items")));
-      const queueRows = page === "queue" ? state.open.rows : queued;
-      const queuedSection = section("queued", page === "queue" ? "Queue" : "Queued and waiting",
-        pageCount(queueRows.length), "",
-        list(queueRows.map(item => itemRow(item, "open", index, now)),
-          state.open.updated ? "No queued work on this page." : "Loading...", "items"));
-      const openPager = pager("open", state.open, "open work");
-      if (openPager) queuedSection.append(openPager);
-      if (state.open.failed) queuedSection.append(h("p", { class: "warn", text: state.open.updated
-        ? "Open work update failed. Showing the previous contents." : "Could not load open work. Check URL filters and Refresh to retry." }));
-      sections.push(queuedSection);
-      const closedSection = section("closed", page === "history" ? "History" : "Recently closed",
-        state.closed.rows.length + (state.closed.next ? "+" : ""), "",
-        list(state.closed.rows.map(item => itemRow(item, "closed", index, now)),
-          state.closed.updated ? "No closed work on this page." : "Loading…", "items closed"));
-      const closedPager = pager("closed", state.closed, "recent outcomes");
-      if (closedPager) closedSection.append(closedPager);
-      if (state.closed.failed) closedSection.append(h("p", { class: "warn", text: state.closed.updated
-        ? "Closed work update failed. Showing the previous contents." : "Could not load closed work. Check URL filters and Refresh to retry." }));
-      sections.push(closedSection);
+      if (enabled.open) {
+        const queueRows = page === "queue" ? state.open.rows : queued;
+        const queuedSection = section("queued", page === "queue" ? "Queue" : "Queued and waiting",
+          pageCount(queueRows.length), "",
+          list(queueRows.map(item => itemRow(item, "open", index, now)),
+            state.open.updated ? "No queued work on this page." : "Loading...", "items"));
+        const openPager = pager("open", state.open, "open work");
+        if (openPager) queuedSection.append(openPager);
+        if (state.open.failed) queuedSection.append(h("p", { class: "warn", text: state.open.updated
+          ? "Open work update failed. Showing the previous contents." : "Could not load open work. Check URL filters and Refresh to retry." }));
+        sections.push(queuedSection);
+      }
+      if (enabled.closed) {
+        const closedSection = section("closed", page === "history" ? "History" : "Recently closed",
+          state.closed.rows.length + (state.closed.next ? "+" : ""), "",
+          list(state.closed.rows.map(item => itemRow(item, "closed", index, now)),
+            state.closed.updated ? "No closed work on this page." : "Loading…", "items closed"));
+        const closedPager = pager("closed", state.closed, "recent outcomes");
+        if (closedPager) closedSection.append(closedPager);
+        if (state.closed.failed) closedSection.append(h("p", { class: "warn", text: state.closed.updated
+          ? "Closed work update failed. Showing the previous contents." : "Could not load closed work. Check URL filters and Refresh to retry." }));
+        sections.push(closedSection);
+      }
 
       syncClock(body);
-      body.replaceChildren(...sections.filter(section => {
-        if (routed) return section.classList.contains("sec-detail");
-        if (page === "queue") return section.classList.contains("sec-queued");
-        if (page === "history") return section.classList.contains("sec-closed");
-        if (["sec-needs", "sec-active", "sec-queued"].some(name => section.classList.contains(name))) return enabled.open;
-        if (section.classList.contains("sec-closed")) return enabled.closed;
-        return true;
-      }));
-      counts.setAttribute("aria-label", "Global workspace summary");
-      counts.replaceChildren(
-        h("li", { class: totals?.needs_you ? "t-attn" : "" }, h("strong", { text: totals ? String(totals.needs_you) : "—" }), " needs you"),
-        h("li", {}, h("strong", { text: totals ? String(totals.running) : "—" }), " running"),
-        h("li", {}, h("strong", { text: totals ? String(totals.queued + totals.blocked + totals.waiting_on_checks) : "—" }), " queued and waiting"),
-        enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || !["queue_backlogged", "deployed"].includes(flag.kind)) ? "t-wait" : "" },
-          h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
-        enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
-      if (state.overview.failed) counts.append(h("li", { class: "warn", text: "Global counts unavailable. Refresh to retry." }));
+      body.replaceChildren(...sections);
+      if (page === "home") {
+        counts.setAttribute("aria-label", "Global workspace summary");
+        counts.replaceChildren(
+          h("li", { class: totals?.needs_you ? "t-attn" : "" }, h("strong", { text: totals ? String(totals.needs_you) : "—" }), " needs you"),
+          h("li", {}, h("strong", { text: totals ? String(totals.running) : "—" }), " running"),
+          h("li", {}, h("strong", { text: totals ? String(totals.queued + totals.blocked + totals.waiting_on_checks) : "—" }), " queued and waiting"),
+          enabled.flags ? h("li", { class: state.flags.rows.some(flag => flag.notifyOwner || !["queue_backlogged", "deployed"].includes(flag.kind)) ? "t-wait" : "" },
+            h("strong", { text: String(state.flags.rows.length) }), " flags") : null,
+          enabled.captains ? h("li", {}, h("strong", { text: state.captains.rows.filter(captain => captain.live).length + "/" + state.captains.rows.length }), " Captains live") : null);
+        if (state.overview.failed) counts.append(h("li", { class: "warn", text: "Global counts unavailable. Refresh to retry." }));
+      }
       renderHealth();
-      if (page !== "home") counts.replaceChildren();
       if (focused) {
         const target = root.querySelector('[data-focus="' + CSS.escape(focused) + '"]');
         if (target && document.activeElement !== target) target.focus({ preventScroll: true });
@@ -1295,6 +1223,19 @@
     }
 
     function onKey(event) {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        const candidates = popovers.filter(({ panel, trigger }) =>
+          (panel.tagName === "DETAILS" ? panel.open : !panel.hidden) &&
+          (panel.contains(event.target) || trigger.contains(event.target)));
+        const popover = candidates.find(candidate => !candidates.some(other =>
+          other !== candidate && candidate.panel.contains(other.panel)));
+        if (popover) {
+          event.preventDefault();
+          event.stopPropagation();
+          closePopover(popover, true);
+          return;
+        }
+      }
       const current = event.target.closest?.("button.title");
       if (event.key === "Escape" && state.expanded && !routed) {
         const id = state.expanded;
@@ -1312,7 +1253,36 @@
       }
     }
 
-    function onRowClick(event) {
+    async function onRowClick(event) {
+      const pagerButton = event.target.closest?.("button[data-page]");
+      if (pagerButton && body.contains(pagerButton)) {
+        const kind = pagerButton.dataset.page;
+        if (pagerButton.dataset.direction === "first") {
+          const target = kind === "detail" ? (routed ? state.route : detailState(state.expanded)) : state[kind];
+          target.cursors = [null, target.cursors.at(-1)];
+        }
+        changePage(kind, pagerButton.dataset.direction === "older");
+        return;
+      }
+      const scoutButton = event.target.closest?.("button[data-scout]");
+      if (scoutButton && body.contains(scoutButton)) {
+        const { issue, controls, message } = scoutIssues.get(scoutButton);
+        const decision = scoutButton.dataset.scout;
+        for (const control of controls) control.disabled = true;
+        try {
+          await source.decideScout(issue, decision);
+          if (disposed) return;
+          message.textContent = decision === "approved"
+            ? "Approved. The next scouting pass rechecks the issue before intake; no work queued yet."
+            : "Declined. No work queued.";
+          await loadOverview();
+        } catch (error) {
+          if (disposed) return;
+          message.textContent = error.message;
+          for (const control of controls) control.disabled = false;
+        }
+        return;
+      }
       const report = event.target.closest?.("button[data-report]");
       if (report && body.contains(report)) {
         source.openReport(reportOutputs.get(report));
@@ -1323,6 +1293,15 @@
       const control = event.target.closest("a, button");
       const id = line.parentElement.dataset.id;
       if (!control || control.matches("button.title")) toggle(id);
+    }
+
+    function onToggle(event) {
+      const group = event.target;
+      if (!body.contains(group)) return;
+      if (group.matches(".fgroup")) {
+        if (group.open) state.flagGroups.add(group.dataset.kind);
+        else state.flagGroups.delete(group.dataset.kind);
+      } else if (group.matches(".ended-captains")) state.endedOpen = group.open;
     }
 
     function tick() {
@@ -1341,6 +1320,8 @@
     refresh.addEventListener("click", refreshAll);
     root.addEventListener("click", onRowClick);
     root.addEventListener("keydown", onKey);
+    root.addEventListener("toggle", onToggle, true);
+    document.addEventListener("click", closeOutside);
     const interval = setInterval(refreshAll, REFRESH_MS);
     const ticker = setInterval(tick, TICK_MS);
     document.addEventListener("visibilitychange", refreshAll);
@@ -1357,6 +1338,8 @@
       document.removeEventListener("visibilitychange", refreshAll);
       root.removeEventListener("click", onRowClick);
       root.removeEventListener("keydown", onKey);
+      root.removeEventListener("toggle", onToggle, true);
+      document.removeEventListener("click", closeOutside);
       for (const target of [state.open, state.closed, state.route, state.flags, state.captains, state.overview, ...state.details.values()]) target.request?.abort();
       root.replaceChildren();
     };
