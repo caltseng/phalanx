@@ -23,7 +23,8 @@
     closed_at: now, outcome: "report_stored", output: { kind: "report" },
     delivery: { merged: true, merge_commit: "f".repeat(40), merged_at: now, merge_method: "merge" },
     writer: { state: "ended", runtime: "copilot-app", session_id: nativeId, session_url: writerUrl,
-      session_availability: "unverified" } };
+      session_availability: "unverified",
+      session_link: { url: writerUrl, reason: "recorded session; existence unverified" } } };
   const report = [
     "# Field report", "", "**Bold** and *emphasis* with `code <img src=x>`.", "",
     "- First", "- Second", "", "1. Ordered", "2. List", "", "> Quoted", "",
@@ -65,6 +66,19 @@
     const win = frame.contentWindow;
     const doc = win.document;
     const intervals = [];
+    const createdNodes = [];
+    const renderListeners = [];
+    const createElement = doc.createElement.bind(doc);
+    doc.createElement = (...args) => {
+      const node = createElement(...args);
+      createdNodes.push(node);
+      return node;
+    };
+    const addListener = win.EventTarget.prototype.addEventListener;
+    win.EventTarget.prototype.addEventListener = function (...args) {
+      if (this.matches?.("[data-page], [data-scout], .fgroup, .ended-captains")) renderListeners.push(this);
+      return addListener.apply(this, args);
+    };
     win.setInterval = (callback, delay) => intervals.push({ callback, delay });
     win.clearInterval = () => {};
     const clock = win.Date.now();
@@ -105,7 +119,9 @@
           first_seen: now, notify_owner: false }
       ] });
       if (path.startsWith("/v1/captains?")) return snapshot({ captains: [
-        { id: "cap-live", session_ref: captainUrl, state: "active", live: true, stale: false, heartbeat_at: now,
+        { id: "cap-live", session_ref: captainUrl,
+          session_link: { url: captainUrl, reason: "recorded session; existence unverified" },
+          state: "active", live: true, stale: false, heartbeat_at: now,
           wake_count: 7, compaction_count: 4, charter_revision: "opaque-hash", focus: [id] },
         { id: "cap-stale", state: "active", live: false, stale: true, heartbeat_at: now, compaction_count: null },
         { id: "cap-ended", state: "ended", live: false, stale: false, heartbeat_at: now, compaction_count: 0 }
@@ -138,6 +154,13 @@
       JSON.stringify(path) + ");</script>"));
     doc.close();
     await until(() => doc.querySelector(".board-navigation"));
+    await new Promise(resolve => win.requestAnimationFrame(resolve));
+    const sectionName = path.startsWith("/operator/queue") ? "sec-queued"
+      : path.startsWith("/operator/history") ? "sec-closed"
+        : /^\/operator\/(items|executions)\//.test(path) ? "sec-detail" : null;
+    if (sectionName) assert(createdNodes.filter(node => node.matches(".sec"))
+      .every(node => node.classList.contains(sectionName)), "Only visible sections are constructed on " + path);
+    assert(!renderListeners.length, "Row/pager/scout/disclosure handlers are mounted once, not on render");
     return { win, doc, intervals };
   }
 

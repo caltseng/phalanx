@@ -27,5 +27,17 @@
     return null;
   }
 
-  window.PhalanxOperatorHelpers = { h, safeUrl };
+  function svg(tag, props = {}, ...children) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [key, value] of Object.entries(props)) node.setAttribute(key, value);
+    node.append(...children);
+    return node;
+  }
+
+  const REQUEST_TIMEOUT_MS = 12000;
+  const readSignal = signal => signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
+    : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+
+  window.PhalanxOperatorHelpers = { h, svg, safeUrl, readSignal };
 })();

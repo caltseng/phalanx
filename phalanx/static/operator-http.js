@@ -2,6 +2,7 @@
   "use strict";
 
   const TOKEN = /^[A-Za-z0-9_-]{32,}$/;
+  const { readSignal } = window.PhalanxOperatorHelpers;
 
   function client(token) {
     const snapshots = new Map();
@@ -47,7 +48,7 @@
 
     function write(path, { headers = {}, ...options }) {
       return request(path, {
-        signal: AbortSignal.timeout(12000),
+        signal: readSignal(),
         ...options,
         headers: { Accept: "application/json", "Content-Type": "application/json", ...headers }
       });

@@ -7,6 +7,7 @@
   const nativeId = "12345678-1234-1234-1234-123456789abc";
   const copilotUrl = "ghapp://sessions/" + nativeId;
   const codexUrl = "codex://threads/" + nativeId;
+  const sessionLink = url => ({ url, reason: "recorded session; existence unverified" });
   const waiting = {
     id: "wait", itemId: "item-wait", title: "<img src=x> Choose deployment target",
     goal: "<img src=x> Choose deployment target.\nTwo targets match.", repo: "example/service",
@@ -19,7 +20,8 @@
     activeStartedAt: now, stageStartedAt: now,
     primaryPrUrl: "https://example.com/pull/7",
     nextAction: "A worker is running the self_review stage",
-    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId }
+    writer: { state: "launching", runtime: "copilot-app", captainId: "cap-1", sessionId: nativeId,
+      sessionLink: sessionLink(copilotUrl) }
   };
   const queued = {
     id: "queue", itemId: "item-queue", title: "Tidy docs", repo: "example/docs",
@@ -27,7 +29,7 @@
   };
   const external = { ...queued, id: "external", title: "Await CI", status: "waiting_for_external" };
   const resumed = { ...queued, id: "resumed", title: "Resumed work",
-    writer: { state: "ended", runtime: "codex", sessionId: nativeId } };
+    writer: { state: "ended", runtime: "codex", sessionId: nativeId, sessionLink: sessionLink(codexUrl) } };
   const failure = {
     id: "fail", title: "Audit build", repo: "example/service", stage: "report_drafting",
     status: "failed", outcome: "failed", target: "checked_in", closedAt: now, createdAt: hourAgo,
@@ -36,7 +38,7 @@
   const success = {
     ...failure, id: "done", title: "Verify rollout", status: "completed", outcome: "checked_in",
     output: { kind: "pr", url: "https://example.com/pull/1" },
-    writer: { state: "ended", runtime: "codex", sessionId: nativeId },
+    writer: { state: "ended", runtime: "codex", sessionId: nativeId, sessionLink: sessionLink(codexUrl) },
     delivery: { mergeCommit: "a40536e" + "0".repeat(33), method: "squash_or_rebase", mergedAt: now }
   };
   const draft = {
@@ -63,8 +65,10 @@
   ];
   const captains = [
     { id: "cap-ended", state: "ended", live: false, stale: false, heartbeatAt: hourAgo, compactionCount: 2 },
-    { id: "cap-stale", sessionRef: codexUrl, state: "active", live: false, stale: true, heartbeatAt: hourAgo },
+    { id: "cap-stale", sessionRef: codexUrl, sessionLink: sessionLink(codexUrl),
+      state: "active", live: false, stale: true, heartbeatAt: hourAgo },
     { id: "cap-1", sessionRef: copilotUrl, state: "active", live: true, stale: false, heartbeatAt: now,
+      sessionLink: sessionLink(copilotUrl),
       wakeCount: 3, compactionCount: 0, charterRevision: "abcdef1234", focus: ["item-run"] }
   ];
   let offline = false;
@@ -355,27 +359,18 @@
     assert(item("run").closest("li").querySelector(".reason").textContent === running.nextAction,
       "Running rows retain the server's next action");
     const target = window.PhalanxOperatorBoard.sessionTarget;
-    assert(target({ runtime: "copilot-app", sessionId: nativeId }).url === copilotUrl &&
-      target({ runtime: "codex", sessionId: nativeId }).url === codexUrl, "Known native IDs route only to their host");
-    for (const reference of [nativeId, "javascript:alert(1)", "file:///tmp/chat", "unknown://sessions/" + nativeId,
-      "ghapp://sessions/" + nativeId + "?run=1", "ghapp://sessions/" + nativeId + "#x",
-      "ghapp://sessions/../" + nativeId, "ghapp://user@sessions/" + nativeId,
-      "ghapp://sessions/" + nativeId + "/", "ghapp://sessions/%31" + nativeId,
-      " ghapp://sessions/" + nativeId, "https://user:pass@example.com/chat", "https://[bad",
-      "https://example.com/\\chat", "/operator/new", "codex://threads/not-a-thread"]) {
-      assert(!target({ runtime: "copilot-app", sessionId: nativeId, sessionUrl: reference }).url,
-        "Unsafe or malformed recorded link is not replaced: " + reference);
-    }
+    assert(target({ sessionLink: sessionLink(copilotUrl) }).url === copilotUrl &&
+      target({ sessionLink: sessionLink(codexUrl) }).url === codexUrl, "Server-resolved links retain their host");
     assert(!target({ sessionId: nativeId }).url && !target({ sessionRef: nativeId }).url &&
       !target({ runtime: "copilot-cli", sessionId: nativeId }).url, "Legacy identity never guesses its provider");
-    assert(!target({ runtime: "copilot-app", sessionUrl: codexUrl }).url &&
-      !target({ sessionUrl: copilotUrl, sessionId: "other" }).url, "Provider and identity conflicts never translate sessions");
+    assert(!target({ sessionUrl: copilotUrl }).url, "Browser never resolves a raw session reference");
     for (const availability of ["missing", "deleted"]) {
-      assert(!target({ sessionUrl: copilotUrl, sessionAvailability: availability }).url &&
-        target({ sessionUrl: copilotUrl, sessionAvailability: availability }).reason.includes(availability),
+      const record = { sessionLink: { url: null, reason: "session " + availability } };
+      assert(!target(record).url && target(record).reason.includes(availability),
       "Known " + availability + " session is explicitly unavailable");
     }
-    assert(target({ sessionUrl: copilotUrl }).reason.includes("unverified"), "Recorded URL does not claim verified existence");
+    assert(target({ sessionLink: sessionLink(copilotUrl) }).reason.includes("unverified"),
+      "Recorded URL does not claim verified existence");
     const captainLinks = root.querySelectorAll('a[href="' + copilotUrl + '"]');
     assert(captainLinks.length >= 3 && [...captainLinks].every(link => link.tabIndex === 0),
       "Helmet, Captain name and writer are native keyboard-accessible links");
@@ -409,6 +404,27 @@
       "Settings closes search and retains its canonical form state");
     settingsInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     assert(!concurrency.open && document.activeElement === settingsSummary, "Settings Escape restores summary focus");
+    const filterTrigger = root.querySelector('[data-action="filters"]');
+    const filterPanel = root.querySelector("#board-filters");
+    filterTrigger.click();
+    const dropdown = filterPanel.querySelector("details");
+    dropdown.open = true;
+    dropdown.querySelector("input").focus();
+    dropdown.querySelector("input").dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Escape", bubbles: true, cancelable: true
+    }));
+    assert(!dropdown.open && !filterPanel.hidden && document.activeElement === dropdown.querySelector("summary"),
+      "Nested Escape closes only the innermost popover and restores its focus");
+    dropdown.querySelector("summary").dispatchEvent(new KeyboardEvent("keydown", {
+      key: "Escape", bubbles: true, cancelable: true
+    }));
+    assert(filterPanel.hidden && document.activeElement === filterTrigger,
+      "The next Escape closes the parent disclosure and restores its trigger");
+    settingsSummary.click();
+    await tick();
+    result.click();
+    assert(!concurrency.open && settingsInput.value === "7",
+      "Outside click closes the shared settings popover without clearing its form");
     const lists = calls.filter(call => call[0] === "open" || call[0] === "closed");
     assert(lists.length === 2 && lists.every(call => call[2] > 0 && call[2] <= 100), "Initial reads are bounded lists");
     assert(section("needs").contains(item("wait")) && section("needs").textContent.includes(waiting.waitReason), "Input wait needs the owner");
