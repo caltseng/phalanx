@@ -167,7 +167,7 @@ def dispatch_context(db, now):
     return {"pickup": pickup.context(db, now), "session_reports": availability_reports(db)}
 
 
-def conditional_read(request, response, db, now, context=None):
+def conditional_read(request, response, db, now, context=None, *, scouting=None):
     # Weak validators ignore ticking display ages, but not deadlines that change row meaning.
     token = db.execute("SELECT token FROM operator_change").fetchone()[0]
     deadlines = tuple(db.execute(
@@ -184,7 +184,6 @@ def conditional_read(request, response, db, now, context=None):
     holds = tuple(sorted(context["pickup"]["holds"]))
     sessions = tuple(sorted(context["session_reports"].items(), key=repr))
     live_pickup = context["pickup"]["captains"]
-    scouting = issue_scout.status(db) if request.url.path.endswith("/overview") else None
     key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}:{live_pickup}:{scouting}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
     response.headers["ETag"] = etag
@@ -533,7 +532,8 @@ def overview(request: Request, response: Response):
     now_ms = int(now.timestamp() * 1000)
     with read_transaction(request.app.state.database_path) as db:
         context = dispatch_context(db, now)
-        unchanged = conditional_read(request, response, db, now, context)
+        scouting = issue_scout.status(db)
+        unchanged = conditional_read(request, response, db, now, context, scouting=scouting)
         if unchanged is not None:
             return unchanged
         open_counts = db.execute(
@@ -550,7 +550,6 @@ def overview(request: Request, response: Response):
                WHERE status = 'queued' AND dependency_wait_json IS NULL AND ready_since <= ?""",
             (now_ms,),
         ).fetchone()[0]
-        scouting = issue_scout.status(db)
         scout_needs_owner = issue_scout.needs_owner(db)
     sections = {"needs_you": 0, "running": 0, "waiting_on_checks": 0, "queued": 0, "blocked": 0}
     for row in open_counts:

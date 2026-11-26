@@ -214,21 +214,22 @@ def historical_item(db, repository_id, url):
     return None
 
 
-def _observe(db, repository_id, issue, configuration, captain_id):
-    remote = db.execute("SELECT remote FROM repositories WHERE id=?", (repository_id,)).fetchone()[0]
-    repository = github_repository(remote)
+def _observe(db, repository_id, repository, issue, configuration, captain_id):
     url = f"https://github.com/{repository}/issues/{issue.number}"
     fingerprint = intake.digest(intake.encode(issue.model_dump(mode="json", exclude={"updated_at"})))
     previous = db.execute("SELECT * FROM issue_sources WHERE repository_id=? AND number=?",
                           (repository_id, issue.number)).fetchone()
     key = github_issue_key(repository_id, repository, issue.number)
-    receipt = db.execute(
-        """SELECT receipt.response_json FROM request_receipts AS receipt
-           JOIN work_items AS item ON item.id=json_extract(receipt.response_json, '$.id')
-           WHERE receipt.scope='intake' AND receipt.idempotency_key=? AND item.repository_id=?""",
-        (key, repository_id)).fetchone()
-    prior_import = json.loads(receipt["response_json"])["id"] if receipt else None
-    item_id = (previous["item_id"] if previous else None) or prior_import or historical_item(db, repository_id, url)
+    item_id = previous["item_id"] if previous else None
+    if item_id is None:
+        receipt = db.execute(
+            """SELECT receipt.response_json FROM request_receipts AS receipt
+               JOIN work_items AS item ON item.id=json_extract(receipt.response_json, '$.id')
+               WHERE receipt.scope='intake' AND receipt.idempotency_key=? AND item.repository_id=?""",
+            (key, repository_id)).fetchone()
+        item_id = json.loads(receipt["response_json"])["id"] if receipt else None
+    if item_id is None and previous is None:
+        item_id = historical_item(db, repository_id, url)
     decision = previous["decision"] if previous else None
     decided_by = previous["decided_by"] if previous else None
     decided_at = previous["decided_at"] if previous else None
@@ -283,8 +284,10 @@ def page(db, pass_id, payload):
             or payload.verified_login.casefold() != configuration["author_login"].casefold()):
         raise intake.Conflict("Local GitHub credential does not verify the configured author identity")
     counts = json.loads(row["counts_json"])
+    remote = db.execute("SELECT remote FROM repositories WHERE id=?", (payload.repository_id,)).fetchone()[0]
+    repository = github_repository(remote)
     for issue in payload.issues:
-        state = _observe(db, payload.repository_id, issue, configuration, row["captain_id"])
+        state = _observe(db, payload.repository_id, repository, issue, configuration, row["captain_id"])
         counts[state] = counts.get(state, 0) + 1
     repository_index = row["repository_index"] + int(not payload.has_more)
     completed = repository_index == len(configuration["repositories"])

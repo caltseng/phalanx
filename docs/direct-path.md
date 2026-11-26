@@ -93,7 +93,10 @@ Configured-author open issues enter ordinary intake with the normal merged targe
 source URL and an explicit untrusted-context criterion. Pauses, both capacity limits,
 repository readiness, dependencies and later steering apply through existing dispatch.
 Existing issue keys and historical goal/context URL links, including completed, failed
-and cancelled work, are reconciled before intake. Edits, closure or reopening never
+and cancelled work, are reconciled on first sighting. Later observations reuse the retained
+source binding and check stable manual-intake keys only while unlinked, without rescanning
+work history. Add historical goal/context links before the first sighting; use manual
+`ingest-issue` with its default issue key for later imports. Edits, closure or reopening never
 change that work or automatically create a rerun. Historical work with **no issue URL
 or source identity** cannot be reliably inferred: add the source link to authorized
 queued work before activation or reconcile it explicitly with the owner.
