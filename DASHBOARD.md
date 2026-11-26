@@ -162,7 +162,7 @@ remain unlinked.
 Long queue waits remain visible after 30 minutes. **Queue backlogged** uses a neutral
 information marker and **Waiting for writer capacity**, including occupied/maximum
 assigned-writer counts from canonical dispatch settings. An active Captain hold does
-not hide full-capacity backlog. **Dispatch overdue** keeps warning styling only for
+not hide full-capacity backlog. **Dispatch overdue** warns at 60 minutes only for
 unassigned runnable work with free capacity, dispatch enabled and no active hold
 (the API retains `captain_idle_with_work` for compatibility). Dependency waits are
 not missed launches. Flags retain first-seen ages and execution/item links; paused
@@ -463,7 +463,7 @@ reads current server values; charter settings cannot undo dashboard edits.
   - `duplicate_count`: other open PRs on the item branch in the latest reconciler observation, or `null` when not observed;
   - `pr`: the PR in the latest reconciler GitHub observation, with `url`, `number`, `state` (`open`, `closed` or `merged`), `draft`, `head_sha`, `head_ci`, `additions` and `deletions`. `head_ci` is the gate result observed on that head. Each field is `null` when not observed; `pr` is `null` before an observation or when the latest observation found no PR. Writer-supplied PR URLs and lifecycle evidence never populate these facts.
   - `pickup`: the shared server decision for an unbound queued item, including eligibility and a concrete reason for exclusion. Normal authorized intake in a charter repository is eligible without naming its ID in charter notes. Scope/readiness snapshots, affinity, persisted dependencies, reasoned holds, retry, pause and canonical Building/Total capacity supply the decision; uninitialized and stale observations never imply readiness.
-  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. An eligible queued item calls for Captain dispatch; an excluded item shows the same specific pickup reason as `shift status`. Eligible unlaunched items use the existing 30-minute **Dispatch overdue** flag; paused/capacity-bound work uses **Queue backlogged**, without another budget.
+  - `next_action`: set on every open row without a `wait_reason`, so each open row has one or the other. An eligible queued item calls for Captain dispatch; an excluded item shows the same specific pickup reason as `shift status`. Eligible unlaunched items use the 60-minute **Dispatch overdue** flag; paused/capacity-bound work retains the 30-minute **Queue backlogged** flag.
 
     Already shipped: a short one-line `title`, the full `goal`, `target` and the execution's `created_at`.
 - `GET /v1/operator/overview`: counts for needs you (waiting for input), running, waiting on checks, queued and blocked by prerequisites; outcomes closed in the last 24 hours; dispatch `paused` (false means on); the oldest eligible queued timestamp and age; and `generated_at` for data age.

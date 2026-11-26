@@ -310,9 +310,9 @@ A hold never reserves capacity. Captain discovery and `shift launch` respect act
 record the predecessor item ID and actual lane/owner constraint, not merely "not listed".
 Existing persisted dependencies, dispatch pause, retry, Building/Total capacity and PR-rework
 preference remain authoritative waits. Eligible intake with no writer and no exclusion
-uses the existing 30-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
-and pause use `queue_backlogged`, without another dispatch budget. Scope, uninitialized
-authority and repository/trust blockers use `pickup_blocked` on the same budget,
+uses the 60-minute `captain_idle_with_work` (**Dispatch overdue**) flag; capacity
+and pause retain the 30-minute `queue_backlogged` budget. Scope, uninitialized
+authority and repository/trust blockers retain `pickup_blocked` on that 30-minute budget,
 with the shared decision's reason/recovery and owner notification. This is not a
 `captain_idle_with_work` handoff signal.
 
