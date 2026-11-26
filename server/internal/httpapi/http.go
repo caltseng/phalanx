@@ -31,6 +31,7 @@ type route struct {
 	itemID      string
 	executionID string
 	captainID   string
+	runnerID    string
 	revision    string
 	method      string
 }
@@ -104,6 +105,10 @@ func match(path, method string) (route, string) {
 		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" && parts[3] == "report":
 			target.kind, target.executionID = "report", parts[2]
 		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" &&
+			(parts[3] == "github-observation" || parts[3] == "local-checks"):
+			target.kind, target.executionID, target.method = parts[3], parts[2], "POST"
+			return target, "POST"
+		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" &&
 			(parts[3] == "cancel" || parts[3] == "close-failure" || parts[3] == "retry-finalization"):
 			target.kind, target.executionID, target.method = parts[3], parts[2], "POST"
 			return target, "POST"
@@ -132,6 +137,19 @@ func match(path, method string) (route, string) {
 		}
 		return target, "GET"
 	}
+	if strings.HasPrefix(path, "/v1/reconcilers/") {
+		parts := strings.Split(strings.TrimPrefix(path, "/v1/reconcilers/"), "/")
+		if parts[0] != "" {
+			target := route{runnerID: parts[0], kind: "reconciler-retire", method: "DELETE"}
+			if len(parts) == 1 {
+				return target, "DELETE"
+			}
+			if len(parts) == 2 && parts[1] == "heartbeat" {
+				target.kind, target.method = "reconciler-heartbeat", "POST"
+				return target, "POST"
+			}
+		}
+	}
 	if strings.HasPrefix(path, "/v1/captains/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/v1/captains/"), "/")
 		if parts[0] != "" {
@@ -155,7 +173,8 @@ func bodyRoute(kind string) bool {
 	switch kind {
 	case "intake", "register", "set-title", "cancel", "close-failure", "retry-finalization",
 		"writer-register", "writer-update", "writer-withdraw", "writer-progress", "writer-capacity", "set-dispatch",
-		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write":
+		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write",
+		"github-observation", "local-checks", "reconciler-heartbeat":
 		return true
 	default:
 		return false
@@ -255,7 +274,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if (route.kind == "writer-register" || route.kind == "writer-update" || route.kind == "writer-withdraw" ||
 		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
-		route.kind == "archive-read" || route.kind == "archive-write") &&
+		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire") &&
 		role != "owner" && role != "runner" {
 		writeJSON(w, 403, map[string]any{"detail": "Owner or runner token required"})
 		return
@@ -272,7 +291,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		route.kind == "close-failure" || route.kind == "retry-finalization" || route.kind == "inbox" ||
 		route.kind == "set-dispatch" || route.kind == "reply" || route.kind == "steer" || route.kind == "rerun" {
 		required = "owner"
-	} else if route.kind == "runner" {
+	} else if route.kind == "runner" || route.kind == "github-observation" || route.kind == "local-checks" || route.kind == "reconciler-heartbeat" {
 		required = "runner"
 	}
 	if required != "" && role != required {
@@ -301,6 +320,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.captainID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.captainID, "captain_id")...)
 	}
+	if route.runnerID != "" {
+		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.runnerID, "runner_id")...)
+	}
 	if route.revision != "" {
 		pathIssues = append(pathIssues, contract.ValidateRevision(route.revision)...)
 	}
@@ -311,6 +333,43 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result json.RawMessage
 	var status = 200
 	switch route.kind {
+	case "github-observation", "local-checks", "reconciler-heartbeat", "reconciler-retire":
+		if bodyRoute(route.kind) && !bodyPresent && route.kind != "reconciler-heartbeat" {
+			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
+			return
+		}
+		var issues []contract.Issue
+		switch route.kind {
+		case "github-observation":
+			request, bodyIssues := contract.ValidateObservation(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.RecordObservation(ctx, route.itemID, route.executionID, request)
+			}
+		case "local-checks":
+			request, bodyIssues := contract.ValidateLocalChecks(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.RecordLocalChecks(ctx, route.itemID, route.executionID, request)
+			}
+		case "reconciler-heartbeat":
+			var request *contract.ReconcilerHeartbeat
+			issues = pathIssues
+			if input != nil {
+				body, bodyIssues := contract.ValidateReconcilerHeartbeat(input, keys)
+				request = &body
+				issues = append(issues, bodyIssues...)
+			}
+			if len(issues) == 0 {
+				result, err = h.App.ReconcilerHeartbeat(ctx, route.runnerID, request)
+			}
+		case "reconciler-retire":
+			result, err = h.App.RetireReconciler(ctx, route.runnerID)
+		}
+		if len(issues) > 0 {
+			writeJSON(w, 422, map[string]any{"detail": issues})
+			return
+		}
 	case "archive-read":
 		sessionID, issues := contract.ValidateArchiveQuery(r.URL.Query())
 		if len(issues) > 0 {

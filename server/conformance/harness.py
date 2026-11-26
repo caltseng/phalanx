@@ -108,6 +108,8 @@ def vector_manifest():
     import steering
     import captains
     import archives
+    import reconciliation
+    import datetimes
 
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
@@ -140,6 +142,10 @@ def vector_manifest():
                              "request_count": len(captains.cases())},
                 "archives": {"request_ids": [case["id"] for case in archives.cases()],
                              "request_count": len(archives.cases())},
+                "reconciliation": {"request_ids": [case["id"] for case in reconciliation.cases()],
+                                   "request_count": len(reconciliation.cases())},
+                "datetimes": {"request_count": len(datetimes.requests()),
+                              "request_sha256": digest(json.dumps(datetimes.requests()).encode())},
                 "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},
                 "numbers": {"request_count": len(numeric_requests), "request_sha256": digest(numeric_bytes)},
             },

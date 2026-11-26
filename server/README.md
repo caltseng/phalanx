@@ -11,9 +11,11 @@ owner inbox, owner retry-finalization, dispatch settings, writer
 registration/update/withdrawal, writer attempt/progress and writer capacity.
 Writer result/stop-confirmed, owner reply, stored-report reads, steering/rerun,
 Captain registration/heartbeat/reinforcement/current routing and session-archive
-reads/writes are also implemented.
+reads/writes are also implemented. Native GitHub observation, local-check,
+reconciler heartbeat/retirement and delivered-deployment retirement operations
+preserve observation deduplication and delivery/stop/rework precedence.
 Native report finalization and bounded dependency refresh use the existing
-schema26 jobs. Current-writer flags, reconciliation, scout, usage and
+schema26 jobs. Current-writer and global derived flags, scout, usage and
 operator/Scribe routes remain unimplemented.
 A 404 outside this slice is not API parity.
 
@@ -168,6 +170,8 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `steering.py` | 22 on each schema shape | Version-fenced owner steering and rerun, exact receipt replay and unchanged scope on refusals |
 | `captains.py` | 41 on each schema shape | Lifecycle, current routing, reinforcement, session field-error ordering, preserved null/duplicate first-seen values and missing-key refusal |
 | `archives.py` | 14 on each schema shape | Active-ownership refusal, immutable terminal archive outcomes and authorization |
+| `reconciliation.py` | 76 on each schema shape | Exact observation digests/timestamps, immutable local checks, heartbeat/retirement, delivery handoff/Building fencing, ready-output enrichment, stop/merge precedence and deployment retirement |
+| `datetimes.py` | 1,449 | Exact pinned aware-datetime coercion, serialization and error envelopes, including numeric precision, calendar/offset boundaries and deterministic randomized timestamps |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
 
@@ -183,6 +187,11 @@ foundation golden bytes. It is not a golden-update or mismatch-normalization pat
 Captain list views load liveness, session observations and four detail queries
 once per page, retaining each Captain's 100-ended-writer limit and full cleanup
 count. A two-Captain fixture checks count, ordering and independent limits.
+Observation tests inject a transition-history failure and verify the observation,
+state/version and writer ownership all roll back, then race identical posts and
+require one observation, one delivery transition and one ended attempt.
+Datetime tests include real-loopback observation validation; the standalone
+model corpus supplements those routes rather than claiming whole-family parity.
 
 Focused native tests additionally cover racing title revisions, report
 savepoint rollback, exact 2/4/8/16-second retry scheduling and fifth-failure

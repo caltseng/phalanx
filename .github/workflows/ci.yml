@@ -175,6 +175,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go build -trimpath -buildvcs=false -o "$env:RUNNER_TEMP\conformance-json.exe" ./cmd/conformance-json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -buildvcs=false -o "$env:RUNNER_TEMP\conformance-models.exe" ./cmd/conformance-models
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location ..
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\history.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\history"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -191,6 +193,10 @@ jobs:
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\captains.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\captains"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\archives.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\archives"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\reconciliation.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\reconciliation"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\datetimes.py --binary "$env:RUNNER_TEMP\conformance-models.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\datetimes"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\decisions.py --binary "$env:RUNNER_TEMP\conformance-decisions.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\decisions"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

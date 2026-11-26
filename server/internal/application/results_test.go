@@ -3,11 +3,111 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
+
+func TestObservationAndDeliveryRollbackTogetherThenReplay(t *testing.T) {
+	app, db := writerStore(t, 1, 1)
+	ctx := context.Background()
+	registered, err := app.RegisterWriter(ctx, "up", "execution", contract.WriterRegistration{
+		ExpectedVersion: "1", CaptainID: "captain", Runtime: "synthetic-runtime",
+		Nonce: "synthetic-observe-0001", TokenDigest: contract.Digest("observe-token")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, writerID, attempt := decodeBinding(t, registered)
+	head, base, url := "a0123456789012345678901234567890123456789", "b0123456789012345678901234567890123456789", "https://github.com/example/fixture/pull/1"
+	state := Start(ReadyTarget, ReadyMode)
+	state.Stage, state.Status, state.Candidate, state.PrimaryPR = Delivery, WaitingForExternal, &head, &url
+	state.Wait = &Wait{"Await current PR", "observation"}
+	raw, err := contract.Canonical(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE executions SET state_json=? WHERE id='execution'; UPDATE writers SET building=0", raw); err != nil {
+		t.Fatal(err)
+	}
+	request := contract.Observation{ObservedAt: contract.AwareTime{Time: time.Now().UTC()},
+		PR: &contract.ObservedPull{Number: "1", State: "open", HeadRef: itemBranch("up"), HeadSHA: head,
+			BaseRef: "main", BaseSHA: base}, Checks: pointer("satisfied"), TargetBase: pointer("main"),
+		CheckReasons: []string{}, Feedback: []string{}}
+	if _, err := db.Exec(`CREATE TRIGGER abort_observation_history BEFORE INSERT ON transition_history
+		WHEN NEW.event='pr_observed' BEGIN SELECT RAISE(ABORT,'injected observation-history failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.RecordObservation(ctx, "up", "execution", request); err == nil {
+		t.Fatal("history failure was hidden")
+	}
+	var observations, history int
+	var version int64
+	var ended *string
+	if err := db.QueryRow("SELECT count(*) FROM github_observations").Scan(&observations); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT version FROM executions WHERE id='execution'").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT ended_at FROM writers WHERE id=?", writerID).Scan(&ended); err != nil {
+		t.Fatal(err)
+	}
+	if observations != 0 || version != row.Version || ended != nil {
+		t.Fatal("observation/apply failure leaked durable delivery effects", observations, version, ended)
+	}
+	if _, err := db.Exec("DROP TRIGGER abort_observation_history"); err != nil {
+		t.Fatal(err)
+	}
+	var group sync.WaitGroup
+	failures := make([]error, 2)
+	responses := make([]json.RawMessage, 2)
+	for index := range 2 {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			responses[index], failures[index] = app.RecordObservation(ctx, "up", "execution", request)
+		}(index)
+	}
+	group.Wait()
+	recorded := 0
+	for index, err := range failures {
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct{ Recorded bool }
+		if err := json.Unmarshal(responses[index], &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.Recorded {
+			recorded++
+		}
+	}
+	if err := db.QueryRow("SELECT count(*) FROM github_observations").Scan(&observations); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM transition_history WHERE event='pr_observed'").Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT version FROM executions WHERE id='execution'").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT ended_at FROM attempts WHERE id=?", *attempt).Scan(&ended); err != nil {
+		t.Fatal(err)
+	}
+	if recorded != 1 || observations != 1 || history != 1 || version != row.Version+1 || ended == nil {
+		t.Fatal("racing replay duplicated delivery history or retained the current attempt", recorded, observations, history, version, ended)
+	}
+	var building bool
+	if err := db.QueryRow("SELECT ended_at,building FROM writers WHERE id=?", writerID).Scan(&ended, &building); err != nil {
+		t.Fatal(err)
+	}
+	if ended == nil || building {
+		t.Fatal("verified delivery retained writer ownership or Building", ended, building)
+	}
+}
 
 func TestWriterResultsContinueSameWriterThroughPublicationAndReply(t *testing.T) {
 	app, _ := writerStore(t, 1, 1)
