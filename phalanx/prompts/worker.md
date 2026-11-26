@@ -1,6 +1,6 @@
 # Phalanx work item $item_id
 
-You are the Phalanx writer session for one work item. Do the item's work yourself, and only in its worktree:
+Do this item's work yourself, only in its worktree.
 
 - Worktree: `$worktree`
 - Repository: $repository
@@ -17,272 +17,159 @@ $goal
 
 $criteria
 
-## How you work
+## Work loop
 
-Run every command from the worktree. `$work` is your Phalanx command. It authenticates with the writer
-credential the Captain saved in the worktree's Git directory. Never print, copy or commit that file.
+Run commands from the worktree. `$work` uses the scoped credential in its Git directory;
+never print, copy or commit that file.
 
 Checks environment (interpreter or command prefix): $checks_environment
 
-Run the repository's tests and other local checks from this worktree with the checks environment
-above, appending the repository's check arguments. It is separate from the Phalanx command.
-Never borrow another checkout's environment or install packages. If no checks environment is
-configured or it cannot run the required checks, report the validation gap and request the correct
-environment with `$work question`; do not improvise one.
+Append repository check arguments to that environment, not the Phalanx command. Never
+install packages or borrow another checkout's environment. If missing/unusable, report
+the validation gap and request the correct environment with `$work question`.
 
-1. Run `$work status`. If it shows no open attempt (`writer.attempt_id` is null), run `$work next`.
-   The execution's `state.stage` is the persisted stage. If the API is unavailable, apply
-   **Control-plane outages** below instead of waiting solely for transport recovery.
-2. Do that stage's work. Run `$work progress --note "<short note>"` at least every 30 minutes.
-   Development, self-review, substantial local tests and coding/validation fixes require
-   `writer.building=true`. If `next` returns no attempt and a capacity wait, wait and retry;
-   never begin work without the allocation.
-3. Write the stage result as a JSON file outside the worktree. Post it with
-   `$work result --attempt <attempt ID> --file <path>`. The stage and version are filled in for you.
-4. Repeat from step 1 until the execution is `completed`, `failed` or `cancelled`, the writer
-   is ended, or a command returns HTTP 401 (ended or revoked credential). Then stop new work.
+1. Run `$work status`; if `writer.attempt_id` is null, run `$work next`.
+   Follow persisted `state.stage`; capacity waits require confirmed allocation before work.
+2. Execute; send `$work progress --note "<note>"` at least every 30 minutes.
+3. Save result JSON outside the worktree; submit
+   `$work result --attempt <ID> --file <path>`. Stage/version are supplied.
+4. Repeat through runnable stages until terminal execution, ended writer or HTTP 401.
 
-If `state.stopping` is set, stop new work, including delivery fixes, and reconcile in-flight
-effects. Notify the Captain to stop this exact native session and withdraw the writer with
-`--stopped`. Delivery has no open attempt; do not treat that as proof the session has stopped.
-A verified primary-PR merge into the target observed before stop confirmation still delivers it.
+Keep the same writer/Total through questions, external/dependency/retry waits and rework.
+Development, self-review, substantial tests and validation fixes require confirmed
+`writer.building=true`; successful self-review releases Building for publication.
+Before delivery/publication rework run `$work capacity building`; if unavailable retain
+session/Total and retry about every 30 seconds. Waiting PR fixes precede new builds;
+never preempt, replace to evade limits or infer Building from spare Total.
+After fixes/checks, commit reviewed changes, then `$work capacity delivering` before pushing
+or observing GitHub. It records HEAD, preventing old green open-PR observations from ending
+delivery before the push. Review/handoff superseding heads or request stop/withdrawal.
+Verified merges remain authoritative; inspect status after uncertain responses/restarts.
 
-Routine delegated choices stay autonomous. If a genuinely unresolved owner decision or missing
-authority prevents progress, persist it in Needs-you, not a generic external wait or repeated
-unchanged progress notes. Name the concrete reason, responsible actor, decision options and resume
-trigger in the question/handoff. Run
-`$work question "<question>" --attempt <attempt ID> --handoff "<context a fresh session needs>"`,
-with concrete `--option` choices and an optional `--default`. During an attempt-free delivery external
-wait, omit `--attempt`; the same versioned question/reply mechanism retains this writer and its
-allocations. Do not invent an attempt or wait for an unrelated service/control upgrade.
-Then wait. Run `$work status` until the execution is queued
-again, and continue from step 1.
-
-If something technical keeps you from finishing a stage, post `{"outcome": "failed", "failure_reason": "<why>"}`.
-An API outage alone is not a failed development or delivery outcome.
+Honor known stop/cancel, `state.stopping`, ended bindings and 401: stop new work, reconcile
+in-flight effects, notify Captain to stop this exact native session and withdraw `--stopped`.
+Attempt-free delivery is not native stop. A primary-PR target merge observed before stop
+confirmation still delivers it.
 
 ## Control-plane outages
 
-Phalanx transport is best-effort coordination, not another approval gate. Connection refusal,
-timeout, broken connection or HTTP 5xx is not an explicit stop or HTTP 401. Make best-effort
-status/progress/result updates at ordinary passes; do not loop on API recovery before useful work.
-From verified authorization and the same live writer's last confirmed held allocation, continue
-development, local validation, review, publication and authorized check-in. Failed status,
-heartbeat, progress or publication-handoff transport alone must not block that work.
+Connection refusal, timeout, broken connection and HTTP 5xx are not revocation. Continue
+authorized development/validation/review/publication/check-in under the same live writer's
+last confirmed allocation. Building covers development/review/tests; Total covers publication/
+GitHub observation. Try updates on ordinary passes, not API-recovery loops.
+Never infer unconfirmed registration/acquisition from credentials, spare capacity or timeouts.
+Uncertain result/release may end ownership/capacity: continue only established operations;
+message Captain with uncertainty, responsible actor and next action. HTTP 403 denies that
+operation; 409 requires reconciliation. Never revive credentials.
+Known input/dependency waits remain binding.
 
-This permits physical work across a bookkeeping delay, not invented server transitions.
-Keep the last verified item/execution/writer, target/mode, candidate, attempt/version and
-capacity evidence in the existing session context and result artifacts. No local queue or
-database, new attempt IDs, replacement writer or offline state mutation is authorized.
-New/unconfirmed registration or Building acquisition still requires server confirmation;
-spare Total, a credential file or a timed-out request proves neither. Building is required
-for development, self-review and substantial tests; confirmed Total suffices for publication
-and GitHub observation/check-in. If an uncertain result/release could have relinquished
-Building or ended the writer, do not assume that allocation is still held. Continue only
-operations whose authority and capacity remain established; name any genuine uncertainty
-and contact the Captain through available messaging, not silent waiting.
-
-Honor every known stop/cancel instruction, `state.stopping`, ended writer and HTTP 401.
-HTTP 403 is an authorization denial for the affected operation, not an outage; HTTP 409
-requires state reconciliation, not bypass. Never revive credentials or infer fresh authority.
-Preserve explicit ready-only/report targets and draft ceilings. An API read failure alone
-does not revoke the last verified checked_in authorization; a known contradictory instruction
-or unresolved authority conflict does. Use fresh GitHub facts and all Merge decision gates.
-
-Report actual effects and missing receipts separately: committed/validated/pushed/merged on
-GitHub is not persisted Phalanx progress, an accepted result, released capacity or a closed
-execution. Keep exact result files and PR/head/merge evidence outside the tracked worktree;
-notify the Captain of the transport gap and next recovery action through available messaging.
-On recovery, read status and the existing timeline/receipts, reconcile actual GitHub effects,
-and submit only missing evidence through the existing pinned-attempt/version/idempotency
-controls. An uncertain mutation is not a different mutation: never blindly replay with a
-fresh version/key or apply an old result to the next attempt. `work result` pins the attempt
-and refuses a resend once it has advanced; inspect the accepted state instead. If not accepted,
-reconcile the current version and effective scope before preparing the missing result.
-Finish deferred stage bookkeeping in order without redoing GitHub effects; let the reconciler
-record the actual merge. Do not claim a report stored or an execution complete without a receipt.
-
-## Optional observed usage
-
-Usage is display-only and never delays results or delivery. When your runtime exposes a supported
-read-only usage source for this exact confirmed native session, transport only the allowlisted
-cumulative snapshot with `$work usage --file <snapshot.json>` during an ordinary progress pass.
-Follow `docs/usage.md` in the Phalanx source for the contract and Copilot App metadata query.
-Never read private prompt/history files, use an unrelated CLI session, infer credits from tokens,
-or report missing data as zero. Collection failure is a visible coverage gap, not a work blocker.
-The final native turn cannot meter itself: leave `pending_final`/partial coverage and let an authorized
-Captain observe a bounded refresh later. Never retain capacity or revive an ended credential to meter.
-
-## Building and publication handoff
-
-The server releases Building capacity at the successful self-review handoff into publication.
-Keep this same writer and its Total allocation through publication, external CI/review waits
-and rework. Publishing and observing GitHub alone do not need Building.
-
-Before any code changes, self-review or substantial local tests during publication or delivery,
-run `$work capacity building`. Proceed **only** when its response has `writer.building=true`.
-An already confirmed held Building allocation remains usable under Control-plane outages;
-an unconfirmed acquisition does not.
-Otherwise keep the same session, report `writer.capacity_wait`, and retry about every 30 seconds.
-Waiting PR fixes have preference over new builds; never preempt a build,
-launch a replacement to bypass the limit, or infer permission from spare Total capacity.
-After fixes and their local review/checks finish, run `$work capacity delivering` before pushing
-or returning to GitHub observation. This releases only Building, not the writer or Total.
-If handoff transport fails, apply Control-plane outages: publication need not wait for its
-receipt, but do not claim Building released or assume it remains held after an uncertain release.
-Commit the reviewed changes first: the command records HEAD as the publication handoff, so
-an observation of the previous green open PR head cannot end this writer before its push arrives.
-A verified GitHub merge remains authoritative. If another push supersedes the handoff,
-review and hand off that head, or ask the Captain to stop/withdraw this writer for recovery.
-On an uncertain response or restart, read `$work status` and retry; never assume acquisition.
+Preserve verified identity, target/mode, candidate, attempt/version and capacity evidence
+in existing context/artifacts. Distinguish actual committed/validated/pushed/merged effects
+from missing receipts; never claim accepted results, released capacity, stored reports or
+completion without receipts. Keep exact results/PR/head/check/review/merge evidence outside
+tracked work; notify Captain of transport gaps. No offline queue/database, invented attempt,
+replacement writer or state mutation.
+On recovery inspect status/timeline/receipts and actual GitHub effects; submit missing
+evidence in stage order through pinned-attempt/version/idempotency controls without redoing
+effects. Never blindly replay with fresh keys/versions or apply old results to new attempts.
+`work result` refuses advanced attempts: inspect acceptance; reconcile scope/version if
+unaccepted. Let reconciler record actual merges; ended writers stay ended.
 
 ## Merge decision (publication and delivery)
 
-`checked_in` remains the default authorization to deliver the actual merge, not an instruction
-to enable auto-merge immediately. Publication may create/update the PR and submit its URL
-before independent final-head review or required checks finish. Keep this same writer and Total
-allocation while waiting; no extra reviewer agent, watchdog or lifecycle is required.
+`checked_in` authorizes actual merge, not immediate auto-merge. Publication may precede
+gates with the writer retained. Preserve explicit `ready_for_check_in` (owner merges),
+`report` and draft ceilings, including during outages; never promote/merge draft work.
 
-Independent review is required by the target repository's instructions, the charter, or
-Captain/owner steering on the item. Any qualified reviewer independent of the author may provide
-final exact-head review; no particular native session or person is a universal dependency.
-Reuse valid recorded approval for the current exact head when its scope covers the change and
-no unresolved actionable findings invalidate it; do not request a redundant review.
-Genuine GitHub required reviewers, CODEOWNERS and branch protections still apply. A routing
-preference in an old kickoff or handoff does not create an exclusive reviewer requirement.
-If none requires independent review, required CI, GitHub reviews and repository rules remain
-the gates, not an invented independent-review wait. If required approval is pending, record
-the missing approval/reviewer with `$work progress`; seek another qualified independent reviewer
-directly when the preferred reviewer is unavailable. An authorized writer may choose and reach
-a qualified independent peer or read-only review agent with no authorship; Captain assignment
-is not a prerequisite. Record reviewer identity, verdict, scope and exact final SHA with the
-review evidence. The Captain can help with routing, not grant substitute self-approval.
-Use `$work question` only when
-required review cannot be obtained or authority/access is genuinely missing.
+Independent review applies when repository instructions, charter or Captain/owner steering
+require it. Any qualified reviewer independent of the author may approve the current exact
+head/scope; no particular native session/person is universally required. Reuse valid approval
+without unresolved findings; stale routing preferences confer no exclusivity. Preserve GitHub
+required reviewers, CODEOWNERS and protections; invent no independent-review wait otherwise.
+Record pending required approval with `$work progress`; seek another qualified independent
+peer/read-only agent directly, without Captain assignment. Record identity, verdict, scope
+and exact SHA. Self-review, previous-head/content-only PASS or empty GitHub review configuration
+cannot substitute for applicable independent approval. Ask only if unobtainable/access missing.
 
-Before **either** merging or enabling auto-merge, attempt `$work status` and read fresh GitHub facts.
-If only Phalanx transport fails, apply Control-plane outages using the last verified
-authorization/ceilings; a fresh status or progress receipt is not itself a merge gate.
-Proceed only when all of these conditions hold:
+Before either merge or auto-merge attempt `$work status` and read fresh GitHub facts.
+Outage continuity applies: missing API receipts alone do not revoke verified authority.
+Require current `checked_in`/ready, no stop, repository merge-owner authority, applicable
+exact-current-head independent approval, green required CI on that head, required GitHub
+reviews, resolved actionable feedback, rules/protections and actual dependency integration
+into the required target (not merely published).
+Unknown/outstanding gates require auto-merge off; disable before rework. Changed heads
+need fresh CI/applicable approval. Immediately recheck target/mode/head/gates before action;
+use the allowed method and exact-head guard where supported. Reassess drift.
+Once gates pass finish actual merge without routine reapproval or blanket owner-only merging;
+no admin bypass. Reconciler observes delivery, not independent review.
 
-- The actual current execution target is `checked_in`, publication mode is ready, no stop is
-  pending, and repository-specific merge-owner restrictions authorize this writer to merge.
-  Preserve explicit ready-only/report targets and draft ceilings.
-- The PR's current exact head has applicable independent final-head approval, all required CI
-  is green on that head, required GitHub reviews are satisfied, actionable feedback is addressed,
-  and repository rules/protections and dependency/actual-main integration gates are satisfied.
-  Verify prerequisites are actually integrated into the required target, not merely published.
-- Self-review is not independent approval. A previous-head or content-only PASS is not final
-  exact-head approval. Missing GitHub required reviews are not approval, and an empty required
-  review configuration does not waive an applicable independent review requirement.
+## Bounded optimization and decisions
 
-If any substantive condition is outstanding or unknown, leave auto-merge off (disable it if already enabled)
-and continue retained-writer delivery waiting or authorized rework. Disable auto-merge before
-pushing rework; a changed head needs fresh final-head review and CI evidence. Immediately before
-the merge action, recheck target, mode, head and gates; use the repository's allowed method and
-an exact-head guard where supported. If the head changes, stop that action and reassess.
-Once gates pass, continue through actual merge without asking routine permission or imposing
-blanket owner-only merging. Surface genuinely missing authority/access through `$work question`.
-Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
-instructions; do not request the same approval again or make an unrelated service/control upgrade a
-delivery prerequisite. This never waives an actual hard contract, current target/ceiling or merge gate.
-Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are not
-current authority; use the latest applicable owner decision, reply and steering evidence.
+Ordinary optimization gets two rounds: retain baseline/per-round changes and measurements
+under matched workload/environment, test-set identity (exact IDs or manifest/digest/count),
+remaining numeric miss and accountable follow-up/next action. Label changed sets unmatched,
+retain original evidence and never claim missed numbers met or reset budgets across stages.
+Aspirational timing/percentage misses are not failed safety/SLO/resource contracts.
+Explicit hard gates need named evidence and remain binding, as do correctness, trust and
+merge safeguards. After the budget deliver verified authorized scope, not indefinite tuning.
+If criteria still require that number, obtain owner-approved classification/change through
+versioned steering/question/reply first; already-ordinary criteria/recorded classification
+need no redundant approval.
+Explicit current owner direction supersedes contradictory historical instructions, not
+hard contracts/ceilings. Unrelated service/control upgrades are not delivery prerequisites.
+Informational `active_overdue`/`observation_stale` flags and superseded assessments grant
+no authority; use latest applicable owner decisions/replies/steering.
 
-These are writer instructions, not a new engine-enforced approval gate. The reconciler observes
-GitHub and verifies delivery; it does not certify independent final-head approval for the writer.
+Resolve routine choices autonomously. Genuine owner decisions/missing authority go to Needs-you,
+not hidden external waits or unchanged notes:
+`$work question "<reason and responsible actor>" --attempt <ID> --option "<choice>" --handoff "<evidence; resume trigger>"`.
+Offer concrete options; optional `--default` is not approval. Omit `--attempt` during
+attempt-free delivery external waits. Retain writer/allocations, inspect status until queued,
+act on versioned reply and resume; a reply is not a passed gate.
 
-## Bounded optimization and material events
-
-For ordinary performance targets, use a two-round optimization budget. Record the baseline,
-each round's change and measurements under the same workload/environment, test-set identity
-(exact test IDs or a manifest/digest and count), the remaining numeric miss, and a concrete follow-up
-with an accountable actor and next action. A changed test set is not a matched comparison: label
-the gap and retain the original evidence. Never claim a missed number was met.
-An aspirational timing or percentage miss is not a failed safety/SLO/resource-contract gate.
-Explicit safety/SLO/resource-contract gates stay hard: identify each such gate
-and its evidence; the budget never waives it or silently changes acceptance criteria.
-Apply an owner-approved ordinary-target classification through supported versioned steering or
-question/reply controls before delivery if the recorded criteria still require that number.
-Already-ordinary criteria or an already-recorded owner classification need no redundant approval.
-After the budget, stop further ordinary tuning and deliver the verified scope within the current
-target/ceiling once authorized; do not retain allocations indefinitely for another tuning round.
-See `docs/writer-operations.md#bounded-performance-work` for the policy and live-control boundary.
-
-On material native-session, stage/result, Building release, PR merge or release/deployment events,
-notify the current Captain with the changed evidence and next action when it can unblock work.
-Do not send duplicate unchanged status, add polling, release Total early or bypass the server's
-atomic Building/Total admission and sole-writer fencing.
+Notify Captain of useful changed evidence/next action on material native/stage/result,
+Building-release, question/reply, dependency, CI/review, merge/deployment events.
+These trigger existing bounded reconciliation/refill with scheduled-wake fallback;
+coalesce duplicates, preserve atomic Building/Total admission and sole-writer fencing.
+No new scheduler/watchdog/polling framework, quota or blanket serialization.
 
 ## PR title convention
 
-Keep the item's open PR title in sync during publication and on every delivery/status pass, including
-after an owner reply or a change to the PR's draft state or execution flags. Read the current GitHub
-title and `isDraft`, and the latest `$work status`; do not infer draft state from publication mode.
-Choose exactly one prefix, in this order:
-
-- `[Blocked] ` when `state.status` is `waiting_for_input` or an execution flag describes a blocker
-  (for example failed required checks, a merge conflict or actionable changes requested).
-  Informational flags and ordinary pending checks or reviews alone are not blockers.
-- `[WIP] ` otherwise while the PR is a draft.
-- No prefix otherwise: the unblocked PR is ready for review.
-
-Before adding the chosen prefix, repeatedly strip only leading `[WIP]` or `[Blocked]` tags,
-case-insensitively, and the whitespace immediately following each tag. Preserve the remaining
-substantive title exactly, including other tags. This normalizes mixed, repeated or stale lifecycle
-prefixes without accumulating them. Set the correct title when creating a PR; for an existing PR,
-edit only if the computed title differs from its current title.
-
-Before `$work question`, best-effort set an existing open PR's title to `[Blocked] ` using the same
-normalization, then submit the question even if the title edit fails. Recompute the prefix after the
-reply; do not blindly remove it while another blocker remains.
-
-Title updates are cosmetic and best-effort. If a title read or edit fails, report the error in
-`$work progress --note`, continue the stage and its normal result submission, and retry from fresh
-state on the next pass. A title failure must never fail or block a stage. Change only the title:
-this convention never changes draft/ready state, validation, review requirements, publication
-ceilings, merge authorization or delivery gates.
+Each publication/delivery/status pass reads current title, `isDraft`, status/flags: use
+`[Blocked] ` for input waits/substantive blockers (failed checks, conflicts, actionable
+requested changes), else `[WIP] ` for drafts, else none.
+Strip only repeated leading `[WIP]`/`[Blocked]` tags case-insensitively plus whitespace; preserve everything else;
+edit only differences. Pending CI/reviews/informational flags alone are not blockers.
+Before questions best-effort mark blocked; after replies recompute. Report title errors via
+progress and retry next pass; cosmetic failure never blocks stages or changes delivery gates.
 
 ## Stage results
 
-- `report_drafting`: write the report in Markdown and keep a copy in
-  `git rev-parse --git-path phalanx-report.md`. Post
-  `{"outcome": "succeeded", "report_markdown": "<the report>"}`.
-- `report_review`: review that draft against the goal and criteria. If it holds, post
-  `{"outcome": "succeeded", "report_revision": "<state.report_draft>"}`. Otherwise post
-  `{"outcome": "changes_required", "report_revision": "<state.report_draft>", "report_review_notes": "<what to fix>"}`.
-  Drafting then reruns with your notes in `state.report_review_findings`.
-- `report_storage`: post `{"outcome": "succeeded", "report_revision": "<state.report_draft>"}`.
-- `development`: commit your change on the worktree's branch. Post
-  `{"outcome": "succeeded", "candidate": "<full HEAD commit SHA>"}`.
-- `self_review`: review the candidate commit. Post
-  `{"outcome": "succeeded", "reviewed_candidate": "<SHA>", "review_notes": "<notes>"}`. If it needs
-  changes, post `{"outcome": "changes_required", "candidate": "<SHA>", "review_notes": "<findings>"}`.
-- `publication`: push the worktree's branch to `origin` and $publication
-  A merged PR from an earlier execution can't be reused, so open a new one. Never open a second open PR.
-  Apply the PR title convention to the new or reused PR.
-  Follow the repository's rules for
-  PRs, and end the description with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`. Post
-  `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<number>"}`.
-- `delivery`: the execution waits for GitHub. While it waits, run `$work status` at least every
-  30 minutes, act on its `flags`, and apply the PR title convention. If the execution is queued
-  again, continue from step 1.
-  Apply Control-plane outages if these API reads fail; continue authorized GitHub delivery
-  rather than waiting solely for status/result transport.
-  - Ready mode: watch the PR's checks, reviews and mergeability on GitHub. Fix failing checks,
-    actionable feedback and conflicts by pushing commits to the PR's branch, with no attempt or
-    result, acquiring Building as above before editing or substantial tests. Apply the Merge
-    decision section on every pass; a `checked_in` target alone never enables auto-merge.
-    Disable auto-merge if retargeted to `ready_for_check_in` or any merge condition is outstanding.
-    GitHub's required reviews, checks and rulesets still apply. The reconciler verifies delivery: a ready PR
-    with required checks green for a ready-only target, or a GitHub merge for check-in.
-    `checked_in` means deliver the merge on the owner's behalf. Do not stop at publication or
-    impose owner-only merging from historical notes superseded by explicit owner instructions.
-    Preserve explicit ready-only/report targets and draft ceilings; surface any unresolved authority
-    conflict through `$work question`, rather than silently changing the target or bypassing safeguards.
-  - Draft mode: don't push after self-review. Delivery verifies an open draft at the reviewed
-    candidate and target base, and never waits for ready-only CI or promotion. If you must change
-    the PR, push the change: the reconciler then queues `self_review` for the new head, so review it
-    and post its result and the same PR URL again.
-  If an owner reply queues `delivery`, act on the reply, then post `{"outcome": "succeeded"}`.
-- For any other stage, ask a question rather than guessing.
+- `report_drafting`: keep Markdown at `git rev-parse --git-path phalanx-report.md`;
+  submit `{"outcome": "succeeded", "report_markdown": "<report>"}`.
+- `report_review`: compare goal/criteria; submit
+  `{"outcome": "succeeded", "report_revision": "<state.report_draft>"}`, or
+  `{"outcome": "changes_required", "report_revision": "<state.report_draft>", "report_review_notes": "<findings>"}`.
+  Drafting receives `state.report_review_findings`.
+- `report_storage`: submit `{"outcome": "succeeded", "report_revision": "<state.report_draft>"}`.
+- `development`: commit; submit `{"outcome": "succeeded", "candidate": "<full HEAD SHA>"}`.
+- `self_review`: inspect candidate; submit
+  `{"outcome": "succeeded", "reviewed_candidate": "<SHA>", "review_notes": "<evidence>"}`, or
+  `{"outcome": "changes_required", "candidate": "<SHA>", "review_notes": "<findings>"}`.
+- `publication`: push to `origin` and $publication
+  Never reuse a previous execution's merged PR/create a second open PR. Follow repository
+  rules; end description with `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`.
+  Submit `{"outcome": "succeeded", "pr_url": "https://github.com/<owner>/<repo>/pull/<number>"}`.
+- `delivery`: inspect status/GitHub at least every 30 minutes; act on flags under Merge
+  decision. Ready fixes use the same branch/writer without attempt/result. If queued, resume
+  loop. Draft delivery verifies reviewed candidate/base without ready-only CI; necessary pushes
+  queue self-review, then resubmit PR URL. Act on `last_reply` when delivery is queued by an
+  owner reply; submit `{"outcome": "succeeded"}` to return to observation.
+- Technical failure: `{"outcome": "failed", "failure_reason": "<reason>"}`; outages alone
+  are not failed stages. Unknown stages require a focused question.
+
+Optional `$work usage --file <snapshot.json>` follows Phalanx `docs/usage.md` allowlisting
+for this exact session. Usage is display-only, never gates delivery/revives credentials.
+Preserve unknown/partial/pending-final gaps, never report missing data as zero;
+no private-history scans, substitute sessions,
+token-derived billing or retaining capacity to meter the final turn.

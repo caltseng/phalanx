@@ -11,11 +11,8 @@ An ending/ended Captain discloses "I am no longer on shift"; a keeper says "I am
 not the current Captain". Unavailable/ambiguous lookup means "I cannot verify the current Captain".
 Do not resume coordination/dispatch off shift.
 
-An active but stale registration is unverified, not proof this native Captain ended. Verify
-your exact registration, charter and successors under the canonical outage recovery rules,
-refresh the SAME active, unsuperseded registration, then re-read `phx shift current` before
-coordinating. If verification/refresh is unavailable, report control plane blocked and current
-server state unknown; keep the existing schedule and identities without dispatch or replacement.
+An active but stale registration is unverified: apply Captain's *Shared API/control-plane
+outages* recovery, then re-read `phx shift current` before coordinating.
 
 1. If `captain` is null, report its exact reason/candidate IDs. API/auth failure is unavailable
    lookup, not proof no Captain exists. Do not choose among live candidates or launch/dispatch
@@ -45,25 +42,11 @@ creator-owned archive authority.
 
 ### Retirement display title
 
-After completed handoff, mark only your own outgoing conversation with exactly one literal
-`[retired]` prefix followed by one space. API registrations/liveness and `phx shift current`,
-never a title, determine authority.
-
-1. Fresh `phx shift status --captain <your ID>` must show your registration to be `ended`, with no
-   `open_intents`, and a registered successor whose `parent_id` is your Captain ID (even if it
-   subsequently handed off). Pending creator cleanup is independent. For active/ending/stale state,
-   failed/uncertain handoff or missing successor, leave the title unchanged and report why.
-2. Resolve your own `session_ref` with its provider. Verify it is this outgoing conversation and
-   read its full current title; fresh `phx shift current` failure or a result naming your
-   registration/session prevents renaming. Never target the incoming/current Captain, keeper,
-   writer, an unrelated chat or title-selected predecessor; another session must not rename
-   another conversation on your behalf.
-3. Use the existing native rename tool within its permissions and title limits.
-   Repeatedly remove only leading literal `[retired]` tags and following whitespace, then prepend
-   `[retired] ` to the remaining title, preserving it exactly. Do not abbreviate, truncate or remove
-   other tags to fit. If the exact title already matches, do not rename.
-   On every retry re-read identity, state and title. Verify the resulting title through native inspection.
-4. For unsupported/restricted/refused/uncertain inspection or rename, report the exact limitation
-   and keep explicit off-shift wording. Never bypass permissions/edit runtime storage or loop on
-   refusals. Retry only on later normal interaction/cleanup after the limitation clears; never
-   bulk-rename historical sessions. Failure changes no lifecycle/bindings and never blocks succession.
+Only rename this outgoing conversation after fresh exact status shows `ended`, no `open_intents`,
+registered successor with matching `parent_id`, and current lookup confirms you are not current.
+Re-read provider identity/title each try; normalize only leading literal `[retired]` tags/whitespace
+to one `[retired] `, preserving the rest exactly within native permissions/limits; skip if correct,
+otherwise verify result.
+Missing/uncertain proof or refused/unsupported rename: leave unchanged, report limitation/off-shift
+status, retry only after it clears on normal interaction/cleanup. No other-session/bulk renames,
+truncation, storage edits or refusal loops; titles never determine authority or block succession.
