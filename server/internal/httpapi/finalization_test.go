@@ -164,6 +164,49 @@ func TestReportFinalizationResumesFromExistingIntent(t *testing.T) {
 	}
 }
 
+func TestFinalizationJobDeleteFaultRollsBackReportAndClosure(t *testing.T) {
+	app, path := fixtureAppDatabase(t)
+	_, executionID := pendingReport(t, app, path, application.ReportStorage, "# Durable job \u96ea\n")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER abort_job_delete BEFORE DELETE ON report_finalizations
+			BEGIN SELECT RAISE(ABORT,'injected finalization deletion failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	current, err := app.FinalizeAttempt(context.Background(), executionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state application.State
+	if err := json.Unmarshal(current.State, &state); err != nil {
+		t.Fatal(err)
+	}
+	var reports, intents, failures int
+	if err := db.QueryRow("SELECT count(*) FROM reports WHERE execution_id=?", executionID).Scan(&reports); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*),max(failures) FROM report_finalizations WHERE execution_id=?", executionID).Scan(&intents, &failures); err != nil {
+		t.Fatal(err)
+	}
+	if reports != 0 || intents != 1 || failures != 1 || state.Status != application.WaitingForExternal ||
+		state.PendingOutput == nil || state.FinalOutput != nil {
+		t.Fatal("job deletion failure retained report/closure or lost intent", reports, intents, failures, state)
+	}
+	if _, err := db.Exec("DROP TRIGGER abort_job_delete; UPDATE report_finalizations SET due_at=0"); err != nil {
+		t.Fatal(err)
+	}
+	current, err = app.FinalizeAttempt(context.Background(), executionID)
+	if err != nil || current == nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(current.State, &state); err != nil || state.Status != application.Completed {
+		t.Fatal("retained finalization did not complete after recovery", state, err)
+	}
+}
+
 func TestReportFinalizationRefreshesDependenciesWithoutAdvancingTheirVersion(t *testing.T) {
 	app, path := fixtureAppDatabase(t)
 	upstream, executionID := pendingReport(t, app, path, application.ReportStorage, "# Release prerequisite\n")

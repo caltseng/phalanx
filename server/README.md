@@ -164,9 +164,30 @@ Unit barriers distinguish caller loss from explicit interruption and prove
 committed-but-unacknowledged receipts remain reconcilable. No total operation
 deadline or production drain deadline is inferred from admission bounds.
 
-Package-switch rehearsal here is only for this slice on synthetic fresh/retained
-data. It is not full-route D0 -> Go -> D0 rollout/rollback approval, filesystem
-power-loss proof, Scribe parity, production adoption, or a performance/SLO claim.
+The original foundation package-switch rehearsal covers only its slice.
+`rehearsal.py` additionally exercises eight package-only phases against each of
+P0 and D0 on fresh/retained evolved current data, without restoring an older
+database: lost-response committed draft replay, the same writer/Building through
+questions/replies/review/storage, immutable receipts, finalization/ended-token
+refusal, exact UTF-8 report bytes, scout page/source replay and fresh approved
+intake, acquisition gaps and late usage. It checks full typed snapshots and
+unchanged schema/application identity/journaling. These focused continuations
+are not full-route rollback approval, filesystem power-loss proof, production
+adoption, or a performance/SLO claim.
+
+`framework.py` retains raw HTTP requests/responses and complete zero-effect
+snapshots for twelve parser/framing cases. Invalid chunk-body reads now match
+the pinned 400 refusal instead of returning 500. Eight standard-library parser
+differences remain explicit, unclassified blockers: duplicate Host, missing Host,
+invalid HTTP version, conflicting Content-Length, invalid header name and
+invalid method have different 400 text bodies; invalid percent URL is pinned
+404 versus Go 400; unsupported transfer encoding is pinned 400 versus Go 501.
+The valid HTTP/1.0-without-Host case additionally returns pinned HTTP/1.1 with
+`Connection: close` versus Go HTTP/1.0 without that header; both return the exact
+200 JSON payload and close. Protocol and Connection differences are retained,
+not silently excluded from comparison. No body/status rewriting, broad framework
+exemption or silent normalization is authorized. Exact scoped classification or
+native compatibility and independent final-head review remain prerequisites.
 
 ## Native domain extension evidence (in development)
 
@@ -194,6 +215,8 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `operator_defaults.py` | 24 on each schema shape | Explicit v4/v9 named read omissions, ready/draft/null preservation, malformed-state refusal and exact complete D0 responses with zero read effects |
 | `scribe.py` | 90 on each schema shape and authority mode | Canonical unchanged assets/CSP, file/range/conditional/HEAD behavior, documentation URLs and direct local-board/owner/proxy/host/origin boundaries |
 | `route_models.py` | All 66 operations / 51 schemas on each shape | Complete pinned generated request-schema comparison and actual read/refusal wire/store inventory; not a substitute for each family’s positive/fault corpus |
+| `framework.py` | 12 raw HTTP cases | Complete raw parser/body characterization and zero-effect snapshots; eight malformed-parser discrepancies plus one valid HTTP/1.0 response-transport difference remain unclassified blockers |
+| `rehearsal.py` | Eight phases per reference/shape | Package-only P0/Go and D0/Go alternation on evolved data; same-writer/grants, caller-loss receipt reconciliation, report/scout/usage continuation and immutable receipts |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
 

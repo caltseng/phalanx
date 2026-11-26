@@ -218,3 +218,65 @@ func TestWriterResultRequiresStructuredQuestionAndKeepsFailureAtomic(t *testing.
 		t.Fatal("refused input result changed history or ended the active attempt", version, ended)
 	}
 }
+
+func TestResultReceiptFailureRollsBackStageClaimAndBuildingRelease(t *testing.T) {
+	app, db := writerStore(t, 1, 1)
+	ctx := context.Background()
+	registered, err := app.RegisterWriter(ctx, "up", "execution", contract.WriterRegistration{
+		ExpectedVersion: "1", CaptainID: "captain", Runtime: "synthetic-runtime",
+		Nonce: "synthetic-receipt-0001", TokenDigest: contract.Digest("receipt-token")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writerID, development := decodeBinding(t, registered)
+	head := "a0123456789012345678901234567890123456789"
+	reviewed, err := app.WriterResult(ctx, "up", "execution", writerID, contract.WriterResult{
+		ExpectedVersion: "2", AttemptID: development, Stage: "development", Outcome: "succeeded", Candidate: &head}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _, attempt := decodeBinding(t, reviewed)
+	key := "self-review-receipt"
+	request := contract.WriterResult{ExpectedVersion: "4", AttemptID: attempt, Stage: "self_review",
+		Outcome: "succeeded", ReviewedCandidate: &head}
+	if _, err := db.Exec(`CREATE TRIGGER abort_stage_receipt BEFORE INSERT ON request_receipts
+			WHEN NEW.scope LIKE 'result:%' BEGIN SELECT RAISE(ABORT,'injected receipt insert failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.WriterResult(ctx, "up", "execution", writerID, request, &key); err == nil {
+		t.Fatal("receipt failure was hidden")
+	}
+	var version int64
+	var attempts, history, receipts int
+	var building bool
+	var current *string
+	if err := db.QueryRow("SELECT version FROM executions WHERE id='execution'").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM attempts").Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM transition_history").Scan(&history); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT count(*) FROM request_receipts").Scan(&receipts); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT building,attempt_id FROM writers WHERE id=?", writerID).Scan(&building, &current); err != nil {
+		t.Fatal(err)
+	}
+	if version != row.Version || attempts != 2 || history != 3 || receipts != 0 || !building || !sameText(current, attempt) {
+		t.Fatal("receipt fault retained transition/claim/history/capacity effects", version, attempts, history, receipts, building, current)
+	}
+	if _, err := db.Exec("DROP TRIGGER abort_stage_receipt"); err != nil {
+		t.Fatal(err)
+	}
+	published, err := app.WriterResult(ctx, "up", "execution", writerID, request, &key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, _, _ = decodeBinding(t, published)
+	if row.Version != 6 {
+		t.Fatal("retry did not advance exactly once into publication", string(published))
+	}
+}

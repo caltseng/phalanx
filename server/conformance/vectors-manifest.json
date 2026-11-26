@@ -1091,6 +1091,34 @@
       "operation_count": 66,
       "model_count": 51
     },
+    "framework": {
+      "request_ids": [
+        "valid-http",
+        "duplicate-host",
+        "missing-host",
+        "invalid-version",
+        "invalid-percent-url",
+        "conflicting-content-length",
+        "same-content-length",
+        "unsupported-transfer-encoding",
+        "invalid-header-name",
+        "invalid-method",
+        "http-1.0-without-host",
+        "invalid-chunk"
+      ],
+      "request_count": 12
+    },
+    "rehearsal": {
+      "reference_packages": [
+        "P0",
+        "D0"
+      ],
+      "schema_shapes": [
+        "fresh",
+        "retained"
+      ],
+      "package_only_stages": 8
+    },
     "decisions": {
       "request_count": 11298,
       "request_sha256": "29da5096c1c001fe6423a471a4339fe134e94131d1729b0e97667e9c3e8e59cf"
@@ -1124,6 +1152,7 @@
     "server/internal/application/results_test.go:TestObservationAndDeliveryRollbackTogetherThenReplay",
     "server/internal/application/results_test.go:TestWriterResultsContinueSameWriterThroughPublicationAndReply",
     "server/internal/application/results_test.go:TestWriterResultRequiresStructuredQuestionAndKeepsFailureAtomic",
+    "server/internal/application/results_test.go:TestResultReceiptFailureRollsBackStageClaimAndBuildingRelease",
     "server/internal/application/scout_test.go:TestScoutIntakeSourceCursorAndReceiptsRollbackThenRaceTogether",
     "server/internal/application/scout_test.go:TestScoutSingleClaimHandoffAndSettingsSupersedeFenceOldPages",
     "server/internal/application/usage_test.go:TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects",
@@ -1144,6 +1173,7 @@
     "server/internal/httpapi/board_test.go:TestStaticRangesKeepRefusalPrecedenceAndBoundedMultipart",
     "server/internal/httpapi/finalization_test.go:TestFinalizationSavepointBackoffAndOwnerRecovery",
     "server/internal/httpapi/finalization_test.go:TestReportFinalizationResumesFromExistingIntent",
+    "server/internal/httpapi/finalization_test.go:TestFinalizationJobDeleteFaultRollsBackReportAndClosure",
     "server/internal/httpapi/finalization_test.go:TestReportFinalizationRefreshesDependenciesWithoutAdvancingTheirVersion",
     "server/internal/httpapi/history_test.go:TestTitleReceiptRacePreservesExecution",
     "server/internal/httpapi/history_test.go:TestHistoryAndTimelineScopeAndMissing",
@@ -1161,7 +1191,7 @@
     "server/internal/sqlite/store_test.go:TestGateTimeoutAndContendedRecovery",
     "server/internal/sqlite/store_test.go:TestDefaultAdmissionBoundCleansBothWaiterKinds"
   ],
-  "go_test_count": 50,
+  "go_test_count": 52,
   "files": {
     "server/cmd/conformance-decisions/main.go": "a373d0e6f55f2448cd3eabc1a923f7170e75859e96dba3ba11fc0a4be2af247d",
     "server/cmd/conformance-json/main.go": "3dadc98f48f1f8f557dec930341f3041f6d6efc42efb429dac31b22ac9c013dc",
@@ -1193,7 +1223,7 @@
     "server/internal/application/reply.go": "9f755d2f31ca3962e425f8bdffa19761435e8c65128bc4ad6c580bd25ee9f320",
     "server/internal/application/report.go": "5221abfc030ac68a927e0b129efdba09826d329fa3a71182c6a2eff93f5b0ec5",
     "server/internal/application/results.go": "d5deda1e95398d02b4db30b6c1015345f0b885a073e736ab6dda6ea7c04d6532",
-    "server/internal/application/results_test.go": "81bc7c8d7cea90edfe37fe4112c53d904ce5d6bc90712d5ee237df4de5bb6afe",
+    "server/internal/application/results_test.go": "a49c72dd5586b2d196ae3e9583634140f9813fe61fcf67e9ff1cd972113181fa",
     "server/internal/application/scout.go": "ceff9f5b46bc0734f38c8baf210ebd04c2210e92356067511813a698f1b41908",
     "server/internal/application/scout_test.go": "a04f33dc17c5c717d1e1fb6063754fbe885e6afada05fe04eb66ba6dd7b13158",
     "server/internal/application/sessions.go": "02e8c2e3297bdb839bde3e467683ee75cec802a7ab333224b54614f3d8703e84",
@@ -1230,9 +1260,9 @@
     "server/internal/httpapi/board_test.go": "9ea17d03aee9873c5656a22cff950ae0c3ff4f88c9db71ea7d3e1d9737a59178",
     "server/internal/httpapi/captains.go": "371df395d1ef53fd1f2ecb4d04e5b87ee5c738b06cec89ee1df079a2752c80c7",
     "server/internal/httpapi/documentation.go": "5a50d3a16f566e01b74741c84d54f2f04846b04c6b9cd6828b2ff6d7b09c0aa5",
-    "server/internal/httpapi/finalization_test.go": "7c9fc03a25bf4f270f4e4ef08bfbfd7b5d6e3577368aefe3038bc9e58bafaffe",
+    "server/internal/httpapi/finalization_test.go": "f371462de52d32cecdba50fc2c20b60d0c6368520cd4d29f2d1225f3ccc6ea0c",
     "server/internal/httpapi/history_test.go": "d07ed673def8728cf7a37a1b25d54941c252183f3b953beaffeead79b3356276",
-    "server/internal/httpapi/http.go": "7a28120423c0aea43c588b0fbbca0309bb8398de846e1655e6e93ad608ea9561",
+    "server/internal/httpapi/http.go": "e2d9a490d68bfa0b6945fe1f5fb540fa0f27b73c39776f3599e06dac4c8d1fdf",
     "server/internal/httpapi/http_test.go": "e54915fe9c4e3f8a75688b7218b8df4c35455a070c3c0e429c9bf8485adf5c4e",
     "server/internal/httpapi/refresh_test.go": "2d6bae85b5c0eec40b8adba668daa13823676afc257a427ca2459b31f7991742",
     "server/internal/httpapi/writers.go": "f353c07522e40a0aad190c4e6a5eab232092d0d0859d8e0d9610dca181da5519",
@@ -1265,7 +1295,8 @@
     "server/conformance/datetimes.py": "bc39e852c0fc8e2b3dc86f747a1c48b04dae767292a96549b45cf7cf227ec6a4",
     "server/conformance/decisions.py": "759a0e459d4c870ce2132b6ca55ed7feda09189d8254b9fd077629fa1d77c397",
     "server/conformance/flags.py": "91b89a7cf0ff3a9fba636c3afac3b4b00066ccefd6ce2762844f251ba5521b30",
-    "server/conformance/harness.py": "c4adb063f9c40e6f9b57d8a7e6ffba7473b1862148c3fc84e6a7dbd06f83c217",
+    "server/conformance/framework.py": "d4964e4aa07ff6b62a971c7da9445415521cbebcc7f54d8f6dc5e6fbb96fc3b4",
+    "server/conformance/harness.py": "977565fde171746bbb10fae66cd9d5040b8b9e6b9da52b1141adcbb4241534c4",
     "server/conformance/history.py": "42c51c6d1120e7906486095383690332e4fd6d1fc724701b3b4c1f04b3af0700",
     "server/conformance/inbox.py": "bd82a37d28efcafa1d12bce1e18513c9d2b1eb84ae29007d69c49c56aef25563",
     "server/conformance/numbers.py": "d17b9a8d0f8ed24dea7bf17a8f18fbac9d8781b99aa717e5e995ac06db425f4e",
@@ -1273,6 +1304,7 @@
     "server/conformance/operator_views.py": "40eb808536d28d3a009a5448409f6295a2625d77dc7e15b51eb6416e8be44f9b",
     "server/conformance/oracle.py": "d5c79b9e2ebaff6e0ce14770c65cfafb49330816929c53f89719fdcc7f40656c",
     "server/conformance/reconciliation.py": "283bd0c44aca4aec6b150e3d020b6182de93165a72e7c7c53ebd0cd506625288",
+    "server/conformance/rehearsal.py": "6f24d3b8890774973c4a465ead9449882b5cb1c0c3e5bedd283234d74700a15c",
     "server/conformance/results.py": "f46549899452d1953edc31ea34aa74b3c7a575940aca91e97299dc825fc9c4c7",
     "server/conformance/route_models.py": "2006fd15ff3f60bd05da9e130168a87d69a45cdbc983a68892d0ca0eb2d98258",
     "server/conformance/scout.py": "f2651b409dab68f84a6d661f13cadaf9a94b0173042ced04da4ac9b200302e3d",

@@ -346,7 +346,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if bodyRoute(route.kind) {
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
-			h.failure(w, err)
+			if h.Logger != nil {
+				h.Logger.Error("HTTP body framing failed", "error", err)
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(400)
+			w.Write([]byte("Invalid HTTP request received."))
 			return
 		}
 		if len(data) > 0 {
