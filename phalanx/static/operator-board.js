@@ -310,7 +310,8 @@
     const actions = h("div", { class: "actions", role: "group", "aria-label": "Board controls" }, create);
     const header = h("header", { class: "bar" },
       h("div", { class: "brand" }, h("span", { class: "mark", "aria-hidden": "true" }),
-        h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" })),
+        h("h1", { text: "Phalanx", tabindex: "-1" }), h("span", { class: "faint sub", text: "Scribe" }),
+        h("span", { class: "faint sub", text: "Push forward" })),
       health, navigation, actions, counts);
     const disclosures = [];
     function disclosure(kind, name, content, activeCount) {
