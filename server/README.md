@@ -63,8 +63,8 @@ The compact golden files retain **exact request bytes, raw response bytes/header
 multimaps and every typed SQLite row**, using content-addressed row/snapshot
 deduplication, not dropped tables. The harness re-runs P0 and D0 and refuses oracle
 drift before comparing Go. It never fetches a substitute oracle on a missing pin.
-`vectors-manifest.json` binds the 112 exact request IDs, Go test IDs, source hashes,
-module graph and both golden corpora. That is 672 ordinary wire/durable
+`vectors-manifest.json` binds the 114 exact request IDs, Go test IDs, source hashes,
+module graph and both golden corpora. That is 684 ordinary wire/durable
 observations across three implementations/two shapes, plus separately recorded
 busy, switch, abort, lost-response/crash and lock fault windows.
 Scoped Git attributes keep server sources/manifests LF on every host; oracle

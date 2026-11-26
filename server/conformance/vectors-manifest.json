@@ -81,6 +81,8 @@
     "nested-extra-order",
     "surrogate-high",
     "surrogate-low",
+    "discarded-surrogate",
+    "discarded-surrogate-subtree",
     "nan-input",
     "inf-input",
     "negative-inf-input",
@@ -113,7 +115,7 @@
     "application-json-suffix",
     "text-json-suffix"
   ],
-  "request_count": 112,
+  "request_count": 114,
   "implementations": [
     "P0",
     "D0",
@@ -143,13 +145,13 @@
   "go_test_count": 15,
   "files": {
     "server/cmd/conformance-server/main.go": "099c5756a66228716c5f8b92668bfbcce3cc6e2b7d41b7701b225ee27c760ab8",
-    "server/internal/application/application.go": "8cac642fce63b71a4d7601ccac86df44d82dcbf2520c5fe030d901e898148fa4",
+    "server/internal/application/application.go": "a3481021148bb756161f8bf19143807ddf26f90955a0f6eda0a5b009f7f21d8a",
     "server/internal/application/dependencies.go": "8422e79a8aa8c059ea7e54c97d89f4c1acdd21ce408ce250ad84b021bf4689f0",
-    "server/internal/contract/decode.go": "f4d8bc1ee7074202f56a797bcc7df6b337ee087973e1122b6a6e47d0cc3e7bd8",
-    "server/internal/contract/intake.go": "3e0d3dbbde84557ea16a5514c8f89cb64225631583c0f7961bf64e53dec587b3",
+    "server/internal/contract/decode.go": "b552a759c2fc2791713122e3115799c7f8d7bd7ee8e23418ae7e6fcdfe02188c",
+    "server/internal/contract/intake.go": "cdf125b0d2fd5d9d2954eae7c49af98d32078c132d13cac000111483a6b9cbc7",
     "server/internal/contract/intake_test.go": "4a85e4b16e27447badb3d3f8e1696a454d407f77d04bef39cd62c0376b829fc0",
     "server/internal/contract/json.go": "6599650d5bddd592d1893b0312005d6a302459ce9fdd0df569c710e01c0bd92c",
-    "server/internal/httpapi/http.go": "4d3204fa003b48c46ea3d2641400a4a232dd218a1ffd3d7d52b178c5d8ae3e36",
+    "server/internal/httpapi/http.go": "e889ad86dafca8dda1ca73c28b0910d69854f76a30e65b40bebed8f54675f9d0",
     "server/internal/httpapi/http_test.go": "4c87f22726bcfe9b5470c9f0784e289a762ba14d5af6fdf4e2611041548b9a1c",
     "server/internal/instancelock/lock.go": "ed38e5c172335fc0b695e9e65835856a0384687188fca610c1e5e12ff86b0fff",
     "server/internal/instancelock/lock_unix.go": "de14dfad829a06b8f9afc2df9e41eb0b09a92b802f2a77a97688858557cae30e",
@@ -158,12 +160,12 @@
     "server/internal/sqlite/records.go": "686be381d0c18d872e5efb9b5a076565a2e0572e3cdd18bb061abc846217b674",
     "server/internal/sqlite/store.go": "a1b57aa6d4ce2808fafcfc3f94323cd7b11e02c8b38c9cdeaf553f71b7778f76",
     "server/internal/sqlite/store_test.go": "80ab89d2ef0924e84e10a346fcf7a81c976751a46e92777e0c760c92d244bea1",
-    "server/conformance/harness.py": "448dafd4f8a99d39b84e4c990aefea583c1c1283084b7d3c952360d670c2dafe",
+    "server/conformance/harness.py": "8438e4fb165d461d9c6db57e4ca39d9311c8e055f19d0f81bac7f2e9ee559d48",
     "server/conformance/oracle.py": "c0e9fca9869d2e01bf3eb74b05e4a3dba804b1e299095acf087da304eb0ab7a8",
     "server/go.mod": "fa2e86a53c75a6763cec03cc324d52fcea59ddd31e8389692dda25ca93a077a9",
     "server/go.sum": "3acecbf3c96a1526d4e225ba7f019e2a0a8c710d4fe258557d9cbf8e121ee94b",
     "server/.gitattributes": "e3bdab20aad75d5588fa4737cee8859c322c183bf673ccf645128b0a21cf8690",
-    "server/conformance/golden-fresh.json": "9b832a00de1f150bf64449867b1b74e59be6dd857280a96ede4de50cbdc6c6c6",
-    "server/conformance/golden-retained.json": "48463bc3706972b94b7465bae0a6c45a2d556ad5b1411a2cbad90ca806314f5f"
+    "server/conformance/golden-fresh.json": "5f08097474aa8c2c8d7e14ee4ebb4b44b2c6855799e20ac2c5a09092380362bd",
+    "server/conformance/golden-retained.json": "fd309036baa46061161dafca5b476d0889ecc243a60c574bff4adf4c0752a598"
   }
 }

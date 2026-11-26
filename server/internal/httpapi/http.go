@@ -127,7 +127,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}})
 					return
 				}
-				unpaired = contract.HasUnpairedSurrogate(data)
+				unpaired = contract.HasUnpaired(input)
 			} else {
 				// FastAPI exposes non-JSON body bytes as validation input.
 				input = string(data)

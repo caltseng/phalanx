@@ -3,6 +3,7 @@ package contract
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -12,11 +13,18 @@ import (
 )
 
 type orderedObject struct {
-	values map[string]any
-	keys   []string
+	values      map[string]any
+	keys        []string
+	unpairedKey bool
 }
 
 func (o *orderedObject) MarshalJSON() ([]byte, error) { return json.Marshal(o.values) }
+
+type unpairedString struct{}
+
+func (*unpairedString) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("unpaired surrogate cannot be encoded as UTF-8")
+}
 
 type JSONError struct {
 	Offset  int
@@ -61,7 +69,7 @@ func decode(data []byte) (any, []string, error) {
 		return nil, nil, p.failure("Extra data", p.at)
 	}
 	if object, ok := value.(*orderedObject); ok {
-		return object.values, object.keys, nil
+		return object, object.keys, nil
 	}
 	return value, nil, nil
 }
@@ -87,10 +95,12 @@ func (p *parser) value(depth int) (any, error) {
 			if p.at == len(p.data) || p.data[p.at] != '"' {
 				return nil, p.failure("Expecting property name enclosed in double quotes", p.at)
 			}
+			keyStart := p.at
 			key, err := p.text()
 			if err != nil {
 				return nil, err
 			}
+			result.unpairedKey = result.unpairedKey || rawUnpaired(p.data[keyStart:p.at])
 			p.whitespace()
 			if p.at == len(p.data) || p.data[p.at] != ':' {
 				return nil, p.failure("Expecting ':' delimiter", p.at)
@@ -149,7 +159,15 @@ func (p *parser) value(depth int) (any, error) {
 			}
 		}
 	case '"':
-		return p.text()
+		start := p.at
+		text, err := p.text()
+		if err != nil {
+			return nil, err
+		}
+		if rawUnpaired(p.data[start:p.at]) {
+			return &unpairedString{}, nil
+		}
+		return text, nil
 	}
 	for _, literal := range []struct {
 		text  string
@@ -223,7 +241,7 @@ func (p *parser) text() (string, error) {
 
 // The Python oracle cannot serialize unpaired surrogate validation input to
 // UTF-8. Never silently turn it into U+FFFD and accept a different work item.
-func HasUnpairedSurrogate(data []byte) bool {
+func rawUnpaired(data []byte) bool {
 	inString := false
 	for i := 0; i < len(data); i++ {
 		if data[i] == '"' {
@@ -236,6 +254,7 @@ func HasUnpairedSurrogate(data []byte) bool {
 				if err != nil || value < 0xd800 || value > 0xdfff {
 					continue
 				}
+
 				if value >= 0xdc00 || i+6 >= len(data) || data[i+1] != '\\' || data[i+2] != 'u' {
 					return true
 				}
@@ -244,6 +263,29 @@ func HasUnpairedSurrogate(data []byte) bool {
 					return true
 				}
 				i += 6
+			}
+		}
+	}
+	return false
+}
+
+func HasUnpaired(value any) bool {
+	switch value := value.(type) {
+	case *unpairedString:
+		return true
+	case *orderedObject:
+		if value.unpairedKey {
+			return true
+		}
+		for _, entry := range value.values {
+			if HasUnpaired(entry) {
+				return true
+			}
+		}
+	case []any:
+		for _, entry := range value {
+			if HasUnpaired(entry) {
+				return true
 			}
 		}
 	}

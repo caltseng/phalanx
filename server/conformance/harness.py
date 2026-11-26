@@ -330,6 +330,8 @@ def cases():
         ("nested-extra-order", '{"repository_id":"fixture","goal":"ok","dependencies":[{"upstream_id":"a","z":1,"a":2}]}'),
         ("surrogate-high", '{"repository_id":"fixture","goal":"\\ud800"}'),
         ("surrogate-low", '{"repository_id":"fixture","goal":"\\udc00"}'),
+        ("discarded-surrogate", '{"repository_id":"fixture","goal":"\\ud800","goal":"valid"}'),
+        ("discarded-surrogate-subtree", '{"repository_id":"fixture","goal":"valid","context_links":["\\ud800"],"context_links":[]}'),
         ("nan-input", '{"repository_id":"fixture","goal":NaN}'),
         ("inf-input", '{"repository_id":"fixture","goal":Infinity}'),
         ("negative-inf-input", '{"repository_id":"fixture","goal":-Infinity}'),

@@ -161,6 +161,10 @@ func object(value any) (map[string]any, bool) {
 	return body, ok
 }
 
+func ObjectValues(value any) (map[string]any, bool) {
+	return object(value)
+}
+
 func modelIssue(value any, prefix []any) []Issue {
 	return []Issue{{Type: "model_attributes_type", Loc: prefix, Msg: "Input should be a valid dictionary or object to extract fields from", Input: value}}
 }

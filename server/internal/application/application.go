@@ -113,7 +113,7 @@ func inspect(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	body, ok := value.(map[string]any)
+	body, ok := contract.ObjectValues(value)
 	if !ok {
 		return nil, errors.New("Stored item request is not an object")
 	}
