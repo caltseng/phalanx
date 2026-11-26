@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from shutil import copytree
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
@@ -335,6 +336,22 @@ class CharterTest(unittest.TestCase):
 
 
 class ShiftFixture(ServerFixture):
+    @classmethod
+    def setUpClass(cls):
+        temporary = TemporaryDirectory()
+        cls.addClassCleanup(temporary.cleanup)
+        cls.source = Path(temporary.name) / "source"
+        cls.source.mkdir()
+        git(cls.source, "init", "-q", "-b", "main")
+        (cls.source / "README.md").write_text("pilot\n", encoding="utf-8")
+        git(cls.source, "add", "README.md")
+        git(cls.source, "commit", "-q", "-m", "Initial")
+
+    def prepare_repository(self, root):
+        checkout = root / "checkout"
+        git(root, "clone", "-q", "--shared", "-b", "main", str(self.source), str(checkout))
+        return checkout, self.source.as_uri()
+
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -367,21 +384,6 @@ class ShiftFixture(ServerFixture):
 
 
 class ShiftTest(ShiftFixture, unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        temporary = TemporaryDirectory()
-        cls.addClassCleanup(temporary.cleanup)
-        cls.source = Path(temporary.name) / "source"
-        repository = Path(__file__).resolve().parents[1]
-        git(repository, "clone", "-q", "--shared", "--no-checkout", str(repository), str(cls.source))
-        # CI may check out a detached PR head without a local main branch.
-        git(cls.source, "update-ref", "refs/heads/main", "HEAD")
-
-    def prepare_repository(self, root):
-        checkout = root / "checkout"
-        git(root, "clone", "-q", "--shared", "-b", "main", str(self.source), str(checkout))
-        return checkout, self.source.as_uri()
-
     def test_normal_intake_enters_real_captain_discovery_without_named_charter_ids(self):
         captain = shift.start(self.api, self.charter, "intake-captain", config=self.config)["captain"]["id"]
         item = self.item()
@@ -1213,16 +1215,17 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
 
 
 class ShiftArchiveTest(ShiftFixture, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.remote = cls.source.parent / "origin.git"
+        git(cls.source.parent, "clone", "-q", "--bare", "--shared", str(cls.source), str(cls.remote))
+
     def prepare_repository(self, root):
         bare, checkout = root / "origin.git", root / "checkout"
-        git(root, "init", "-q", "--bare", str(bare))
-        checkout.mkdir()
-        git(checkout, "init", "-q", "-b", "main")
-        (checkout / "README.md").write_text("pilot\n", encoding="utf-8")
-        git(checkout, "add", "README.md")
-        git(checkout, "commit", "-q", "-m", "Initial")
-        git(checkout, "remote", "add", "origin", bare.as_uri())
-        git(checkout, "push", "-q", "origin", "main")
+        # Archive tests push and delete refs, so each needs its own writable remote.
+        copytree(self.remote, bare)
+        git(root, "clone", "-q", "--shared", "-b", "main", str(bare), str(checkout))
         return checkout, bare.as_uri()
 
     def ended_writer(self, *, push=True, **options):
