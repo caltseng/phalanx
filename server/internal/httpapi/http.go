@@ -32,6 +32,7 @@ type route struct {
 	executionID string
 	captainID   string
 	runnerID    string
+	writerID    string
 	revision    string
 	method      string
 }
@@ -52,6 +53,8 @@ func match(path, method string) (route, string) {
 		return route{kind: "writer-progress", method: "POST"}, "POST"
 	case "/v1/writer/capacity":
 		return route{kind: "writer-capacity", method: "POST"}, "POST"
+	case "/v1/writer/usage":
+		return route{kind: "writer-usage", method: "POST"}, "POST"
 	case "/v1/dispatch/settings":
 		if method == "PUT" {
 			return route{kind: "set-dispatch", method: "PUT"}, "GET"
@@ -132,6 +135,10 @@ func match(path, method string) (route, string) {
 			return target, "POST"
 		case len(parts) == 5 && parts[1] == "executions" && parts[2] != "" && parts[3] == "drafts" && parts[4] != "":
 			target.kind, target.executionID, target.revision = "draft", parts[2], parts[4]
+		case len(parts) == 6 && parts[1] == "executions" && parts[2] != "" && parts[3] == "writers" &&
+			parts[4] != "" && parts[5] == "usage":
+			target.kind, target.executionID, target.writerID, target.method = "captain-usage", parts[2], parts[4], "POST"
+			return target, "POST"
 		default:
 			return route{}, ""
 		}
@@ -174,7 +181,7 @@ func bodyRoute(kind string) bool {
 	case "intake", "register", "set-title", "cancel", "close-failure", "retry-finalization",
 		"writer-register", "writer-update", "writer-withdraw", "writer-progress", "writer-capacity", "set-dispatch",
 		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write",
-		"github-observation", "local-checks", "reconciler-heartbeat":
+		"github-observation", "local-checks", "reconciler-heartbeat", "writer-usage", "captain-usage":
 		return true
 	default:
 		return false
@@ -274,13 +281,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if (route.kind == "writer-register" || route.kind == "writer-update" || route.kind == "writer-withdraw" ||
 		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
-		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire") &&
+		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire" || route.kind == "captain-usage") &&
 		role != "owner" && role != "runner" {
 		writeJSON(w, 403, map[string]any{"detail": "Owner or runner token required"})
 		return
 	}
 	if (route.kind == "writer-attempt" || route.kind == "writer-progress" || route.kind == "writer-capacity" ||
-		route.kind == "writer-result" || route.kind == "writer-stop") &&
+		route.kind == "writer-result" || route.kind == "writer-stop" || route.kind == "writer-usage") &&
 		role != "writer" {
 		writeJSON(w, 403, map[string]any{"detail": "Writer token required"})
 		return
@@ -323,6 +330,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.runnerID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.runnerID, "runner_id")...)
 	}
+	if route.writerID != "" {
+		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.writerID, "writer_id")...)
+	}
 	if route.revision != "" {
 		pathIssues = append(pathIssues, contract.ValidateRevision(route.revision)...)
 	}
@@ -333,6 +343,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var result json.RawMessage
 	var status = 200
 	switch route.kind {
+	case "writer-usage", "captain-usage":
+		if !bodyPresent {
+			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
+			return
+		}
+		var issues []contract.Issue
+		if route.kind == "writer-usage" {
+			request, bodyIssues := contract.ValidateUsageSnapshot(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.OwnUsage(ctx, writerID, request)
+			}
+		} else {
+			request, bodyIssues := contract.ValidateCaptainUsage(input, keys)
+			issues = append(pathIssues, bodyIssues...)
+			if len(issues) == 0 {
+				result, err = h.App.CaptainUsage(ctx, route.itemID, route.executionID, route.writerID, request)
+			}
+		}
+		if len(issues) > 0 {
+			writeJSON(w, 422, map[string]any{"detail": issues})
+			return
+		}
 	case "github-observation", "local-checks", "reconciler-heartbeat", "reconciler-retire":
 		if bodyRoute(route.kind) && !bodyPresent && route.kind != "reconciler-heartbeat" {
 			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
@@ -687,11 +720,14 @@ func missingBody() []contract.Issue {
 func (h *Handler) failure(w http.ResponseWriter, err error) {
 	var missing *application.Missing
 	var conflict *application.Conflict
+	var forbidden *application.Forbidden
 	switch {
 	case errors.As(err, &missing):
 		writeJSON(w, 404, map[string]any{"detail": missing.Message})
 	case errors.As(err, &conflict):
 		writeJSON(w, 409, map[string]any{"detail": conflict.Message})
+	case errors.As(err, &forbidden):
+		writeJSON(w, 403, map[string]any{"detail": forbidden.Message})
 	case sqlite.IsBusy(err):
 		w.Header().Set("Retry-After", "1")
 		writeJSON(w, 503, map[string]any{"detail": "SQLite store unavailable (" + sqlite.BusyReason(err) + "); retry the same request"})

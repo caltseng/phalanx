@@ -23,6 +23,10 @@ type Conflict struct{ Message string }
 
 func (e *Conflict) Error() string { return e.Message }
 
+type Forbidden struct{ Message string }
+
+func (e *Forbidden) Error() string { return e.Message }
+
 type App struct {
 	Store       *sqlite.Store
 	Clock       func() time.Time

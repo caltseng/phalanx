@@ -198,6 +198,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\datetimes.py --binary "$env:RUNNER_TEMP\conformance-models.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\datetimes"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\usage.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\usage"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\decisions.py --binary "$env:RUNNER_TEMP\conformance-decisions.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\decisions"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\numbers.py --binary "$env:RUNNER_TEMP\conformance-json.exe" --output "$env:RUNNER_TEMP\domain-conformance-proof\numbers"
