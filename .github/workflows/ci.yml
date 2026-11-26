@@ -128,14 +128,27 @@ jobs:
           CGO_ENABLED: "1"
         run: go test -race ./...
 
-      - uses: actions/setup-python@v7
+      - name: Provision the exact disposable Python/SQLite oracle
         if: runner.os == 'Windows'
-        with:
-          python-version: "3.14.10"
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "python-oracle-20261110.tar.gz"
+          Invoke-WebRequest "https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.14.10%2B20261110-x86_64-pc-windows-msvc-install_only_stripped.tar.gz" -OutFile $archive
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne "32b6cf90a03e2bc15fda8d2ab7ff78c4870f138887d612932650ce764efaab8f") { throw "Oracle archive checksum mismatch" }
+          $root = Join-Path $env:RUNNER_TEMP "phalanx-oracle-20261110"
+          New-Item -ItemType Directory -Path $root | Out-Null
+          tar -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $root "python\python.exe"
+          & $python -c "import platform,sqlite3; print(platform.python_version(),sqlite3.sqlite_version); assert platform.python_version()=='3.14.10'; assert sqlite3.sqlite_version=='3.53.1'"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -m venv (Join-Path $root "venv")
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $python = Join-Path $root "venv\Scripts\python.exe"
+          "PHALANX_CONFORMANCE_PYTHON=$python" >> $env:GITHUB_ENV
 
       - name: Install pinned disposable Python oracle dependencies
         if: runner.os == 'Windows'
-        run: python -m pip install -r requirements.lock
+        run: '& $env:PHALANX_CONFORMANCE_PYTHON -m pip install -r requirements.lock'
 
       - name: Compare immutable P0 and D0 oracles and sole-instance locks
         if: runner.os == 'Windows'
@@ -144,7 +157,7 @@ jobs:
           go build -trimpath -buildvcs=false -o "$env:RUNNER_TEMP\conformance-server.exe" ./cmd/conformance-server
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Set-Location ..
-          python server\conformance\harness.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\conformance-proof"
+          & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\harness.py --binary "$env:RUNNER_TEMP\conformance-server.exe" --output "$env:RUNNER_TEMP\conformance-proof"
 
       - name: Preserve exact synthetic wire and durable evidence
         if: always() && runner.os == 'Windows'

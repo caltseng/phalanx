@@ -160,7 +160,7 @@
     "server/internal/sqlite/records.go": "686be381d0c18d872e5efb9b5a076565a2e0572e3cdd18bb061abc846217b674",
     "server/internal/sqlite/store.go": "a1b57aa6d4ce2808fafcfc3f94323cd7b11e02c8b38c9cdeaf553f71b7778f76",
     "server/internal/sqlite/store_test.go": "80ab89d2ef0924e84e10a346fcf7a81c976751a46e92777e0c760c92d244bea1",
-    "server/conformance/harness.py": "8438e4fb165d461d9c6db57e4ca39d9311c8e055f19d0f81bac7f2e9ee559d48",
+    "server/conformance/harness.py": "f507d78622453784964f6b3d9da5d6514d71eef5f1456d7c33a4d67cdf2c3d43",
     "server/conformance/oracle.py": "c0e9fca9869d2e01bf3eb74b05e4a3dba804b1e299095acf087da304eb0ab7a8",
     "server/go.mod": "fa2e86a53c75a6763cec03cc324d52fcea59ddd31e8389692dda25ca93a077a9",
     "server/go.sum": "3acecbf3c96a1526d4e225ba7f019e2a0a8c710d4fe258557d9cbf8e121ee94b",

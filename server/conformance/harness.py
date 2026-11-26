@@ -89,7 +89,10 @@ def verify_manifest():
     if frozen != source_manifest():
         raise AssertionError("Immutable source/test manifest changed")
     if platform.python_version() != frozen["python"] or sqlite3.sqlite_version != frozen["sqlite"]:
-        raise AssertionError("Use the pinned isolated Python/SQLite checks environment")
+        raise AssertionError(
+            f"Use the pinned isolated Python/SQLite checks environment: "
+            f"expected CPython {frozen['python']} / SQLite {frozen['sqlite']}; "
+            f"observed CPython {platform.python_version()} / SQLite {sqlite3.sqlite_version}")
     if {name: importlib.metadata.version(name) for name in RUNTIME} != RUNTIME:
         raise AssertionError("Pinned Python oracle dependencies differ")
 
@@ -603,11 +606,15 @@ def busy_checks(binary, root, sources, output):
 
 
 def differential(binary, output, freeze=False):
+    output.mkdir(parents=True, exist_ok=True)
+    runtime = {"python": platform.python_version(), "sqlite": sqlite3.sqlite_version,
+               "dependencies": {name: importlib.metadata.version(name) for name in RUNTIME},
+               "expected_python": "3.14.10", "expected_sqlite": "3.53.1"}
+    (output / "runtime.json").write_text(json.dumps(runtime, indent=2), encoding="utf-8", newline="\n")
     verify_comparator()
     verify_manifest()
     if not freeze:
         verify_vectors()
-    output.mkdir(parents=True, exist_ok=True)
     with disposable_root() as root:
         sources = {label: export(label, root) for label in PINS}
         for retained in (False, True):

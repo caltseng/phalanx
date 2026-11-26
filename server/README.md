@@ -45,6 +45,15 @@ Windows real-loopback differential/lock evidence is a required CI job. Linux/mac
 lock implementations build there, but Python-Go bidirectional lock proof is
 currently for Windows only; those hosts are not authorized deployment targets.
 
+Windows CI provisions a job-local, non-free-threaded Python-build-standalone
+`20261110` CPython 3.14.10 archive, SHA-256
+`32b6cf90a03e2bc15fda8d2ab7ff78c4870f138887d612932650ce764efaab8f`,
+and verifies SQLite 3.53.1 before installing the locked oracle dependencies.
+`setup-python`'s Python version alone did not establish the SQLite pin; the
+original runtime/corpus checks remain unchanged. Runtime evidence is saved even
+on a pin failure. No global interpreter, other checkout, or deployed runtime is
+modified to repair CI.
+
 ## Immutable disposable conformance
 
 The harness exports **public immutable Git objects**, not another checkout,
