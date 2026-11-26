@@ -15,6 +15,10 @@ Scribe remains a separate visible product label, including on compact screens.
 static lockup (on ivory for legibility in either README theme); the dashboard
 references its parts rather than duplicating paths.
 Typography uses local Palatino/Georgia serif fallbacks, without downloaded fonts.
+The toolbar retains top clearance for the upward rim break while removing bottom
+padding, row spacing and the inline-heading baseline gap; its complete default
+header keeps the existing 100px budget at 1280px without scaling the shield or
+engraved typography.
 
 This is a source/package adoption boundary, not a live-service rollout. Compatible
 installed-package adoption and service refresh remain Captain-coordinated under the
