@@ -8,6 +8,12 @@ Prepared 2026-11-26 for Phalanx item `e9eec24973954316938ca68aef79a0f2`, executi
 
 ## 1. Executive architecture decision
 
+**Separately authorized foundation:** the first disposable implementation slice
+and its executable P0/D0 conformance boundary are documented in
+[server/README.md](../server/README.md). The historical proposal/review text below
+is preserved as provenance. Partial routes and synthetic slice proofs do not
+authorize production cutover or establish complete API/package rollback parity.
+
 Propose one Go HTTP service, one authoritative SQLite file, and three substantive internal boundaries: HTTP contract/authentication, application/domain operations, and SQLite storage. Retain static Scribe assets and all current client entrypoints. Move durable background report finalization and dependency refresh into the same service, preserving their existing jobs and restart semantics. Do not move GitHub observation, Git commands, native-session launches, issue fetching, usage acquisition, or merge actions into the server.
 
 The benefit is simpler execution ownership and explicit transaction/admission behavior, not a change in product semantics. Go's goroutines do not remove SQLite serialization, establish durability, guarantee fairness, or cancel already committed work. The migration is accepted only by comparing both wire behavior and durable effects, including retry/restart/rollback, against pinned Python behavior and current owner contracts.

@@ -1,0 +1,284 @@
+// Package contract owns the Python-compatible request boundary, not database state.
+package contract
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
+const IdentifierPattern = `^[A-Za-z0-9_-]{1,100}$`
+const labelPattern = `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`
+
+var identifier = regexp.MustCompile(IdentifierPattern)
+var label = regexp.MustCompile(labelPattern)
+
+type Prerequisite struct {
+	UpstreamID string `json:"upstream_id"`
+	Milestone  string `json:"milestone"`
+}
+
+type Intake struct {
+	RepositoryID       string         `json:"repository_id"`
+	Goal               string         `json:"goal"`
+	Target             string         `json:"target"`
+	ContextLinks       []string       `json:"context_links"`
+	AcceptanceCriteria []string       `json:"acceptance_criteria"`
+	TargetBranch       *string        `json:"target_branch"`
+	Priority           string         `json:"priority"`
+	Label              *string        `json:"label"`
+	Dependencies       []Prerequisite `json:"dependencies"`
+	PublicationMode    string         `json:"publication_mode"`
+}
+
+type Registration struct {
+	ID     string `json:"id"`
+	Remote string `json:"remote"`
+}
+
+type Issue struct {
+	Type  string         `json:"type"`
+	Loc   []any          `json:"loc"`
+	Msg   string         `json:"msg"`
+	Input any            `json:"input"`
+	Ctx   map[string]any `json:"ctx,omitempty"`
+}
+
+type validator struct {
+	issues []Issue
+}
+
+func (v *validator) issue(kind, message string, loc []any, input any, ctx map[string]any) {
+	v.issues = append(v.issues, Issue{kind, loc, message, input, ctx})
+}
+
+func location(prefix []any, field any) []any {
+	return append(append([]any{}, prefix...), field)
+}
+
+func (v *validator) required(body map[string]any, field string, prefix []any) (any, bool) {
+	value, ok := body[field]
+	if !ok {
+		v.issue("missing", "Field required", location(prefix, field), body, nil)
+	}
+	return value, ok
+}
+
+// Pydantic's Rust string validator strips Unicode White_Space, not Python
+// str.strip's additional ASCII information separators.
+func pythonSpace(r rune) bool {
+	return unicode.IsSpace(r)
+}
+
+func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern string) string {
+	text, ok := value.(string)
+	if !ok {
+		v.issue("string_type", "Input should be a valid string", loc, value, nil)
+		return ""
+	}
+	if strip {
+		text = strings.TrimFunc(text, pythonSpace)
+	}
+	size := utf8.RuneCountInString(text)
+	if min > 0 && size < min {
+		v.issue("string_too_short", fmt.Sprintf("String should have at least %d character", min), loc, value, map[string]any{"min_length": min})
+	} else if max > 0 && size > max {
+		v.issue("string_too_long", fmt.Sprintf("String should have at most %d characters", max), loc, value, map[string]any{"max_length": max})
+	} else if pattern != "" && !regexp.MustCompile(pattern).MatchString(text) {
+		v.issue("string_pattern_mismatch", fmt.Sprintf("String should match pattern '%s'", pattern), loc, value, map[string]any{"pattern": pattern})
+	}
+	return text
+}
+
+func (v *validator) choice(value any, loc []any, choices []string, literal bool) string {
+	text, ok := value.(string)
+	if ok {
+		for _, choice := range choices {
+			if choice == text {
+				return text
+			}
+		}
+	}
+	quoted := make([]string, len(choices))
+	for i, choice := range choices {
+		quoted[i] = "'" + choice + "'"
+	}
+	expected := strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
+	kind := "enum"
+	if literal {
+		kind = "literal_error"
+	}
+	v.issue(kind, "Input should be "+expected, loc, value, map[string]any{"expected": expected})
+	return ""
+}
+
+func (v *validator) texts(value any, loc []any, limit int) []string {
+	values, ok := value.([]any)
+	if !ok {
+		v.issue("list_type", "Input should be a valid list", loc, value, nil)
+		return nil
+	}
+	start := len(v.issues)
+	result := make([]string, len(values))
+	for i, entry := range values {
+		result[i] = v.text(entry, location(loc, i), true, 1, 16000, "")
+	}
+	// Pydantic validates elements before checking the collection bound.
+	if len(v.issues) == start && len(values) > limit {
+		v.tooLong(value, loc, limit, len(values))
+	}
+	return result
+}
+
+func (v *validator) tooLong(value any, loc []any, limit, length int) {
+	v.issue("too_long", fmt.Sprintf("List should have at most %d items after validation, not %d", limit, length), loc, value,
+		map[string]any{"field_type": "List", "max_length": limit, "actual_length": length})
+}
+
+func (v *validator) extras(body map[string]any, keys, allowed []string, prefix []any) {
+	for _, key := range keys {
+		found := false
+		for _, field := range allowed {
+			if key == field {
+				found = true
+				break
+			}
+		}
+		if !found {
+			v.issue("extra_forbidden", "Extra inputs are not permitted", location(prefix, key), body[key], nil)
+		}
+	}
+}
+
+func object(value any) (map[string]any, bool) {
+	if body, ok := value.(*orderedObject); ok {
+		return body.values, true
+	}
+	body, ok := value.(map[string]any)
+	return body, ok
+}
+
+func modelIssue(value any, prefix []any) []Issue {
+	return []Issue{{Type: "model_attributes_type", Loc: prefix, Msg: "Input should be a valid dictionary or object to extract fields from", Input: value}}
+}
+
+var targets = []string{"report", "ready_for_check_in", "checked_in"}
+
+func ValidateIntake(value any, keys []string) (Intake, []Issue) {
+	body, ok := object(value)
+	prefix := []any{"body"}
+	if !ok {
+		return Intake{}, modelIssue(value, prefix)
+	}
+	v := validator{}
+	result := Intake{Target: "checked_in", ContextLinks: []string{}, AcceptanceCriteria: []string{}, Dependencies: []Prerequisite{}, Priority: "normal", PublicationMode: "ready"}
+	if x, ok := v.required(body, "repository_id", prefix); ok {
+		result.RepositoryID = v.text(x, location(prefix, "repository_id"), false, 0, 0, IdentifierPattern)
+	}
+	if x, ok := v.required(body, "goal", prefix); ok {
+		result.Goal = v.text(x, location(prefix, "goal"), true, 1, 16000, "")
+	}
+	if x, ok := body["target"]; ok {
+		result.Target = v.choice(x, location(prefix, "target"), targets, false)
+	}
+	if x, ok := body["context_links"]; ok {
+		result.ContextLinks = v.texts(x, location(prefix, "context_links"), 50)
+	}
+	if x, ok := body["acceptance_criteria"]; ok {
+		result.AcceptanceCriteria = v.texts(x, location(prefix, "acceptance_criteria"), 50)
+	}
+	if x, ok := body["target_branch"]; ok && x != nil {
+		text := v.text(x, location(prefix, "target_branch"), true, 1, 16000, "")
+		result.TargetBranch = &text
+	}
+	if x, ok := body["priority"]; ok {
+		result.Priority = v.choice(x, location(prefix, "priority"), []string{"low", "normal", "urgent"}, true)
+	}
+	if x, ok := body["label"]; ok && x != nil {
+		text := v.text(x, location(prefix, "label"), false, 0, 0, labelPattern)
+		result.Label = &text
+	}
+	if x, ok := body["dependencies"]; ok {
+		loc := location(prefix, "dependencies")
+		values, ok := x.([]any)
+		if !ok {
+			v.issue("list_type", "Input should be a valid list", loc, x, nil)
+		} else {
+			start := len(v.issues)
+			for i, entry := range values {
+				at := location(loc, i)
+				dependency, ok := object(entry)
+				if !ok {
+					v.issues = append(v.issues, modelIssue(entry, at)...)
+					continue
+				}
+				link := Prerequisite{Milestone: "checked_in"}
+				if y, ok := v.required(dependency, "upstream_id", at); ok {
+					link.UpstreamID = v.text(y, location(at, "upstream_id"), false, 0, 0, IdentifierPattern)
+				}
+				if y, ok := dependency["milestone"]; ok {
+					link.Milestone = v.choice(y, location(at, "milestone"), targets, false)
+				}
+				v.extras(dependency, ObjectKeys(entry), []string{"upstream_id", "milestone"}, at)
+				result.Dependencies = append(result.Dependencies, link)
+			}
+			if len(v.issues) == start && len(values) > 100 {
+				v.tooLong(x, loc, 100, len(values))
+			}
+		}
+	}
+	if x, ok := body["publication_mode"]; ok {
+		result.PublicationMode = v.choice(x, location(prefix, "publication_mode"), []string{"ready", "draft"}, false)
+	}
+	v.extras(body, keys, []string{"repository_id", "goal", "target", "context_links", "acceptance_criteria", "target_branch", "priority", "label", "dependencies", "publication_mode"}, prefix)
+	if len(v.issues) == 0 && result.Target == "report" && result.PublicationMode == "draft" {
+		v.issue("value_error", "Value error, Draft publication requires a PR target", prefix, body, map[string]any{"error": map[string]any{}})
+	}
+	return result, v.issues
+}
+
+func ValidateRegistration(value any, keys []string) (Registration, []Issue) {
+	body, ok := object(value)
+	prefix := []any{"body"}
+	if !ok {
+		return Registration{}, modelIssue(value, prefix)
+	}
+	v := validator{}
+	result := Registration{}
+	if x, ok := v.required(body, "id", prefix); ok {
+		result.ID = v.text(x, location(prefix, "id"), false, 0, 0, IdentifierPattern)
+	}
+	if x, ok := v.required(body, "remote", prefix); ok {
+		result.Remote = v.text(x, location(prefix, "remote"), true, 1, 16000, "")
+	}
+	v.extras(body, keys, []string{"id", "remote"}, prefix)
+	return result, v.issues
+}
+
+func ValidateIdentifier(text string, name string) []Issue {
+	if identifier.MatchString(text) {
+		return nil
+	}
+	return []Issue{{Type: "string_pattern_mismatch", Loc: []any{"path", name}, Msg: "String should match pattern '" + IdentifierPattern + "'", Input: text, Ctx: map[string]any{"pattern": IdentifierPattern}}}
+}
+
+func ValidateKey(key string) []Issue {
+	v := validator{}
+	v.text(key, []any{"header", "Idempotency-Key"}, false, 1, 200, "")
+	return v.issues
+}
+
+// Material includes all validated defaults and explicit nulls. Only intake's
+// internal compatibility fingerprint adds the removed field.
+func (request Intake) Material() (map[string]any, error) {
+	data, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	var value map[string]any
+	err = json.Unmarshal(data, &value)
+	return value, err
+}
