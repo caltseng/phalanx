@@ -11,7 +11,7 @@ from pydantic import TypeAdapter
 
 from . import dependencies
 from .finalization_schema import enqueue
-from .pr_models import GITHUB_REMOTE
+from .pr_models import github_repository
 from .transitions import (
     Event, Evidence, Execution, Outcome, PublicationMode, Stage, Status, Target, TERMINAL, Wait, decide, start,
 )
@@ -538,11 +538,11 @@ def result(db, item_id, execution_id, payload, writer_id):
     if publishing:
         remote, = db.execute("SELECT remote FROM repositories WHERE id=?",
                              (item_row(db, item_id)["repository_id"],)).fetchone()
-        match = GITHUB_REMOTE.fullmatch(remote)
-        if match is None or not payload.pr_url.lower().startswith(f"https://github.com/{match[1].lower()}/pull/"):
+        repository = github_repository(remote, lowercase=False)
+        if repository is None or not payload.pr_url.lower().startswith(f"https://github.com/{repository.lower()}/pull/"):
             raise Conflict("The PR must be in the item's registered GitHub repository")
         # The reconciler's URL for the same PR, so its observations match primary_pr exactly.
-        published = f"https://github.com/{match[1]}/pull/{payload.pr_url.rsplit('/', 1)[1]}"
+        published = f"https://github.com/{repository}/pull/{payload.pr_url.rsplit('/', 1)[1]}"
         # Every execution shares the item branch, so an earlier execution's PR may still be found there.
         if db.execute(
             """SELECT 1 FROM executions AS execution

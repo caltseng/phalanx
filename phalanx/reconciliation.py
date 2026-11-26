@@ -11,9 +11,10 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, Field, StringConstraints, model_validator
 
 from . import intake
+from .flag_models import flag as _flag
 from .intake_models import Identifier, Payload
 from .operator_schema import OPEN
-from .pr_models import DEPLOYMENT_WINDOW, GITHUB_REMOTE, Name, SHA
+from .pr_models import DEPLOYMENT_WINDOW, Name, SHA, github_repository
 from .transitions import (
     TERMINAL, Event, Evidence, PullRequest, Revision, Stage, Status, decide, item_branch,
 )
@@ -134,12 +135,12 @@ def record(db, item_id, execution_id, body: Observation):
         item = intake.item_row(db, item_id)
         remote, = db.execute("SELECT remote FROM repositories WHERE id=?",
                              (item["repository_id"],)).fetchone()
-        match = GITHUB_REMOTE.fullmatch(remote)
-        if match is None:
+        repository = github_repository(remote, lowercase=False)
+        if repository is None:
             raise intake.Conflict("GitHub observations require a registered github.com remote")
         if body.pr.head_ref != item_branch(item_id):
             raise intake.Conflict("The PR head branch must be the item branch")
-        url = f"https://github.com/{match[1]}/pull/{body.pr.number}"
+        url = f"https://github.com/{repository}/pull/{body.pr.number}"
         if output is not None and output.get("url", "").lower() != url.lower():
             raise intake.Conflict("Observation must describe the delivered PR")
         primary = state.get("primary_pr")
@@ -275,13 +276,6 @@ def retire(db, runner_id):
     return {"runner_id": runner_id, "retired": cursor.rowcount > 0}
 
 
-def _flag(kind, row, reason, recovery, first_seen, notify_owner=False):
-    return {"kind": kind, "item_id": row["item_id"] if row else "",
-            "execution_id": row["execution_id"] if row else "", "captain_id": "",
-            "reason": reason, "recovery": recovery, "first_seen": first_seen,
-            "notify_owner": notify_owner, "source": "server"}
-
-
 def observation_flags(db, now, *, execution_id=None):
     """Flag latest observations in scope, annotating stale evidence until GitHub refreshes it."""
     flags = []
@@ -317,9 +311,9 @@ def observation_flags(db, now, *, execution_id=None):
             for flag in found:
                 flag["reason"] += f" (last observed {row['last_observed_at']})"
             found.insert(0, _flag(
-                "observation_stale", row, f"GitHub was last observed for this item at {row['last_observed_at']}",
+                "observation_stale", f"GitHub was last observed for this item at {row['last_observed_at']}",
                 "A Captain checks the reconciler's pass log for this item's error and repairs it",
-                (last + RECONCILER_STALE).isoformat(timespec="microseconds"),
+                (last + RECONCILER_STALE).isoformat(timespec="microseconds"), row=row,
             ))
         flags += found
     return flags
@@ -336,20 +330,20 @@ def _deployment_flags(row, observation, *, now=None):
         return []
     if expired and state == "pending":
         return [_flag(
-            "deployment_missing", row,
+            "deployment_missing",
             f"{deployment['check_name']} did not complete successfully within 24 hours of check-in "
             f"on merge commit {deployment['commit']}",
             "The owner checks the deployment workflow on GitHub; automatic deployment polling has ended",
-            deadline.isoformat(timespec="microseconds"), notify_owner=True,
+            deadline.isoformat(timespec="microseconds"), row=row, notify_owner=True,
         )]
     recovery = ("Informational: GitHub reported a successful deployment check" if state == "deployed"
                 else "Check the post-merge workflow on GitHub and rerun or repair it; reconciliation refreshes this flag")
     if expired:
         recovery = "The owner checks the failed deployment on GitHub; automatic deployment polling has ended"
     return [_flag(
-        "deployed" if state == "deployed" else f"deployment_{state}", row,
+        "deployed" if state == "deployed" else f"deployment_{state}",
         f"{deployment['check_name']} on merge commit {deployment['commit']}: {state}",
-        recovery, row["observed_at"],
+        recovery, row["observed_at"], row=row,
     )]
 
 
@@ -358,9 +352,9 @@ def _observed(row, observation):
     if pull is None:
         if observation["merged_branch"]:
             flags.append(_flag(
-                "unpublished_branch_merged", row,
+                "unpublished_branch_merged",
                 f"{item_branch(row['item_id'])} is reachable from its base, but no PR exists",
-                "A Captain confirms the work landed and closes the item, or reopens it", seen,
+                "A Captain confirms the work landed and closes the item, or reopens it", seen, row=row,
             ))
         return flags
     url = pull["url"]
@@ -369,9 +363,9 @@ def _observed(row, observation):
     handoff = row["handoff_head"]
     if state.get("publication_mode") == "draft" and pull["state"] == "open" and not pull["draft"]:
         flags.append(_flag(
-            "draft_required", row, f"{url} is ready, but this item requires draft-only publication",
+            "draft_required", f"{url} is ready, but this item requires draft-only publication",
             "The writer disables auto-merge and converts the PR to draft; never promote or merge it", seen,
-            notify_owner=True,
+            row=row, notify_owner=True,
         ))
     # Conflict and check results describe the observed head. When it isn't the expected head
     # (typically a writer pushed and recorded a fix the reconciler hasn't seen yet), they would be stale
@@ -388,34 +382,34 @@ def _observed(row, observation):
             recovery = "Informational: the writer records the new head with its next result"
         recorded = f"publication handoff {handoff}" if handoff else f"recorded candidate {candidate}"
         flags.append(_flag(
-            "head_drift", row,
+            "head_drift",
             f"{url} head {pull['head_sha']} differs from the {recorded}",
-            recovery, seen,
+            recovery, seen, row=row,
         ))
     if pull["state"] == "closed" and not pull["merged"]:
-        flags.append(_flag("pr_closed", row, f"{url} was closed without merging",
-                           "A Captain asks the owner whether to reopen it; never open a replacement", seen))
+        flags.append(_flag("pr_closed", f"{url} was closed without merging",
+                           "A Captain asks the owner whether to reopen it; never open a replacement", seen, row=row))
     if current and pull["state"] == "open" and pull["mergeable"] is False:
-        flags.append(_flag("merge_conflict", row, f"{url} conflicts with {pull['base_ref']}",
-                           WRITER_RECOVERY, seen))
+        flags.append(_flag("merge_conflict", f"{url} conflicts with {pull['base_ref']}",
+                           WRITER_RECOVERY, seen, row=row))
     target = observation.get("target_base")
     if pull["state"] == "open" and pull["base_ref"] != target:
-        flags.append(_flag("wrong_base", row, f"{url} merges into {pull['base_ref']}, not the item's target {target}",
-                           "The writer retargets the PR; delivery waits until it does", seen))
+        flags.append(_flag("wrong_base", f"{url} merges into {pull['base_ref']}, not the item's target {target}",
+                           "The writer retargets the PR; delivery waits until it does", seen, row=row))
     if current and observation["checks"] == GateState.FAILED:
         reasons = "; ".join(observation["check_reasons"]) or "required checks failed"
-        flags.append(_flag("checks_failed", row, f"{url}: {reasons}", WRITER_RECOVERY, seen))
+        flags.append(_flag("checks_failed", f"{url}: {reasons}", WRITER_RECOVERY, seen, row=row))
     if observation["feedback"]:
         count = len(observation["feedback"])
-        flags.append(_flag("review_feedback", row,
+        flags.append(_flag("review_feedback",
                            f"{url} has {count} unresolved review item{'s' if count != 1 else ''}",
-                           WRITER_RECOVERY, seen))
+                           WRITER_RECOVERY, seen, row=row))
     failures = json.loads(row["failures_json"] or "[]")
     if current and failures:
-        flags.append(_flag("pre_pr_checks_failed", row,
+        flags.append(_flag("pre_pr_checks_failed",
                            f"Local checks failed on {pull['head_sha']}: " + "; ".join(
                                failure.splitlines()[0] for failure in failures),
-                           WRITER_RECOVERY, row["checked_at"]))
+                           WRITER_RECOVERY, row["checked_at"], row=row))
     return flags
 
 
@@ -427,7 +421,7 @@ def reconciler_stale(db, now):
         seen = datetime.fromisoformat(last_seen)
         if now - seen >= RECONCILER_STALE:
             flags.append(_flag(
-                "reconciler_stale", None, f"Reconciler {runner_id} has sent no heartbeat since {last_seen}",
+                "reconciler_stale", f"Reconciler {runner_id} has sent no heartbeat since {last_seen}",
                 f"A Captain restarts reconciler {runner_id}, reports it to the owner, or retires it "
                 "with `phx shift retire-reconciler` if it was decommissioned",
                 (seen + RECONCILER_STALE).isoformat(timespec="microseconds"),

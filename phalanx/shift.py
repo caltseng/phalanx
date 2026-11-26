@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode
 
 from .work_cli import CREDENTIAL, request
 from .git import run_git
+from .json_utils import write_json as _write_credential
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 from .display_text import reason_text, short_title
 from .session_links import session_reference
@@ -262,12 +263,6 @@ def credential_path(worktree):
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise ShiftError(f"Cannot locate the writer credential in {worktree}: {detail}")
     return Path(worktree) / result.stdout.decode("utf-8", errors="surrogateescape").strip()
-
-
-def _write_credential(path, data):
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(data), encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def _read_credential(path):

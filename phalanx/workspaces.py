@@ -158,7 +158,8 @@ class WorkspaceManager:
             # On case-insensitive macOS volumes, a mis-cased configured path lands here.
             raise WorkspaceError(f"Mapped checkout {self.checkout} is not its Git worktree root {top}; "
                                  "configure the exact on-disk path")
-        origin = _git(self.checkout, "remote", "get-url", "--all", "origin").rstrip("\n")
+        # Compare the configured identity, not a local insteadOf transport rewrite.
+        origin = _git(self.checkout, "config", "--get-all", "remote.origin.url").rstrip("\n")
         if _remote_identity(origin, self.checkout) != self.expected_remote:
             raise WorkspaceError(f"Origin of {self.checkout} does not match the registered remote")
         if self.root.is_relative_to(self.checkout):
