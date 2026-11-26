@@ -206,10 +206,80 @@ class IntakeTest(ServerFixture, unittest.TestCase):
         with connect(self.path, mode="ro") as db:
             stored, = db.execute("SELECT request_digest FROM request_receipts WHERE idempotency_key='first'"
                                  ).fetchone()
-        self.assertEqual(stored, digest(encode(expected)))
+        self.assertEqual(stored, digest(encode({**expected, "runner_affinity": None})))
         self.assertEqual(self.submit("/v1/items", body, key="first"), (201, item))
         self.assertEqual(self.submit("/v1/items", dict(body, publication_mode="ready"), key="first"), (201, item))
         self.assertEqual(self.submit("/v1/items", dict(body, publication_mode="draft"), key="first")[0], 409)
+
+    def test_retired_null_and_exact_current_receipts_replay_without_rewriting_history(self):
+        from phalanx.intake_models import Intake
+
+        item, body, _, _ = self.create()
+        canonical = Intake(**body).model_dump(mode="json")
+        response_json = encode(item)
+        for previous in (canonical, {**canonical, "runner_affinity": None}):
+            with self.subTest(previous=previous):
+                request_digest = digest(encode(previous))
+                with write_transaction(self.path) as db:
+                    db.execute("INSERT OR REPLACE INTO request_receipts VALUES (?, ?, ?, ?)",
+                               ("intake", "previous", request_digest, response_json))
+                with connect(self.path, mode="ro") as db:
+                    before = list(db.iterdump())
+                self.assertEqual(self.submit("/v1/items", body, key="previous"), (201, item))
+                self.assertEqual(self.submit("/v1/items", dict(body, goal="Changed"),
+                                             key="previous")[0], 409)
+                with connect(self.path, mode="ro") as db:
+                    self.assertEqual(list(db.iterdump()), before)
+                    self.assertEqual(db.execute("SELECT count(*) FROM work_items").fetchone()[0], 1)
+
+    def test_unproven_legacy_receipts_and_invalid_payloads_stay_rejected(self):
+        from phalanx.intake_models import Intake
+
+        item, body, _, _ = self.create()
+        canonical = Intake(**body).model_dump(mode="json")
+        for previous in (
+            {**canonical, "runner_affinity": "different-runner"},
+            {**canonical, "unknown": None},
+            {**canonical, "runner_affinity": None, "unknown": None},
+            {"unverifiable": "request"},
+        ):
+            with self.subTest(previous=previous):
+                with write_transaction(self.path) as db:
+                    db.execute("INSERT INTO request_receipts VALUES (?, ?, ?, ?)",
+                               ("intake", "unproven", digest(encode(previous)), encode(item)))
+                with connect(self.path, mode="ro") as db:
+                    before = list(db.iterdump())
+                self.assertEqual(self.submit("/v1/items", body, key="unproven")[0], 409)
+                with connect(self.path, mode="ro") as db:
+                    self.assertEqual(list(db.iterdump()), before)
+                with write_transaction(self.path) as db:
+                    db.execute("DELETE FROM request_receipts WHERE idempotency_key='unproven'")
+        for extra in ({"runner_affinity": None}, {"runner_affinity": "different-runner"},
+                      {"unknown": None}, {"goal": ""}):
+            with self.subTest(extra=extra):
+                for key in ("first", "invalid-new"):
+                    self.assertEqual(self.submit("/v1/items", {**body, **extra}, key=key)[0], 422)
+        with connect(self.path, mode="ro") as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM work_items").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM request_receipts").fetchone()[0], 1)
+
+    def test_retired_null_hash_match_is_intake_only_and_does_not_bypass_auth(self):
+        from phalanx.intake import Conflict, replayable
+        from phalanx.intake_models import Intake
+
+        item, body, _, _ = self.create()
+        canonical = Intake(**body).model_dump(mode="json")
+        with write_transaction(self.path) as db:
+            db.execute("INSERT INTO request_receipts VALUES (?, ?, ?, ?)",
+                       ("other", "first", digest(encode({**canonical, "runner_affinity": None})),
+                        encode(item)))
+            with self.assertRaises(Conflict):
+                replayable(db, "other", "first", canonical, lambda: self.fail("Must not perform"))
+        self.claim(item, item["execution"])
+        for token, expected in ((None, 401), (RUNNER, 403), (LEASE, 403)):
+            self.assertEqual(self.submit("/v1/items", body, token=token, key="first")[0], expected)
+        self.assertEqual(self.request("/v1/items", OWNER, body,
+                                     {"Idempotency-Key": "first", "Origin": "null"})[0], 403)
 
     def test_cli_cancel_uses_current_execution_and_version(self):
         item, _, base, execution = self.create()

@@ -52,12 +52,19 @@ def replayable(db, scope, key, payload, perform, *, should_record=None):
     if key is None:
         return perform()
     fingerprint = digest(encode(payload))
+    current_fingerprint = fingerprint
+    if scope == "intake":
+        # Keep new receipts replayable by packages whose validated Intake included
+        # this default-null field. It is hash material, not a public payload alias.
+        fingerprint = digest(encode({**payload, "runner_affinity": None}))
     receipt = db.execute(
         "SELECT request_digest, response_json FROM request_receipts WHERE scope=? AND idempotency_key=?",
         (scope, key),
     ).fetchone()
     if receipt:
-        if receipt["request_digest"] != fingerprint:
+        if receipt["request_digest"] != fingerprint and not (
+            scope == "intake" and receipt["request_digest"] == current_fingerprint
+        ):
             raise Conflict("Idempotency key was already used with a different request")
         return json.loads(receipt["response_json"])
     result = perform()

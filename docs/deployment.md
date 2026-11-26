@@ -57,6 +57,10 @@ and eligible-capacity refill; this grants no capacity increase.
 Dispatch overdue is a loaded 60-minute API constant; verify adoption through the reviewed
 upgrade, never monkeypatch. Backlog/pickup warnings and holds remain 30 minutes.
 
+For intake's retired default-null field, follow the [receipt contract](../SPEC.md#intake-receipt-fingerprints)
+and disposable bidirectional rollback rehearsals; unchanged older packages cannot replay
+intermediate null-omitting receipts.
+
 ## New installation
 
 Install the package and locked dependencies as in [Install Phalanx](install.md), then run:
