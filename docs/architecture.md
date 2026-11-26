@@ -102,7 +102,8 @@ request-local query reductions in #263 reduce load but do not bound gate admissi
 
 `tests/test_contention.py` exercises timeout cleanup and reuse, logged dependency
 refresh retry from its retained durable audit, and real HTTP writer progress, capacity,
-result and reconciler heartbeat requests with a deliberately reduced two-thread pool.
+result and reconciler heartbeat requests against an isolated in-process HTTP server
+with a deliberately reduced two-thread pool for gate contention.
 It checks health/auth responsiveness while a gate turn remains held, retryable failures,
 concurrent recovery without restart, exact result replay/stale-result rejection,
 integrity, DELETE/EXTRA and preserved configured 10-Building/20-Total settings.
@@ -117,12 +118,12 @@ current queue even if a write handed off the read batch just before interruption
 Separately, a synchronous contention exception handler needed another AnyIO request-worker
 slot after SQLite had already failed. Saturating those slots prevented delivery of an
 already-determined 503. The JSON-only handler now runs on the event loop, without moving
-SQLite there. The regression holds a real external EXCLUSIVE lock, waits through SQLite's
-production two-second busy timeout, and requires the 503 within five seconds while all
+SQLite there. The regression holds a real external EXCLUSIVE lock, waits through a shortened
+SQLite busy timeout, and requires the 503 within five seconds while all
 request-worker slots remain borrowed.
 
 The same module also drives 20 concurrent writer/control requests against an external
-RESERVED lock with unchanged production admission/busy timeouts and the normal request
+RESERVED lock with shortened admission/busy timeouts and the normal request
 pool. Progress, capacity, results and reconciler heartbeats must return retryable failures
 within a 15-second batch deadline, while owner authentication and health succeed. After
 unlocking, all 20 original writers resume. Failed requests preserve full writer, attempt,
@@ -131,6 +132,9 @@ apply. A held read snapshot separately forces COMMIT to time out and verifies ro
 Background prerequisite refresh and report finalization retain their durable intents
 through external writer contention. These tests establish bounded recovery for those
 faults, not a general latency guarantee under arbitrary overload.
+Production timing and load bounds remain the responsibility of the standalone
+`tests/envelope_probe.py` probe (decision 36); unit tests shorten only fault waits,
+not durability, locking, retry, fencing or recovery semantics.
 
 **Remaining limits:** gate admission and SQLite lock waits have separate budgets; worker
 queueing, authentication and route transactions can add them. SQLite's busy timeout is

@@ -144,14 +144,22 @@ class OperatorTest(ServerFixture, unittest.TestCase):
         initialize(self.path)
         with write_transaction(self.path) as db:
             db.execute("INSERT INTO repositories VALUES ('repo', 'https://github.com/a/b', ?)", (EARLY,))
-            for number in range(1, 5001):
+            for number in [*range(1, 12), 4999, 5000]:
                 insert(db, number)
             transition(db, 5000, 2, WAITING)
             transition(db, 5000, 3, WAITING, LATEST)
-            for number in range(6000, 8000):
+            for number in [6000, *range(7996, 8000)]:
                 insert(db, number, self.closed(number))
-            for version in range(2, 5001):
+            for version in range(2, 5):
                 transition(db, 10, version, QUEUED)
+            if self._testMethodName == "test_deep_queue_pages_seek_to_cursor":
+                for number in range(12, 4999):
+                    insert(db, number)
+                for number in range(6001, 7996):
+                    insert(db, number, self.closed(number))
+                for number in range(1000):
+                    db.execute("INSERT INTO github_observations VALUES (?, '', '', ?, 1, ?, ?, ?)",
+                               (identifier(4901), str(number), EARLY, EARLY, '{"pr": null}'))
         self.start_server(self.path)
 
     @staticmethod
@@ -298,14 +306,14 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             self.assertEqual(self.get(f"{BOARD}?{query}", OWNER)[0], status)
             self.assertEqual(self.get(f"{route}?{query}", OWNER)[0], status)
         first = self.page(route + "?limit=2")
-        self.assertEqual([row["version"] for row in first["events"]], [5000, 4999])
+        self.assertEqual([row["version"] for row in first["events"]], [4, 3])
         with write_transaction(self.path) as db:
             db.execute("INSERT INTO attempts VALUES (?, ?, ?, ?, NULL)",
                        ("attempt", identifier(10), QUEUED.stage, LATEST))
-            transition(db, 10, 5001, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
+            transition(db, 10, 5, replace(QUEUED, status=Status.RUNNING), LATEST, "attempt")
         later = self.page(f"{route}?limit=2&cursor={first['next_cursor']}")
         self.assertEqual(later["attempt"], "attempt")
-        self.assertEqual([row["version"] for row in later["events"]], [4998, 4997])
+        self.assertEqual([row["version"] for row in later["events"]], [2, 1])
         self.assertEqual(self.get(f"{BOARD}/{identifier(11)}/timeline?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertEqual(self.get(f"{BOARD}?cursor={first['next_cursor']}", OWNER)[0], 400)
         self.assertIsNone(self.page(f"{BOARD}/{identifier(11)}/timeline")["next_cursor"])
@@ -444,10 +452,6 @@ class OperatorTest(ServerFixture, unittest.TestCase):
             self.assertIn("; Push rejected: [redacted]", reason)
 
     def test_deep_queue_pages_seek_to_cursor(self):
-        with write_transaction(self.path) as db:
-            for number in range(1000):
-                db.execute("INSERT INTO github_observations VALUES (?, '', '', ?, 1, ?, ?, ?)",
-                           (identifier(4901), str(number), EARLY, EARLY, '{"pr": null}'))
         with connect(self.path, mode="ro") as db:
             # Interrupt after 2,000 VM instructions. A scan through thousands
             # of rows before either boundary would exceed this budget.

@@ -1,6 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -11,75 +11,58 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import anyio.to_thread
+
+from phalanx.api import create_app
 from phalanx import captains, dependencies, finalization, intake, store, writers
 from phalanx.intake_models import Cancel, Intake, Result
-from test_bootstrap import OWNER, RUNNER, SERVER_PROCESS, ServerFixture
+from test_bootstrap import OWNER, RUNNER, ServerFixture
 
 
-CONTENTION_SERVER = """
-import asyncio
-from contextlib import asynccontextmanager
-from threading import Event, Thread
-import anyio.to_thread
-from phalanx import api, store
+def contention_app():
+    app = create_app()
+    original_lifespan = app.router.lifespan_context
+    worker_borrowers = [object(), object()]
 
-normal_admission_timeout = store.ADMISSION_TIMEOUT
-store.ADMISSION_TIMEOUT = 0.2
-original_lifespan = api.app.router.lifespan_context
-worker_borrowers = [object(), object()]
+    @asynccontextmanager
+    async def lifespan(app):
+        async with original_lifespan(app):
+            anyio.to_thread.current_default_thread_limiter().total_tokens = 2
+            yield
 
-@asynccontextmanager
-async def lifespan(app):
-    async with original_lifespan(app):
-        anyio.to_thread.current_default_thread_limiter().total_tokens = 2
-        yield
+    app.router.lifespan_context = lifespan
 
-api.app.router.lifespan_context = lifespan
-release, held = Event(), Event()
+    @app.post("/fixture/workers")
+    async def workers(body: dict):
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        for borrower in worker_borrowers:
+            limiter.acquire_on_behalf_of_nowait(borrower)
+        return {"held": True}
 
-@api.app.post("/fixture/workers")
-async def workers():
-    limiter = anyio.to_thread.current_default_thread_limiter()
-    for borrower in worker_borrowers:
-        limiter.acquire_on_behalf_of_nowait(borrower)
-    return {"held": True}
+    @app.post("/fixture/release-workers")
+    async def release_workers(body: dict):
+        limiter = anyio.to_thread.current_default_thread_limiter()
+        for borrower in worker_borrowers:
+            limiter.release_on_behalf_of(borrower)
+        return {"released": True}
 
-@api.app.post("/fixture/release-workers")
-async def release_workers():
-    limiter = anyio.to_thread.current_default_thread_limiter()
-    for borrower in worker_borrowers:
-        limiter.release_on_behalf_of(borrower)
-    return {"released": True}
+    @app.get("/fixture/read")
+    async def read():
+        def transaction():
+            with store.read_transaction(app.state.database_path) as db:
+                return db.execute("PRAGMA user_version").fetchone()[0]
+        return {"version": await asyncio.to_thread(transaction)}
 
-@api.app.get("/fixture/read")
-async def read():
-    def transaction():
-        with store.read_transaction(api.app.state.database_path) as db:
-            return db.execute("PRAGMA user_version").fetchone()[0]
-    return {"version": await asyncio.to_thread(transaction)}
-
-@api.app.post("/fixture/hold")
-async def hold():
-    release.clear()
-    held.clear()
-    def transaction():
-        with store._gate.write():
-            held.set()
-            release.wait(300)
-    Thread(target=transaction, daemon=True).start()
-    while not held.is_set():
-        await asyncio.sleep(0)
-    return {"held": True}
-
-@api.app.post("/fixture/release")
-async def unlock():
-    store.ADMISSION_TIMEOUT = normal_admission_timeout
-    release.set()
-    return {"released": True}
-""" + SERVER_PROCESS
+    return app
 
 
 class ContentionTests(ServerFixture, unittest.TestCase):
+    def setUp(self):
+        # Production timeout/load bounds belong to the separate envelope probe.
+        self.fault_timeouts = self.enterContext(ExitStack())
+        self.fault_timeouts.enter_context(patch.object(store, "BUSY_TIMEOUT", 0.05))
+        self.fault_timeouts.enter_context(patch.object(store, "ADMISSION_TIMEOUT", 0.2))
+
     def test_interrupted_reader_does_not_leave_phantom_admission(self):
         for transferred in (False, True):
             with self.subTest(transferred=transferred):
@@ -139,8 +122,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "external.sqlite3"
             store.initialize(path)
-            with patch("test_bootstrap.SERVER_PROCESS", CONTENTION_SERVER):
-                server = self.start_server(path, in_process=False)
+            server = self.start_server(path, app=contention_app())
             try:
                 self.assertEqual(self.request("/fixture/workers", body={})[0], 200)
                 with store.connect(path) as lock:
@@ -284,11 +266,11 @@ class ContentionTests(ServerFixture, unittest.TestCase):
     def test_http_writer_contention_is_retryable_and_recovers_without_restarting(self):
         self.check_http_writer_recovery(external=False)
 
-    def test_http_external_sqlite_lock_recovers_at_production_bounds(self):
+    def test_http_external_sqlite_lock_recovers_without_restarting(self):
         self.check_http_writer_recovery(external=True)
 
     def check_http_writer_recovery(self, *, external):
-        with TemporaryDirectory() as directory, ExitStack() as cleanup:
+        with TemporaryDirectory() as directory, ExitStack() as cleanup, ExitStack() as held:
             path = Path(directory) / "http.sqlite3"
             store.initialize(path)
             with store.write_transaction(path) as db:
@@ -322,8 +304,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                 "expected_version": binding["version"], "outcome": "succeeded", "candidate": "a" * 40,
             }
             headers = {"Idempotency-Key": "contention-result"}
-            with patch("test_bootstrap.SERVER_PROCESS", SERVER_PROCESS if external else CONTENTION_SERVER):
-                server = self.start_server(path, in_process=False)
+            server = self.start_server(path, app=None if external else contention_app())
             cleanup.callback(self.stop_server, server)
             with store.connect(path, mode="ro") as db:
                 before = {
@@ -334,7 +315,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                 lock = cleanup.enter_context(store.connect(path))
                 lock.execute("BEGIN IMMEDIATE")
             else:
-                self.assertEqual(self.request("/fixture/hold", body={})[0], 200)
+                held.enter_context(store._gate.write())
             try:
                 operations = [
                     ("/v1/writer/progress", token, {"note": "Still moving"}),
@@ -371,7 +352,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                 if external:
                     lock.execute("ROLLBACK")
                 else:
-                    self.assertEqual(self.request("/fixture/release", body={})[0], 200)
+                    held.close()
 
             with store.connect(path, mode="ro") as db:
                 for table, rows in before.items():
@@ -393,6 +374,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                     self.assertLess(time.monotonic() - started, 5)
                 finally:
                     lock.execute("ROLLBACK")
+            self.fault_timeouts.close()
             with ThreadPoolExecutor(max_workers=20) as pool:
                 resumed = [
                     pool.submit(self.request, "/v1/writer/progress", f"fixture-writer-token-{index:032}",
