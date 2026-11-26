@@ -5,8 +5,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
+from urllib.request import Request, urlopen
 
-from phalanx import intake
+from phalanx import intake, issue_scout
 from phalanx.github import GitHubClient, HTTPResponse
 from phalanx.issue_scout_client import scout
 from phalanx.pr_models import github_issue_key
@@ -171,6 +172,68 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
         self.submit(self.claim(), [self.issue()])
         self.assertEqual(len(self.items()), 1)
         self.assertEqual(self.source()["state"], "imported")
+
+    def test_known_sources_skip_history_scans_even_without_imported_work(self):
+        issues = [
+            self.issue(1),
+            self.issue(2, author_login="another-author", author_id=99),
+            self.issue(3, author_login="another-author", author_id=99),
+            self.issue(4, body="x" * 16000),
+            self.issue(5, state="closed"),
+        ]
+        with patch("phalanx.issue_scout.historical_item", wraps=issue_scout.historical_item) as history:
+            self.submit(self.claim(), issues)
+            self.assertEqual(history.call_count, len(issues))
+            self.decide("declined", 3)
+            self.due()
+            claimed = self.claim()
+            statements = []
+            with write_transaction(self.path) as db:
+                db.set_trace_callback(statements.append)
+                issue_scout.page(db, claimed["id"], issue_scout.Page(
+                    claim_id=claimed["claim_id"], repository_id="example", page=claimed["page"],
+                    verified_login="configured-owner", verified_id=42,
+                    issues=issues, has_more=False))
+            self.assertEqual(history.call_count, len(issues))
+        self.assertFalse(any("instr(lower(request_json)" in sql for sql in statements))
+        with read_transaction(self.path) as db:
+            for sql in statements:
+                if sql.lstrip().startswith("SELECT") and "work_items" in sql:
+                    plans = db.execute("EXPLAIN QUERY PLAN " + sql).fetchall()
+                    self.assertFalse(any("SCAN" in row["detail"] for row in plans), plans)
+        self.assertEqual([self.source(n)["state"] for n in range(1, 6)],
+                         ["imported", "needs_owner", "skipped", "skipped", "skipped"])
+        self.assertEqual(len(self.items()), 1)
+
+    def test_known_unlinked_source_reconciles_later_manual_intake_key(self):
+        other = self.issue(author_login="another-author", author_id=99)
+        self.submit(self.claim(), [other])
+        self.request("/v1/items", OWNER, {"repository_id": "example", "goal": "Later manual import"},
+                     {"Idempotency-Key": github_issue_key("example", "example/project", 1)})
+        self.due()
+        with patch("phalanx.issue_scout.historical_item", side_effect=AssertionError("history rescanned")):
+            self.submit(self.claim(), [other])
+        self.assertEqual(len(self.items()), 1)
+        self.assertEqual(self.source()["state"], "imported")
+
+    def test_overview_reuses_scout_status_for_body_and_conditional_validator(self):
+        route = "/v1/operator/overview"
+        with patch("phalanx.issue_scout.status", wraps=issue_scout.status) as status:
+            with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {RUNNER}"})) as response:
+                self.assertEqual(response.status, 200)
+                overview = json.load(response)
+                etag = response.headers["ETag"]
+            self.assertEqual(status.call_count, 1)
+            self.assertEqual(overview["issue_scout"]["state"], "due")
+            status.reset_mock()
+            self.assertEqual(self.request(
+                route, RUNNER, headers={"If-None-Match": etag})[0], 304)
+            self.assertEqual(status.call_count, 1)
+            self.claim()
+            status.reset_mock()
+            self.assertEqual(self.request(
+                route, RUNNER, headers={"If-None-Match": etag})[0], 200)
+            self.assertEqual(status.call_count, 1)
 
     def test_single_claim_page_replay_and_captain_handoff_preserve_cursor(self):
         with ThreadPoolExecutor(max_workers=4) as pool:
