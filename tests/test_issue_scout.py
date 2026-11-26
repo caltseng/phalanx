@@ -8,11 +8,11 @@ from unittest.mock import patch
 from urllib.request import Request, urlopen
 
 from phalanx import intake, issue_scout
+from phalanx.api_client import APIClient, APIError
 from phalanx.github import GitHubClient, HTTPResponse
 from phalanx.issue_scout_client import scout
 from phalanx.pr_models import github_issue_key
 from phalanx.store import read_transaction, write_transaction
-from phalanx.work_cli import request
 
 from test_bootstrap import OWNER, RUNNER, ServerFixture
 
@@ -35,7 +35,7 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
         return result["id"]
 
     def api(self, route, **options):
-        return request(self.url, RUNNER, route, **options)
+        return APIClient(self.url, RUNNER).call(route, **options)
 
     def configure(self, **changes):
         current = self.get("/v1/issue-scout", RUNNER)[1]["settings"]
@@ -331,7 +331,7 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
             result = self.api(route, **options)
             if route.endswith("/page") and failed_post:
                 failed_post = False
-                raise ValueError("API response lost")
+                raise APIError("API response lost")
             return result
 
         with (patch.dict(os.environ, PHALANX_GITHUB_TOKEN="not-a-real-secret"),
@@ -362,7 +362,7 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
 
     def test_api_unavailable_is_explicit_and_does_not_invalidate_the_captain(self):
         def unavailable(route, **options):
-            raise OSError("Private host URL must not be echoed")
+            raise APIError("Private host URL must not be echoed")
         result = scout(unavailable, self.captain)
         self.assertEqual(result["observation_error"], "api")
         self.assertNotIn("Private host", json.dumps(result))

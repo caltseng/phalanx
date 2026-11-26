@@ -70,7 +70,7 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
     else:
         try:
             found = {entry["id"]: entry["remote"]
-                     for entry in APIClient(config["base_url"], token).call("/repositories")}
+                     for entry in APIClient(config["base_url"], token, timeout=10).call("/v1/repositories")}
             if repository in found:
                 registered = found[repository]
                 if remote and remote != registered:
@@ -85,8 +85,8 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
                 step("registration", MISSING, "Set PHALANX_OWNER_TOKEN, or run "
                      f"`python -m phalanx register {repository} {remote}` as the owner")
             else:
-                APIClient(config["base_url"], owner_token).call(
-                    "/repositories", {"id": repository, "remote": remote})
+                APIClient(config["base_url"], owner_token, timeout=10).call(
+                    "/v1/repositories", {"id": repository, "remote": remote})
                 registered = remote
                 step("registration", DONE, f"registered with remote {remote}")
         except APIError as error:

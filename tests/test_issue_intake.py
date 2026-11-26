@@ -9,7 +9,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from phalanx.__main__ import api_request, main
+from phalanx.__main__ import main
+from phalanx.api_client import APIClient
 from phalanx.github import GitHubClient, GitHubError, HTTPResponse
 from phalanx.issue_intake import ingest_issue
 from phalanx.store import read_transaction
@@ -67,7 +68,8 @@ class IssueIntakeTest(ServerFixture, unittest.TestCase):
         return HTTPResponse(200, headers, json.dumps(data).encode())
 
     def ingest(self, *, repository="example", target="ready_for_check_in", key=None):
-        return ingest_issue(api_request, self.url, repository, 42, target, key=key)
+        return ingest_issue(APIClient(self.url, os.environ.get("PHALANX_OWNER_TOKEN"), timeout=10).call,
+                            repository, 42, target, key=key)
 
     def item_count(self):
         with read_transaction(self.path) as db:

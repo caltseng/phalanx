@@ -5,13 +5,12 @@ item's worktree. The file is a credential under the git directory, never committ
 """
 
 import json
-from http.client import HTTPException
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.parse import quote
 
-from .api_client import request as api_request
+from .api_client import APIClient
 from .git import git_text
+from .json_utils import print_json
 
 CREDENTIAL = "phalanx-writer.json"
 
@@ -31,29 +30,14 @@ def credential(cwd=None):
     return data["base_url"], data["token"]
 
 
-def request(base_url, token, route, *, body=None, method=None, key=None, timeout=30):
-    try:
-        return api_request(base_url, token, route, body=body, method=method, key=key, timeout=timeout)
-    except HTTPError as error:
-        with error:
-            detail = error.read().decode("utf-8", errors="replace")
-        raise ValueError(f"HTTP {error.code}: {detail}") from error
-    except (OSError, HTTPException) as error:
-        raise ValueError(
-            f"API response unavailable for {route}: {error}. "
-            "Any mutation's acceptance is unknown; reconcile status before retrying. "
-            "This is not a stop or an authorization response."
-        ) from error
-
-
-def post_result(base_url, token, attempt, payload, key=None):
+def post_result(api, attempt, payload, key=None):
     """Post the pinned attempt's result or a version-pinned attempt-free delivery question.
 
     The attempt is pinned by the caller, so a resend after a lost reply can never land on the
     next stage: once the attempt has ended, the post is refused instead. Attempt-free questions
     require a fresh delivery external wait; an already-open question is not renewed.
     """
-    binding = request(base_url, token, "/v1/writer")
+    binding = api("/v1/writer")
     if attempt is None and not (
         binding["state"]["stage"] == "delivery"
         and binding["state"]["status"] == "waiting_for_external"
@@ -68,7 +52,7 @@ def post_result(base_url, token, attempt, payload, key=None):
     route = (f"/v1/items/{quote(binding['item_id'], safe='')}"
              f"/executions/{quote(binding['id'], safe='')}/result")
     default_key = f"{attempt}-result" if attempt else f"{binding['id']}-question-{binding['version']}"
-    return request(base_url, token, route, body=body, key=key or default_key)
+    return api(route, body=body, key=key or default_key)
 
 
 def add_work_command(commands):
@@ -98,34 +82,35 @@ def add_work_command(commands):
 
 def run_work(args):
     base_url, token = credential()
+    api = APIClient(base_url, token).call
     if args.work_command == "status":
-        result = request(base_url, token, "/v1/writer")
+        result = api("/v1/writer")
     elif args.work_command == "next":
-        result = request(base_url, token, "/v1/writer/attempt", method="POST")
+        result = api("/v1/writer/attempt", method="POST")
     elif args.work_command == "capacity":
-        current = request(base_url, token, "/v1/writer")
+        current = api("/v1/writer")
         body = {"phase": args.phase, "expected_revision": current["writer"]["capacity_revision"]}
         if args.phase == "delivering" and current["writer"]["building"]:
             try:
                 body["handoff_head"] = git_text(None, "rev-parse", "HEAD", error=ValueError).strip()
             except ValueError as error:
                 raise ValueError("Cannot read the reviewed commit for the publication handoff") from error
-        result = request(base_url, token, "/v1/writer/capacity", body=body)
+        result = api("/v1/writer/capacity", body=body)
     elif args.work_command == "progress":
-        result = request(base_url, token, "/v1/writer/progress", body={"note": args.note})
+        result = api("/v1/writer/progress", body={"note": args.note})
     elif args.work_command == "usage":
         from .usage_models import Snapshot
         payload = Snapshot.model_validate_json(args.file.read_text(encoding="utf-8"))
-        result = request(base_url, token, "/v1/writer/usage", body=payload.model_dump(mode="json"))
+        result = api("/v1/writer/usage", body=payload.model_dump(mode="json"))
     elif args.work_command == "result":
         payload = json.loads(args.file.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("The result file must hold a JSON object")
-        result = post_result(base_url, token, args.attempt, payload, args.key)
+        result = post_result(api, args.attempt, payload, args.key)
     else:
         question = {"prompt": args.prompt, "options": args.options, "handoff": args.handoff}
         if args.proposed_default:
             question["proposed_default"] = args.proposed_default
-        result = post_result(base_url, token, args.attempt,
+        result = post_result(api, args.attempt,
                              {"outcome": "needs_input", "question": question}, args.key)
-    print(json.dumps(result, indent=2))
+    print_json(result)

@@ -17,11 +17,12 @@ import threading
 import time
 from urllib.parse import quote, urlencode
 
-from .api_client import APIClient
+from .api_client import APIClient, APIError
 from .git import run_git
 from .github import GitHubClient, GitHubError, github_repository, merge_method
 from .github_checks import collect_github_checks
 from .local_checks import CheckCommandError, run_check
+from .json_utils import print_json
 from .pr_models import DEPLOYMENT_WINDOW
 from .priority import foreground_priority
 from .transitions import item_branch
@@ -39,19 +40,6 @@ _HIDDEN = {"PHALANX_RUNNER_TOKEN", "PHALANX_OWNER_TOKEN", "PHALANX_GITHUB_TOKEN"
 
 class ReconcilerError(RuntimeError):
     pass
-
-
-class API(APIClient):
-    """Phalanx API calls with the runner token."""
-
-    error = ReconcilerError
-    timeout = 30
-    detailed_errors = True
-
-    def __init__(self, base_url, token):
-        super().__init__(base_url, token)
-        if not token:
-            raise ReconcilerError("Set PHALANX_RUNNER_TOKEN for the reconciler")
 
 
 git = partial(run_git, error=ReconcilerError)
@@ -83,7 +71,7 @@ class Reconciler:
         """Observe open work and opted-in deployments, run local checks, and notify the owner."""
         errors, jobs = [], []
         self.heartbeat(force=True)
-        remotes = {repo["id"]: repo["remote"] for repo in self.api.call("/repositories")}
+        remotes = {repo["id"]: repo["remote"] for repo in self.api.call("/v1/repositories")}
         fetched, policies = {}, {}
         observed = 0
         for execution in self.executions():
@@ -114,18 +102,18 @@ class Reconciler:
             try:
                 failures = self.run_checks(checkout, head, checks)
                 self.api.call(path, {"head": head, "failures": failures})
-            except (ReconcilerError, OSError, subprocess.SubprocessError) as error:
+            except (APIError, ReconcilerError, OSError, subprocess.SubprocessError) as error:
                 errors.append(f"{path}: {error}")
         try:
             self.notify_owner()
-        except ReconcilerError as error:
+        except (APIError, ReconcilerError) as error:
             errors.append(f"flags: {error}")
         return {"observed": observed, "checked": len(jobs), "errors": errors}
 
     def heartbeat(self, force=False):
         now = self.clock()
         if force or self.last_heartbeat is None or now - self.last_heartbeat >= HEARTBEAT_SECONDS:
-            self.api.call(f"/reconcilers/{quote(self.config['reconciler_id'], safe='')}/heartbeat", {
+            self.api.call(f"/v1/reconcilers/{quote(self.config['reconciler_id'], safe='')}/heartbeat", {
                 "deployment_checks": {repo: mapping.get("post_merge_check")
                                       for repo, mapping in self.config.get("repositories", {}).items()},
             })
@@ -140,7 +128,7 @@ class Reconciler:
             while not stop.wait(HEARTBEAT_SECONDS):
                 try:
                     self.heartbeat(force=True)
-                except ReconcilerError as error:
+                except (APIError, ReconcilerError) as error:
                     print(f"reconciler heartbeat failed: {error}", file=sys.stderr, flush=True)
         thread = threading.Thread(target=beat, name="reconciler-heartbeat", daemon=True)
         thread.start()
@@ -172,7 +160,7 @@ class Reconciler:
         cursor = None
         while True:
             query = {"kind": kind, "limit": 100, **filters, **({"cursor": cursor} if cursor else {})}
-            page = self.api.call("/operator/executions?" + urlencode(query))
+            page = self.api.call("/v1/operator/executions?" + urlencode(query))
             yield from page["items"]
             cursor = page["next_cursor"]
             if not cursor:
@@ -250,7 +238,7 @@ class Reconciler:
                 if policy is not None:
                     checks = policy.local_checks or ()
                 body["feedback"] = [_clip(text) for _, text in self.feedback(github, pull.number)[:50]]
-        execution_path = f"/items/{quote(item_id, safe='')}/executions/{quote(execution['id'], safe='')}"
+        execution_path = f"/v1/items/{quote(item_id, safe='')}/executions/{quote(execution['id'], safe='')}"
         result = self.api.call(execution_path + "/github-observation", body)
         if not checks or result["local_checks_recorded"]:
             return 1, None
@@ -355,7 +343,7 @@ class Reconciler:
     def notify_owner(self):
         if self.notify is None:
             return
-        for flag in self.api.call("/flags")["flags"]:
+        for flag in self.api.call("/v1/flags")["flags"]:
             key = (flag["kind"], flag["item_id"], flag["execution_id"], flag["captain_id"], flag["first_seen"])
             if not flag["notify_owner"] or key in self.notified:
                 continue
@@ -383,9 +371,9 @@ class Reconciler:
         while True:
             try:
                 result = self.run_pass()
-            except (ReconcilerError, GitHubError) as error:
+            except (APIError, ReconcilerError, GitHubError) as error:
                 result = {"observed": 0, "checked": 0, "errors": [str(error)]}
-            print(json.dumps({"at": datetime.now(UTC).isoformat(), **result}), flush=True)
+            print_json({"at": datetime.now(UTC).isoformat(), **result}, indent=None, flush=True)
             if once or stop.wait(interval):
                 return result
 
@@ -429,7 +417,10 @@ def run_reconcile(args):
     github_token = os.environ.get("PHALANX_GITHUB_TOKEN")
     if not github_token:
         raise ReconcilerError("Set PHALANX_GITHUB_TOKEN for the reconciler")
-    reconciler = Reconciler(config, args.state, API(config["base_url"], os.environ.get("PHALANX_RUNNER_TOKEN")),
+    runner_token = os.environ.get("PHALANX_RUNNER_TOKEN")
+    if not runner_token:
+        raise ReconcilerError("Set PHALANX_RUNNER_TOKEN for the reconciler")
+    reconciler = Reconciler(config, args.state, APIClient(config["base_url"], runner_token),
                             github_token=github_token, notify=command_notifier(config.get("notify_command")))
     try:
         result = reconciler.run(threading.Event(), args.interval_seconds, args.once)
