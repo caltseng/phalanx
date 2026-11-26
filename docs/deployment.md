@@ -57,27 +57,9 @@ and eligible-capacity refill; this grants no capacity increase.
 Dispatch overdue is a loaded 60-minute API constant; verify adoption through the reviewed
 upgrade, never monkeypatch. Backlog/pickup warnings and holds remain 30 minutes.
 
-### Intake receipt replay across the retired default-null field
-
-Owner intake still rejects the retired `runner_affinity` field and all other unknown
-public fields. Only the internal `intake` receipt fingerprint retains
-`"runner_affinity": null` alongside the complete validated current request. New receipts
-therefore remain replayable by the previous package that supplied this default.
-Existing receipts may match either that exact hash or the exact current-model hash
-written after field removal. No receipt key, digest, response, item or history is rewritten.
-A different payload, retired non-null value, unknown historical field or unverified
-digest cannot match either permitted form. Other receipt scopes are unchanged.
-Receipts already written without the null field still cannot replay on an unmodified
-package that requires it; inventory those separately when choosing a rollback package.
-
-Run `python -m unittest discover -s tests -p test_intake.py` on disposable test data.
-Before adoption, the sole service operator must also rehearse the pinned previous package
-and target against disposable data: old receipt/current request, target-created receipt
-after package-only rollback, same-key changed request, and retained writer-result replay.
-Verify exact stored responses, digests, keys, item counts and writer bindings in both
-directions. Do not infer rollback from startup or restore an earlier database to hide a
-conflict. A package predating a different request/schema contract is not covered by this
-narrow hash transition; the complete upgrade and rollback procedure above still applies.
+For intake's retired default-null field, follow the [receipt contract](../SPEC.md#intake-receipt-fingerprints)
+and disposable bidirectional rollback rehearsals; unchanged older packages cannot replay
+intermediate null-omitting receipts.
 
 ## New installation
 

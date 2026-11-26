@@ -96,6 +96,27 @@ absent refs or refresh a reconciler observation; unrelated items continue throug
 
 ## Dispatch and execution
 
+### Intake receipt fingerprints
+
+Owner intake rejects the retired `runner_affinity` field and other unknown public fields.
+Only internal `intake` receipt hash material retains `"runner_affinity": null` alongside
+the complete validated current request. New receipts remain replayable by the previous
+package that supplied this default. Existing receipts may match either that exact hash or
+the exact current-model hash written after field removal. Comparison uses these precise
+request fingerprints, not reconstructed mutable item state or guessed historical bodies.
+No receipt key, digest, response, item or history is rewritten. Changed payloads, retired
+non-null values, unknown historical fields and unverified digests cannot match either form.
+Other receipt scopes are unchanged. Null-omitting intermediate receipts are target-replayable
+but remain incompatible with an unmodified earlier package requiring the null field.
+This narrow transition does not cover other request or schema changes; operators prove the
+complete [upgrade and rollback path](docs/deployment.md#standing-authority-for-compatible-upgrades).
+
+Run `python -m unittest discover -s tests -p test_intake.py` on disposable data.
+Before adoption, the sole operator rehearses old-key replay, target-created-key replay after
+package-only rollback, changed-request conflicts and retained writer results. Verify stored
+response bytes, digests, keys, item counts and bindings in both directions; startup alone
+does not prove compatibility.
+
 ### Display-only observed usage
 
 Optional cumulative native-session snapshots live outside lifecycle state. Scribe details
