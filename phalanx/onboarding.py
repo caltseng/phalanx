@@ -1,11 +1,11 @@
 """Configure and verify direct Captain repository mappings."""
 
 import json
-import os
 from pathlib import Path
 
 from .api_client import APIClient, APIError
 from .github import github_repository
+from .json_utils import write_json
 from .workspaces import WorkspaceError, WorkspaceManager, _git
 
 DONE, OK, MISSING, MANUAL = "done", "ok", "missing", "manual"
@@ -43,12 +43,6 @@ def discover_ready_checks(remote: str, base_branch: str, token: str | None) -> t
         return None, f"no CI reported on {base_branch} tip {tip[:12]}"
     return checks, f"{len(checks)} found on {base_branch} tip {tip[:12]}: " + ", ".join(
         check["name"] for check in checks)
-
-
-def _write_json(path: Path, data: dict) -> None:
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def onboard(config_path: Path, state: Path, repository: str, *, remote=None, checkout=None,
@@ -148,7 +142,7 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
             step("mapping", OK, f"{config_path} maps {repository}")
         else:
             mappings[repository] = wanted
-            _write_json(config_path, config)
+            write_json(config_path, config, indent=2, newline=True)
             step("mapping", DONE, f"wrote {repository} to {config_path}")
     else:
         step("mapping", MISSING, "Complete the checkout and runtime project steps to write the mapping")
@@ -176,7 +170,7 @@ def onboard(config_path: Path, state: Path, repository: str, *, remote=None, che
                         else {"version": 1, "repositories": {}})
                 data["repositories"][repository] = {
                     "local_checks": None, "draft_checks": [], "ready_checks": ready}
-                _write_json(policy, data)
+                write_json(policy, data, indent=2, newline=True)
                 written = f"wrote {repository} to {policy} (draft_checks [], ready checks {found}); "
                 selected = load_validation_policy(policy, repository)
             unset = [name for name, value in (("local_checks", selected.local_checks),

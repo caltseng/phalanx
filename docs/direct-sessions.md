@@ -42,14 +42,9 @@ are hints to verify against current API, GitHub and native state, never another 
    Only the owning Captain handles an unconfirmed intent until it ends, goes stale or
    abandons it. Silence/progress age alone never proves a writer stopped.
 
-One writer retains its item through runnable stages and input/external/retry/dependency
-waits, with a separately fenced attempt per stage. Tokens have no timed expiry; ended or
-replaced writers cannot submit. `work next` resumes eligible work. See
-[writer operations](writer-operations.md) for capacity acquisition/handoff and delivery.
-An API outage alone does not stop authorized physical work under that same writer's confirmed
-held allocation. Deferred stage bookkeeping is not an offline transition or a fresh admission;
-follow [control-plane outage recovery](writer-operations.md#control-plane-outages), preserving
-known stops, credential revocation, capacity and publication ceilings.
+Tokens have no timed expiry; ended/replaced writers cannot submit. `work next` resumes
+eligible work. The canonical worker [work loop](../phalanx/prompts/worker.md#work-loop)
+and [outage protocol](../phalanx/prompts/worker.md#control-plane-outages) govern continuation.
 
 ## Evidence submission
 
@@ -74,24 +69,15 @@ and opens/reuses one PR at the explicit target base. Publication supplies its pr
 a PR merged by an earlier execution cannot be reused. Every created description ends with
 `Spearheaded by [Phalanx](https://github.com/caltseng/phalanx)`.
 
-The current execution target and publication ceiling control delivery:
-
-| Target/mode | Required behavior |
-| --- | --- |
-| `checked_in` (default), ready | Publish ready; keep auto-merge off until the [merge decision gates](writer-operations.md#merge-decision-before-auto-merge) pass on the current exact head, then deliver the authorized merge. |
-| `ready_for_check_in`, ready | Deliver a verified ready PR; leave merging to the owner. Never enable auto-merge. |
-| `publication_mode: "draft"` | Open/convert the reused PR to draft, disable auto-merge, never promote/merge. Delivery verifies it open, unmerged, at the reviewed head/item branch/target base without ready-only CI. A changed head queues self-review; ready raises `draft_required`. |
-
-Publication may finish before merge gates pass. The same writer remains registered during
-attempt-free delivery, fixes checks/feedback/conflicts on the primary PR and follows fresh
-target steering. Scoped Building is required before rework; spare Total is not permission.
-Self-review is not independent final-head approval. Trusted local checks raise flags, not
-an extra gate; repository checks/reviews/protections remain binding.
+Apply the worker's [merge decision](../phalanx/prompts/worker.md#merge-decision-publication-and-delivery)
+and [stage instructions](../phalanx/prompts/worker.md#stage-results) for current target/mode.
+These are writer policy, not new reconciler predicates.
 
 Owner/Captain target steering is audited and cannot switch PR/report. Draft delivery records
 `draft_published`, ends the writer and satisfies no ready/check-in dependency. A verified
 merge remains authoritative for either PR target, including draft-mode work. Ready-only
 completion may later be enriched by an owner merge without restarting its writer.
+An open ready PR under draft mode raises `draft_required`; changed heads queue self-review.
 
 ## GitHub reconciliation
 
@@ -144,7 +130,7 @@ clears. Owner-needed flags notify; informational flags do not block work.
 | `captain_stale`, `no_live_captain` | Captain liveness/recovery follows the [continuity rules](direct-path.md#captain-shifts-and-handoff). |
 | `captain_idle_with_work` | Runnable unassigned work for 30 minutes with admission available, dispatch on and no deliberate hold; launch or refresh a justified hold. |
 | `queue_backlogged` | Unassigned work waiting 30 minutes on Building/Total, PR-fix preference or pause; informational, including with a hold. |
-| `pickup_blocked` | Unassigned work waiting 30 minutes on scope/authority, affinity or checkout/trust; notify with the shared pickup reason/recovery, not a Captain-failure signal. |
+| `pickup_blocked` | Unassigned work waiting 30 minutes on scope/authority or checkout/trust; notify with the shared pickup reason/recovery, not a Captain-failure signal. |
 | `launch_unconfirmed` | Unconfirmed for ten minutes; recover the same reservation by full nonce as above. |
 | `duplicate_writer` | Two sessions carry one item's ID/nonce; stop the unregistered one. |
 | `orphan_session` | Unregistered session or blocked/refused archival; creator preserves work, records outcome and escalates refusals once. |

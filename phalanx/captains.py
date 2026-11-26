@@ -31,7 +31,6 @@ router = APIRouter(prefix="/v1")
 
 class Pickup(Payload):
     repositories: dict[Identifier, Text | None] = Field(default_factory=dict, max_length=100)
-    runner_id: Identifier | None = None
 
 
 class CaptainRegistration(Payload):

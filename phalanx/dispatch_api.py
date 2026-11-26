@@ -16,7 +16,6 @@ router = APIRouter(prefix="/v1")
 
 class DispatchSettings(Payload):
     paused: Annotated[bool, Field(strict=True)] | None = None
-    aging_seconds: Annotated[int, Field(strict=True, ge=1, le=86400)] | None = None
     max_writers: Annotated[int, Field(strict=True, gt=0, le=2147483647)] | None = None
     max_building_writers: Annotated[int, Field(strict=True, gt=0, le=2147483647)] | None = None
 

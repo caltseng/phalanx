@@ -23,7 +23,7 @@ def settings(db):
     row = db.execute("SELECT * FROM dispatch_settings WHERE id=1").fetchone()
     active = active_writers(db)
     building = sum(writer["building"] for writer in active)
-    return {"paused": bool(row["paused"]), "aging_seconds": row["aging_seconds"],
+    return {"paused": bool(row["paused"]),
             "max_writers": row["max_writers"], "active_writers": len(active),
             "max_building_writers": row["max_building_writers"], "building_writers": building,
             "delivering_writers": len(active) - building}

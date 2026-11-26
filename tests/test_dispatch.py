@@ -19,7 +19,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
     def test_capacity_is_owner_controlled_validated_and_persistent(self):
         route = "/v1/dispatch/settings"
         initial = self.get(route, RUNNER)
-        self.assertEqual(initial, (200, {"paused": False, "aging_seconds": 300,
+        self.assertEqual(initial, (200, {"paused": False,
                                        "max_writers": 10, "active_writers": 0,
                                        "max_building_writers": 5, "building_writers": 0,
                                        "delivering_writers": 0}))
@@ -34,22 +34,21 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.get(route, OWNER), initial)
         self.assertEqual(self.request(route, OWNER, {"max_writers": 3, "max_building_writers": 2},
                                       method="PUT")[0], 200)
-        for field in ("paused", "aging_seconds"):
-            with self.subTest(field=field):
-                self.assertEqual(self.request(route, OWNER, {field: None}, method="PUT")[0], 422)
+        self.assertEqual(self.request(route, OWNER, {"paused": None}, method="PUT")[0], 422)
+        self.assertEqual(self.request(route, OWNER, {"aging_seconds": 42}, method="PUT")[0], 422)
         self.assertEqual(self.request(route, OWNER, {"max_writers": 9},
                                       {"Origin": "https://evil.example"}, method="PUT")[0], 403)
-        self.assertEqual(self.request(route, OWNER, {"paused": True, "aging_seconds": 42,
+        self.assertEqual(self.request(route, OWNER, {"paused": True,
                                                     "max_writers": 7}, method="PUT")[0], 200)
         status, saved = self.request(route, OWNER, {"max_writers": 6}, method="PUT")
-        self.assertEqual((status, saved), (200, {"paused": True, "aging_seconds": 42,
+        self.assertEqual((status, saved), (200, {"paused": True,
                                                "max_writers": 6, "active_writers": 0,
                                                "max_building_writers": 2, "building_writers": 0,
                                                "delivering_writers": 0}))
         initialize(self.path)
         with connect(self.path, mode="ro") as db:
             row = db.execute("SELECT * FROM dispatch_settings").fetchone()
-            self.assertEqual((row["paused"], row["aging_seconds"], row["max_writers"]), (1, 42, 6))
+            self.assertEqual((row["paused"], row["max_writers"]), (1, 6))
         # A fresh server process reads the same saved limit, not a charter or a default.
         self.start_server(self.path)
         self.assertEqual(self.get(route, OWNER), (200, saved))

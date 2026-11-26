@@ -26,7 +26,6 @@ SCHEMA = (
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         queue_repository TEXT REFERENCES repositories(id),
-        queue_affinity TEXT NOT NULL DEFAULT '',
         queue_priority INTEGER NOT NULL DEFAULT 1,
         ready_since INTEGER,
         retry_at INTEGER,
@@ -91,7 +90,6 @@ SCHEMA = (
     """CREATE TABLE dispatch_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         paused INTEGER NOT NULL CHECK (paused IN (0, 1)),
-        aging_seconds INTEGER NOT NULL CHECK (aging_seconds > 0),
         max_writers INTEGER NOT NULL DEFAULT 10 CHECK (typeof(max_writers) = 'integer' AND max_writers > 0),
         max_building_writers INTEGER NOT NULL DEFAULT 5
             CHECK (typeof(max_building_writers) = 'integer' AND max_building_writers > 0)
@@ -200,10 +198,10 @@ SCHEMA = (
     ) WITHOUT ROWID""",
     """CREATE INDEX dependencies_by_upstream ON work_dependencies(upstream_id, item_id)""",
     """CREATE INDEX queue_heads ON executions
-        (queue_repository, queue_affinity, queue_priority, ready_since, item_id, id)
+        (queue_repository, queue_priority, ready_since, item_id, id)
         WHERE status = 'queued' AND ready_since IS NOT NULL AND dependency_wait_json IS NULL""",
     """CREATE INDEX queue_stage_heads ON executions
-        (queue_repository, queue_affinity, queue_priority, stage, ready_since, item_id, id)
+        (queue_repository, queue_priority, stage, ready_since, item_id, id)
         WHERE status = 'queued' AND ready_since IS NOT NULL AND dependency_wait_json IS NULL""",
     """CREATE TABLE dependency_refresh_jobs (
         upstream_id TEXT PRIMARY KEY NOT NULL REFERENCES work_items(id),
@@ -221,7 +219,7 @@ SCHEMA = (
         id TEXT PRIMARY KEY NOT NULL,
         session_ref TEXT NOT NULL,
         charter_revision TEXT NOT NULL,
-        pickup_json TEXT NOT NULL DEFAULT '{"repositories":{},"runner_id":null}',
+        pickup_json TEXT NOT NULL DEFAULT '{"repositories":{}}',
         parent_id TEXT REFERENCES captains(id),
         state TEXT NOT NULL CHECK (state IN ('active', 'ending', 'ended')),
         wake_count INTEGER NOT NULL DEFAULT 0,
@@ -291,7 +289,6 @@ SCHEMA = (
         observation_json TEXT NOT NULL CHECK (json_valid(observation_json)),
         PRIMARY KEY (execution_id, pr_url, head_sha, digest)
     ) WITHOUT ROWID""",
-    """CREATE INDEX github_observations_latest ON github_observations (execution_id, last_observed_at)""",
     """CREATE TABLE local_check_results (
         execution_id TEXT NOT NULL REFERENCES executions(id),
         head_sha TEXT NOT NULL,
@@ -468,7 +465,7 @@ SCHEMA = (
     )""",
     """CREATE TRIGGER operator_change_item_titles AFTER INSERT ON item_titles
        BEGIN UPDATE operator_change SET token = hex(randomblob(16)); END""",
-    "INSERT INTO dispatch_settings VALUES (1, 0, 300, 10, 5)",
+    "INSERT INTO dispatch_settings VALUES (1, 0, 10, 5)",
     "INSERT INTO operator_change VALUES (hex(randomblob(16)))",
     "INSERT INTO dependency_audit (id, cursor) VALUES (1, NULL)",
 )

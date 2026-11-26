@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from shutil import copytree
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
@@ -134,7 +135,7 @@ class CharterTest(unittest.TestCase):
                                     "original batch reason no longer applies"):
                     self.assertIn(instruction, text)
                 self.assertIn("five-minute", text)
-                self.assertIn("24-hour", text)
+                self.assertIn("default 24 hours from registration", text)
                 self.assertIn("90-minute reinforcement", text)
         wake = shift.prompt("wake")
         self.assertIn("*Own progress and unblock delivery*", wake)
@@ -174,7 +175,7 @@ class CharterTest(unittest.TestCase):
                 self.assertIn("submit the PR URL and retain this writer in delivery", publication)
                 self.assertIn('{"outcome": "succeeded", "pr_url":', publication)
                 self.assertIn("satisfy the Merge decision section", publication)
-                self.assertIn("Apply the Merge decision section on every pass", delivery)
+                self.assertIn("act on flags under Merge decision", delivery)
                 self.assertNotIn("enable GitHub auto-merge with any method", prompt)
                 self.assertNotIn("enable GitHub auto-merge only for `checked_in`", delivery)
 
@@ -184,19 +185,19 @@ class CharterTest(unittest.TestCase):
         prompt = shift.kickoff(item, "worktree", "nonce", "phx work", "main")
         decision = " ".join(prompt.split("## Merge decision (publication and delivery)", 1)[1].split(
             "## PR title convention", 1)[0].split())
-        self.assertIn("Before **either** merging or enabling auto-merge", decision)
-        self.assertIn("target repository's instructions, the charter, or Captain/owner steering", decision)
-        self.assertIn("If none requires independent review", decision)
-        self.assertIn("current exact head has applicable independent final-head approval", decision)
-        self.assertIn("record the missing approval/reviewer with `phx work progress`", decision)
-        self.assertIn("seek another qualified independent reviewer", decision)
-        self.assertIn("Captain assignment is not a prerequisite", decision)
-        self.assertIn("Record reviewer identity, verdict, scope and exact final SHA", decision)
+        self.assertIn("Before either merge or auto-merge attempt `phx work status`", decision)
+        self.assertIn("repository instructions, charter or Captain/owner steering", decision)
+        self.assertIn("invent no independent-review wait otherwise", decision)
+        self.assertIn("exact-current-head independent approval", decision)
+        self.assertIn("Record pending required approval with `phx work progress`", decision)
+        self.assertIn("seek another qualified independent peer/read-only agent", decision)
+        self.assertIn("without Captain assignment", decision)
+        self.assertIn("Record identity, verdict, scope and exact SHA", decision)
         self.assertIn("Any qualified reviewer independent of the author", decision)
-        self.assertIn("no particular native session or person is a universal dependency", decision)
-        self.assertIn("Reuse valid recorded approval for the current exact head", decision)
-        self.assertIn("Genuine GitHub required reviewers, CODEOWNERS and branch protections", decision)
-        self.assertIn("Use `phx work question` only when required review cannot be obtained", decision)
+        self.assertIn("no particular native session/person is universally required", decision)
+        self.assertIn("Reuse valid approval without unresolved findings", decision)
+        self.assertIn("GitHub required reviewers, CODEOWNERS and protections", decision)
+        self.assertIn("Ask only if unobtainable/access missing", decision)
 
     def test_autonomy_policy_survives_kickoff_wake_and_keeper_handoff(self):
         worker = shift.kickoff(
@@ -207,20 +208,19 @@ class CharterTest(unittest.TestCase):
             text = " ".join(prompt.split())
             with self.subTest(prompt=name):
                 self.assertIn("qualified reviewer independent of the author", text)
-                self.assertIn("two-round optimization budget", text)
-                self.assertIn("safety/SLO/resource-contract gates stay hard", text)
+                self.assertIn("Ordinary optimization gets two rounds", text)
+                self.assertIn("Explicit hard gates need named evidence and remain binding", text)
                 self.assertIn("Building", text)
                 self.assertIn("Total", text)
                 self.assertIn("sole-writer", text)
         captain = " ".join(shift.prompt("captain").split())
         for requirement in (
-                "qualified reviewer independent of the author", "two optimization rounds",
-                "Safety/SLO/resource contracts remain hard", "Building/Total",
                 "one native writer per item",
-                "On scheduled wakes and material native/stage/result/question",
-                "merge/deployment or owner-reply events",
-                "Standing authority permits routine compatible reviewed/checks-green upgrades",
-                "source merge is not live adoption"):
+                "phx shift prompt worker", "delivery authority/ceilings, review/merge",
+                "writer capacity/outage continuity, optimization, owner decisions and material-event policy",
+                "worker's material-event policy and scheduled wakes",
+                "docs/deployment.md#standing-authority-for-compatible-upgrades",
+                "Instructions apply when read"):
             with self.subTest(prompt="captain", requirement=requirement):
                 self.assertIn(requirement, captain)
         for name in ("wake", "keeper"):
@@ -234,18 +234,37 @@ class CharterTest(unittest.TestCase):
              "acceptance_criteria": ["Aspirational 40% improvement; two rounds, report misses"],
              "execution": {"id": "execution", "state": {"target": "checked_in"}}},
             "worktree", "nonce", "phx work", "main")
-        review_policy = Path(__file__).resolve().parents[1] / ".agents" / "skills" / "pr-review" / "SKILL.md"
-        for name, prompt in (("writer", worker), ("captain", shift.prompt("captain")),
-                             ("review", review_policy.read_text(encoding="utf-8"))):
-            text = " ".join(prompt.split())
-            with self.subTest(protocol=name):
-                for clause in ("test-set identity", "remaining numeric miss", "no redundant approval",
-                               "current owner", "historical instructions", "service/control upgrade",
-                               "Needs-you", "resume trigger"):
-                    self.assertIn(clause, text)
-        self.assertIn("During an attempt-free delivery external wait, omit `--attempt`",
-                      " ".join(worker.split()))
-        self.assertIn("An aspirational timing or percentage miss is not a failed", worker)
+        text = " ".join(worker.split())
+        for clause in ("test-set identity", "remaining numeric miss", "no redundant approval",
+                       "current owner", "historical instructions", "service/control upgrades",
+                       "Needs-you", "resume trigger",
+                       "Omit `--attempt` during attempt-free delivery external waits",
+                       "Aspirational timing/percentage misses are not failed safety/SLO/resource contracts"):
+            self.assertIn(clause, text)
+        root = Path(__file__).resolve().parents[1]
+        for relative in ("SPEC.md", "AGENTS.md", "docs/writer-operations.md",
+                         ".agents/skills/pr-review/SKILL.md"):
+            with self.subTest(reference=relative):
+                reference = (root / relative).read_text(encoding="utf-8")
+                self.assertIn("phalanx/prompts/worker.md", reference)
+                self.assertNotIn("test-set identity", reference)
+
+    def test_prompt_budgets_and_long_lines_do_not_regress(self):
+        root = Path(__file__).resolve().parents[1]
+        prompts = root / "phalanx" / "prompts"
+        self.assertLessEqual(len((prompts / "worker.md").read_text(encoding="utf-8").split()), 1600)
+        self.assertLessEqual(sum(len((prompts / f"{name}.md").read_text(encoding="utf-8").split())
+                                 for name in ("captain", "forwarding", "keeper", "wake")), 3200)
+        paths = [root / "AGENTS.md", root / "SPEC.md"]
+        for directory in (prompts, root / "docs", root / ".agents" / "skills"):
+            paths.extend(path for path in directory.rglob("*") if path.is_file())
+        occurrences = {}
+        for path in paths:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if len(line.split()) >= 15:
+                    occurrences.setdefault(line.strip(), set()).add(str(path.relative_to(root)))
+        duplicates = {line: sorted(files) for line, files in occurrences.items() if len(files) > 1}
+        self.assertEqual(duplicates, {})
 
     def test_outage_continuity_preserves_confirmed_capacity_and_explicit_ceilings(self):
         for target, mode in (("checked_in", "ready"), ("ready_for_check_in", "ready"),
@@ -260,25 +279,26 @@ class CharterTest(unittest.TestCase):
                 self.assertIn(f"Target: {target}", text)
                 self.assertIn(f"Publication mode: {mode}", text)
                 for clause in (
-                    "same live writer's last confirmed held allocation",
-                    "continue development, local validation, review, publication and authorized check-in",
-                    "New/unconfirmed registration or Building acquisition still requires server confirmation",
-                    "uncertain result/release could have relinquished Building or ended the writer",
-                    "Honor every known stop/cancel instruction, `state.stopping`, ended writer and HTTP 401",
-                    "HTTP 403 is an authorization denial",
-                    "Preserve explicit ready-only/report targets and draft ceilings",
-                    "never blindly replay with a fresh version/key",
-                    "let the reconciler record the actual merge",
-                    "Do not claim a report stored or an execution complete without a receipt",
+                    "same live writer's last confirmed allocation",
+                    "Continue authorized development/validation/review/publication/check-in",
+                    "Never infer unconfirmed registration/acquisition",
+                    "Uncertain result/release may end ownership/capacity",
+                    "Honor known stop/cancel, `state.stopping`, ended bindings and 401",
+                    "HTTP 403 denies that operation; 409 requires reconciliation",
+                    "Preserve explicit `ready_for_check_in` (owner merges), `report` and draft ceilings",
+                    "Never blindly replay with fresh keys/versions",
+                    "Let reconciler record actual merges",
+                    "completion without receipts",
                 ):
                     self.assertIn(clause, text)
                 self.assertNotIn("re-read `phx work status` and fresh GitHub facts", text)
-                self.assertIn("a fresh status or progress receipt is not itself a merge gate", text)
-                self.assertIn("current exact head has applicable independent final-head approval", text)
+                self.assertIn("missing API receipts alone do not revoke verified authority", text)
+                self.assertIn("exact-current-head independent approval", text)
                 self.assertIn("exact-head guard", text)
         captain = " ".join(shift.prompt("captain").split())
-        self.assertIn("must not gate already-authorized work under verified held allocations", captain)
-        self.assertIn("Do not launch an unconfirmed admission", captain)
+        self.assertIn("phx shift prompt worker", captain)
+        self.assertIn("writer capacity/outage continuity", captain)
+        self.assertIn("Defer unverifiable admissions/mutations", captain)
 
     def test_writer_names_put_task_words_before_a_bounded_discovery_marker(self):
         for goal, prefix in (
@@ -335,6 +355,22 @@ class CharterTest(unittest.TestCase):
 
 
 class ShiftFixture(ServerFixture):
+    @classmethod
+    def setUpClass(cls):
+        temporary = TemporaryDirectory()
+        cls.addClassCleanup(temporary.cleanup)
+        cls.source = Path(temporary.name) / "source"
+        cls.source.mkdir()
+        git(cls.source, "init", "-q", "-b", "main")
+        (cls.source / "README.md").write_text("pilot\n", encoding="utf-8")
+        git(cls.source, "add", "README.md")
+        git(cls.source, "commit", "-q", "-m", "Initial")
+
+    def prepare_repository(self, root):
+        checkout = root / "checkout"
+        git(root, "clone", "-q", "--shared", "-b", "main", str(self.source), str(checkout))
+        return checkout, self.source.as_uri()
+
     def setUp(self):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -367,21 +403,6 @@ class ShiftFixture(ServerFixture):
 
 
 class ShiftTest(ShiftFixture, unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        temporary = TemporaryDirectory()
-        cls.addClassCleanup(temporary.cleanup)
-        cls.source = Path(temporary.name) / "source"
-        repository = Path(__file__).resolve().parents[1]
-        git(repository, "clone", "-q", "--shared", "--no-checkout", str(repository), str(cls.source))
-        # CI may check out a detached PR head without a local main branch.
-        git(cls.source, "update-ref", "refs/heads/main", "HEAD")
-
-    def prepare_repository(self, root):
-        checkout = root / "checkout"
-        git(root, "clone", "-q", "--shared", "-b", "main", str(self.source), str(checkout))
-        return checkout, self.source.as_uri()
-
     def test_normal_intake_enters_real_captain_discovery_without_named_charter_ids(self):
         captain = shift.start(self.api, self.charter, "intake-captain", config=self.config)["captain"]["id"]
         item = self.item()
@@ -444,13 +465,22 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         self.assertEqual(self.request("/v1/dispatch/settings", OWNER, {"max_writers": 1}, method="PUT")[0], 200)
         decision(queued, "capacity", "Total capacity exhausted")
 
-    def test_pickup_reports_mapping_affinity_and_persistent_runtime_trust_blocks(self):
+    def test_pickup_prioritizes_later_urgent_intake_and_preserves_fifo_within_priority(self):
+        captain = shift.start(self.api, self.charter, "priority-captain", config=self.config)["captain"]["id"]
+        low = self.item(priority="low")
+        normal = self.item()
+        urgent = self.item(priority="urgent")
+        later = self.item()
+        status = shift.status(self.api, self.charter, captain)
+        self.assertEqual(status["pickup_candidates"], [urgent["id"], normal["id"], later["id"], low["id"]])
+        launched = shift.launch(self.api, self.config, self.charter, captain, status["pickup_candidates"][0])
+        self.assertEqual(launched["item_id"], urgent["id"])
+        self.assertEqual(launched["status"], "running")
+        self.assertEqual(self.api(f"/v1/items/{normal['id']}")["execution"]["state"]["status"], "queued")
+
+    def test_pickup_reports_mapping_and_persistent_runtime_trust_blocks(self):
         captain = shift.start(self.api, self.charter, "readiness-captain", config=self.config)["captain"]["id"]
         item = self.item()
-        affinity = self.item(runner_affinity="another-runner")
-        board = self.api(f"/v1/operator/items/{affinity['id']}")["item"]
-        self.assertEqual(board["pickup"]["code"], "affinity")
-        self.assertIn("another-runner", board["wait_reason"])
         shift.heartbeat(self.api, self.charter, captain, config=self.config,
                         repository_blocks=[("repo", "Owner trust approval required for shared workspace")])
         shift.heartbeat(self.api, self.charter, captain, config=self.config)
@@ -524,7 +554,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         checkout = Path(self.config["repositories"]["repo"]["checkout"]).resolve()
         checkout_calls = [call.args[1:] for call in calls.call_args_list if call.args[0] == checkout]
         self.assertEqual(sum(args[:2] == ("rev-parse", "--show-toplevel") for args in checkout_calls), 1)
-        self.assertEqual(sum(args[:2] == ("remote", "get-url") for args in checkout_calls), 1)
+        self.assertEqual(sum(args[:3] == ("config", "--get-all", "remote.origin.url") for args in checkout_calls), 1)
         writer = launched["writer"]
         self.assertEqual((launched["status"], writer["state"], writer["captain_id"]), ("running", "launching", captain))
         self.assertEqual(launched["session_name"], "Write the report [phx]")
@@ -636,12 +666,12 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         reinforced = " ".join(due["reinforcement"]["workflow"].split())
         for requirement in (
                 "## Own progress and unblock delivery",
-                "On scheduled wakes and material native/stage/result/question",
+                "worker's material-event policy and scheduled wakes",
                 "verify recovery effects",
-                "last meaningful stage evidence and next step/wait trigger",
-                "stale reconciliation and cleared prerequisites",
-                "atomic server Building/Total limits",
-                "do not churn sessions",
+                "against next steps/wait triggers",
+                "Resolve routine decisions/cleared prerequisites",
+                "server admission is authoritative",
+                "Healthy waits need no per-wake commits or arbitrary SLA",
                 "concrete reason, responsible actor and resume trigger",
                 "charter revision; stage evidence",
                 "Instructions apply when read"):
@@ -745,12 +775,11 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM attempts").fetchone()[0], 1)
 
     def test_outage_policy_reaches_wakes_handoffs_keeper_and_retained_routing(self):
-        for name in ("captain", "keeper"):
-            text = " ".join(shift.prompt(name).split())
-            with self.subTest(prompt=name):
-                self.assertIn("control plane blocked", text)
-                self.assertIn("current server state unknown", text)
-                self.assertIn("same", text.lower())
+        text = " ".join(shift.prompt("captain").split())
+        self.assertIn("control plane blocked", text)
+        self.assertIn("current server state unknown", text)
+        self.assertIn("SAME registration/session/writers", text)
+        self.assertIn("Shared API/control-plane outages", shift.prompt("keeper"))
         wake = shift.prompt("wake")
         self.assertIn("*Shared API/control-plane outages*", wake)
         self.assertIn("phx shift prompt captain", wake)
@@ -759,7 +788,8 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         captain = shift.start(self.api, self.charter, "handoff-policy")["captain"]["id"]
         handoff = shift.handoff(self.api, self.charter, captain, "Normal age rotation", "phx shift")
         self.assertIn("Shared API/control-plane outages", handoff["kickoff"])
-        self.assertIn("never trigger a safety handoff", " ".join(handoff["kickoff"].split()))
+        self.assertIn("no successor, re-registration or safety handoff to repair connectivity",
+                      " ".join(handoff["kickoff"].split()))
         keeper = " ".join(shift.prompt("keeper").split())
         self.assertIn("Apply this check to all non-ended stale registrations", keeper)
         self.assertIn("fresh native evidence confirms the exact Captain is stopped", keeper)
@@ -767,33 +797,31 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         self.assertIn("never duplicate it", keeper)
         forwarding = " ".join(shift.prompt("forwarding").split())
         self.assertIn("An active but stale registration is unverified", forwarding)
-        self.assertIn("refresh the SAME active, unsuperseded registration", forwarding)
+        self.assertIn("apply Captain's *Shared API/control-plane outages* recovery", forwarding)
         self.assertNotIn("An ending/ended/stale Captain discloses", forwarding)
 
     def test_prompts_keep_checkpoints_and_degradation_independent_of_compaction_telemetry(self):
         captain = " ".join(shift.prompt("captain").split())
         keeper = " ".join(shift.prompt("keeper").split())
         for prompt in (captain,):
-            self.assertIn("rotation is elapsed-time only", prompt)
+            self.assertIn("Rotate only by elapsed age", prompt)
             self.assertIn("[shift].max_hours", prompt)
-            self.assertIn("checkpoint, not a mandatory handoff", prompt)
-            self.assertIn("first-compaction fallback", prompt)
+            self.assertIn("Compaction is a checkpoint, never a handoff trigger", prompt)
+            self.assertIn("Never infer counts from tokens/checkpoints", prompt)
             self.assertNotIn("max_compactions", prompt)
         self.assertIn("*Authority and shift lifetime*", keeper)
-        self.assertIn("five-minute wake/reconciliation schedule", captain)
+        self.assertIn("Keep five-minute wakes through empty/blocked queues", captain)
         self.assertIn("Stop for good on an explicit owner stop, not queue completion", captain)
-        self.assertIn("dependency/external waits", captain)
-        for signal in ("three failed actions in a row", "self-raised deviation flag",
-                       "missed heartbeat noticed on waking"):
+        for signal in ("three consecutive failures", "self-raised `captain_idle_with_work`",
+                       "missed heartbeat"):
             self.assertIn(signal, captain.lower())
 
     def test_keeper_preserves_accountability_and_adoption_without_replacing_live_work(self):
         keeper = " ".join(shift.prompt("keeper").split())
         for requirement in (
-                "current canonical workflow and fresh charter",
+                "current workflow/charter, not copied policy summaries",
                 "phx shift prompt captain",
-                "accountability, autonomy and instruction-adoption sections govern the inherited work",
-                "not take over a live Captain's work or grant access"):
+                "never take over live work"):
             with self.subTest(requirement=requirement):
                 self.assertIn(requirement, keeper)
 
@@ -987,9 +1015,10 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
                 expected = (f"`{environment}`" if environment is not None
                             else "Not configured. Do not guess an interpreter or command prefix.")
                 self.assertIn(f"Checks environment (interpreter or command prefix): {expected}", prompt)
-                self.assertIn("Never borrow another checkout's environment or install packages.", prompt)
+                self.assertIn("install packages or borrow another checkout's environment", " ".join(prompt.split()))
                 self.assertIn("python -m phalanx work question", prompt)
-                self.assertIn("It is separate from the Phalanx command.", prompt)
+                self.assertIn("Append repository check arguments to that environment, not the Phalanx command.",
+                              " ".join(prompt.split()))
 
     def test_refused_launch_leaves_the_live_credential_untouched(self):
         first = shift.start(self.api, self.charter, "chat-1")["captain"]["id"]
@@ -1108,10 +1137,11 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         for prompt in (handoff["off_shift_instructions"], handoff["kickoff"],
                        shift.prompt("captain"), shift.prompt("keeper")):
             text = " ".join(prompt.split())
-            for guard in ("be `ended`, with no `open_intents`",
-                          "successor whose `parent_id` is your Captain ID",
-                          "failed/uncertain handoff or missing successor",
-                          "leave the title unchanged"):
+            for guard in ("status shows `ended`, no `open_intents`",
+                          "registered successor with matching `parent_id`",
+                          "current lookup confirms you are not current",
+                          "Missing/uncertain proof",
+                          "leave unchanged"):
                 with self.subTest(guard=guard):
                     self.assertIn(guard, text)
         self.assertIn("Ending the shift alone is not a completed handoff",
@@ -1122,24 +1152,21 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
 
     def test_retirement_prompt_preserves_title_and_makes_retries_idempotent(self):
         text = " ".join(shift.prompt("forwarding").split())
-        for instruction in ("exactly one literal `[retired]` prefix followed by one space",
-                            "Repeatedly remove only leading literal `[retired]` tags",
-                            "preserving it exactly", "If the exact title already matches, do not rename",
-                            "On every retry re-read identity, state and title",
-                            "abbreviate, truncate or remove other tags",
-                            "Verify the resulting title through native inspection"):
+        for instruction in ("normalize only leading literal `[retired]` tags/whitespace",
+                            "to one `[retired] `", "preserving the rest exactly",
+                            "Re-read provider identity/title each try",
+                            "native permissions/limits", "verify result", "truncation"):
             with self.subTest(instruction=instruction):
                 self.assertIn(instruction, text)
         self.assertNotIn("an off-shift chat `Off-shift", text)
 
     def test_retirement_prompt_protects_incoming_and_unrelated_sessions(self):
         text = " ".join(shift.prompt("forwarding").split())
-        for instruction in ("Verify it is this outgoing conversation",
-                            "a result naming your registration/session prevents renaming",
-                            "Never target the incoming/current Captain",
-                            "an unrelated chat", "must not rename another conversation",
-                            "never a title, determine authority", "within its permissions and title limits",
-                            "report the exact limitation", "never bulk-rename historical sessions"):
+        for instruction in ("Only rename this outgoing conversation",
+                            "current lookup confirms you are not current",
+                            "No other-session/bulk renames",
+                            "titles never determine authority",
+                            "native permissions/limits", "report limitation/off-shift status"):
             with self.subTest(instruction=instruction):
                 self.assertIn(instruction, text)
 
@@ -1213,16 +1240,17 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
 
 
 class ShiftArchiveTest(ShiftFixture, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.remote = cls.source.parent / "origin.git"
+        git(cls.source.parent, "clone", "-q", "--bare", "--shared", str(cls.source), str(cls.remote))
+
     def prepare_repository(self, root):
         bare, checkout = root / "origin.git", root / "checkout"
-        git(root, "init", "-q", "--bare", str(bare))
-        checkout.mkdir()
-        git(checkout, "init", "-q", "-b", "main")
-        (checkout / "README.md").write_text("pilot\n", encoding="utf-8")
-        git(checkout, "add", "README.md")
-        git(checkout, "commit", "-q", "-m", "Initial")
-        git(checkout, "remote", "add", "origin", bare.as_uri())
-        git(checkout, "push", "-q", "origin", "main")
+        # Archive tests push and delete refs, so each needs its own writable remote.
+        copytree(self.remote, bare)
+        git(root, "clone", "-q", "--shared", "-b", "main", str(bare), str(checkout))
         return checkout, bare.as_uri()
 
     def ended_writer(self, *, push=True, **options):

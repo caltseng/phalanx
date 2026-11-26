@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode
 
 from .work_cli import CREDENTIAL, request
 from .git import run_git
+from .json_utils import write_json as _write_credential
 from .workspaces import WorkspaceError, WorkspaceManager, _git, _status
 from .display_text import reason_text, short_title
 from .session_links import session_reference
@@ -156,7 +157,7 @@ def pickup_scope(api, charter, config=None):
                                      Path(config["worktrees"])).verify_checkout()
                 except WorkspaceError as error:
                     repositories[repository] = f"Checkout blocked: {error}"
-    return {"repositories": repositories, "runner_id": (config or {}).get("runner_id")}
+    return {"repositories": repositories}
 
 
 def start(api, charter, session_ref, parent_id=None, *, runtime=None, config=None):
@@ -213,7 +214,7 @@ def _summary(item):
     return {
         "item_id": item["item_id"], "execution_id": item["id"], "version": item["version"],
         "repository_id": item["repository_id"], "title": item["title"], "stage": item["stage"],
-        "status": item["status"], "wait_reason": item["wait_reason"],
+        "status": item["status"], "priority": item["priority"], "wait_reason": item["wait_reason"],
         "resume_trigger": item["resume_trigger"], "wait_age_seconds": item["wait_age_seconds"],
         "pickup": item["pickup"],
         "blocked_prerequisites": item["blocked_prerequisite_count"], "primary_pr_url": item["primary_pr_url"],
@@ -242,7 +243,8 @@ def status(api, charter, captain_id=None):
         "captains": api("/v1/captains?limit=100")["captains"],
         "items": scoped,
         "excluded_items": [_summary(item) for item in items if item["repository_id"] not in scope],
-        "pickup_candidates": [item["item_id"] for item in scoped
+        "pickup_candidates": [item["item_id"] for item in sorted(
+                                  scoped, key=lambda item: ("urgent", "normal", "low").index(item["priority"]))
                               if item["pickup"] and item["pickup"]["eligible"]
                               and (not captain_id or captain_id in item["pickup"]["captain_ids"])],
         "active_writers": capacity["active_writers"],
@@ -261,12 +263,6 @@ def credential_path(worktree):
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise ShiftError(f"Cannot locate the writer credential in {worktree}: {detail}")
     return Path(worktree) / result.stdout.decode("utf-8", errors="surrogateescape").strip()
-
-
-def _write_credential(path, data):
-    temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text(json.dumps(data), encoding="utf-8")
-    os.replace(temporary, path)
 
 
 def _read_credential(path):
@@ -332,7 +328,7 @@ def launch(api, config, charter, captain_id, item_id, *, replaces=None):
         if decision and not decision["eligible"]:
             raise ShiftError(decision["reason"])
         if decision and captain_id not in decision["captain_ids"]:
-            raise ShiftError("This Captain's scope, runner affinity or repository readiness excludes pickup")
+            raise ShiftError("This Captain's scope or repository readiness excludes pickup")
     mapping = config["repositories"].get(repository)
     if not mapping:
         raise ShiftError(f"Repository {repository} has no checkout mapping")

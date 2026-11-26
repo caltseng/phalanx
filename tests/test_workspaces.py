@@ -83,14 +83,17 @@ class WorkspaceTests(unittest.TestCase):
         git(self.directory, "init", "--bare", str(remote))
         git(self.checkout, "remote", "set-url", "origin", remote.as_uri())
         git(self.checkout, "push", "origin", "main")
-        manager = WorkspaceManager(self.checkout, remote.as_uri(), self.root)
+        git(self.checkout, "remote", "set-url", "origin", "https://github.com/owner/repo.git")
+        git(self.checkout, "config", f"url.{remote.as_uri()}.insteadOf", "https://github.com/owner/repo.git")
+        manager = WorkspaceManager(self.checkout, "git@github.com:owner/repo", self.root)
         for existing in (False, True):
             with self.subTest(existing=existing), patch("phalanx.workspaces._git", wraps=workspaces._git) as calls:
                 workspace = manager.prepare_from_origin("item", branch="main")
             checkout_calls = [call.args[1:] for call in calls.call_args_list if call.args[0] == self.checkout]
             self.assertEqual(sum(args[:2] == ("rev-parse", "--show-toplevel")
                                  for args in checkout_calls), 1)
-            self.assertEqual(sum(args[:2] == ("remote", "get-url") for args in checkout_calls), 1)
+            self.assertEqual(sum(args[:3] == ("config", "--get-all", "remote.origin.url")
+                                 for args in checkout_calls), 1)
             self.assertEqual(workspace.head, self.base)
             self.assertEqual(workspace.dirty, existing)
             (workspace.path / "source").write_text("uncommitted work\n")
