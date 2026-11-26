@@ -524,7 +524,7 @@ class ShiftTest(ShiftFixture, unittest.TestCase):
         checkout = Path(self.config["repositories"]["repo"]["checkout"]).resolve()
         checkout_calls = [call.args[1:] for call in calls.call_args_list if call.args[0] == checkout]
         self.assertEqual(sum(args[:2] == ("rev-parse", "--show-toplevel") for args in checkout_calls), 1)
-        self.assertEqual(sum(args[:2] == ("remote", "get-url") for args in checkout_calls), 1)
+        self.assertEqual(sum(args[:3] == ("config", "--get-all", "remote.origin.url") for args in checkout_calls), 1)
         writer = launched["writer"]
         self.assertEqual((launched["status"], writer["state"], writer["captain_id"]), ("running", "launching", captain))
         self.assertEqual(launched["session_name"], "Write the report [phx]")

@@ -31,9 +31,9 @@ GITHUB_REMOTE = re.compile(
 )
 
 
-def github_repository(remote):
+def github_repository(remote, *, lowercase=True):
     match = GITHUB_REMOTE.fullmatch(remote)
-    return match[1].lower() if match else None
+    return (match[1].lower() if lowercase else match[1]) if match else None
 
 
 def github_issue_key(repository_id, repository, number):

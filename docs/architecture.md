@@ -189,8 +189,9 @@ See [installation](install.md), [work items](work-items.md), [writer operations]
 and [API reference](api.md) for executable examples and authentication.
 
 Direct clients share no-redirect HTTP and API URL validation in `api_client.py`,
-checkout-confined Git execution in `git.py`, and duplicate-key JSON decoding in
-`json_utils.py`. Direct-client GitHub remote recognition uses `github_repository`.
+checkout-confined Git execution in `git.py`, and JSON decoding/atomic writes in `json_utils.py`.
+Checkout identity verification uses `WorkspaceManager` (configured origin, before transport rewrites);
+server flags use `flag_models.flag`, and GitHub remote recognition uses `pr_models.github_repository`.
 
 ## One writer, separately fenced stages
 

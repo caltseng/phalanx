@@ -27,7 +27,7 @@ from .priority import foreground_priority
 from .transitions import item_branch
 from .validation import Phase, PreOutcome
 from .validation_policy import ValidationPolicyError, load_validation_policy
-from .workspaces import WorkspaceError, any_file_lock
+from .workspaces import WorkspaceError, WorkspaceManager, any_file_lock
 
 PASS_SECONDS = 120
 HEARTBEAT_SECONDS = 60
@@ -308,17 +308,11 @@ class Reconciler:
         if repo in fetched:
             return fetched[repo]
         checkout = Path(self.config["repositories"][repo]["checkout"]).resolve()
-        top = git(checkout, "rev-parse", "--show-toplevel").stdout.decode().strip()
-        # The configured URL, before any local insteadOf rewrite, names the repository.
-        urls = git(checkout, "config", "--get-all", "remote.origin.url",
-                   check=False, allowed_returncodes=(0, 1)).stdout.decode().split()
-        origin = github_repository(urls[0]) if len(urls) == 1 else None
-        expected = github_repository(remote)
-        if (Path(top).resolve() != checkout or origin is None or expected is None
-                or origin != expected):
-            raise ReconcilerError(f"{checkout} is not a checkout of the registered remote for {repo}")
-        if self.state.is_relative_to(checkout):
-            raise ReconcilerError("The reconciler state directory must be outside the mapped checkout")
+        try:
+            WorkspaceManager(checkout, remote, self.state).verify_checkout()
+        except WorkspaceError as error:
+            raise ReconcilerError(
+                f"{checkout} is not a checkout of the registered remote for {repo}: {error}") from error
         git(checkout, "fetch", "--no-tags", "--prune", "origin")
         fetched[repo] = checkout
         return checkout

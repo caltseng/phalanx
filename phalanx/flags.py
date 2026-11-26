@@ -14,6 +14,7 @@ from pydantic import StringConstraints
 from . import dispatch, intake, pickup, reconciliation
 from .auth import authenticate_board_read, require_coordinator
 from .captains import IDLE_WITH_WORK, STALE, gone_at, live_captains, successor_name
+from .flag_models import flag
 from .intake_api import run
 from .intake_models import Payload, Text
 from .operator_schema import ACTIVE_STARTED_AT, OPEN
@@ -41,13 +42,6 @@ class Flag(FlagKey):
     reason: Text
     recovery: Text
     notify_owner: bool = False
-
-
-def flag(kind, reason, recovery, first_seen, *, item_id="", execution_id="", captain_id="",
-         notify_owner=False):
-    return {"kind": kind, "item_id": item_id, "execution_id": execution_id, "captain_id": captain_id,
-            "reason": reason, "recovery": recovery, "first_seen": first_seen.isoformat(timespec="microseconds"),
-            "notify_owner": notify_owner, "source": "server"}
 
 
 def captain_stale(db, now):
