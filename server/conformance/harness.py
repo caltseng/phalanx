@@ -97,6 +97,7 @@ def verify_manifest():
 def vector_manifest():
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
+              ROOT / "server" / ".gitattributes",
               HERE / "golden-fresh.json", HERE / "golden-retained.json"]
     tests = []
     for path in paths:

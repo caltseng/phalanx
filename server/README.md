@@ -67,6 +67,9 @@ drift before comparing Go. It never fetches a substitute oracle on a missing pin
 module graph and both golden corpora. That is 672 ordinary wire/durable
 observations across three implementations/two shapes, plus separately recorded
 busy, switch, abort, lost-response/crash and lock fault windows.
+Scoped Git attributes keep server sources/manifests LF on every host; oracle
+exports disable caller `autocrlf` and verify actual extracted source bytes
+against the unchanged Git-blob manifest.
 
 Fresh canonical 26 and the public old-initializer -> D0 retained-26 sequence are
 both exercised. Retained DDL SHA-256 is

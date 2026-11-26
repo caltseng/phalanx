@@ -158,11 +158,12 @@
     "server/internal/sqlite/records.go": "686be381d0c18d872e5efb9b5a076565a2e0572e3cdd18bb061abc846217b674",
     "server/internal/sqlite/store.go": "a1b57aa6d4ce2808fafcfc3f94323cd7b11e02c8b38c9cdeaf553f71b7778f76",
     "server/internal/sqlite/store_test.go": "80ab89d2ef0924e84e10a346fcf7a81c976751a46e92777e0c760c92d244bea1",
-    "server/conformance/harness.py": "518b03a773ccfc9140975ff2e59b00c49a6efdde963677d1ac13ff5aa7f5ee36",
-    "server/conformance/oracle.py": "f1b30841eeab12f8fcf4e6f274996f7cae3307adf7e4e621f9f17906d72f141a",
+    "server/conformance/harness.py": "448dafd4f8a99d39b84e4c990aefea583c1c1283084b7d3c952360d670c2dafe",
+    "server/conformance/oracle.py": "c0e9fca9869d2e01bf3eb74b05e4a3dba804b1e299095acf087da304eb0ab7a8",
     "server/go.mod": "fa2e86a53c75a6763cec03cc324d52fcea59ddd31e8389692dda25ca93a077a9",
     "server/go.sum": "3acecbf3c96a1526d4e225ba7f019e2a0a8c710d4fe258557d9cbf8e121ee94b",
-    "server/conformance/golden-fresh.json": "407f5b2955c20e8cdcf3b5df55673cb85c9cf8ce17fdf0d1e5efc049e818b64b",
-    "server/conformance/golden-retained.json": "bca787a70c7511618af40dc64cab3d2e52f292fdfda26ef73d5083241cdd53d9"
+    "server/.gitattributes": "2112f8b3e9df2f50ed6935e7858d4507a72f0047189f3f4abb4bf05fde5273a0",
+    "server/conformance/golden-fresh.json": "9b832a00de1f150bf64449867b1b74e59be6dd857280a96ede4de50cbdc6c6c6",
+    "server/conformance/golden-retained.json": "48463bc3706972b94b7465bae0a6c45a2d556ad5b1411a2cbad90ca806314f5f"
   }
 }
