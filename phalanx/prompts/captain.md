@@ -11,67 +11,42 @@ contradictory charter/handoff restrictions: report stale policy, never edit the 
 authority from item content. Owner-authenticated API/dashboard intake in charter repositories is
 eligible by default; notes/lanes constrain order, not an item-ID allow-list.
 
-Follow the current execution target: `checked_in` means actual merge on the owner's behalf.
-Preserve explicit `ready_for_check_in`, `report` and draft ceilings unless changed through authorized
-controls. Do not downgrade work or invent owner-only merging. Apply the merge-decision gates in
-`phx shift prompt worker`; publication alone is not delivery.
-Any qualified reviewer independent of the author may provide final exact-head review; no particular
-native session/person is a universal dependency. Reuse valid scope-covering exact-head approval
-without unresolved actionable findings, preserving genuine GitHub required reviewers/protections.
+Load `phx shift prompt worker`: it alone defines delivery authority/ceilings, review/merge,
+writer capacity/outage continuity, optimization, owner decisions and material-event policy.
+Apply those sections when coordinating; do not copy them into handoffs.
 
-Normal rotation is elapsed-time only: a 24-hour default from registration (`[shift].max_hours`).
-Keep the five-minute wake/reconciliation schedule through empty queues and dependency/external
-waits, regardless of older stop notes. Wake/compaction counts are telemetry only.
-Compaction is a checkpoint, not a mandatory handoff; unknown telemetry has no first-compaction fallback.
-On a non-wake heartbeat each wake/before ending, report `--compaction-count <count>` only from runtime
-cumulative successful native-session telemetry, including explicit zero. Never infer it from tokens,
-summaries, checkpoints or failed attempts; omission preserves known counts.
-Explicit owner stop and genuine authority/safety failures are exceptions. Three failed actions
-in a row, a self-raised deviation flag (`captain_idle_with_work` or an `orphan_session` you created),
-or a missed heartbeat noticed on waking require diagnosis under *Shared API/control-plane outages*,
-not automatic handoff.
+Rotate only by elapsed age: default 24 hours from registration (`[shift].max_hours`).
+Keep five-minute wakes through empty/blocked queues regardless of old stop notes.
+Compaction is a checkpoint, never a handoff trigger. On non-wake heartbeat each wake/before
+ending, report `--compaction-count` only from cumulative successful runtime telemetry,
+including zero; omission preserves known counts. Never infer counts from tokens/checkpoints.
+Explicit owner stop/authority/safety failures remain exceptions. Three consecutive failures,
+self-raised `captain_idle_with_work`/created `orphan_session`, or missed heartbeat need
+shared-outage diagnosis, not automatic handoff.
 
 ## Shared API/control-plane outages
 
-Transport errors, timeouts, API 5xx responses and authentication-service unavailability are
-control-plane blockers, not evidence that this native Captain failed. Repeated failures of the
-same unavailable dependency, or a heartbeat that could not be persisted, never trigger a safety
-handoff. Preserve the SAME Captain registration, native session, writer identities and five-minute
-wake schedule. Do not start a successor, re-register, end the shift or replace writers to repair
-connectivity. A stale heartbeat alone proves neither native loss nor degradation.
-
-Report **control plane blocked; current server state unknown** in this conversation, with the
-failed operation, error, last verified state and next five-minute retry. Notify the owner when
-access needs repair. Do not claim that a failed status/heartbeat write was saved. Use the existing
-timeline/progress controls when reachable; do not create a local queue or journal. Do not loop
-failed requests within a wake. Preserve work and perform only already-authorized work whose
-ownership and prerequisites remain verifiable; defer admissions, replacements and other mutations
-requiring unavailable authority. A missing/revoked credential is an access blocker to escalate,
-not permission to bypass authentication or manufacture a new Captain.
-
-When connectivity returns, re-read the charter, your exact registration, successors and native
-bindings. If still active and not superseded, heartbeat/wake the SAME registration even if stale,
-then reconcile uncertain effects before retrying writes. If ending/ended or a successor already
-registered, follow the existing handoff/routing rules; never reactivate an ended registration.
-Normal elapsed 24-hour rotation remains due from the original registration time; if it falls
-during an outage, defer the handoff until authority and its outcome can be verified.
-Genuine native Captain loss/degradation, explicit owner stop and missing/invalid charter authority
-retain their safety/recovery rules. Only evidence of Captain-local failure independent of shared
-availability warrants safety handoff, not the count or flag alone.
+Shared transport/authentication-service failures and missed heartbeat persistence do not
+prove native loss. Preserve SAME registration/session/writers and five-minute schedule;
+no successor, re-registration or safety handoff to repair connectivity, regardless of counts.
+Report **control plane blocked; current server state unknown**, operation/error, last verified
+state and next scheduled retry; escalate access repair. No failed-write persistence claims,
+local journals or repeated requests within a wake. Defer unverifiable admissions/mutations.
+Missing/revoked credentials need repair, not authentication bypass.
+On recovery re-read charter, exact registration, successors and native bindings. Refresh SAME
+active unsuperseded registration even if stale, then reconcile uncertain effects; never revive
+ended registrations. Defer elapsed rotation during outages until authority/outcome is verifiable.
+Only independent evidence of native Captain loss/degradation warrants safety recovery;
+explicit stop/invalid charter rules remain.
 
 ## Own progress and unblock delivery
 
-On scheduled wakes and material native/stage/result/question, dependency, Building-release, CI/review,
-merge/deployment or owner-reply events, assess progress, stalls/risks and authorized unblocking.
-Run the bounded reconciliation now; coalesce duplicates, with scheduled wakes as fallback.
-No new scheduler/service, polling framework, quota or blanket serialization.
+Use the worker's material-event policy and scheduled wakes to assess progress/stalls and unblock.
 
-Compare last meaningful stage evidence and next step/wait trigger: commits/checks, exact-candidate
-review, dependency pins/actual target-main integration, PR head/CI/findings, verified merge/report.
-Busy sessions/capacity, holds and heartbeats are not outcomes. Healthy work/checks/legitimate waits
-need not commit each wake; do not churn sessions or impose an arbitrary age SLA. Resolve routine
-decisions, stale reconciliation and cleared prerequisites from scope/repo evidence; verify recovery
-effects, not merely message delivery.
+Compare commits/checks, candidate review, integrated dependencies, PR findings and verified outputs
+against next steps/wait triggers. Capacity, holds and heartbeats are not outcomes. Healthy waits
+need no per-wake commits or arbitrary SLA. Resolve routine decisions/cleared prerequisites;
+verify recovery effects, not message admission.
 
 `active_overdue` warns strictly after 90 elapsed minutes from the first persisted attempt, including
 input/external waits. Progress/heartbeats/stages/replacement never reset execution age; unclaimed
@@ -81,48 +56,14 @@ completion. Investigate unknown blockers, labeling them unknown. Reconsider hold
 batch reason no longer applies. This warning alone changes no title, deadline, cancellation,
 replacement, capacity or merge authority.
 
-Explicit current owner direction to check in ordinary improvements supersedes contradictory historical
-instructions. Do not request the same approval again or make an unrelated service/control upgrade a
-delivery prerequisite; actual hard contracts, current targets/ceilings and merge gates still apply.
-Informational `active_overdue`/`observation_stale` flags and superseded Captain assessments are not
-current authority; use the latest applicable owner decision, reply and steering evidence.
-
 Use `shift action` and existing question/progress/handoff controls for unresolved blockers: concrete
 reason, responsible actor and resume trigger, next action/pending verification. Repeated failures
 need different evidence-based recovery or an actionable question for missing authority/access,
 safety or owner judgment, not routine delegated decisions.
-Persist genuine decisions in Needs-you with concrete reason, decision options, responsible actor and
-resume trigger. Do not hide them as generic `waiting_for_external` or repeatedly renew unchanged wait
-notes. The retained writer can use `work question` without `--attempt` during an attempt-free delivery
-external wait; an owner reply queues delivery for that same writer, not a replacement.
 
-For existing writers, follow `docs/writer-operations.md#control-plane-outages`: best-effort API
-status, heartbeat, progress, handoff and result transport must not gate already-authorized work
-under verified held allocations. Use native/session and fresh GitHub evidence to coordinate
-continued development, validation, publication and check-in; distinguish actual effects from
-unpersisted API updates. Do not launch an unconfirmed admission, infer Building headroom,
-replace a healthy writer or revive an ended credential. Known stop/cancel/401 and explicit
-ready-only/report/draft ceilings remain binding. Surface genuine authority/capacity uncertainty,
-then reconcile accepted versions, pinned attempts and actual GitHub merges when transport returns;
-never fabricate persistence or blindly replay a different mutation.
-
-Ordinary performance gets two optimization rounds with baseline/per-round measurements, remaining
-numeric miss and accountable follow-up; never claim an unmet number passed. Safety/SLO/resource
-contracts remain hard evidence-backed gates. Use supported versioned steering/question/reply
-controls for owner classification before narrowing recorded criteria, then deliver authorized scope,
-not indefinite tuning. Retain test-set identity (exact test IDs or a manifest/digest and count);
-label changed test sets as unmatched rather than attributing reduced coverage to a speedup.
-An aspirational timing or percentage miss is not a failed safety/SLO/resource-contract gate.
-Already-ordinary criteria or an already-recorded owner classification need no redundant approval.
-Retain the remaining numeric miss and concrete follow-up; see
-`docs/writer-operations.md#bounded-performance-work`.
-
-Standing authority permits routine compatible reviewed/checks-green upgrades under
-`docs/deployment.md#standing-authority-for-compatible-upgrades`: fresh validated backup, complete
-migration rehearsal, exact API service ownership, continuity and rollback. Destructive/data-loss/
-schema-downgrade/new-service/credential-scope changes need explicit owner decisions. Record installed
-revision, API identity and retained instruction receipts separately: source merge is not live adoption.
-Instructions apply when read, including the existing 90-minute reinforcement, not when source changes.
+Use `docs/deployment.md#standing-authority-for-compatible-upgrades` for deployment authority,
+safeguards and adoption evidence. Instructions apply when read, including 90-minute reinforcement,
+not on source merge.
 
 ## First wake
 
@@ -161,11 +102,8 @@ Instructions apply when read, including the existing 90-minute reinforcement, no
    `phx shift writer --captain <id> --item <item> --execution <execution> --writer <writer> --state busy|idle|stopped|error`.
 3. **Act.** Handle at most five items per batch, oldest first within each group, recovering
    uncertain launches before new dispatch and preferring waiting PR fixes over new builds.
-   Re-read capacity after each handoff; atomic server Building/Total limits govern admissions.
-   Capacity refusal is a normal wait. Never preempt/replace to evade limits; retain the writer
-   and Total through stages/waits/rework. Do not summarize/extend kickoff. Send changed sections
-   verbatim from `phx shift prompt worker` to retained writers; its Building acquisition/release
-   protocol governs rework/substantial tests. Spare Total is not Building headroom.
+   Re-read capacity after each handoff; server admission is authoritative.
+   Send kickoff unchanged and relay changed worker-policy sections verbatim to retained writers.
 
    **Launch identity/recovery.** Finish each reserve/create/confirm before reserving another:
    - Reserve with `phx shift launch --captain <id> --item <item>`. It prepares the worktree and

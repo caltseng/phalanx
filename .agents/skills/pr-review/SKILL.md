@@ -11,14 +11,8 @@ Review every PR this way, including docs, plan, and test-only PRs. [AGENTS.md](.
 
 Record the head SHA first and review only that commit (`git fetch origin pull/<n>/head`, `git diff origin/main...<sha>`). If the head moves, restart. Findings, CI evidence, and the merge decision all bind to that one SHA, and all required CI jobs must pass on it.
 
-Any qualified reviewer independent of the author may provide final exact-head review; no native
-session or person is a universal dependency. Reuse valid recorded approval covering the current
-exact head and effective scope with no unresolved actionable findings instead of adding another
-review. Preserve genuine GitHub required reviewers, CODEOWNERS and protections. A preferred
-reporting recipient or stale routing note does not make that reviewer exclusive.
-Authorized writers may choose and reach a qualified independent peer or read-only review agent
-with no authorship without Captain assignment. Record reviewer identity, verdict, scope and final
-SHA; self-review is never substitute independent approval.
+Reviewer eligibility and approval reuse follow the worker's
+[Merge decision](../../../phalanx/prompts/worker.md#merge-decision-publication-and-delivery).
 
 ## What matters most
 
@@ -42,12 +36,6 @@ Use that method to challenge speculative edge cases, obsolete compatibility, unn
 
 Rank findings by impact as **blocking** or **follow-up**. Skip style nits. Say explicitly when nothing blocks.
 
-- **Merge** only after the item's current target and publication mode authorize check-in and the [canonical merge decision gates](../../../docs/writer-operations.md#merge-decision-before-auto-merge) pass at the exact head. Until then, publish and retain the writer in delivery with auto-merge off. Attempt a current execution read and re-read the GitHub head immediately before `gh pr merge <n> --auto --merge --match-head-commit <sha>`. If only Phalanx transport fails, apply [control-plane outage continuity](../../../docs/writer-operations.md#control-plane-outages): verified checked-in authority and held capacity remain usable without a fresh status/handoff/progress receipt. Genuine authority uncertainty, known stop/cancel/401 or ended credentials do not. GitHub head, CI, independent exact-final-head review, required reviewers/protections, mergeability and merge reconciliation remain mandatory; respect repository-specific merge-owner restrictions and never use an admin bypass. Disable auto-merge before rework and reassess a changed head. `ready_for_check_in` leaves merging to the owner; never enable auto-merge or merge it. Draft-only publication never authorizes promotion or merging. A review recommendation does not override those limits.
+- **Merge** only under the worker's canonical [merge decision](../../../phalanx/prompts/worker.md#merge-decision-publication-and-delivery), applying its [outage protocol](../../../phalanx/prompts/worker.md#control-plane-outages) when needed. A review recommendation is evidence, not execution authority.
 - **Fix round** otherwise: give file:line, the failure scenario, and the simplest fix direction. Prefer fixes that remove code or constraints over fixes that add them.
-- **Bound it.** Ordinary performance targets have a two-round optimization budget. Retain baseline/round measurements, remaining numeric miss and a concrete accountable follow-up; never claim a missed number was met. Explicit safety/SLO/resource-contract gates stay hard, as do correctness, required CI and independent exact-head review. Recorded acceptance criteria need an owner-approved change through [supported versioned controls](../../../docs/writer-operations.md#bounded-performance-work), not an implicit waiver after two reviews. Deliver the authorized verified scope within the current target/publication ceiling, and pass follow-up plan updates to the Captain. Merge only when authorized above.
-  Retain test-set identity (exact test IDs or a manifest/digest and count); changed sets are unmatched
-  evidence, not a speedup. An aspirational timing or percentage miss is not a failed hard contract.
-  Already-ordinary criteria or recorded owner classification need no redundant approval. Explicit
-  current owner check-in direction supersedes contradictory historical instructions; unrelated
-  service/control upgrades are not prerequisites. Genuine unresolved authority or requirement
-  decisions use Needs-you with reason, options, actor and resume trigger, never a hidden external wait.
+- **Bound it.** Apply [optimization and decisions](../../../phalanx/prompts/worker.md#bounded-optimization-and-decisions); pass follow-up plan updates to the Captain, not extra requirements to the writer.

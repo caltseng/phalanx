@@ -14,14 +14,9 @@ and OS locks, not SQLite queues or publication journals.
 The [implementation map and diagrams](docs/architecture.md) trace current code ownership
 and deployment boundaries. The relay's removal did not remove the HTTP API or Scribe.
 
-Control-plane transport failure alone does not gate already-authorized development, local
-validation, publication or check-in by the same live writer under verified held capacity.
-Status/heartbeat/progress/results are best-effort during an outage, with missing receipts
-explicit. New admissions/acquisitions still require confirmation; known stop, cancellation,
-ended/revoked credentials and explicit ready-only/report/draft ceilings remain binding.
-GitHub owns actual PR/head/check/review/protection/merge facts. Recovery reconciles accepted
-versions and actual side effects through existing fenced/idempotent controls, not an offline
-queue or fabricated lifecycle transitions. See [outage continuity](docs/writer-operations.md#control-plane-outages).
+Operational policy lives in the [worker prompt](phalanx/prompts/worker.md) and
+[Captain prompt](phalanx/prompts/captain.md); this spec defines persisted contracts.
+For transport failures use the worker's [outage protocol](phalanx/prompts/worker.md#control-plane-outages).
 
 Direct clients discover the existing muster via `--home`, `PHALANX_HOME`, then the single
 per-user `~/.phalanx/muster.json` locator. Discovery is read-only: never initialize or migrate
@@ -55,26 +50,12 @@ absent refs or refresh a reconciler observation; unrelated items continue throug
 - A repository has a stable ID and expected remote. Local mappings verify the checkout and
   base before work. Repository instructions apply. Missing mappings or prepared checks
   environments are visible blockers, not permission to improvise another environment.
-- PR target defaults to `checked_in`; explicit `ready_for_check_in` and `report` are
-  preserved. Writers merge or enable GitHub auto-merge only for checked-in work after the
-  [merge decision gates](docs/writer-operations.md#merge-decision-before-auto-merge) pass. Publication may precede
-  those gates with the same writer retained in delivery and auto-merge off. Owner/Captain
-  steering can change an open PR target, including delivery, but cannot switch PR/report.
-  The writer reconciles GitHub auto-merge with the latest target on each delivery pass.
-  Newer explicit owner instructions supersede contradictory older charter prose or historical
-  notes; Captains surface stale policy for operator correction, not an extra owner-merge gate.
-  This does not retarget explicit ready-only/report work, lift draft ceilings or waive required
-  review, checks, dependency integration, credentials or trust.
-- Any qualified reviewer independent of the author may supply applicable final exact-head review;
-  no native session/person is a universal dependency. Reuse valid evidence covering the effective
-  scope without unresolved findings; genuine GitHub required reviewers/protections remain hard.
-- Ordinary performance optimization has a two-round budget, retaining measurements, remaining miss
-  and concrete follow-up with test-set identity; explicit safety/SLO/resource-contract gates remain hard.
-  Already-ordinary criteria or recorded owner classification need no redundant approval; aspirational
-  timing/percentage misses are not failed hard contracts. Current explicit owner check-in direction
-  supersedes contradictory historical instructions, not merge safeguards or hard contracts.
-  Unrelated service/control upgrades are not delivery prerequisites. Owner-approved
-  classification uses [versioned controls](docs/writer-operations.md#bounded-performance-work).
+- PR target defaults to `checked_in`; other target values are `ready_for_check_in` and
+  `report`. Owner/Captain steering can change an open PR target, including delivery, but
+  cannot switch PR/report. Writer behavior follows the canonical
+  [merge policy](phalanx/prompts/worker.md#merge-decision-publication-and-delivery).
+- Performance classification uses [existing versioned controls](docs/writer-operations.md#bounded-performance-work)
+  under the worker's [optimization policy](phalanx/prompts/worker.md#bounded-optimization-and-decisions).
   Acceptance-criteria-only owner steering is permitted during an attempt-free delivery external
   wait, audited before/after without altering state, writer, capacity, target or publication mode.
 - A completed ready execution stays completed when its primary PR later merges into the
@@ -82,8 +63,8 @@ absent refs or refresh a reconciler observation; unrelated items continue throug
   output once with final revision, merge commit and `merged_at`, and releases check-in
   dependents without a rerun, writer or merge authorization. Closed-unmerged PRs, unrelated
   heads and wrong-base merges do not advance it.
-- `publication_mode: "draft"` (default `"ready"`) is a ceiling for either PR target. Writers
-  never promote/merge it. Delivery verifies the primary PR open, draft, unmerged, at the
+- `publication_mode: "draft"` (default `"ready"`) applies to either PR target.
+  Delivery verifies the primary PR open, draft, unmerged, at the
   reviewed head/item branch/target base. It records `draft_published`, satisfies no
   ready/check-in dependency and ends the writer. A changed head queues self-review.
 - Every closed execution records exactly one verified PR or stored Markdown report.
@@ -156,22 +137,13 @@ End each created PR description with
 5. The reconciler independently observes GitHub and posts timestamped facts/flags. It
    does not launch/stop sessions, mutate GitHub, or require a worker attempt.
 
-A genuine unresolved owner decision or missing authority is a Needs-you question with concrete
-reason, options, responsible actor and resume trigger, not a generic external wait or renewed
-unchanged note. The bound writer may submit a versioned structured `needs_input` result without
+The bound writer may submit a versioned structured `needs_input` result without
 an attempt only during an attempt-free delivery external wait. Existing question history, inbox
 and versioned owner replies apply; no new state store or scheduler exists. A reply queues the
 same stage for the same writer; all ordinary attempt fences and merge safeguards still apply.
 
-Material native/stage/Building-release/merge/deployment events prompt the Captain's existing bounded
-reconciliation/refill as well as scheduled wakes, preferring waiting PR fixes and preserving atomic
-Building/Total admission and sole-writer fencing. There is no new event service, scheduler, polling
-framework, quota or blanket serialization. Routine compatible reviewed/checks-green upgrades use
-[standing owner deployment authority](docs/deployment.md#standing-authority-for-compatible-upgrades)
-with backup, complete rehearsal, exact API ownership, continuity and recoverable rollback; destructive/
-data-loss/schema-downgrade/new-service/credential-scope changes require explicit owner decisions.
-Source merge is not a deployed result; [live adoption](docs/deployment.md#coordination-policy-adoption-boundary)
-is separately verified.
+Event-driven coordination follows the [worker event policy](phalanx/prompts/worker.md#bounded-optimization-and-decisions).
+Deployment and adoption use [the deployment guide](docs/deployment.md#standing-authority-for-compatible-upgrades).
 
 ## Development lifecycle state machine
 
