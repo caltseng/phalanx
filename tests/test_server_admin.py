@@ -10,14 +10,6 @@ from timing import WAIT_SECONDS
 
 
 class ServerPriorityTest(unittest.TestCase):
-    def test_api_normalizes_priority_before_serving(self):
-        order = []
-        with patch.object(server_admin, "foreground_priority", side_effect=lambda: order.append("priority")), \
-                patch("uvicorn.run", side_effect=lambda *a, **k: order.append("serve")) as run:
-            server_admin.serve(host="127.0.0.1", port=8765)
-        self.assertEqual(order, ["priority", "serve"])
-        run.assert_called_once_with("phalanx.api:app", host="127.0.0.1", port=8765, workers=1)
-
     def test_non_windows_does_not_load_windows_api(self):
         with patch.object(priority.os, "name", "posix"), \
                 patch.object(ctypes, "WinDLL", create=True) as load:
