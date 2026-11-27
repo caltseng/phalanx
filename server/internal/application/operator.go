@@ -60,9 +60,9 @@ func automaticISO(value time.Time) string {
 func operatorWait(row sqlite.OperatorRow, state State, now time.Time, current operatorContext) (*Wait, *string, *PickupDecision, error) {
 	since := row.WaitSince
 	if row.Status == "queued" && (row.WriterID == nil || row.WriterEndedAt != nil) {
-		decision, err := pickupDecision(sqlite.QueueProjection{ID: row.ID, ItemID: row.ItemID, RepositoryID: row.RepositoryID,
-			Stage: row.Stage, StateJSON: row.StateJSON, ReadySince: row.ReadySince, RetryAt: row.RetryAt,
-			DependencyWait: row.DependencyWait}, now, current.Pickup)
+		decision, err := pickupDecisionForState(sqlite.QueueProjection{ID: row.ID, ItemID: row.ItemID, RepositoryID: row.RepositoryID,
+			Stage: row.Stage, ReadySince: row.ReadySince, RetryAt: row.RetryAt,
+			DependencyWait: row.DependencyWait}, state, now, current.Pickup)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -132,69 +132,48 @@ func textValue(value *string) string {
 	return *value
 }
 
-func operatorPull(row sqlite.OperatorRow) any {
+func operatorPull(row sqlite.OperatorRow) *operatorPR {
 	if row.PRURL == nil {
 		return nil
 	}
-	state := any(row.PRState)
+	state := row.PRState
 	if boolValue(row.PRMerged) {
-		state = "merged"
+		merged := "merged"
+		state = &merged
 	}
 	var ci *string
 	if nullableTextEqual(row.PRCIHeadSHA, row.PRHeadSHA) {
 		ci = row.PRCI
 	}
-	return map[string]any{"url": row.PRURL, "number": row.PRNumber, "state": state, "draft": row.PRDraft,
-		"head_sha": row.PRHeadSHA, "head_ci": ci, "additions": row.PRAdditions, "deletions": row.PRDeletions}
+	return &operatorPR{row.PRURL, row.PRNumber, state, row.PRDraft, row.PRHeadSHA, ci, row.PRAdditions, row.PRDeletions}
 }
 
-func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorContext) (map[string]any, error) {
-	value, _, err := contract.Decode([]byte(row.StateJSON))
+func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorContext) (OperatorSummary, error) {
+	state, mode, err := decodeStoredState([]byte(row.StateJSON), true)
 	if err != nil {
-		return nil, err
+		return OperatorSummary{}, err
 	}
-	fields, ok := contract.ObjectValues(value)
-	if !ok {
-		return nil, errors.New("Stored execution state is not an object")
-	}
-	mode, exists := fields["publication_mode"]
-	if !exists {
-		mode = "ready"
-	}
-	stateData := row.StateJSON
-	if exists && mode == nil {
-		// The read projection preserves null; it must not authorize a mutation.
-		fields["publication_mode"] = "ready"
-		stateData, err = contract.Canonical(fields)
-		if err != nil {
-			return nil, err
-		}
-	}
-	state, err := readState([]byte(stateData))
+	wait, waitSince, decision, err := operatorWait(row, state, now, current)
 	if err != nil {
-		return nil, err
+		return OperatorSummary{}, err
 	}
-	projectionRow := row
-	projectionRow.StateJSON = stateData
-	wait, waitSince, decision, err := operatorWait(projectionRow, state, now, current)
-	if err != nil {
-		return nil, err
-	}
-	var outcome, output, revision, delivery any
+	var outcome string
+	var output *operatorOutput
+	var revision *Revision
+	var delivery *operatorDelivery
 	if state.FinalOutput != nil {
 		if state.FinalOutput.Report != nil {
-			output = map[string]any{"kind": "report", "url": state.FinalOutput.Report.Reference}
+			output = &operatorOutput{"report", state.FinalOutput.Report.Reference}
 			outcome = "report_stored"
 		} else {
 			pr := state.FinalOutput.PR
-			output, revision, outcome = map[string]any{"kind": "pr", "url": pr.URL}, pr.Revision, "ready_for_check_in"
+			output, revision, outcome = &operatorOutput{"pr", pr.URL}, &pr.Revision, "ready_for_check_in"
 			if pr.Draft {
 				outcome = "draft_published"
 			}
 			if present(pr.MergeCommit) {
 				outcome = "checked_in"
-				delivery = map[string]any{"merged": true, "merge_commit": pr.MergeCommit,
-					"merge_method": pr.MergeMethod, "merged_at": pr.MergedAt}
+				delivery = &operatorDelivery{true, pr.MergeCommit, pr.MergeMethod, pr.MergedAt}
 			}
 		}
 		if row.Status != "completed" {
@@ -222,7 +201,7 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 		next = &value
 	}
 	if row.Goal == nil {
-		return nil, errors.New("Stored item goal is missing")
+		return OperatorSummary{}, errors.New("Stored item goal is missing")
 	}
 	title := shortTitle(*row.Goal, 80)
 	if present(row.DisplayTitle) {
@@ -233,20 +212,20 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 		priority += 3
 	}
 	if priority < 0 || priority >= 3 {
-		return nil, errors.New("Stored queue priority is outside display range")
+		return OperatorSummary{}, errors.New("Stored queue priority is outside display range")
 	}
 	var activeAge, waitAge *int64
 	var stageStarted *string
 	if present(row.ActiveStartedAt) {
 		started, err := time.Parse(time.RFC3339Nano, *row.ActiveStartedAt)
 		if err != nil {
-			return nil, err
+			return OperatorSummary{}, err
 		}
 		stop := now
 		if output != nil {
 			stop, err = time.Parse(time.RFC3339Nano, row.UpdatedAt)
 			if err != nil {
-				return nil, err
+				return OperatorSummary{}, err
 			}
 		}
 		age := max(int64(0), int64(elapsedSeconds(stop, started)))
@@ -257,7 +236,7 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	if present(waitSince) {
 		started, err := time.Parse(time.RFC3339Nano, *waitSince)
 		if err != nil {
-			return nil, err
+			return OperatorSummary{}, err
 		}
 		age := max(int64(0), int64(elapsedSeconds(now, started)))
 		waitAge = &age
@@ -270,14 +249,11 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	if output != nil {
 		closed = &row.UpdatedAt
 	}
-	var deployment any
+	var deployment json.RawMessage
 	if present(row.DeploymentJSON) {
-		deployment, _, err = contract.Decode([]byte(*row.DeploymentJSON))
-		if err != nil {
-			return nil, err
-		}
+		deployment = json.RawMessage(*row.DeploymentJSON)
 	}
-	var writer any
+	var writer *operatorWriter
 	if row.WriterID != nil {
 		state := row.WriterState
 		if present(row.WriterEndedAt) {
@@ -288,25 +264,29 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 		if availability == "" {
 			availability = "unverified"
 		}
-		writer = map[string]any{"id": row.WriterID, "state": state, "runtime": row.WriterRuntime, "ended_at": row.WriterEndedAt,
-			"captain_id": row.WriterCaptainID, "session_id": row.WriterSessionID, "session_url": row.WriterSessionURL,
-			"last_progress_at": row.WriterProgressAt, "session_link": sessionTarget(textValue(row.WriterSessionURL),
+		writer = &operatorWriter{ID: row.WriterID, State: state, Runtime: row.WriterRuntime, EndedAt: row.WriterEndedAt,
+			CaptainID: row.WriterCaptainID, SessionID: row.WriterSessionID, SessionURL: row.WriterSessionURL,
+			LastProgressAt: row.WriterProgressAt, SessionLink: sessionTarget(textValue(row.WriterSessionURL),
 				textValue(row.WriterRuntime), textValue(row.WriterSessionID), availability, present(row.WriterSessionURL)),
-			"progress_note": row.WriterProgressNote, "nonce": row.WriterNonce, "created_at": row.WriterCreatedAt,
-			"confirmed_at": row.WriterConfirmedAt, "abandoned_at": row.WriterAbandonedAt, "building": boolValue(row.WriterBuilding),
-			"building_requested_at": row.BuildingRequestedAt, "session_availability": availability}
+			ProgressNote: row.WriterProgressNote, Nonce: row.WriterNonce, CreatedAt: row.WriterCreatedAt,
+			ConfirmedAt: row.WriterConfirmedAt, AbandonedAt: row.WriterAbandonedAt, Building: boolValue(row.WriterBuilding),
+			BuildingRequestedAt: row.BuildingRequestedAt, SessionAvailability: availability}
 	}
-	return map[string]any{
-		"id": row.ID, "item_id": row.ItemID, "version": row.Version, "title": title, "goal": row.Goal,
-		"priority": []string{"low", "normal", "urgent"}[priority], "label": row.Label, "target": state.Target,
-		"target_branch": row.TargetBranch, "publication_mode": mode, "repository_id": row.RepositoryID,
-		"created_at": row.CreatedAt, "active_started_at": row.ActiveStartedAt, "active_age_seconds": activeAge,
-		"stage_started_at": stageStarted, "stage": row.Stage, "status": row.Status, "revision_round": row.RevisionRound,
-		"last_advanced_at": row.LastAdvancedAt, "last_progress_at": row.UpdatedAt, "wait_reason": waitReason, "pickup": decision,
-		"blocked_prerequisite_count": row.BlockedCount, "resume_trigger": trigger, "next_action": next,
-		"retry_at_ms": row.RetryAt, "stage_owner": row.StageOwner, "wait_since": waitSince, "wait_age_seconds": waitAge,
-		"primary_pr_url": state.PrimaryPR, "pr": operatorPull(row), "duplicate_count": row.DuplicateCount, "closed_at": closed,
-		"outcome": outcome, "output": output, "output_revision": revision, "delivery": delivery, "deployment": deployment, "writer": writer,
+	var outcomeValue *string
+	if outcome != "" {
+		outcomeValue = &outcome
+	}
+	return OperatorSummary{
+		ID: row.ID, ItemID: row.ItemID, Version: row.Version, Title: title, Goal: row.Goal,
+		Priority: []string{"low", "normal", "urgent"}[priority], Label: row.Label, Target: state.Target,
+		TargetBranch: row.TargetBranch, PublicationMode: mode, RepositoryID: row.RepositoryID,
+		CreatedAt: row.CreatedAt, ActiveStartedAt: row.ActiveStartedAt, ActiveAgeSeconds: activeAge,
+		StageStartedAt: stageStarted, Stage: row.Stage, Status: row.Status, RevisionRound: row.RevisionRound,
+		LastAdvancedAt: row.LastAdvancedAt, LastProgressAt: row.UpdatedAt, WaitReason: waitReason, Pickup: decision,
+		BlockedPrerequisiteCount: row.BlockedCount, ResumeTrigger: trigger, NextAction: next,
+		RetryAtMS: row.RetryAt, StageOwner: row.StageOwner, WaitSince: waitSince, WaitAgeSeconds: waitAge,
+		PrimaryPRURL: state.PrimaryPR, PR: operatorPull(row), DuplicateCount: row.DuplicateCount, ClosedAt: closed,
+		Outcome: outcomeValue, Output: output, OutputRevision: revision, Delivery: delivery, Deployment: deployment, Writer: writer,
 	}, nil
 }
 
@@ -565,7 +545,7 @@ func (a *App) OperatorList(ctx context.Context, request contract.OperatorQuery, 
 		if err != nil {
 			return err
 		}
-		items := []map[string]any{}
+		items := []OperatorSummary{}
 		for _, row := range rows {
 			item, err := operatorSummary(row, now, current)
 			if err != nil {
@@ -587,21 +567,24 @@ func (a *App) OperatorList(ctx context.Context, request contract.OperatorQuery, 
 	return response, err
 }
 
-func operatorBrief(tx *sqlite.Tx, itemID string) (map[string]any, error) {
+func operatorBrief(tx *sqlite.Tx, itemID string) (*OperatorBrief, error) {
 	criteria, links, err := tx.OperatorBrief(itemID)
 	if err != nil {
 		return nil, err
 	}
-	result := map[string]any{}
-	for name, value := range map[string]*string{"acceptance_criteria": criteria, "context_links": links} {
+	result := &OperatorBrief{}
+	for _, field := range []struct {
+		source *string
+		target *any
+	}{{criteria, &result.AcceptanceCriteria}, {links, &result.ContextLinks}} {
 		var parsed any = []any{}
-		if present(value) {
-			parsed, _, err = contract.Decode([]byte(*value))
+		if present(field.source) {
+			parsed, _, err = contract.Decode([]byte(*field.source))
 			if err != nil {
 				return nil, err
 			}
 		}
-		result[name] = parsed
+		*field.target = parsed
 	}
 	return result, nil
 }
@@ -635,9 +618,7 @@ func (a *App) OperatorItem(ctx context.Context, itemID string, condition Conditi
 		if err != nil {
 			return err
 		}
-		for name, value := range brief {
-			item[name] = value
-		}
+		item.OperatorBrief = brief
 		response.Body, err = responseValue(map[string]any{"item": item})
 		return err
 	})
@@ -814,15 +795,15 @@ func (a *App) OperatorGroup(ctx context.Context, label string, request contract.
 		}
 		closed, open, unknown := outcomeCounts(), int64(0), int64(0)
 		var first, lastClosed, oldestOpen *string
-		items := []map[string]any{}
+		items := []OperatorSummary{}
 		for _, row := range rows {
 			item, err := operatorSummary(row, now, current)
 			if err != nil {
 				return err
 			}
 			items = append(items, item)
-			if outcome, ok := item["outcome"].(string); ok {
-				closed[outcome]++
+			if item.Outcome != nil {
+				closed[*item.Outcome]++
 			}
 			if first == nil || row.ItemCreatedAt < *first {
 				value := row.ItemCreatedAt
@@ -1048,9 +1029,7 @@ func (a *App) OperatorTimeline(ctx context.Context, executionID string, request 
 		if err != nil {
 			return err
 		}
-		for name, value := range brief {
-			item[name] = value
-		}
+		item.OperatorBrief = brief
 		result, err = responseValue(map[string]any{"item": item, "usage": usage, "attempt": execution.StageOwner,
 			"previous_execution_id": previous, "next_execution_id": next, "prerequisites": prerequisites,
 			"question": question, "events": events, "next_cursor": cursor})

@@ -106,6 +106,10 @@ func pickupDecision(row sqlite.QueueProjection, now time.Time, current pickupCon
 	if err != nil {
 		return PickupDecision{}, err
 	}
+	return pickupDecisionForState(row, state, now, current)
+}
+
+func pickupDecisionForState(row sqlite.QueueProjection, state State, now time.Time, current pickupContext) (PickupDecision, error) {
 	if state.Stopping != nil || state.PendingOutput != nil {
 		return blockedPickup("closing", "Execution is stopping or finalizing", "Finish the pending finalization"), nil
 	}
