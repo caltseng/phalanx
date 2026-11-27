@@ -15,32 +15,45 @@ func resolveHome(path string) (string, error) {
 	for {
 		resolved, err := resolveExistingHome(path)
 		if err == nil {
-			for i := len(suffix) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, suffix[i])
-			}
-			return resolved, nil
+			return appendHomeSuffix(resolved, suffix), nil
 		}
 		// Python's non-strict Windows resolution also follows dangling
-		// reparse points before preserving the missing suffix.
-		if target, err := os.Readlink(path); err == nil && !seen[path] {
-			seen[path] = true
+		// reparse points, retaining the target's literal casing/DOS aliases
+		// rather than canonicalizing its existing ancestors a second time.
+		linked := false
+		for !seen[strings.ToLower(path)] {
+			seen[strings.ToLower(path)] = true
+			target, err := os.Readlink(path)
+			if err != nil {
+				break
+			}
 			if !filepath.IsAbs(target) {
 				target = filepath.Join(filepath.Dir(path), target)
 			}
+			linked = true
 			path = target
-			continue
+		}
+		if linked {
+			return appendHomeSuffix(path, suffix), nil
 		}
 		root := filepath.Clean(path) == filepath.VolumeName(path)+`\`
 		parent, tail := filepath.Split(strings.TrimRight(path, `\/`))
 		if root || tail == "" || parent == path {
-			for i := len(suffix) - 1; i >= 0; i-- {
-				path = filepath.Join(path, suffix[i])
-			}
-			return filepath.Clean(path), nil
+			return appendHomeSuffix(filepath.Clean(path), suffix), nil
 		}
 		suffix = append(suffix, tail)
 		path = parent
 	}
+}
+
+func appendHomeSuffix(path string, suffix []string) string {
+	for i := len(suffix) - 1; i >= 0; i-- {
+		if !strings.HasSuffix(path, `\`) {
+			path += `\`
+		}
+		path += suffix[i]
+	}
+	return path
 }
 
 func resolveExistingHome(path string) (string, error) {

@@ -100,6 +100,7 @@ def run(binary, output):
             _winapi.CreateJunction(str(home / "child"), str(root / "link"))
             (home / "gone").mkdir()
             _winapi.CreateJunction(str(home / "gone"), str(root / "dangling"))
+            _winapi.CreateJunction(str(home / "gone").swapcase(), str(root / "dangling-case"))
             (home / "gone").rmdir()
         else:
             (root / "link").symlink_to(home / "child", target_is_directory=True)
@@ -115,6 +116,8 @@ def run(binary, output):
         if os.name != "nt":
             homes["symlink-parent"] = str(root / "link") + "/.."
             homes["dangling-parent"] = str(root / "dangling") + "/.."
+        else:
+            homes["dangling-case"] = str(root / "dangling-case") + os.sep + "tail"
         configurations = [(name, value, None, True) for name, value in homes.items()]
         configurations += [("trust-" + name, None, value, trusted) for name, value, trusted in (
             ("empty", "", False), ("other", "192.0.2.1", False),
