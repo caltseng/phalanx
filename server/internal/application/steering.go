@@ -216,21 +216,11 @@ func (a *App) Rerun(ctx context.Context, itemID, executionID string, request con
 			if err != nil {
 				return nil, err
 			}
-			id, err := a.ID()
-			if err != nil {
-				return nil, err
-			}
-			text, err := contract.Canonical(Start(Target(request.Target), mode))
+			id, err := a.createExecution(tx, itemID, item.RepositoryID, Target(request.Target), mode, priority, &executionID)
 			if err != nil {
 				return nil, err
 			}
 			now := a.Clock()
-			if err := tx.InsertExecution(id, itemID, text, timestamp(now), item.RepositoryID, priority, now.UnixMilli(), &executionID); err != nil {
-				return nil, err
-			}
-			if err := refreshWait(tx, itemID, id, now.UnixMilli()); err != nil {
-				return nil, err
-			}
 			if err := refreshDependents(tx, itemID, "", now); err != nil {
 				return nil, err
 			}
