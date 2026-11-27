@@ -95,7 +95,7 @@ func equalUsageValue(first, second any) (bool, error) {
 	return a == b, err
 }
 
-func (a *App) observeUsage(tx *sqlite.Tx, writer sqlite.WriterRecord, snapshot contract.UsageSnapshot) (json.RawMessage, error) {
+func (a *App) observeUsage(tx *sqlite.Tx, writer sqlite.WriterRecord, snapshot contract.UsageSnapshot) (any, error) {
 	if !present(writer.ConfirmedAt) || writer.Runtime != snapshot.Runtime ||
 		writer.SessionID == nil || *writer.SessionID != snapshot.SessionID {
 		return nil, &Conflict{"Usage requires this writer's confirmed runtime and native session"}
@@ -122,7 +122,7 @@ func (a *App) observeUsage(tx *sqlite.Tx, writer sqlite.WriterRecord, snapshot c
 	if err != nil {
 		return nil, err
 	}
-	snapshotValue, _, err := contract.Decode([]byte(raw))
+	snapshotValue, err := contract.JSONValue(snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (a *App) observeUsage(tx *sqlite.Tx, writer sqlite.WriterRecord, snapshot c
 					return nil, err
 				}
 				if equal {
-					return encoded(map[string]any{"accepted": false, "reason": "Identical cumulative snapshot already observed"})
+					return responseValue(map[string]any{"accepted": false, "reason": "Identical cumulative snapshot already observed"})
 				}
 				return nil, &Conflict{"Stale or conflicting usage sequence; read the latest observation"}
 			}
@@ -288,11 +288,11 @@ func (a *App) observeUsage(tx *sqlite.Tx, writer sqlite.WriterRecord, snapshot c
 	if err := tx.SaveUsage(writer.ID, sequence, stamp, snapshotJSON, failureJSON); err != nil {
 		return nil, err
 	}
-	return encoded(map[string]any{"accepted": true, "status": snapshot.Status})
+	return responseValue(map[string]any{"accepted": true, "status": snapshot.Status})
 }
 
-func (a *App) OwnUsage(ctx context.Context, writerID string, snapshot contract.UsageSnapshot) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) OwnUsage(ctx context.Context, writerID string, snapshot contract.UsageSnapshot) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		writer, err := writerRecord(tx, writerID)
 		if err != nil {
@@ -307,8 +307,8 @@ func (a *App) OwnUsage(ctx context.Context, writerID string, snapshot contract.U
 	return result, err
 }
 
-func (a *App) CaptainUsage(ctx context.Context, itemID, executionID, writerID string, request contract.CaptainUsage) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) CaptainUsage(ctx context.Context, itemID, executionID, writerID string, request contract.CaptainUsage) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		writer, err := boundWriter(tx, itemID, executionID, writerID)
 		if err != nil {

@@ -21,8 +21,12 @@ func TestBoundedDependencyRefreshAndRestartAuditCursor(t *testing.T) {
 		PublicationMode: "ready", ContextLinks: []string{}, AcceptanceCriteria: []string{},
 		Dependencies: []contract.Prerequisite{},
 	}
-	readItem := func(raw json.RawMessage, err error) (string, string) {
+	readItem := func(value any, err error) (string, string) {
 		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(value)
 		if err != nil {
 			t.Fatal(err)
 		}

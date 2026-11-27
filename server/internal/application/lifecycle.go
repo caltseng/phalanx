@@ -178,7 +178,7 @@ func (a *App) apply(tx *sqlite.Tx, itemID string, row sqlite.Execution, state St
 	return tx.Execution(itemID, row.ID)
 }
 
-func replay(tx *sqlite.Tx, scope string, key *string, payload any, perform func() (json.RawMessage, error)) (json.RawMessage, error) {
+func replay(tx *sqlite.Tx, scope string, key *string, payload any, perform func() (any, error)) (any, error) {
 	if key == nil {
 		return perform()
 	}
@@ -191,7 +191,7 @@ func replay(tx *sqlite.Tx, scope string, key *string, payload any, perform func(
 		if receipt.Digest != contract.Digest(material) {
 			return nil, &Conflict{"Idempotency key was already used with a different request"}
 		}
-		return json.RawMessage(receipt.Response), nil
+		return storedResponse(receipt.Response)
 	}
 	if err != sql.ErrNoRows {
 		return nil, err
@@ -200,22 +200,26 @@ func replay(tx *sqlite.Tx, scope string, key *string, payload any, perform func(
 	if err != nil {
 		return nil, err
 	}
-	if err := tx.SaveReceipt(scope, *key, contract.Digest(material), string(result)); err != nil {
+	text, err := contract.Canonical(result)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.SaveReceipt(scope, *key, contract.Digest(material), text); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
 func (a *App) RequestStop(ctx context.Context, itemID, executionID string, request contract.Cancellation,
-	event Event, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+	event Event, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		scope := "cancel"
 		if event == CloseFailure {
 			scope = "close-failure"
 		}
-		result, err = replay(tx, scope+":"+itemID+":"+executionID, key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, scope+":"+itemID+":"+executionID, key, request, func() (any, error) {
 			row, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
 			if err != nil {
 				return nil, err
@@ -241,7 +245,7 @@ func (a *App) RequestStop(ctx context.Context, itemID, executionID string, reque
 					}
 				}
 			}
-			return encoded(updated)
+			return responseValue(updated)
 		})
 		return err
 	})
@@ -251,11 +255,11 @@ func (a *App) RequestStop(ctx context.Context, itemID, executionID string, reque
 	return a.finishResponse(ctx, result)
 }
 
-func (a *App) RetryFinalization(ctx context.Context, itemID, executionID string, request contract.Versioned, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RetryFinalization(ctx context.Context, itemID, executionID string, request contract.Versioned, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "retry-finalization:"+itemID+":"+executionID, key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "retry-finalization:"+itemID+":"+executionID, key, request, func() (any, error) {
 			row, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
 			if err != nil {
 				return nil, err
@@ -272,7 +276,7 @@ func (a *App) RetryFinalization(ctx context.Context, itemID, executionID string,
 			if err != nil {
 				return nil, err
 			}
-			return encoded(updated)
+			return responseValue(updated)
 		})
 		return err
 	})
@@ -282,27 +286,31 @@ func (a *App) RetryFinalization(ctx context.Context, itemID, executionID string,
 	return a.finishResponse(ctx, result)
 }
 
-func (a *App) finishResponse(ctx context.Context, result json.RawMessage) (json.RawMessage, error) {
-	var row sqlite.Execution
-	if err := json.Unmarshal(result, &row); err != nil {
-		return nil, err
+func (a *App) finishResponse(ctx context.Context, result any) (any, error) {
+	body, ok := contract.ObjectValues(result)
+	if !ok {
+		return nil, errors.New("Execution response is not an object")
 	}
-	state, err := readState(row.State)
-	if err != nil {
-		return nil, err
+	id, ok := body["id"].(string)
+	if !ok {
+		return nil, errors.New("Execution response has no id")
 	}
-	if state.PendingOutput == nil {
+	state, ok := contract.ObjectValues(body["state"])
+	if !ok {
+		return nil, errors.New("Execution response state is not an object")
+	}
+	if state["pending_output"] == nil {
 		return result, nil
 	}
 	if a.afterIntent != nil {
 		a.afterIntent()
 	}
-	finished, err := a.FinalizeAttempt(ctx, row.ID)
+	finished, err := a.FinalizeAttempt(ctx, id)
 	if err != nil {
 		var unknown *sqlite.UnknownCommit
 		if sqlite.IsBusy(err) || sqlite.IsDriverError(err) || errors.As(err, &unknown) {
 			slog.Error("Finalization could not access the store; return committed pending intent and reconcile current state",
-				"execution_id", row.ID, "error", err)
+				"execution_id", id, "error", err)
 			// Phase one is already committed. This is its explicit pending
 			// snapshot, never a claimed final output or blind mutation replay.
 			return result, nil
@@ -312,7 +320,7 @@ func (a *App) finishResponse(ctx context.Context, result json.RawMessage) (json.
 	if finished == nil {
 		return result, nil
 	}
-	return encoded(finished)
+	return responseValue(finished)
 }
 
 func (a *App) FinalizeAttempt(ctx context.Context, executionID string) (*sqlite.Execution, error) {

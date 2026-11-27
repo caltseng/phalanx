@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -83,11 +82,11 @@ func requestPriority(body map[string]any) (int, error) {
 	return priority, nil
 }
 
-func (a *App) Steer(ctx context.Context, itemID, executionID string, request contract.Steering, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Steer(ctx context.Context, itemID, executionID string, request contract.Steering, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "steer:"+itemID+":"+executionID, key, request.Payload, func() (json.RawMessage, error) {
+		result, err = replay(tx, "steer:"+itemID+":"+executionID, key, request.Payload, func() (any, error) {
 			row, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
 			if err != nil {
 				return nil, err
@@ -182,11 +181,11 @@ func (a *App) Steer(ctx context.Context, itemID, executionID string, request con
 	return result, err
 }
 
-func (a *App) Rerun(ctx context.Context, itemID, executionID string, request contract.Rerun, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Rerun(ctx context.Context, itemID, executionID string, request contract.Rerun, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "rerun:"+itemID+":"+executionID, key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "rerun:"+itemID+":"+executionID, key, request, func() (any, error) {
 			_, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
 			if err != nil {
 				return nil, err
@@ -228,7 +227,7 @@ func (a *App) Rerun(ctx context.Context, itemID, executionID string, request con
 			if err != nil {
 				return nil, err
 			}
-			return encoded(view)
+			return responseValue(view)
 		})
 		return err
 	})

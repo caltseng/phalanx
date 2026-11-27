@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"strconv"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
@@ -26,8 +25,8 @@ func requireExecution(tx *sqlite.Tx, itemID, executionID string) error {
 	return err
 }
 
-func (a *App) History(ctx context.Context, itemID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) History(ctx context.Context, itemID string) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		if err := requireItem(tx, itemID); err != nil {
 			return err
@@ -36,14 +35,14 @@ func (a *App) History(ctx context.Context, itemID string) (json.RawMessage, erro
 		if err != nil {
 			return err
 		}
-		result, err = encoded(history)
+		result, err = responseValue(history)
 		return err
 	})
 	return result, err
 }
 
-func (a *App) Timeline(ctx context.Context, itemID, executionID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Timeline(ctx context.Context, itemID, executionID string) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		if err := requireExecution(tx, itemID, executionID); err != nil {
 			return err
@@ -52,7 +51,7 @@ func (a *App) Timeline(ctx context.Context, itemID, executionID string) (json.Ra
 		if err != nil {
 			return err
 		}
-		result, err = encoded(events)
+		result, err = responseValue(events)
 		return err
 	})
 	return result, err
@@ -74,8 +73,8 @@ func (a *App) Draft(ctx context.Context, itemID, executionID, revision string) (
 	return result, err
 }
 
-func (a *App) DisplayTitle(ctx context.Context, itemID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) DisplayTitle(ctx context.Context, itemID string) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		result, err = displayTitle(tx, itemID)
@@ -84,7 +83,7 @@ func (a *App) DisplayTitle(ctx context.Context, itemID string) (json.RawMessage,
 	return result, err
 }
 
-func displayTitle(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
+func displayTitle(tx *sqlite.Tx, itemID string) (any, error) {
 	if err := requireItem(tx, itemID); err != nil {
 		return nil, err
 	}
@@ -92,14 +91,14 @@ func displayTitle(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return encoded(title)
+	return responseValue(title)
 }
 
-func (a *App) SetDisplayTitle(ctx context.Context, itemID string, request contract.DisplayTitle, key string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) SetDisplayTitle(ctx context.Context, itemID string, request contract.DisplayTitle, key string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "display-title:"+itemID, &key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "display-title:"+itemID, &key, request, func() (any, error) {
 			if err := requireItem(tx, itemID); err != nil {
 				return nil, err
 			}

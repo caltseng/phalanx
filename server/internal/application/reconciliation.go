@@ -14,8 +14,8 @@ import (
 
 func itemBranch(itemID string) string { return "phalanx/" + contract.Digest(itemID) }
 
-func (a *App) RecordObservation(ctx context.Context, itemID, executionID string, request contract.Observation) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RecordObservation(ctx context.Context, itemID, executionID string, request contract.Observation) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		result, err = a.recordObservation(tx, itemID, executionID, request)
@@ -24,7 +24,7 @@ func (a *App) RecordObservation(ctx context.Context, itemID, executionID string,
 	return result, err
 }
 
-func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, request contract.Observation) (json.RawMessage, error) {
+func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, request contract.Observation) (any, error) {
 	if err := requireExecution(tx, itemID, executionID); err != nil {
 		return nil, err
 	}
@@ -95,11 +95,7 @@ func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, reque
 			return nil, &Conflict{"Deployment must describe a merge into the item's target branch"}
 		}
 	}
-	raw, err := encoded(request)
-	if err != nil {
-		return nil, err
-	}
-	value, _, err := contract.Decode(raw)
+	value, err := responseValue(request)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +137,7 @@ func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, reque
 			return nil, err
 		}
 	}
-	return encoded(map[string]any{"recorded": recorded, "local_checks_recorded": checked})
+	return responseValue(map[string]any{"recorded": recorded, "local_checks_recorded": checked})
 }
 
 func (a *App) advanceObservation(tx *sqlite.Tx, itemID string, row sqlite.Execution, state State, url string,
@@ -237,8 +233,8 @@ func (a *App) advanceObservation(tx *sqlite.Tx, itemID string, row sqlite.Execut
 	return nil
 }
 
-func (a *App) RecordLocalChecks(ctx context.Context, itemID, executionID string, request contract.LocalChecks) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RecordLocalChecks(ctx context.Context, itemID, executionID string, request contract.LocalChecks) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		if err := requireExecution(tx, itemID, executionID); err != nil {
 			return err
@@ -269,14 +265,14 @@ func (a *App) RecordLocalChecks(ctx context.Context, itemID, executionID string,
 		if err != nil {
 			return err
 		}
-		result, err = encoded(map[string]any{"recorded": recorded})
+		result, err = responseValue(map[string]any{"recorded": recorded})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request *contract.ReconcilerHeartbeat) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request *contract.ReconcilerHeartbeat) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		now := timestamp(a.Clock())
 		if err := tx.ReconcilerHeartbeat(runnerID, now); err != nil {
@@ -321,20 +317,20 @@ func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request 
 			}
 		}
 		var err error
-		result, err = encoded(map[string]any{"runner_id": runnerID, "last_seen": now})
+		result, err = responseValue(map[string]any{"runner_id": runnerID, "last_seen": now})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) RetireReconciler(ctx context.Context, runnerID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RetireReconciler(ctx context.Context, runnerID string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		retired, err := tx.RetireReconciler(runnerID)
 		if err != nil {
 			return err
 		}
-		result, err = encoded(map[string]any{"runner_id": runnerID, "retired": retired})
+		result, err = responseValue(map[string]any{"runner_id": runnerID, "retired": retired})
 		return err
 	})
 	return result, err

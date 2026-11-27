@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -89,12 +88,12 @@ func reinforcement(row sqlite.Captain, now time.Time) (ReinforcementView, error)
 		AcknowledgedInterval: row.ReinforcedInterval, Due: row.State == "active" && interval > row.ReinforcedInterval}, nil
 }
 
-func captainView(tx *sqlite.Tx, row sqlite.Captain, now time.Time) (json.RawMessage, error) {
+func captainView(tx *sqlite.Tx, row sqlite.Captain, now time.Time) (any, error) {
 	views, err := captainViews(tx, []sqlite.Captain{row}, now)
 	if err != nil {
 		return nil, err
 	}
-	return encoded(views[0])
+	return responseValue(views[0])
 }
 
 func captainViews(tx *sqlite.Tx, rows []sqlite.Captain, now time.Time) ([]CaptainView, error) {
@@ -207,8 +206,8 @@ func captainViewWithContext(row sqlite.Captain, now time.Time, live bool, report
 	}, nil
 }
 
-func (a *App) Captain(ctx context.Context, id string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Captain(ctx context.Context, id string) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		row, err := captainRow(tx, id)
 		if err != nil {
@@ -220,8 +219,8 @@ func (a *App) Captain(ctx context.Context, id string) (json.RawMessage, error) {
 	return result, err
 }
 
-func (a *App) Captains(ctx context.Context, limit int) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Captains(ctx context.Context, limit int) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		rows, err := tx.Captains(limit)
 		if err != nil {
@@ -231,17 +230,17 @@ func (a *App) Captains(ctx context.Context, limit int) (json.RawMessage, error) 
 		if err != nil {
 			return err
 		}
-		result, err = encoded(map[string]any{"captains": views})
+		result, err = responseValue(map[string]any{"captains": views})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) RegisterCaptain(ctx context.Context, request contract.CaptainRegistration, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RegisterCaptain(ctx context.Context, request contract.CaptainRegistration, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "captain", key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "captain", key, request, func() (any, error) {
 			if request.ParentID != nil {
 				if _, err := captainRow(tx, *request.ParentID); err != nil {
 					return nil, err
@@ -269,8 +268,8 @@ func (a *App) RegisterCaptain(ctx context.Context, request contract.CaptainRegis
 	return result, err
 }
 
-func (a *App) CaptainHeartbeat(ctx context.Context, id string, request contract.CaptainHeartbeat) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) CaptainHeartbeat(ctx context.Context, id string, request contract.CaptainHeartbeat) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		row, err := captainRow(tx, id)
 		if err != nil {
@@ -327,11 +326,7 @@ func (a *App) CaptainHeartbeat(ctx context.Context, id string, request contract.
 		now := timestamp(a.Clock())
 		sessions := []map[string]any{}
 		for _, session := range request.Sessions {
-			raw, err := encoded(session)
-			if err != nil {
-				return err
-			}
-			value, _, err := contract.Decode(raw)
+			value, err := responseValue(session)
 			if err != nil {
 				return err
 			}
@@ -386,8 +381,8 @@ func (a *App) CaptainHeartbeat(ctx context.Context, id string, request contract.
 	return result, err
 }
 
-func (a *App) CaptainReinforcement(ctx context.Context, id string, request contract.Reinforcement) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) CaptainReinforcement(ctx context.Context, id string, request contract.Reinforcement) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		row, err := captainRow(tx, id)
 		if err != nil {
@@ -416,14 +411,14 @@ func (a *App) CaptainReinforcement(ctx context.Context, id string, request contr
 		if err != nil {
 			return err
 		}
-		result, err = encoded(current)
+		result, err = responseValue(current)
 		return err
 	})
 	return result, err
 }
 
-func (a *App) CurrentCaptain(ctx context.Context) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) CurrentCaptain(ctx context.Context) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		now := a.Clock().UTC()
 		rows, current, err := liveSnapshot(tx, now)
@@ -465,17 +460,17 @@ func (a *App) CurrentCaptain(ctx context.Context) (json.RawMessage, error) {
 				reason = "Unique live active registration; verify its session_ref and conversation link in the runtime"
 			}
 		}
-		result, err = encoded(map[string]any{"captain": captain, "candidates": candidates, "reason": reason, "observed_at": timestamp(now)})
+		result, err = responseValue(map[string]any{"captain": captain, "candidates": candidates, "reason": reason, "observed_at": timestamp(now)})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) CaptainAction(ctx context.Context, itemID string, request contract.CaptainAction, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) CaptainAction(ctx context.Context, itemID string, request contract.CaptainAction, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "captain-action:"+itemID, key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "captain-action:"+itemID, key, request, func() (any, error) {
 			if _, err := requireActingCaptain(tx, request.CaptainID, "An ended Captain cannot act"); err != nil {
 				return nil, err
 			}
@@ -493,7 +488,7 @@ func (a *App) CaptainAction(ctx context.Context, itemID string, request contract
 			if err := tx.InsertCaptainAction(id, row.ID, request.CaptainID, row.Version, request.Action, request.Reason, timestamp(a.Clock())); err != nil {
 				return nil, err
 			}
-			return encoded(map[string]any{"id": id, "item_id": itemID, "execution_id": row.ID, "version": row.Version,
+			return responseValue(map[string]any{"id": id, "item_id": itemID, "execution_id": row.ID, "version": row.Version,
 				"captain_id": request.CaptainID, "action": request.Action, "reason": request.Reason})
 		})
 		return err

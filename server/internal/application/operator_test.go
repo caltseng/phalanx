@@ -65,22 +65,22 @@ func TestFilteredOperatorPageContinuesAfterExactCandidateWindow(t *testing.T) {
 		Items []map[string]any `json:"items"`
 		Next  *string          `json:"next_cursor"`
 	}
-	if err := json.Unmarshal(response.Body, &first); err != nil {
+	if err := json.Unmarshal(responseJSON(t, response.Body), &first); err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Items) != 0 || first.Next == nil {
-		t.Fatal("empty filtered window dropped the bounded continuation", string(response.Body))
+		t.Fatal("empty filtered window dropped the bounded continuation", string(responseJSON(t, response.Body)))
 	}
 	request.Cursor = first.Next
 	response, err = app.OperatorList(context.Background(), request, ConditionalRead{Path: "/v1/operator/executions", Query: "q=needle&limit=1&cursor=" + *first.Next})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(response.Body, &first); err != nil {
+	if err := json.Unmarshal(responseJSON(t, response.Body), &first); err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Items) != 1 || first.Items[0]["goal"] != "Find this needle" || first.Next != nil {
-		t.Fatal("continuation skipped a match beyond the 2000-candidate window", string(response.Body))
+		t.Fatal("continuation skipped a match beyond the 2000-candidate window", string(responseJSON(t, response.Body)))
 	}
 }
 

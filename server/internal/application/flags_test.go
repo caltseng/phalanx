@@ -42,7 +42,7 @@ func TestFlagDerivationsRespectPerFamilyBoundWithoutLifecycleEffects(t *testing.
 	var result struct {
 		Flags []FlagView `json:"flags"`
 	}
-	if err := json.Unmarshal(raw, &result); err != nil {
+	if err := json.Unmarshal(responseJSON(t, raw), &result); err != nil {
 		t.Fatal(err)
 	}
 	staleCount := 0
@@ -55,7 +55,7 @@ func TestFlagDerivationsRespectPerFamilyBoundWithoutLifecycleEffects(t *testing.
 		t.Fatal("bounded stale-Captain projection changed", staleCount)
 	}
 	after, err := app.Inspect(context.Background(), "up")
-	if err != nil || string(after) != string(before) {
+	if err != nil || string(responseJSON(t, after)) != string(responseJSON(t, before)) {
 		t.Fatal("deriving flags changed work state/history/capacity", err)
 	}
 }
@@ -86,11 +86,11 @@ func TestScopedWriterFlagsDoNotLeakUnrelatedStoredFlags(t *testing.T) {
 	var response struct {
 		Flags []FlagView `json:"flags"`
 	}
-	if err := json.Unmarshal(raw, &response); err != nil {
+	if err := json.Unmarshal(responseJSON(t, raw), &response); err != nil {
 		t.Fatal(err)
 	}
 	if len(response.Flags) != 1 || response.Flags[0].Kind != "scoped" {
-		t.Fatal("current writer received flags from another execution or global scope", string(raw))
+		t.Fatal("current writer received flags from another execution or global scope", string(responseJSON(t, raw)))
 	}
 	var version int64
 	var ended *string

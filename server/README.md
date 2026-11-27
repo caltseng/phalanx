@@ -50,6 +50,11 @@ replacement-writer, pending-cleanup and unfinished-handoff blockers.
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
 owns immutable intake receipts and transaction orchestration; `internal/sqlite`
 owns SQL, per-transaction connections, PRAGMAs, admission, and commit outcomes.
+Application responses remain JSON values through view composition and finalization;
+HTTP serializes them once. Stored JSON is decoded at the storage boundary, while
+receipt request digests and persisted snapshots retain their canonical encoding.
+Response projection preserves sorted keys, exact numeric tokens and the existing
+wire escaping without serializing typed views just to recover their fields.
 Dependency resolution loads ordered links, current executions and stored-report
 existence in one SQL statement. Intake and rerun share execution creation and
 initial dependency-wait refresh.

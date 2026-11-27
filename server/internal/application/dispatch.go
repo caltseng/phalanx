@@ -2,27 +2,26 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
-func (a *App) DispatchSettings(ctx context.Context) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) DispatchSettings(ctx context.Context) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		settings, err := tx.DispatchSettings()
 		if err != nil {
 			return err
 		}
-		result, err = encoded(settings)
+		result, err = responseValue(settings)
 		return err
 	})
 	return result, err
 }
 
-func (a *App) SetDispatch(ctx context.Context, request contract.DispatchUpdate) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) SetDispatch(ctx context.Context, request contract.DispatchUpdate) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		current, err := tx.DispatchSettings()
 		if err != nil {
@@ -60,7 +59,7 @@ func (a *App) SetDispatch(ctx context.Context, request contract.DispatchUpdate) 
 		if err != nil {
 			return err
 		}
-		result, err = encoded(current)
+		result, err = responseValue(current)
 		return err
 	})
 	return result, err

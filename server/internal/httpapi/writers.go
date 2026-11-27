@@ -2,14 +2,13 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 )
 
 func (h *Handler) writerOperation(ctx context.Context, target route, writerID string, input any, keys []string,
-	pathIssues []contract.Issue, key *string) (json.RawMessage, []contract.Issue, error) {
+	pathIssues []contract.Issue, key *string) (any, []contract.Issue, error) {
 	switch target.kind {
 	case "writer-register":
 		request, issues := contract.ValidateWriterRegistration(input, keys)
