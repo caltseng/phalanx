@@ -43,6 +43,38 @@ func Canonical(value any) (string, error) {
 	return buffer.String(), err
 }
 
+// SumNumbers matches Python's integer sum and its promotion on the first real.
+func SumNumbers(numbers []json.Number) (any, error) {
+	total := new(big.Int)
+	var real *float64
+	for _, number := range numbers {
+		if real == nil && !strings.ContainsAny(string(number), ".eE") {
+			integer, ok := new(big.Int).SetString(string(number), 10)
+			if !ok {
+				return nil, fmt.Errorf("Invalid numeric subtotal %q", number)
+			}
+			total.Add(total, integer)
+			continue
+		}
+		if real == nil {
+			value, _ := new(big.Float).SetInt(total).Float64()
+			real = &value
+		}
+		value, err := number.Float64()
+		if err != nil {
+			return nil, err
+		}
+		*real += value
+	}
+	if real != nil {
+		return *real, nil
+	}
+	if len(numbers) == 0 {
+		return nil, nil
+	}
+	return json.Number(total.String()), nil
+}
+
 func writeString(buffer *bytes.Buffer, text string) {
 	buffer.WriteByte('"')
 	for _, r := range text {

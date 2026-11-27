@@ -79,7 +79,7 @@ func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 			result.Holds[hold.ExecutionID] = hold.Reason
 		}
 	}
-	result.admissionContext, err = admissionSnapshot(tx, nil)
+	result.admissionContext, err = admissionSnapshot(tx, nil, now)
 	if err != nil {
 		return result, err
 	}

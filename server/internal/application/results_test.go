@@ -13,6 +13,7 @@ import (
 
 func TestObservationAndDeliveryRollbackTogetherThenReplay(t *testing.T) {
 	app, db := writerStore(t, 1, 1)
+	app.Clock = func() time.Time { return time.Date(2040, 1, 2, 3, 4, 5, 0, time.UTC) }
 	ctx := context.Background()
 	registered, err := app.RegisterWriter(ctx, "up", "execution", contract.WriterRegistration{
 		ExpectedVersion: "1", CaptainID: "captain", Runtime: "synthetic-runtime",
@@ -32,7 +33,7 @@ func TestObservationAndDeliveryRollbackTogetherThenReplay(t *testing.T) {
 	if _, err := db.Exec("UPDATE executions SET state_json=? WHERE id='execution'; UPDATE writers SET building=0", raw); err != nil {
 		t.Fatal(err)
 	}
-	request := contract.Observation{ObservedAt: contract.AwareTime{Time: time.Now().UTC()},
+	request := contract.Observation{ObservedAt: contract.AwareTime{Time: app.Clock()},
 		PR: &contract.ObservedPull{Number: "1", State: "open", HeadRef: itemBranch("up"), HeadSHA: head,
 			BaseRef: "main", BaseSHA: base}, Checks: pointer("satisfied"), TargetBase: pointer("main"),
 		CheckReasons: []string{}, Feedback: []string{}}

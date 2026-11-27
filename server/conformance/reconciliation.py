@@ -36,7 +36,7 @@ def cases():
     add("observation-without-pr-replay", {"observed_at": STAMP})
     add("observation", body)
     add("observation-replay", body)
-    add("observation-later", {**body, "observed_at": "2026-01-03T03:04:05+00:00"})
+    add("observation-later", {**body, "observed_at": "2026-01-02T03:04:06+00:00"})
     add("observation-older", {**body, "observed_at": "2026-01-01T03:04:05Z"})
     add("local-checks-unobserved", {"head": "d" * 40}, path=base + "/local-checks")
     add("local-checks", {"head": HEAD}, path=base + "/local-checks")

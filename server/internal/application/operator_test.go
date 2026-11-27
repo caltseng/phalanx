@@ -93,6 +93,22 @@ func TestOperatorSummaryDefersDeploymentDecodeToResponseProjection(t *testing.T)
 	}
 }
 
+func TestOperatorMetricsRetainSQLiteKindsAndExactSums(t *testing.T) {
+	_, db := writerStore(t, 1, 1)
+	var integer, real, absent *sqlite.Number
+	if err := db.QueryRow("SELECT 9223372036854775807,1.0,NULL").Scan(&integer, &real, &absent); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := contract.SumNumbers([]json.Number{json.Number(*integer), json.Number(*integer)})
+	if err != nil || sum != json.Number("18446744073709551614") || absent != nil {
+		t.Fatal("integer overflow or unknown metric changed", sum, absent, err)
+	}
+	sum, err = contract.SumNumbers([]json.Number{"9007199254740992", json.Number(*real), "1"})
+	if err != nil || sum != float64(9007199254740992) {
+		t.Fatal("REAL promotion stopped rounding in row order", sum, err)
+	}
+}
+
 func TestFilteredOperatorPageContinuesAfterExactCandidateWindow(t *testing.T) {
 	app, db := writerStore(t, 2, 1)
 	now := time.Now().UTC()

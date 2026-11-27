@@ -53,8 +53,8 @@ projects status once, after any claim mutation.
 ## Boundaries and pinned build
 
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
-owns immutable intake receipts and transaction orchestration; `internal/sqlite`
-owns SQL, per-transaction connections, PRAGMAs, admission, and commit outcomes.
+owns immutable receipts, orchestration and the injected `Clock`, also used by validation.
+`internal/sqlite` owns SQL/connections/admission/commits and typed metrics with exact sums.
 Application responses remain JSON values through view composition and finalization;
 HTTP serializes them once. Stored JSON is decoded at the storage boundary, while
 receipt request digests and persisted snapshots retain their canonical encoding.

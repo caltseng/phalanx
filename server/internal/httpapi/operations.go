@@ -156,13 +156,13 @@ func (h *Handler) serveUsage(w http.ResponseWriter, r *http.Request, q *requestS
 	}
 	var issues []contract.Issue
 	if q.route.operation == opWriterUsage {
-		request, bodyIssues := contract.ValidateUsageSnapshot(q.input, q.keys)
+		request, bodyIssues := contract.ValidateUsageSnapshot(q.input, q.keys, h.App.Clock())
 		issues = append(q.pathIssues, bodyIssues...)
 		if len(issues) == 0 {
 			result, err = h.App.OwnUsage(q.ctx, q.writerID, request)
 		}
 	} else {
-		request, bodyIssues := contract.ValidateCaptainUsage(q.input, q.keys)
+		request, bodyIssues := contract.ValidateCaptainUsage(q.input, q.keys, h.App.Clock())
 		issues = append(q.pathIssues, bodyIssues...)
 		if len(issues) == 0 {
 			result, err = h.App.CaptainUsage(q.ctx, q.route.itemID, q.route.executionID, q.route.writerID, request)

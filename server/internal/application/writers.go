@@ -20,19 +20,16 @@ type admissionContext struct {
 	Rework   *string
 }
 
-func admissionSnapshot(tx *sqlite.Tx, capacity *sqlite.DispatchSettings) (admissionContext, error) {
-	var current admissionContext
-	var err error
+func admissionSnapshot(tx *sqlite.Tx, capacity *sqlite.DispatchSettings, now time.Time) (admissionContext, error) {
 	if capacity == nil {
-		current.Capacity, err = tx.DispatchSettings()
+		settings, err := tx.DispatchSettings()
 		if err != nil {
-			return current, err
+			return admissionContext{}, err
 		}
-	} else {
-		current.Capacity = *capacity
+		capacity = &settings
 	}
-	current.Rework, err = tx.FirstRework(time.Now().UnixMilli())
-	return current, err
+	rework, err := tx.FirstRework(now.UnixMilli())
+	return admissionContext{*capacity, rework}, err
 }
 
 func writerRecord(tx *sqlite.Tx, id string) (sqlite.WriterRecord, error) {
@@ -41,14 +38,6 @@ func writerRecord(tx *sqlite.Tx, id string) (sqlite.WriterRecord, error) {
 		return writer, &Missing{"Writer not found"}
 	}
 	return writer, err
-}
-
-func buildingWait(tx *sqlite.Tx, writerID string) (*string, error) {
-	current, err := admissionSnapshot(tx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return buildingReason(current.Capacity, current.Rework, writerID), nil
 }
 
 func buildingReason(capacity sqlite.DispatchSettings, first *string, writerID string) *string {
@@ -81,11 +70,7 @@ func admissionReason(capacity sqlite.DispatchSettings, rework *string, stage Sta
 	return &reason
 }
 
-func binding(tx *sqlite.Tx, writer sqlite.WriterRecord) (any, error) {
-	return bindingWithContext(tx, writer, nil)
-}
-
-func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admissionContext) (any, error) {
+func (a *App) bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admissionContext) (any, error) {
 	execution, err := tx.Execution(writer.ItemID, writer.ExecutionID)
 	if err != nil {
 		return nil, err
@@ -113,13 +98,13 @@ func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admi
 	var capacityWait *string
 	if present(writer.BuildingRequestedAt) && !writer.Building {
 		if current == nil {
-			capacityWait, err = buildingWait(tx, writer.ID)
-		} else {
-			capacityWait = buildingReason(current.Capacity, current.Rework, writer.ID)
+			snapshot, err := admissionSnapshot(tx, nil, a.Clock())
+			if err != nil {
+				return nil, err
+			}
+			current = &snapshot
 		}
-		if err != nil {
-			return nil, err
-		}
+		capacityWait = buildingReason(current.Capacity, current.Rework, writer.ID)
 		if capacityWait == nil {
 			reason := "Building capacity available; retry acquisition"
 			capacityWait = &reason
@@ -152,7 +137,7 @@ func (a *App) acquireBuilding(tx *sqlite.Tx, writer sqlite.WriterRecord, capacit
 			return false, nil, err
 		}
 	}
-	current, err := admissionSnapshot(tx, capacity)
+	current, err := admissionSnapshot(tx, capacity, a.Clock())
 	if err != nil {
 		return false, nil, err
 	}
@@ -176,7 +161,7 @@ func (a *App) claimNext(tx *sqlite.Tx, writer sqlite.WriterRecord, continuedFrom
 		return nil, err
 	}
 	var attemptID *string
-	nowMS := time.Now().UnixMilli()
+	nowMS := a.Clock().UnixMilli()
 	if state.Status == Queued && state.Stopping == nil && state.PendingOutput == nil &&
 		row.ReadySince != nil && *row.ReadySince <= nowMS {
 		acquired := true
@@ -305,13 +290,13 @@ func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, re
 				(old.ReplacedID != nil && *old.ReplacedID != *request.Replaces) {
 				return &Conflict{"This nonce was already used for a different registration"}
 			}
-			result, err = binding(tx, *old)
+			result, err = a.bindingWithContext(tx, *old, nil)
 			return err
 		}
 		if _, err := requireActingCaptain(tx, request.CaptainID, "An ended Captain cannot act on writers"); err != nil {
 			return err
 		}
-		admission, err := admissionSnapshot(tx, nil)
+		admission, err := admissionSnapshot(tx, nil, a.Clock())
 		if err != nil {
 			return err
 		}
@@ -401,7 +386,7 @@ func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, re
 		if err != nil {
 			return err
 		}
-		result, err = bindingWithContext(tx, writer, snapshot)
+		result, err = a.bindingWithContext(tx, writer, snapshot)
 		return err
 	})
 	return result, err
@@ -448,7 +433,7 @@ func (a *App) WriterCapacity(ctx context.Context, writerID string, request contr
 				return err
 			}
 		} else {
-			now := time.Now().UnixMilli()
+			now := a.Clock().UnixMilli()
 			dependencyWait, err := tx.DependencyWaitPresent(execution.ID)
 			if err != nil {
 				return err
@@ -467,7 +452,7 @@ func (a *App) WriterCapacity(ctx context.Context, writerID string, request contr
 		if err != nil {
 			return err
 		}
-		result, err = bindingWithContext(tx, writer, snapshot)
+		result, err = a.bindingWithContext(tx, writer, snapshot)
 		return err
 	})
 	return result, err
@@ -501,7 +486,7 @@ func (a *App) WriterNext(ctx context.Context, writerID string) (any, error) {
 		if err != nil {
 			return err
 		}
-		result, err = bindingWithContext(tx, writer, snapshot)
+		result, err = a.bindingWithContext(tx, writer, snapshot)
 		return err
 	})
 	return result, err
@@ -517,7 +502,7 @@ func (a *App) WriterProgress(ctx context.Context, writerID string, request contr
 		if err != nil {
 			return err
 		}
-		result, err = binding(tx, writer)
+		result, err = a.bindingWithContext(tx, writer, nil)
 		return err
 	})
 	return result, err
@@ -534,7 +519,7 @@ func boundWriter(tx *sqlite.Tx, itemID, executionID, writerID string) (sqlite.Wr
 	return writer, nil
 }
 
-func authorizeWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, captainID string) (string, error) {
+func (a *App) authorizeWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, captainID string) (string, error) {
 	if _, err := requireActingCaptain(tx, captainID, "An ended Captain cannot act on writers"); err != nil {
 		return "", err
 	}
@@ -553,7 +538,7 @@ func authorizeWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, captainID string
 		if err != nil {
 			return "", err
 		}
-		if time.Now().Before(gone) {
+		if a.Clock().Before(gone) {
 			return "", &Conflict{"Captain " + owner.ID + " owns this unconfirmed intent"}
 		}
 	}
@@ -570,7 +555,7 @@ func (a *App) UpdateWriter(ctx context.Context, itemID, executionID string, requ
 		if writer.EndedAt != nil {
 			return &Conflict{"The writer has ended"}
 		}
-		owner, err := authorizeWriter(tx, writer, request.CaptainID)
+		owner, err := a.authorizeWriter(tx, writer, request.CaptainID)
 		if err != nil {
 			return err
 		}
@@ -598,7 +583,7 @@ func (a *App) UpdateWriter(ctx context.Context, itemID, executionID string, requ
 		if err != nil {
 			return err
 		}
-		result, err = binding(tx, writer)
+		result, err = a.bindingWithContext(tx, writer, nil)
 		return err
 	})
 	return result, err
@@ -612,7 +597,7 @@ func (a *App) WithdrawWriter(ctx context.Context, itemID, executionID string, re
 			return err
 		}
 		if writer.EndedAt == nil {
-			if _, err := authorizeWriter(tx, writer, request.CaptainID); err != nil {
+			if _, err := a.authorizeWriter(tx, writer, request.CaptainID); err != nil {
 				return err
 			}
 			if writer.ConfirmedAt != nil && !request.Stopped {
@@ -626,7 +611,7 @@ func (a *App) WithdrawWriter(ctx context.Context, itemID, executionID string, re
 				return err
 			}
 		}
-		result, err = binding(tx, writer)
+		result, err = a.bindingWithContext(tx, writer, nil)
 		return err
 	})
 	return result, err
