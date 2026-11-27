@@ -3,7 +3,33 @@ package sqlite
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"strconv"
 )
+
+const terminalStatusesSQL = "('completed','failed','cancelled')"
+
+// Number retains SQLite INTEGER/REAL identity at the JSON boundary.
+type Number json.Number
+
+func (n *Number) Scan(value any) error {
+	switch value := value.(type) {
+	case int64:
+		*n = Number(strconv.FormatInt(value, 10))
+	case float64:
+		*n = Number(strconv.FormatFloat(value, 'e', -1, 64))
+	default:
+		return fmt.Errorf("Stored PR metric is not numeric: %T", value)
+	}
+	return nil
+}
+
+func (n Number) JSONValue() (any, error) {
+	if integer, err := json.Number(n).Int64(); err == nil {
+		return integer, nil
+	}
+	return json.Number(n).Float64()
+}
 
 type OperatorRow struct {
 	ID, ItemID, CreatedAt, UpdatedAt, Stage, Status, StateJSON string
@@ -17,7 +43,7 @@ type OperatorRow struct {
 	WaitSince, ActiveStartedAt                                 *string
 	RevisionRound                                              int64
 	PRURL, PRState, PRHeadSHA, PRCI, PRCIHeadSHA               *string
-	PRNumber, PRAdditions, PRDeletions, DuplicateCount         any
+	PRNumber, PRAdditions, PRDeletions, DuplicateCount         *Number
 	PRDraft, PRMerged                                          *bool
 	BlockedCount                                               int64
 	WriterID, WriterState, WriterRuntime, WriterCaptainID      *string
@@ -63,7 +89,11 @@ func scanOperatorRow(row scanner) (OperatorRow, error) {
 	return r, err
 }
 
-func scanOperatorRows(rows *sql.Rows) ([]OperatorRow, error) {
+func (tx *Tx) operatorRows(query string, values []any) ([]OperatorRow, error) {
+	rows, err := tx.conn.QueryContext(tx.ctx, query, values...)
+	if err != nil {
+		return nil, err
+	}
 	defer rows.Close()
 	result := []OperatorRow{}
 	for rows.Next() {
@@ -87,7 +117,7 @@ func sqlCursor(value any) any {
 }
 
 func openBucket(selectSQL string, rank int64, after, through []any, where string, parameters []any, limit int) (string, []any) {
-	query := selectSQL + " WHERE execution.status NOT IN ('completed','failed','cancelled')" +
+	query := selectSQL + " WHERE execution.status NOT IN " + terminalStatusesSQL +
 		" AND(CASE execution.status WHEN 'waiting_for_input' THEN 0 ELSE 1 END)=?"
 	values := []any{rank}
 	if after != nil && sqlCursor(after[0]) == rank {
@@ -118,11 +148,7 @@ func (tx *Tx) OperatorOpenPage(after, through []any, size int, where string, par
 			break
 		}
 		query, values := openBucket(operatorSummarySQL, rank, after, through, where, parameters, size-len(result))
-		rows, err := tx.conn.QueryContext(tx.ctx, query, values...)
-		if err != nil {
-			return nil, err
-		}
-		bucket, err := scanOperatorRows(rows)
+		bucket, err := tx.operatorRows(query, values)
 		if err != nil {
 			return nil, err
 		}
@@ -137,25 +163,13 @@ func (tx *Tx) OperatorOpenPage(after, through []any, size int, where string, par
 func (tx *Tx) OperatorOpenCandidates(after []any, size int) ([][]any, error) {
 	result := [][]any{}
 	for rank := cursorRank(after, 0); rank < 2; rank++ {
-		query, values := openBucket("SELECT execution.id,execution.created_at FROM executions execution",
+		query, values := openBucket("SELECT execution.created_at,execution.id FROM executions execution",
 			rank, after, nil, "", nil, size-len(result))
-		rows, err := tx.conn.QueryContext(tx.ctx, query, values...)
+		bucket, err := tx.operatorCandidates(query, values, rank)
 		if err != nil {
 			return nil, err
 		}
-		for rows.Next() {
-			var id, stamp string
-			if err := rows.Scan(&id, &stamp); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			result = append(result, []any{rank, stamp, id})
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		rows.Close()
+		result = append(result, bucket...)
 		if len(result) == size {
 			break
 		}
@@ -164,7 +178,7 @@ func (tx *Tx) OperatorOpenCandidates(after []any, size int) ([][]any, error) {
 }
 
 func (tx *Tx) OperatorClosedPage(after, through []any, size int, where string, parameters []any) ([]OperatorRow, error) {
-	query := operatorSummarySQL + " WHERE execution.status IN ('completed','failed','cancelled')"
+	query := operatorSummarySQL + " WHERE execution.status IN " + terminalStatusesSQL
 	values := []any{}
 	if after != nil {
 		query += " AND(execution.updated_at,execution.id)<(?,?)"
@@ -177,15 +191,11 @@ func (tx *Tx) OperatorClosedPage(after, through []any, size int, where string, p
 	query += where + " ORDER BY execution.updated_at DESC,execution.id DESC LIMIT ?"
 	values = append(values, parameters...)
 	values = append(values, size)
-	rows, err := tx.conn.QueryContext(tx.ctx, query, values...)
-	if err != nil {
-		return nil, err
-	}
-	return scanOperatorRows(rows)
+	return tx.operatorRows(query, values)
 }
 
 func (tx *Tx) OperatorClosedCandidates(after []any, floor *string, size int) ([][]any, error) {
-	query := "SELECT execution.updated_at,execution.id FROM executions execution WHERE status IN ('completed','failed','cancelled')"
+	query := "SELECT execution.updated_at,execution.id FROM executions execution WHERE status IN " + terminalStatusesSQL
 	values := []any{}
 	if after != nil {
 		query += " AND(execution.updated_at,execution.id)<(?,?)"
@@ -197,6 +207,10 @@ func (tx *Tx) OperatorClosedCandidates(after []any, floor *string, size int) ([]
 	}
 	query += " ORDER BY execution.updated_at DESC,execution.id DESC LIMIT ?"
 	values = append(values, size)
+	return tx.operatorCandidates(query, values)
+}
+
+func (tx *Tx) operatorCandidates(query string, values []any, prefix ...any) ([][]any, error) {
 	rows, err := tx.conn.QueryContext(tx.ctx, query, values...)
 	if err != nil {
 		return nil, err
@@ -208,7 +222,8 @@ func (tx *Tx) OperatorClosedCandidates(after []any, floor *string, size int) ([]
 		if err := rows.Scan(&stamp, &id); err != nil {
 			return nil, err
 		}
-		result = append(result, []any{stamp, id})
+		key := append([]any{}, prefix...)
+		result = append(result, append(key, stamp, id))
 	}
 	return result, rows.Err()
 }
@@ -239,11 +254,7 @@ func (tx *Tx) OperatorGroup(label string, after []any, limit int) ([]OperatorRow
 		" WHERE item.id IN(SELECT id FROM group_page) AND NOT EXISTS(SELECT 1 FROM executions later WHERE later.previous_id=execution.id)" +
 		" ORDER BY item.created_at,item.id"
 	values = append(values, limit)
-	rows, err := tx.conn.QueryContext(tx.ctx, query, values...)
-	if err != nil {
-		return nil, err
-	}
-	return scanOperatorRows(rows)
+	return tx.operatorRows(query, values)
 }
 
 func (tx *Tx) OperatorBrief(itemID string) (*string, *string, error) {
@@ -258,25 +269,12 @@ func (tx *Tx) OperatorDeadlines(nowMS int64, launchCutoff, closedCutoff string) 
 	var retry, ready *int64
 	var launch, closed *string
 	err := tx.conn.QueryRowContext(tx.ctx, `SELECT
-		(SELECT max(retry_at) FROM executions WHERE status NOT IN ('completed','failed','cancelled') AND retry_at<=?),
-		(SELECT max(ready_since) FROM executions WHERE status NOT IN ('completed','failed','cancelled') AND ready_since<=?),
+		(SELECT max(retry_at) FROM executions WHERE status NOT IN `+terminalStatusesSQL+` AND retry_at<=?),
+		(SELECT max(ready_since) FROM executions WHERE status NOT IN `+terminalStatusesSQL+` AND ready_since<=?),
 		(SELECT max(created_at) FROM writers WHERE ended_at IS NULL AND confirmed_at IS NULL AND created_at<=?),
-		(SELECT max(updated_at) FROM executions WHERE status IN ('completed','failed','cancelled') AND updated_at<?)`,
+		(SELECT max(updated_at) FROM executions WHERE status IN `+terminalStatusesSQL+` AND updated_at<?)`,
 		nowMS, nowMS, launchCutoff, closedCutoff).Scan(&retry, &ready, &launch, &closed)
-	result := []any{nil, nil, nil, nil}
-	if retry != nil {
-		result[0] = *retry
-	}
-	if ready != nil {
-		result[1] = *ready
-	}
-	if launch != nil {
-		result[2] = *launch
-	}
-	if closed != nil {
-		result[3] = *closed
-	}
-	return result, err
+	return []any{retry, ready, launch, closed}, err
 }
 
 func (tx *Tx) OperatorChangeToken() (string, error) {
@@ -293,7 +291,7 @@ type OperatorOpenCount struct {
 
 func (tx *Tx) OperatorOpenCounts() ([]OperatorOpenCount, error) {
 	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT status,dependency_wait_json IS NOT NULL,count(*) FROM executions
-		WHERE status NOT IN ('completed','failed','cancelled') GROUP BY status,dependency_wait_json IS NOT NULL`)
+		WHERE status NOT IN `+terminalStatusesSQL+` GROUP BY status,dependency_wait_json IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +309,7 @@ func (tx *Tx) OperatorOpenCounts() ([]OperatorOpenCount, error) {
 
 func (tx *Tx) OperatorClosedCounts(cutoff string) (map[string]int64, error) {
 	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT outcome,count(*) FROM executions
-		WHERE status IN ('completed','failed','cancelled') AND updated_at>=? GROUP BY outcome`, cutoff)
+		WHERE status IN `+terminalStatusesSQL+` AND updated_at>=? GROUP BY outcome`, cutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +453,7 @@ func (tx *Tx) MusterWriters() ([]map[string]any, error) {
 	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT writer.id,writer.item_id,writer.execution_id,writer.captain_id,
 		writer.state,writer.session_id,writer.session_url,writer.last_progress_at
 		FROM writers writer JOIN executions execution ON execution.id=writer.execution_id
-		WHERE writer.ended_at IS NULL AND writer.abandoned_at IS NULL AND execution.status NOT IN ('completed','failed','cancelled')
+		WHERE writer.ended_at IS NULL AND writer.abandoned_at IS NULL AND execution.status NOT IN `+terminalStatusesSQL+`
 		ORDER BY writer.id`)
 	if err != nil {
 		return nil, err

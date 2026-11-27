@@ -139,7 +139,7 @@ def differential(binary, output):
             for label in ("P0", "D0", "Go"):
                 directory = root / f"usage-{shape}-{label}"
                 database = h.fresh(directory, sources, retained)
-                command = [str(binary), "--fixture", str(database)] if label == "Go" else [
+                command = [str(binary), "--fixture", str(database), "--clock-offset=24h"] if label == "Go" else [
                     sys.executable, "-P", str(h.HERE / "oracle.py"), "serve", str(sources[label]), str(database)]
                 actual, tokens = [], {}
                 with h.server(command, directory) as url:

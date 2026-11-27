@@ -633,13 +633,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		var issues []contract.Issue
 		if route.kind == "writer-usage" {
-			request, bodyIssues := contract.ValidateUsageSnapshot(input, keys)
+			request, bodyIssues := contract.ValidateUsageSnapshot(input, keys, h.App.Clock())
 			issues = append(pathIssues, bodyIssues...)
 			if len(issues) == 0 {
 				result, err = h.App.OwnUsage(ctx, writerID, request)
 			}
 		} else {
-			request, bodyIssues := contract.ValidateCaptainUsage(input, keys)
+			request, bodyIssues := contract.ValidateCaptainUsage(input, keys, h.App.Clock())
 			issues = append(pathIssues, bodyIssues...)
 			if len(issues) == 0 {
 				result, err = h.App.CaptainUsage(ctx, route.itemID, route.executionID, route.writerID, request)

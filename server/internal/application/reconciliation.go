@@ -74,7 +74,7 @@ func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, reque
 	if completedReady && request.PR == nil {
 		return nil, &Conflict{"A completed ready execution requires its primary PR observation"}
 	}
-	if request.ObservedAt.After(time.Now().UTC().Add(5 * time.Minute)) {
+	if request.ObservedAt.After(a.Clock().UTC().Add(5 * time.Minute)) {
 		return nil, &Conflict{"observed_at is in the future"}
 	}
 	url, head := "", ""

@@ -14,21 +14,18 @@ var TokenFields = []string{"input", "output", "cache_read", "cache_write", "reas
 
 // SumUsageCounters retains exact subtotals, using text above the JSON-safe bound.
 func SumUsageCounters(counters []json.Number) (any, error) {
-	if len(counters) == 0 {
-		return nil, nil
+	sum, err := SumNumbers(counters)
+	if sum == nil || err != nil {
+		return sum, err
 	}
-	total := new(big.Int)
-	for _, counter := range counters {
-		integer, ok := new(big.Int).SetString(string(counter), 10)
-		if !ok {
-			return nil, errors.New("Included usage counter is not an integer")
-		}
-		total.Add(total, integer)
+	total, ok := sum.(json.Number)
+	if !ok {
+		return nil, errors.New("Included usage counter is not an integer")
 	}
-	if total.Cmp(big.NewInt(MaxUsageCounter)) > 0 {
-		return total.String(), nil
+	if value, err := total.Int64(); value > MaxUsageCounter || err != nil && total[0] != '-' {
+		return string(total), nil
 	}
-	return json.Number(total.String()), nil
+	return total, nil
 }
 
 type Tokens struct {
@@ -130,7 +127,7 @@ func (v *validator) quantity(value any, at []any) *Quantity {
 	return result
 }
 
-func (v *validator) usageSnapshot(value any, at []any, keys []string) UsageSnapshot {
+func (v *validator) usageSnapshot(value any, at []any, keys []string, now time.Time) UsageSnapshot {
 	body, ok := object(value)
 	if !ok {
 		v.issues = append(v.issues, modelIssue(value, at)...)
@@ -189,7 +186,7 @@ func (v *validator) usageSnapshot(value any, at []any, keys []string) UsageSnaps
 		switch {
 		case result.WindowStart.After(result.Cutoff.Time) || result.Cutoff.After(result.ObservedAt.Time):
 			message = "Usage window must precede observation"
-		case result.ObservedAt.After(time.Now().UTC()):
+		case result.ObservedAt.After(now):
 			message = "Usage observation cannot be in the future"
 		case result.Status == "unavailable" && known:
 			message = "Unavailable acquisition must not invent or erase numeric counters"
@@ -203,13 +200,13 @@ func (v *validator) usageSnapshot(value any, at []any, keys []string) UsageSnaps
 	return result
 }
 
-func ValidateUsageSnapshot(value any, keys []string) (UsageSnapshot, []Issue) {
+func ValidateUsageSnapshot(value any, keys []string, now time.Time) (UsageSnapshot, []Issue) {
 	v := validator{}
-	result := v.usageSnapshot(value, []any{"body"}, keys)
+	result := v.usageSnapshot(value, []any{"body"}, keys, now)
 	return result, v.issues
 }
 
-func ValidateCaptainUsage(value any, keys []string) (CaptainUsage, []Issue) {
+func ValidateCaptainUsage(value any, keys []string, now time.Time) (CaptainUsage, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
@@ -220,7 +217,7 @@ func ValidateCaptainUsage(value any, keys []string) (CaptainUsage, []Issue) {
 		result.CaptainID = v.text(value, location(at, "captain_id"), false, 0, 0, IdentifierPattern)
 	}
 	if value, exists := v.required(body, "snapshot", at); exists {
-		result.Snapshot = v.usageSnapshot(value, location(at, "snapshot"), ObjectKeys(value))
+		result.Snapshot = v.usageSnapshot(value, location(at, "snapshot"), ObjectKeys(value), now)
 	}
 	v.extras(body, keys, []string{"captain_id", "snapshot"}, at)
 	return result, v.issues
