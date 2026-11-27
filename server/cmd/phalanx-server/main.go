@@ -131,6 +131,7 @@ func serve(ctx context.Context, config configuration) (result error) {
 	if err != nil {
 		return err
 	}
+	defer func() { result = errors.Join(result, store.Close()) }()
 	app := application.New(store)
 	if err := app.StartReconciliation(ctx); err != nil {
 		return err

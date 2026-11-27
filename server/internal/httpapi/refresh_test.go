@@ -67,6 +67,11 @@ func TestBoundedDependencyRefreshAndRestartAuditCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	restarted := application.New(store)
 	if worked, err := restarted.ProcessRefresh(context.Background()); err != nil || !worked {
 		t.Fatal("persisted dependency continuation did not resume", worked, err)

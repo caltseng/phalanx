@@ -80,6 +80,11 @@ func fixtureAppDatabase(t *testing.T) (*application.App, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	app := application.New(store)
 	if _, err := app.Register(context.Background(), contract.Registration{ID: "fixture", Remote: "https://github.com/example/fixture.git"}); err != nil {
 		t.Fatal(err)
