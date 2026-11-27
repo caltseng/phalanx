@@ -431,8 +431,14 @@ def supervise(config_path, config, env, *, task, record, engine, go_binary):
             if (current.expected["executable_hash"] == proof["action_executable_hash"]
                     and current.expected["arguments_hash"] == proof["action_arguments_hash"]):
                 break
+            if current.pid == proof["engine_pid"]:
+                raise OwnershipError("Task engine is not the proven executable action", diagnostic={
+                    "expected_executable_hash": proof["action_executable_hash"],
+                    "expected_arguments_hash": proof["action_arguments_hash"],
+                    "observed_lineage": [node["identity"] for node in lineage],
+                })
             parent = current.expected["parent"]
-            if not parent or parent == proof["engine_pid"] or len(lineage) >= 16:
+            if not parent or len(lineage) >= 16:
                 raise OwnershipError("Sole task action is not the supervisor's proven ancestor")
             current = Original.capture(native, parent, _query)
             stack.callback(current.close)

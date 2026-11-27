@@ -302,6 +302,7 @@ def main():
             return fixture_supervise(args)
         except BaseException as error:
             details = {"error": str(error), "type": type(error).__name__,
+                       "diagnostic": getattr(error, "diagnostic", None),
                        "traceback": traceback.format_exc(), "historical_cause": "UNKNOWN"}
             args.record.with_suffix(".failure.json").write_text(
                 json.dumps(details, indent=2), encoding="utf-8")

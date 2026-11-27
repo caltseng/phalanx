@@ -100,16 +100,22 @@ class IdentityTest(unittest.TestCase):
             self.assertEqual(result["request_outcomes"], "transport-unknown")
 
     def test_supervise_keeps_server_engine_separate_from_task_engine_identity(self):
-        for selected in (None, "python", "go"):
-            with self.subTest(engine=selected), TemporaryDirectory() as temporary:
+        for selected, launcher in ((engine, parent) for engine in (None, "python", "go")
+                                   for parent in (False, True)):
+            with self.subTest(engine=selected, launcher=launcher), TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
                 database = root / "synthetic.sqlite3"
                 database.touch()
                 database.with_name(database.name + ".service.lock").touch()
                 identity = dict(self.row, pid=os.getpid())
                 original = w.Original(self.native, os.getpid(), 900, self.row["created"], identity)
-                proof = {"engine_pid": os.getpid(), "action_executable_hash": identity["executable_hash"],
-                         "action_arguments_hash": identity["arguments_hash"]}
+                parent_identity = dict(self.row, pid=identity["parent"], parent=7,
+                                       executable_hash=w.digest("venv-launcher.exe"))
+                parent = w.Original(self.native, parent_identity["pid"], 899,
+                                    self.row["created"], parent_identity)
+                action = parent if launcher else original
+                proof = {"engine_pid": action.pid, "action_executable_hash": action.expected["executable_hash"],
+                         "action_arguments_hash": action.expected["arguments_hash"]}
                 job = Mock(handle=901, root=902, identity="owned-fixture", root_identity=self.row)
                 job.launch.return_value = 42
                 job.wait_empty.return_value = 17
@@ -118,7 +124,7 @@ class IdentityTest(unittest.TestCase):
                     return {"task": proof} if operation == "inspect" else {"listeners": []}
 
                 with patch.object(w, "_native", return_value=self.native), \
-                        patch.object(w.Original, "capture", return_value=original), \
+                        patch.object(w.Original, "capture", side_effect=[original, parent]), \
                         patch.object(w, "Job", return_value=job), \
                         patch.object(w, "task_control", side_effect=control):
                     code = w.supervise(root / "deployment.json", {"server": {"port": 12345}},
@@ -130,6 +136,27 @@ class IdentityTest(unittest.TestCase):
                 else:
                     self.assertEqual(command[command.index("--engine") + 1], selected)
                 self.assertEqual(code, 17)
+
+    def test_shared_engine_parent_never_substitutes_for_the_executable_action(self):
+        identity = dict(self.row, pid=os.getpid())
+        original = w.Original(self.native, os.getpid(), 900, self.row["created"], identity)
+        parent_identity = dict(self.row, pid=identity["parent"], parent=7)
+        parent = w.Original(self.native, parent_identity["pid"], 899, self.row["created"], parent_identity)
+        proof = {"engine_pid": parent.pid, "action_executable_hash": w.digest("different-action.exe"),
+                 "action_arguments_hash": identity["arguments_hash"]}
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            database = root / "synthetic.sqlite3"
+            database.touch()
+            with patch.object(w, "_native", return_value=self.native), \
+                    patch.object(w.Original, "capture", side_effect=[original, parent]), \
+                    patch.object(w, "Job") as job, \
+                    patch.object(w, "task_control", return_value={"task": proof}):
+                with self.assertRaisesRegex(w.OwnershipError, "not the proven executable action"):
+                    w.supervise(root / "deployment.json", {"server": {"port": 12345}},
+                                {"PHALANX_DB": str(database)}, task="\\synthetic",
+                                record=root / "record.json", engine="go", go_binary=None)
+                job.assert_not_called()
 
 
 @unittest.skipUnless(os.name == "nt", "Win32 native-handle fixtures run in Windows CI")
