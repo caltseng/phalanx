@@ -253,6 +253,108 @@ Authoritative state decoding now refuses explicit-null publication mode before
 mutation; the named operator projections still return null without effects,
 and omitted mode retains its ready default.
 
+### Deployment retirement and incomplete-header regression
+
+The original unchanged Python writer regression
+`test_deployment_observations_refresh_flags_without_reopening_delivery` found
+a Go 500 when a heartbeat disabled a real latest deployment with
+`{"deployment_checks":{"repo":null}}`. Validation already accepted that null.
+Retirement removed the generated stored PR URL but revalidated the decoded
+object's stale original key list. The edited PR now uses its actual map keys;
+request validation still rejects a caller-supplied PR URL. The strengthened
+`reconciliation.py` uses a strictly earlier deployment timestamp, checks that
+the latest signal actually becomes disabled, retains complete before/after
+typed stores, and asserts every unrelated table stays unchanged. This avoids
+the former equal-timestamp fixture's vacuous success. Absent and null bodies,
+absent configuration, null per-repository names and refused malformed
+configuration retain the actual Python contract.
+
+The strict production regression in `headers.py`
+exercises P0, D0 and Go through their real production launchers on both schema
+shapes. Run from the repository root with the approved Python checks prefix:
+
+```text
+server\conformance\headers.py --binary <outside-checkout>\phalanx-server.exe --output <outside-checkout>\headers
+```
+
+`--record-only` preserves exploratory observations without claiming parity.
+The strict command retains exact request segments, raw
+replies, early-refusal timing, actual close, valid neighboring connections and
+every typed table/DDL before and after each request, including an authenticated
+mutation Python refuses without effects. The pinned Windows production parser
+is Uvicorn's h11 implementation: an incomplete receive event larger than
+16,384 bytes is refused with HTTP/1.1 400, plain-text
+`Invalid HTTP request received.` and `Connection: close` before the terminator.
+An event of exactly 16,384 bytes may wait; a complete oversized head in the same
+receive event can be accepted. Splitting at or below the boundary then
+coalescing the rest with the terminator differs from crossing it while still
+incomplete. Body and pipeline cases retain their measured receive-event
+segmentation; one client `sendall` is not proof of one server receive event.
+
+Go's global `MaxHeaderBytes` is not an equivalent fix. Neither a blanket size
+cap, a request deadline, a broader malformed-input exception nor a replacement
+parser is approved. The owner authorized a narrowly scoped passive observer
+experiment in execution `db1cd4356eaa4e6992ed10fd25c8f9ef`, reply v4. The
+observer uses the pinned asyncio receive-event sizes (Windows 64 KiB, POSIX
+256 KiB), checks only incomplete heads and follows fixed/chunked-body framing
+to defer pipelined heads until native idle. `net/http` remains the request/body
+parser and receives unchanged bytes. Native malformed framing remains its
+authority. Buffered read-ahead does not count as new idle input, and native
+pending-read aborts are transient, not cached connection failures. The native
+500-field default is disabled because Python accepts complete multi-field
+events above that count; no new global byte/count limit or timeout is added.
+The current-head first byte also follows h11's early control/space refusal;
+otherwise native Go's POST CR/LF tolerance can silently bypass observation.
+This check applies only at head boundaries, never to fixed/chunked body bytes.
+
+The corpus includes 29 header boundary/segmentation/body/pipeline cases, 26
+initial/post-body/coalesced CR/LF/space/tab boundary cases, the
+18 unchanged framework requests with their exact v12 classifications, full
+typed-store refusal checks, and a valid same-key intake receipt after a refused
+request. Raw response bytes remain recorded; only the existing generated
+Date/Server/length/chunk-framing allowances are used for semantic comparison.
+Original first-byte idle, buffered-prefix, body, disconnect, lock and drain
+checks remain required alongside exact-head independent review and fresh CI.
+An authorized experiment or source merge is not deployment readiness.
+
+Repeated real Windows entrypoint requests with coalesced body/next-head input
+exposed TCP resets that discarded the 400 or the entire response. A direct
+Windows `SHUT_RDWR`-before-close experiment did not eliminate that loss and was
+removed. Those failing raw responses, reset errors, typed stores and matched
+repetition manifests remain evidence; a passing single matrix or package run
+does not supersede them.
+
+The owner separately authorized receive/closure investigation in execution
+`db1cd4356eaa4e6992ed10fd25c8f9ef`, reply v11. A write FIN followed by a drain
+until peer EOF passed wire tests, but independent review rejected its indefinite
+per-peer socket/goroutine/buffer lifetime. That experiment and its evidence
+remain historical, not adoption approval.
+
+The current strategy sends the refusal and a write-side FIN, snapshots the
+finite bytes already queued by the native socket, reads only that snapshot,
+then fully closes. It never waits for future data, peer EOF or service
+cancellation. Windows uses Winsock `FIONREAD`; Linux and macOS use their native
+queued-byte ioctl. There is no new timer, request cap, request parsing or
+dispatch of drained bytes. Temporary raw close work remains inside the native
+connection goroutine/tracking lifetime; service cancellation can interrupt it.
+Refused request buffers are released.
+
+The native TCP/HTTP tests verify prompt raw-descriptor and connection-tracking
+disposal before peer EOF, including batches of EOF-open peers and concurrent
+closes with quiet or sending peers. The production corpus verifies no retained
+database transaction/admission/accepted-operation ownership, ordinary
+authenticated work and its receipt, zero receipts from authenticated-looking
+refused noise, and clean shutdown/lock release without first closing peers.
+Independent final-head review must assess both resource disposal and wire
+preservation; investigation permission is not an adoption waiver.
+
+`headers.py` also repeats the original fixed/chunked-body response-preservation
+cases 100 times each per implementation and schema shape. Every response,
+close/reset error and full typed store remains recorded. The prior unexplained
+post-load drain failure is independently UNKNOWN; successful later runs do not
+relabel its cause. Exact-final-head independent approval, original strict
+stream/body/disconnect/drain/receipt checks and fresh CI remain required.
+
 ## Native domain extension evidence (in development)
 
 The immutable foundation's 114 vectors and both golden files are unchanged.
@@ -270,7 +372,7 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `steering.py` | 22 on each schema shape | Version-fenced owner steering and rerun, exact receipt replay and unchanged scope on refusals |
 | `captains.py` | 41 on each schema shape | Lifecycle, current routing, reinforcement, session field-error ordering, preserved null/duplicate first-seen values and missing-key refusal |
 | `archives.py` | 14 on each schema shape | Active-ownership refusal, immutable terminal archive outcomes and authorization |
-| `reconciliation.py` | 76 on each schema shape | Exact observation digests/timestamps, immutable local checks, heartbeat/retirement, delivery handoff/Building fencing, ready-output enrichment, stop/merge precedence and deployment retirement |
+| `reconciliation.py` | 84 on each schema shape | Exact observation digests/timestamps, immutable local checks, heartbeat/retirement, delivery handoff/Building fencing, ready-output enrichment, stop/merge precedence and nonvacuous deployment retirement with null/absent/malformed configuration boundaries |
 | `datetimes.py` | 1,449 | Exact pinned aware-datetime coercion, serialization and error envelopes, including numeric precision, calendar/offset boundaries and deterministic randomized timestamps |
 | `usage.py` | 71 on each schema shape | Exact JSON storage, cumulative replay/monotonicity, attribution/scope, acquisition-gap retention, provided decimal quantities and late observations; every other durable table is unchanged |
 | `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |
