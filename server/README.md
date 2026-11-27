@@ -1,8 +1,8 @@
-# Disposable Go HTTP foundation
+# Go HTTP server and disposable compatibility proof
 
-**Not deployable.** This is the first implementation slice of the
+**Not automatically deployed.** The native server implements the
 [HTTP server migration specification](../docs/http-server-migration.md).
-It does not replace the Python service, alter deployment entrypoints, discover
+It does not replace the Python service by default, discover
 operator configuration, migrate a database, or change Python clients/reconciler/Scribe.
 Implemented HTTP operations are `/health`, the owner/runner role probes,
 repository registration/listing, owner intake, scoped item reads, display-title
@@ -41,7 +41,10 @@ owns immutable intake receipts and transaction orchestration; `internal/sqlite`
 owns SQL, per-transaction connections, PRAGMAs, admission, and commit outcomes.
 `internal/contract` is the presence/validation/canonical encoding
 boundary. `internal/instancelock` holds the Python-compatible database-adjacent OS
-lock for the entire test-server lifetime. There is no production `serve` command.
+lock for the entire server lifetime. The explicitly selected
+`cmd/phalanx-server` and deterministic `package.py` produce a server-only package
+for [operator-owned rehearsal/cutover/rollback](../docs/go-server-release.md).
+The existing `deploy run` adapter defaults to Python; Go cannot initialize a DB.
 
 Go **1.27.4**, `modernc.org/sqlite` **v1.63.0** (observed SQLite **3.54.1**),
 `golang.org/x/sys` **v0.50.0** and the
@@ -66,9 +69,11 @@ go test ./...
 CI builds/tests on Windows, Linux and macOS and race-checks Linux/macOS with their
 prepared C compilers. The supplied local Windows environment has CGO disabled
 and no C compiler: a local `go test -race` is an explicit gap, not a passing check.
-Windows real-loopback differential/lock evidence is a required CI job. Linux/macOS
-lock implementations build there, but Python-Go bidirectional lock proof is
-currently for Windows only; those hosts are not authorized deployment targets.
+Windows real-loopback pinned differential evidence is a required CI job.
+`conformance/locks.py` separately exercises actual Python-Go exclusion in both
+directions on Windows/Linux/macOS. Its OS-only runtime is recorded, not falsely
+called the exact Windows wire oracle. Host eligibility still requires the
+operator's actual private rehearsal and service ownership.
 
 Windows CI provisions a job-local, non-free-threaded Python-build-standalone
 `20261110` CPython 3.14.10 archive, SHA-256
@@ -298,10 +303,11 @@ finalization intents after reopening the store. Background work drains an
 already dispatched bounded batch before the disposable adapter releases its
 instance lock; it does not introduce a production shutdown deadline.
 
-These are partial implementation proofs, **not full workflow/API conformance**.
-Pure decision parity does not prove transactional writer/claim/capacity
-continuation. Complete finalization/dependency race/fault and package-switch
-coverage, all remaining route/model families, exact-head independent review,
-fresh required CI and the separately authorized release/adoption work remain
-required. No server-launch adapter, live configuration, schema, credential,
-Python CLI/reconciler or Scribe asset was changed.
+The full family corpus, transactional faults/races and eight-phase package
+continuation remain mandatory alongside inventory and pure decision tests.
+`conformance/release.py` adds the real packaged binary, unchanged clients,
+online Python admin backup, same-data new-write rollback and measured matched
+synthetic load. Exact-final-head independent review and fresh required CI remain
+merge gates; operator-private current-data rehearsal is a distinct adoption gate.
+Only the server launch adapter is extended; no live configuration/schema/data/
+credentials, client protocols, reconciler or canonical Scribe asset is changed.

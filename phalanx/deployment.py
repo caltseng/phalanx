@@ -143,7 +143,14 @@ def service_environment(env):
         os.environ.update(previous)
 
 
-def run_service(config, env, service, *, initialize_database=False, once=False, serve=None):
+def run_service(config, env, service, *, initialize_database=False, once=False, serve=None,
+                engine="python", go_binary=None):
+    if engine not in ("python", "go"):
+        raise ValueError("Server engine must be python or go")
+    if (engine != "python" or go_binary is not None) and service != "server":
+        raise ValueError("Engine selection applies only to the server")
+    if go_binary is not None and engine != "go":
+        raise ValueError("--go-binary requires explicit --engine go")
     if service == "reconciler":
         command = [sys.executable, "-P", "-m", "phalanx", "reconcile",
                    "--config", config["reconciler_config"], "--state", config["reconciler_state"]]
@@ -159,6 +166,19 @@ def run_service(config, env, service, *, initialize_database=False, once=False, 
                          "For a new install only, pass --initialize-database")
     if path.exists() and initialize_database:
         raise ValueError("--initialize-database is only for a new database")
+    if engine == "go":
+        if initialize_database:
+            raise ValueError("Go cutover requires an existing database; initialization is not supported")
+        if go_binary is None or not Path(go_binary).is_absolute() or not Path(go_binary).is_file():
+            raise ValueError("Go cutover requires an explicit absolute packaged --go-binary")
+        binary = Path(go_binary).resolve()
+        # The Go child owns the same OS lock; acquiring it here would fence our child.
+        from .priority import foreground_priority
+
+        foreground_priority()
+        return subprocess.call([str(binary), "--host", config["server"]["host"],
+                                "--port", str(config["server"]["port"]),
+                                "--assets", str(binary.parent / "assets")], env=env)
     if serve is None:
         raise ValueError("Server launch requires the server-host entrypoint")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -189,6 +209,9 @@ def add_deploy_command(commands):
             action.add_argument("service", choices=("server", "reconciler"))
             action.add_argument("--initialize-database", action="store_true")
             action.add_argument("--once", action="store_true")
+            action.add_argument("--engine", choices=("python", "go"), default="python",
+                                help="server only; Go requires a separately validated operator cutover")
+            action.add_argument("--go-binary", type=Path, help="absolute versioned Go package binary")
         elif name == "cli":
             action.add_argument("arguments", nargs=argparse.REMAINDER)
 
@@ -224,4 +247,5 @@ def run_deploy(args, *, serve=None):
     if args.once and args.service != "reconciler":
         raise ValueError("--once applies only to the reconciler")
     return run_service(config, env, args.service,
-                       initialize_database=args.initialize_database, once=args.once, serve=serve)
+                       initialize_database=args.initialize_database, once=args.once, serve=serve,
+                       engine=getattr(args, "engine", "python"), go_binary=getattr(args, "go_binary", None))

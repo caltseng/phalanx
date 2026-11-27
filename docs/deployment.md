@@ -7,6 +7,12 @@ See the [deployment diagram](architecture.md#deployment-and-recovery-boundaries)
 boundaries. Keep installed revisions, private paths and rollout receipts in the operator's
 private runbook, not this repository.
 
+The optional [Go server package and rehearsal](go-server-release.md) uses
+explicit `deploy run ... server --engine go --go-binary <absolute-package-binary>`.
+Python remains the default. This selects only the existing API server after the
+operator's compatibility gates; it does not deploy on merge or replace clients,
+configuration, data, credentials, capacities, reconciler or supervisor ownership.
+
 ## Standing authority for compatible upgrades
 
 Authorized service operators may execute routine compatible reviewed/checks-green upgrades
@@ -101,9 +107,10 @@ python -m phalanx deploy cli --home D:\.phalanx_muster -- shift status
 ```
 
 Remove `--initialize-database` from persistent commands. Normal startup refuses a missing
-database; initialization refuses an existing file. Uvicorn performs server schema checks;
+database; initialization refuses an existing file. The selected server performs schema checks;
 deployment tooling never opens queue storage itself. Each supported server holds a
-database-adjacent OS lock for its lifetime and uses one Uvicorn worker. Reconciler scratch
+database-adjacent OS lock for its lifetime; Python uses one Uvicorn worker and
+Go uses one foreground native server. Reconciler scratch
 locking is separate.
 
 Both services remain foreground processes. Configure **one** host supervisor per service

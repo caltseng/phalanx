@@ -232,6 +232,35 @@ class DeploymentTest(unittest.TestCase):
         serve.assert_not_called()
         self.assertFalse(database.exists())
 
+    def test_go_engine_is_explicit_and_child_owns_the_existing_lock(self):
+        home = self.install()
+        config, env = deployment.configuration(home / "deployment.json")
+        database = Path(env["PHALANX_DB"])
+        database.parent.mkdir()
+        database.write_bytes(b"existing database")
+        binary = self.root / "versioned-package" / "phalanx-server.exe"
+        binary.parent.mkdir()
+        binary.write_bytes(b"synthetic executable")
+        with patch.object(deployment, "any_file_lock") as lock, \
+                patch.object(deployment.subprocess, "call", return_value=7) as call:
+            self.assertEqual(deployment.run_service(
+                config, env, "server", engine="go", go_binary=binary), 7)
+            call.assert_called_once_with([
+                str(binary), "--host", "127.0.0.1", "--port", "8000",
+                "--assets", str(binary.parent / "assets")], env=env)
+            lock.assert_not_called()
+            self.assertEqual(database.read_bytes(), b"existing database")
+        for options in (
+                {"engine": "go"}, {"engine": "python", "go_binary": binary},
+                {"engine": "go", "go_binary": Path("relative.exe")},
+                {"engine": "go", "go_binary": binary, "initialize_database": True}):
+            with self.subTest(options=options), patch.object(deployment.subprocess, "call") as call:
+                with self.assertRaises(ValueError):
+                    deployment.run_service(config, env, "server", **options)
+                call.assert_not_called()
+        with self.assertRaisesRegex(ValueError, "only to the server"):
+            deployment.run_service(config, env, "reconciler", engine="go", go_binary=binary)
+
     def test_read_only_check_has_no_service_or_database_side_effects(self):
         home = self.install()
         args = Namespace(deploy_command="check", config=home / "deployment.json", home=None)
