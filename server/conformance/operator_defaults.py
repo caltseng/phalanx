@@ -18,7 +18,8 @@ def cases():
         "operator-timeline": "/v1/operator/executions/" + h.SEED_EXECUTION + "/timeline",
     }
     reads = [{"id": name + "/" + mode, "path": path, "mode": mode}
-             for name, path in routes.items() for mode in ("omitted", "ready", "draft", "null", "missing-target", "invalid-wait")]
+             for name, path in routes.items() for mode in ("omitted", "ready", "draft", "null", "missing-target", "invalid-wait",
+                                                          "null-no-writer", "null-ended-writer")]
     return reads + [{"id": "owner-cancel/" + field + "-null", "path": "/v1/items/" + h.SEED +
                     "/executions/" + h.SEED_EXECUTION + "/cancel", "mode": "mutation-null", "null_field": field}
                     for field in ("publication_mode",)]
@@ -41,6 +42,9 @@ def characterize(binary, output):
                     base, = db.execute("SELECT state_json FROM executions WHERE id=?", (h.SEED_EXECUTION,)).fetchone()
                     base = json.loads(base)
                     version, = db.execute("SELECT version FROM executions WHERE id=?", (h.SEED_EXECUTION,)).fetchone()
+                    cursor = db.execute("SELECT * FROM writers WHERE id='fixture-writer'")
+                    writer_columns = [column[0] for column in cursor.description]
+                    writer_values = cursor.fetchone()
                     db.execute("UPDATE work_items SET request_json=json_set(request_json,'$.label','synthetic-group') WHERE id=?", (h.SEED,))
                     db.commit()
                 command = [str(binary), "--fixture", str(database)] if label == "Go" else [
@@ -59,8 +63,16 @@ def characterize(binary, output):
                         elif mode == "invalid-wait":
                             state["wait"] = "invalid"
                         else:
-                            state["publication_mode"] = None if mode == "null" else mode
+                            state["publication_mode"] = None if mode.startswith("null") else mode
                         with closing(sqlite3.connect(database)) as db:
+                            db.execute("DELETE FROM writers WHERE id='fixture-writer'")
+                            if mode != "null-no-writer":
+                                names = ",".join('"' + name + '"' for name in writer_columns)
+                                db.execute("INSERT INTO writers (" + names + ") VALUES (" +
+                                           ",".join("?" for _ in writer_values) + ")", writer_values)
+                                if mode == "null-ended-writer":
+                                    db.execute("UPDATE writers SET state='stopped',ended_at=? WHERE id='fixture-writer'",
+                                               ("2026-01-02T03:04:05.123456+00:00",))
                             db.execute("UPDATE executions SET state_json=? WHERE id=?", (json.dumps(state), h.SEED_EXECUTION))
                             db.execute("UPDATE operator_change SET token='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")
                             db.commit()
@@ -77,12 +89,15 @@ def characterize(binary, output):
                             raise AssertionError("Default-mode conformance changed durable state: " + case["id"])
                         expected = 500 if mode in ("missing-target", "invalid-wait", "mutation-null") or mode == "omitted" and label == "P0" else 200
                         if response["status"] != expected:
+                            (output / f"failure-{shape}-{label}.json").write_text(json.dumps({
+                                "case": case, "response": response, "before": before, "after": after
+                            }, ensure_ascii=True), encoding="utf-8")
                             raise AssertionError(f"{shape}/{label}/{case['id']}: expected{expected}, got{response['status']}")
                         observations.append({"case": case["id"], "response": response, "durable": after})
                         summary[shape].setdefault(case["id"], {})[label] = response["status"]
                         if response["status"] == 200:
                             item = response["json"]["items"][0] if case["path"].endswith("executions") or "/groups/" in case["path"] else response["json"]["item"]
-                            expected_mode = None if mode == "null" else "ready" if mode == "omitted" else mode
+                            expected_mode = None if mode.startswith("null") else "ready" if mode == "omitted" else mode
                             if item["publication_mode"] != expected_mode or item["target"] != "report":
                                 raise AssertionError("Explicit/null/default publication mode or report target changed")
                 (output / f"defaults-{shape}-{label}.json").write_text(json.dumps(observations, ensure_ascii=True), encoding="utf-8")
@@ -99,7 +114,7 @@ def characterize(binary, output):
                             raise AssertionError("Go did not match complete D0 default/mode/error response: " + first["case"])
     result = {"pins": h.PINS, "results": summary,
               "classification": "Executionv4 current-item and separately acceptedv9 list/group/timeline omitted-field read cases preserve D0/spec ready. Explicit modes/null and malformed refusal remain unchanged; no global500 normalization or durable rewrite.",
-              "Go_behavior": "Matches complete D0 wire/durable results on all25 named/default/explicit/null/malformed/mutation-refusal cases per schema shape."}
+              "Go_behavior": "Matches complete D0 wire/durable results on all33 named/default/explicit/null/writerless/malformed/mutation-refusal cases per schema shape."}
     (output / "characterization.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
 

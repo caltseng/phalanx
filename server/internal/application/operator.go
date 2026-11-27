@@ -174,7 +174,9 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	if err != nil {
 		return nil, err
 	}
-	wait, waitSince, decision, err := operatorWait(row, state, now, current)
+	projectionRow := row
+	projectionRow.StateJSON = stateData
+	wait, waitSince, decision, err := operatorWait(projectionRow, state, now, current)
 	if err != nil {
 		return nil, err
 	}
