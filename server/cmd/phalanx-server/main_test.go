@@ -17,10 +17,14 @@ func TestConfigurationPreservesExplicitSettingsAndRefusesUnsafeStartup(t *testin
 	}
 	env := map[string]string{"PHALANX_DB": filepath.Join(t.TempDir(), "current.sqlite3"),
 		"PHALANX_OWNER_TOKEN": strings.Repeat("o", 32), "PHALANX_RUNNER_TOKEN": strings.Repeat("r", 32),
-		"PHALANX_HOME": "retained-home", "PHALANX_LOCAL_BOARD": "1"}
-	config, err := configure("::1", 8765, assets, func(key string) string { return env[key] })
+		"PHALANX_HOME": t.TempDir(), "PHALANX_LOCAL_BOARD": "1"}
+	canonical, err := resolveExistingHome(env["PHALANX_HOME"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := configure("::1", 8765, assets, func(key string) (string, bool) { value, ok := env[key]; return value, ok })
 	if err != nil || config.database != env["PHALANX_DB"] || config.home == nil ||
-		*config.home != env["PHALANX_HOME"] || !config.localBoard || config.port != 8765 {
+		*config.home != canonical || !config.localBoard || config.port != 8765 {
 		t.Fatalf("Configuration changed explicit settings: %+v, %v", config, err)
 	}
 	for _, test := range []struct{ key, value string }{
@@ -33,15 +37,15 @@ func TestConfigurationPreservesExplicitSettingsAndRefusesUnsafeStartup(t *testin
 				values[key] = value
 			}
 			values[test.key] = test.value
-			if _, err := configure("127.0.0.1", 8765, assets, func(key string) string { return values[key] }); err == nil {
+			if _, err := configure("127.0.0.1", 8765, assets, func(key string) (string, bool) { value, ok := values[key]; return value, ok }); err == nil {
 				t.Fatal("Unsafe settings accepted")
 			}
 		})
 	}
-	if _, err := configure("0.0.0.0", 8765, assets, func(key string) string { return env[key] }); err == nil {
+	if _, err := configure("0.0.0.0", 8765, assets, func(key string) (string, bool) { value, ok := env[key]; return value, ok }); err == nil {
 		t.Fatal("Changed service exposure accepted")
 	}
-	if _, err := configure("127.0.0.1", 8765, t.TempDir(), func(key string) string { return env[key] }); err == nil {
+	if _, err := configure("127.0.0.1", 8765, t.TempDir(), func(key string) (string, bool) { value, ok := env[key]; return value, ok }); err == nil {
 		t.Fatal("Missing packaged Scribe accepted")
 	}
 }

@@ -40,6 +40,13 @@ The launcher reads the existing `PHALANX_DB`, owner/runner credentials,
 `PHALANX_HOME` and `PHALANX_LOCAL_BOARD`. It requires a regular existing database,
 schema26/application identity and DELETE journaling; there is no initialization,
 schema conversion, restore, credential generation or capacity override. The
+proxy peer allowlist uses the same `FORWARDED_ALLOW_IPS` environment setting as
+the Python launcher (default `127.0.0.1`; explicit empty disables forwarding).
+Trusted `X-Forwarded-Proto` affects scheme/origin/redirects only, never local-board
+authority or bearer roles. Absolute expanded muster homes are filesystem-resolved;
+relative/unset homes report null, preserving the existing client identity guard.
+The cross-platform production-entrypoint `conformance/identity.py` proof covers
+these cases in addition to the immutable historical oracle corpora. The
 same database-adjacent OS lock fences Python and Go for the entire HTTP and
 background-work lifetime. Dispatched operations are not cancelled by caller
 disconnect. Graceful shutdown stops HTTP admission, drains dispatched requests

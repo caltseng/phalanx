@@ -84,6 +84,26 @@ original runtime/corpus checks remain unchanged. Runtime evidence is saved even
 on a pin failure. No global interpreter, other checkout, or deployed runtime is
 modified to repair CI.
 
+The production launcher retains Uvicorn's `FORWARDED_ALLOW_IPS` boundary:
+unset trusts only `127.0.0.1`, an explicitly empty value trusts no proxy, and
+configured IPs/networks (or an explicitly configured `*`) select trusted peers.
+Only a trusted socket peer's last valid `X-Forwarded-Proto` sets the effective
+scheme for redirects and browser-origin checks. Forwarded Host/client claims
+cannot grant authority; every forwarding header still disqualifies anonymous
+local-board access. `PHALANX_HOME` is exposed only after user expansion yields
+an absolute path, resolved through existing filesystem links with a non-strict
+missing suffix, matching the unchanged Python muster identity comparison.
+
+Run `conformance/identity.py --binary <production-server> --output <outside-checkout>`
+with the prepared Python checks prefix. This starts the actual current-source
+Python service entrypoint and production Go binary in isolated current-schema
+stores, not the in-process oracle adapter. It retains wire/header evidence and
+complete typed before/after snapshots for trusted/untrusted schemes, redirects,
+owner/runner/writer/browser/local-board refusals and home identity, including
+dot segments, missing tails, Unix links/Windows junctions and the unchanged
+`muster status` client. All three OS CI jobs run this additional proof; the
+original immutable P0/D0 corpora and their approved exceptions are unchanged.
+
 ## Immutable disposable conformance
 
 The harness exports **public immutable Git objects**, not another checkout,

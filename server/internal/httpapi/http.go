@@ -970,6 +970,9 @@ func (h *Handler) authenticate(ctx context.Context, r *http.Request, itemID, exe
 }
 
 func scheme(r *http.Request) string {
+	if value, ok := r.Context().Value(proxySchemeKey{}).(string); ok {
+		return value
+	}
 	if r.TLS != nil {
 		return "https"
 	}
