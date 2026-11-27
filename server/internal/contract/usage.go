@@ -2,6 +2,7 @@ package contract
 
 import (
 	"encoding/json"
+	"errors"
 	"math/big"
 	"time"
 )
@@ -10,6 +11,25 @@ const MaxUsageCounter = 9007199254740991
 const UsageAmountPattern = `^(0|[1-9][0-9]{0,14})(\.[0-9]{1,9})?$`
 
 var TokenFields = []string{"input", "output", "cache_read", "cache_write", "reasoning", "total"}
+
+// SumUsageCounters retains exact subtotals, using text above the JSON-safe bound.
+func SumUsageCounters(counters []json.Number) (any, error) {
+	if len(counters) == 0 {
+		return nil, nil
+	}
+	total := new(big.Int)
+	for _, counter := range counters {
+		integer, ok := new(big.Int).SetString(string(counter), 10)
+		if !ok {
+			return nil, errors.New("Included usage counter is not an integer")
+		}
+		total.Add(total, integer)
+	}
+	if total.Cmp(big.NewInt(MaxUsageCounter)) > 0 {
+		return total.String(), nil
+	}
+	return json.Number(total.String()), nil
+}
 
 type Tokens struct {
 	Input      *json.Number `json:"input"`
