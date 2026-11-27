@@ -26,7 +26,7 @@ remain separate from exact-head review, required CI and installation adoption.
 
 | Supported native boundary | Responsibility |
 | --- | --- |
-| `server/internal/httpapi` | Route/role/scope/browser authority, exact response/error projection, Scribe/static assets and pinned documentation |
+| `server/internal/httpapi` | Declarative route table with typed operations, per-method role/body/origin rules and handlers; scope/browser authority, exact response/error projection, Scribe/static assets and pinned documentation |
 | `server/internal/contract` | Presence/default/model validation, datetime and exact receipt/usage JSON encoding |
 | `server/internal/application` | Authoritative atomic workflows, writer/capacity continuation, reconciliation, usage, scouting, pickup/flags/operator projection and existing finalization/refresh jobs |
 | `server/internal/sqlite` | Schema26 query/storage, connection-local PRAGMAs, admission, rollback and unknown-commit outcomes; no migration or new scheduler |
