@@ -10,6 +10,7 @@ import (
 )
 
 var nativeID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var ipvFutureHost = regexp.MustCompile(`^v[0-9A-Fa-f]+\..+$`)
 
 var nativePrefixes = []struct{ runtime, prefix string }{
 	{"copilot-app", "ghapp://sessions/"},
@@ -82,7 +83,7 @@ func sessionTarget(reference, runtime, identity, availability string, explicitUR
 					}
 					if strings.HasPrefix(parsed.Host, "[") {
 						host := parsed.Hostname()
-						valid = valid && (net.ParseIP(host) != nil || regexp.MustCompile(`^v[0-9A-Fa-f]+\..+$`).MatchString(host))
+						valid = valid && (net.ParseIP(host) != nil || ipvFutureHost.MatchString(host))
 					}
 					if valid {
 						target = &reference

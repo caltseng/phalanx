@@ -16,6 +16,25 @@ const labelPattern = `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`
 var identifier = regexp.MustCompile(IdentifierPattern)
 var label = regexp.MustCompile(labelPattern)
 
+// Keys retain the Python patterns used in validation messages.
+var textPatterns = map[string]*regexp.Regexp{
+	IdentifierPattern:  identifier,
+	labelPattern:       label,
+	FlagKindPattern:    regexp.MustCompile(FlagKindPattern),
+	FlagSubjectPattern: regexp.MustCompile(FlagSubjectPattern),
+	NoncePattern:       regexp.MustCompile(NoncePattern),
+	URLPattern:         regexp.MustCompile(pythonPatternSource(URLPattern)),
+	SHAPattern:         regexp.MustCompile(SHAPattern),
+	RevisionPattern:    regexp.MustCompile(RevisionPattern),
+	PullURLPattern:     regexp.MustCompile(PullURLPattern),
+	ScoutLoginPattern:  regexp.MustCompile(ScoutLoginPattern),
+	ScoutAuthorPattern: regexp.MustCompile(ScoutAuthorPattern),
+	UsageAmountPattern: regexp.MustCompile(UsageAmountPattern),
+	`^[0-9a-f]{32}$`:   cursorID,
+	`\S`:               regexp.MustCompile(pythonPatternSource(`\S`)),
+	`^[^\r\n]+$`:       regexp.MustCompile(`^[^\r\n]+$`),
+}
+
 type Prerequisite struct {
 	UpstreamID string `json:"upstream_id"`
 	Milestone  string `json:"milestone"`
@@ -94,12 +113,20 @@ func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern
 }
 
 func pythonPattern(pattern string) *regexp.Regexp {
+	compiled, ok := textPatterns[pattern]
+	if !ok {
+		panic(fmt.Sprintf("unregistered validation pattern %q", pattern))
+	}
+	return compiled
+}
+
+func pythonPatternSource(pattern string) string {
 	// Rust/Pydantic's \S uses Unicode White_Space; Go's Perl class is ASCII.
 	const atom = `[^\x09-\x0d\x20\x85\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]`
 	pattern = strings.ReplaceAll(pattern, `\S`, atom)
 	// Go RE2 caps individual repetition bounds at 1000.
 	pattern = strings.ReplaceAll(pattern, atom+"{1,2000}", atom+"{1,1000}"+atom+"{0,1000}")
-	return regexp.MustCompile(pattern)
+	return pattern
 }
 
 func (v *validator) choice(value any, loc []any, choices []string, literal bool) string {
