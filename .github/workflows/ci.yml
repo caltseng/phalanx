@@ -266,6 +266,19 @@ jobs:
           $package = (Get-ChildItem "$env:RUNNER_TEMP\server-package" -Filter "*.zip").FullName
           & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\release.py --package $package --output "$env:RUNNER_TEMP\release-proof"
 
+      - name: Prove production incomplete-header and native framing parity
+        if: runner.os == 'Windows'
+        run: |
+          & $env:PHALANX_CONFORMANCE_PYTHON server\conformance\headers.py --binary "$env:RUNNER_TEMP\phalanx-server.exe" --output "$env:RUNNER_TEMP\headers-proof"
+
+      - name: Preserve production header boundaries and complete typed state
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v6
+        with:
+          name: go-headers-windows
+          path: ${{ runner.temp }}/headers-proof
+          if-no-files-found: error
+
       - name: Preserve versioned server package and actual numeric runtime proof
         if: always() && runner.os == 'Windows'
         uses: actions/upload-artifact@v6

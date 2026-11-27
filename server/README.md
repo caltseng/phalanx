@@ -228,7 +228,7 @@ the former equal-timestamp fixture's vacuous success. Absent and null bodies,
 absent configuration, null per-repository names and refused malformed
 configuration retain the actual Python contract.
 
-**Unresolved compatibility gap, not an approved exception:** `headers.py`
+The strict production regression in `headers.py`
 exercises P0, D0 and Go through their real production launchers on both schema
 shapes. Run from the repository root with the approved Python checks prefix:
 
@@ -236,8 +236,8 @@ shapes. Run from the repository root with the approved Python checks prefix:
 server\conformance\headers.py --binary <outside-checkout>\phalanx-server.exe --output <outside-checkout>\headers
 ```
 
-The strict command currently fails for Go. `--record-only` preserves all
-observations without claiming parity. It retains exact request segments, raw
+`--record-only` preserves exploratory observations without claiming parity.
+The strict command retains exact request segments, raw
 replies, early-refusal timing, actual close, valid neighboring connections and
 every typed table/DDL before and after each request, including an authenticated
 mutation Python refuses without effects. The pinned Windows production parser
@@ -252,10 +252,25 @@ segmentation; one client `sendall` is not proof of one server receive event.
 
 Go's global `MaxHeaderBytes` is not an equivalent fix. Neither a blanket size
 cap, a request deadline, a broader malformed-input exception nor a replacement
-parser is approved. A proposed framing observer must first resolve the
-existing adapter restriction and prove body/pipeline alignment and all prior
-first-byte idle, buffered-prefix, disconnect and drain contracts. Until that
-gap is resolved, this characterization is not Go replacement readiness.
+parser is approved. The owner authorized a narrowly scoped passive observer
+experiment in execution `db1cd4356eaa4e6992ed10fd25c8f9ef`, reply v4. The
+observer uses the pinned asyncio receive-event sizes (Windows 64 KiB, POSIX
+256 KiB), checks only incomplete heads and follows fixed/chunked-body framing
+to defer pipelined heads until native idle. `net/http` remains the request/body
+parser and receives unchanged bytes. Native malformed framing remains its
+authority. Buffered read-ahead does not count as new idle input, and native
+pending-read aborts are transient, not cached connection failures. The native
+500-field default is disabled because Python accepts complete multi-field
+events above that count; no new global byte/count limit or timeout is added.
+
+The corpus includes 29 header boundary/segmentation/body/pipeline cases, the
+18 unchanged framework requests with their exact v12 classifications, full
+typed-store refusal checks, and a valid same-key intake receipt after a refused
+request. Raw response bytes remain recorded; only the existing generated
+Date/Server/length/chunk-framing allowances are used for semantic comparison.
+Original first-byte idle, buffered-prefix, body, disconnect, lock and drain
+checks remain required alongside exact-head independent review and fresh CI.
+An authorized experiment or source merge is not deployment readiness.
 
 ## Native domain extension evidence (in development)
 

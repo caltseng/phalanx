@@ -60,6 +60,18 @@ idle peek, including retained expiry for already buffered partial prefixes.
 Windows corrects only the service's own inherited Idle/BelowNormal priority to
 Normal, preserving higher priorities.
 
+The separately authorized incomplete-header observer preserves the pinned
+h11 receive-event boundary, not a blanket 16 KiB header limit. Complete
+coalesced oversized heads remain valid; an incomplete event above 16,384
+bytes returns the pinned early 400/close without dispatch or durable effects.
+Native fixed/chunked-body and pipeline alignment, buffered-prefix idle behavior
+and transient pending-read aborts are covered by the
+[production header corpus](../server/README.md#deployment-retirement-and-incomplete-header-regression).
+Native `net/http` still parses unchanged request bytes; this adds no request,
+body, idle or drain deadline and no new byte/count cap. The owner-authorized
+experiment requires independent exact-head review and fresh required CI,
+not merely a passing anonymous health probe.
+
 ## Compatibility evidence and limits
 
 P0 is `9af29396b37f86816fd274e01632164a47718a57`; public installed-source

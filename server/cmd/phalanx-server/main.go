@@ -136,6 +136,8 @@ func serve(ctx context.Context, config configuration) (result error) {
 			Logger: slog.Default(), Home: config.home, LocalBoard: config.localBoard, AssetsDirectory: config.assets},
 		IdleTimeout: 5 * time.Second,
 		ConnState:   idleState,
+		// h11 bounds incomplete events, not the number of fields in a complete one.
+		MaxHeaderValueCount: int(^uint(0) >> 1),
 	}
 	jobsContext, stopJobs := context.WithCancel(context.Background())
 	jobsDone := make(chan struct{})

@@ -118,6 +118,7 @@ def vector_manifest():
     import scribe
     import route_models
     import framework
+    import headers
 
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
@@ -176,6 +177,10 @@ def vector_manifest():
                                  "model_count": len(route_models.inventory()[0]["components"]["schemas"])},
                 "framework": {"request_ids": [case["id"] for case in framework.cases()],
                               "request_count": len(framework.cases())},
+                "headers": {"request_ids": [case[0] for case in headers.cases()],
+                            "request_count": len(headers.cases()),
+                            "production_framework_count": len(framework.cases()),
+                            "receipt_neighbor": "header-refusal-neighbor"},
                 "rehearsal": {"reference_packages": ["P0", "D0"], "schema_shapes": ["fresh", "retained"],
                               "package_only_stages": 8},
                 "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},

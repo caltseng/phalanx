@@ -144,6 +144,20 @@ historical, not broadened to other endpoints. The additional authenticated and
 denied repositories/health cases compare strictly against P0/D0. This restoration
 does not add a request parser/listener adapter or alter body/auth/storage handling.
 
+### 4.1.2 Incomplete-event observer experiment
+
+The owner separately authorized a passive incomplete-header event/framing
+observer experiment in execution `db1cd4356eaa4e6992ed10fd25c8f9ef`,
+reply **v4**, 2026-11-27. This permits only the measured incomplete-head
+refusal and native fixed/chunked-body/pipeline alignment, preserving original
+request bytes, native `net/http` request/body parsing, idle-cycle boundaries,
+and new-input versus buffered-prefix distinctions. It does not waive parity,
+permit a replacement parser or add a global header cap/deadline. Adoption
+requires original stream/body/disconnect/drain/typed-state regressions,
+independent exact-final-head review and fresh required CI. The
+[production regression](../server/README.md#deployment-retirement-and-incomplete-header-regression)
+retains the original failing evidence and measured complete/incomplete boundary.
+
 ### 4.2 Routes and authority
 
 Appendix A is the generated exhaustive P0 request/parameter inventory (66 operations, 51 schemas). It supplements, not substitutes for, the domain rules below. Auth codes: O=owner bearer; R=trusted runner; C=owner or runner coordinator; W=current scoped writer; B=board-read token or explicitly authorized direct local board. A valid writer may read only its own item/execution routes where the route admits that role. Exact source dependencies determine role errors, not "all authenticated" middleware.

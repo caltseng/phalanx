@@ -17,9 +17,17 @@ type idleConnection struct {
 	idle     bool
 	received bool
 	deadline time.Time
+	headers  *headReads
 }
 
 func (c *idleConnection) Read(p []byte) (int, error) {
+	if c.headers != nil {
+		return c.readHead(p)
+	}
+	return c.readNetwork(p)
+}
+
+func (c *idleConnection) readNetwork(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.mu.Lock()
@@ -79,14 +87,22 @@ func (l idleListener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &idleConnection{Conn: connection}, nil
+	return &idleConnection{Conn: connection, headers: &headReads{}}, nil
 }
 
 func idleState(connection net.Conn, state http.ConnState) {
-	if err := connection.(*idleConnection).state(state); err != nil {
+	c := connection.(*idleConnection)
+	if err := c.state(state); err != nil {
 		slog.Error("Cannot preserve connection idle deadline", "error", err)
 		if closeError := connection.Close(); closeError != nil {
 			slog.Error("Cannot close failed idle connection", "error", closeError)
 		}
+	}
+	if state == http.StateIdle && c.headers != nil {
+		c.headers.mu.Lock()
+		if !c.headers.refused && !c.headers.events.idle() {
+			c.refuseHeadLocked()
+		}
+		c.headers.mu.Unlock()
 	}
 }
