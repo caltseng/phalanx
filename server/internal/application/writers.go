@@ -16,6 +16,26 @@ import (
 
 func needsBuilding(stage Stage) bool { return stage != Publication && stage != Delivery }
 
+type admissionContext struct {
+	Capacity sqlite.DispatchSettings
+	Rework   *string
+}
+
+func admissionSnapshot(tx *sqlite.Tx, capacity *sqlite.DispatchSettings) (admissionContext, error) {
+	var current admissionContext
+	var err error
+	if capacity == nil {
+		current.Capacity, err = tx.DispatchSettings()
+		if err != nil {
+			return current, err
+		}
+	} else {
+		current.Capacity = *capacity
+	}
+	current.Rework, err = tx.FirstRework(time.Now().UnixMilli())
+	return current, err
+}
+
 func writerRecord(tx *sqlite.Tx, id string) (sqlite.WriterRecord, error) {
 	writer, err := tx.WriterRecord(id)
 	if err == sql.ErrNoRows {
@@ -25,18 +45,11 @@ func writerRecord(tx *sqlite.Tx, id string) (sqlite.WriterRecord, error) {
 }
 
 func buildingWait(tx *sqlite.Tx, writerID string) (*string, error) {
-	capacity, err := tx.DispatchSettings()
+	current, err := admissionSnapshot(tx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if capacity.Paused || capacity.BuildingWriters >= capacity.MaxBuildingWriters {
-		return buildingReason(capacity, nil, writerID), nil
-	}
-	first, err := tx.FirstRework(time.Now().UnixMilli())
-	if err != nil {
-		return nil, err
-	}
-	return buildingReason(capacity, first, writerID), nil
+	return buildingReason(current.Capacity, current.Rework, writerID), nil
 }
 
 func buildingReason(capacity sqlite.DispatchSettings, first *string, writerID string) *string {
@@ -54,30 +67,26 @@ func buildingReason(capacity sqlite.DispatchSettings, first *string, writerID st
 	return &reason
 }
 
-func admissionWait(tx *sqlite.Tx, stage Stage) (*string, error) {
-	capacity, err := tx.DispatchSettings()
-	if err != nil {
-		return nil, err
-	}
+func admissionReason(capacity sqlite.DispatchSettings, rework *string, stage Stage) *string {
 	var reason string
 	if capacity.Paused {
 		reason = "Dispatch is paused"
 	} else if capacity.ActiveWriters >= capacity.MaxWriters {
 		reason = fmt.Sprintf("Total capacity exhausted: max_writers=%d", capacity.MaxWriters)
 	} else if needsBuilding(stage) {
-		return buildingWait(tx, "")
+		return buildingReason(capacity, rework, "")
 	}
 	if reason == "" {
-		return nil, nil
+		return nil
 	}
-	return &reason, nil
+	return &reason
 }
 
 func binding(tx *sqlite.Tx, writer sqlite.WriterRecord) (json.RawMessage, error) {
 	return bindingWithContext(tx, writer, nil)
 }
 
-func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *pickupContext) (json.RawMessage, error) {
+func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admissionContext) (json.RawMessage, error) {
 	execution, err := tx.Execution(writer.ItemID, writer.ExecutionID)
 	if err != nil {
 		return nil, err
@@ -139,33 +148,37 @@ func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *pick
 	return encoded(body)
 }
 
-func (a *App) acquireBuilding(tx *sqlite.Tx, writer sqlite.WriterRecord) (bool, error) {
+func (a *App) acquireBuilding(tx *sqlite.Tx, writer sqlite.WriterRecord, capacity *sqlite.DispatchSettings) (bool, *admissionContext, error) {
 	if writer.Building {
-		return true, nil
+		return true, nil, nil
 	}
 	if writer.BuildingRequestedAt == nil {
 		if err := tx.RequestBuilding(writer.ID, timestamp(a.Clock())); err != nil {
-			return false, err
+			return false, nil, err
 		}
 	}
-	wait, err := buildingWait(tx, writer.ID)
-	if err != nil || wait != nil {
-		return false, err
+	current, err := admissionSnapshot(tx, capacity)
+	if err != nil {
+		return false, nil, err
+	}
+	if buildingReason(current.Capacity, current.Rework, writer.ID) != nil {
+		return false, &current, nil
 	}
 	if err := tx.GrantBuilding(writer.ID); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return true, nil
+	return true, nil, nil
 }
 
-func (a *App) claimNext(tx *sqlite.Tx, writer sqlite.WriterRecord, continuedFrom *string) error {
+func (a *App) claimNext(tx *sqlite.Tx, writer sqlite.WriterRecord, continuedFrom *string, capacity *sqlite.DispatchSettings) (*admissionContext, error) {
+	var current *admissionContext
 	row, err := tx.Execution(writer.ItemID, writer.ExecutionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	state, err := readState(row.State)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var attemptID *string
 	nowMS := time.Now().UnixMilli()
@@ -173,44 +186,44 @@ func (a *App) claimNext(tx *sqlite.Tx, writer sqlite.WriterRecord, continuedFrom
 		row.ReadySince != nil && *row.ReadySince <= nowMS {
 		acquired := true
 		if needsBuilding(state.Stage) {
-			acquired, err = a.acquireBuilding(tx, writer)
+			acquired, current, err = a.acquireBuilding(tx, writer, capacity)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if acquired {
 			pins, unmet, err := resolveDependencies(tx, writer.ItemID)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if len(unmet) != 0 {
 				if err := refreshWait(tx, writer.ItemID, writer.ExecutionID, nowMS); err != nil {
-					return err
+					return nil, err
 				}
 			} else {
 				id, err := a.ID()
 				if err != nil {
-					return err
+					return nil, err
 				}
 				if err := tx.InsertAttempt(id, row.ID, string(state.Stage), timestamp(a.Clock())); err != nil {
-					return err
+					return nil, err
 				}
 				details := map[string]any{"writer_id": writer.ID, "ready_since_ms": row.ReadySince, "dependencies": pins}
 				if continuedFrom != nil {
 					details["continued_from"] = *continuedFrom
 				}
 				if _, err := a.apply(tx, writer.ItemID, row, state, Claim, details, DecisionOptions{}, &id, nil); err != nil {
-					return err
+					return nil, err
 				}
 				attemptID = &id
 			}
 		}
 	}
-	return tx.SetWriterAttempt(writer.ID, attemptID)
+	return current, tx.SetWriterAttempt(writer.ID, attemptID)
 }
 
-func requireActingCaptain(tx *sqlite.Tx, captainID, message string) (sqlite.CaptainRecord, error) {
-	captain, err := tx.CaptainRecord(captainID)
+func requireActingCaptain(tx *sqlite.Tx, captainID, message string) (sqlite.Captain, error) {
+	captain, err := tx.Captain(captainID)
 	if err == sql.ErrNoRows {
 		return captain, &Missing{"Captain not found"}
 	}
@@ -303,11 +316,11 @@ func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, re
 		if _, err := requireActingCaptain(tx, request.CaptainID, "An ended Captain cannot act on writers"); err != nil {
 			return err
 		}
-		settings, err := tx.DispatchSettings()
+		admission, err := admissionSnapshot(tx, nil)
 		if err != nil {
 			return err
 		}
-		if settings.Paused {
+		if admission.Capacity.Paused {
 			return &Conflict{"Dispatch is paused. No new writers are registered until it resumes"}
 		}
 		_, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
@@ -338,10 +351,7 @@ func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, re
 			return &Conflict{"The writer to replace is no longer registered"}
 		}
 		if current == nil {
-			wait, err := admissionWait(tx, state.Stage)
-			if err != nil {
-				return err
-			}
+			wait := admissionReason(admission.Capacity, admission.Rework, state.Stage)
 			if wait != nil {
 				active, err := tx.ActiveWriters()
 				if err != nil {
@@ -387,14 +397,16 @@ func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, re
 		if err != nil {
 			return err
 		}
-		if err := a.claimNext(tx, writer, nil); err != nil {
+		// Replacement preserves both capacity allocations; only the rework ordering needs refreshing.
+		snapshot, err := a.claimNext(tx, writer, nil, &admission.Capacity)
+		if err != nil {
 			return err
 		}
 		writer, err = writerRecord(tx, id)
 		if err != nil {
 			return err
 		}
-		result, err = binding(tx, writer)
+		result, err = bindingWithContext(tx, writer, snapshot)
 		return err
 	})
 	return result, err
@@ -424,6 +436,7 @@ func (a *App) WriterCapacity(ctx context.Context, writerID string, request contr
 		if Terminal(state.Status) || state.Stopping != nil || state.PendingOutput != nil {
 			return &Conflict{"The execution is closed or closing"}
 		}
+		var snapshot *admissionContext
 		if request.Phase == "delivering" {
 			if needsBuilding(state.Stage) {
 				return &Conflict{"Development, self-review and report work must retain Building capacity"}
@@ -450,7 +463,8 @@ func (a *App) WriterCapacity(ctx context.Context, writerID string, request contr
 				(state.Status == Queued && (execution.ReadySince == nil || *execution.ReadySince > now)) {
 				return &Conflict{"Resolve input, dependencies or scheduling wait before starting building work"}
 			}
-			if _, err := a.acquireBuilding(tx, writer); err != nil {
+			_, snapshot, err = a.acquireBuilding(tx, writer, nil)
+			if err != nil {
 				return err
 			}
 		}
@@ -458,7 +472,7 @@ func (a *App) WriterCapacity(ctx context.Context, writerID string, request contr
 		if err != nil {
 			return err
 		}
-		result, err = binding(tx, writer)
+		result, err = bindingWithContext(tx, writer, snapshot)
 		return err
 	})
 	return result, err
@@ -481,8 +495,10 @@ func (a *App) WriterNext(ctx context.Context, writerID string) (json.RawMessage,
 				return err
 			}
 		}
+		var snapshot *admissionContext
 		if !active {
-			if err := a.claimNext(tx, writer, nil); err != nil {
+			snapshot, err = a.claimNext(tx, writer, nil, nil)
+			if err != nil {
 				return err
 			}
 		}
@@ -490,7 +506,7 @@ func (a *App) WriterNext(ctx context.Context, writerID string) (json.RawMessage,
 		if err != nil {
 			return err
 		}
-		result, err = binding(tx, writer)
+		result, err = bindingWithContext(tx, writer, snapshot)
 		return err
 	})
 	return result, err
@@ -530,7 +546,7 @@ func authorizeWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, captainID string
 	if writer.CaptainID == captainID || writer.ConfirmedAt != nil {
 		return writer.CaptainID, nil
 	}
-	owner, err := tx.CaptainRecord(writer.CaptainID)
+	owner, err := tx.Captain(writer.CaptainID)
 	if err == sql.ErrNoRows {
 		return "", &Missing{"Captain not found"}
 	}
@@ -538,19 +554,9 @@ func authorizeWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, captainID string
 		return "", err
 	}
 	if writer.AbandonedAt == nil && owner.State != "ended" {
-		heartbeat, err := time.Parse(time.RFC3339Nano, owner.HeartbeatAt)
+		gone, err := captainGone(owner)
 		if err != nil {
 			return "", err
-		}
-		gone := heartbeat.Add(15 * time.Minute)
-		if owner.EndingAt != nil {
-			ending, err := time.Parse(time.RFC3339Nano, *owner.EndingAt)
-			if err != nil {
-				return "", err
-			}
-			if ending.Add(30 * time.Minute).Before(gone) {
-				gone = ending.Add(30 * time.Minute)
-			}
 		}
 		if time.Now().Before(gone) {
 			return "", &Conflict{"Captain " + owner.ID + " owns this unconfirmed intent"}
