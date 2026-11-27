@@ -105,31 +105,20 @@ queue, offline transitions or admission bypass.
 
 ### SQLite contention and request threads
 
-Go's `internal/sqlite` owns connection-per-transaction admission, DELETE/EXTRA/FK,
-rollback and explicit unknown-commit errors. `internal/application` owns atomic domain
-operations plus durable report-finalization/dependency-refresh jobs. HTTP disconnect
-does not cancel accepted work; shutdown drains dispatched work/background jobs while
-holding the cross-engine OS lock. No request/header/drain deadline is inferred from
-the four-second admission bound. See [native contributor guidance](development.md#native-go-server).
+Go's `internal/sqlite` owns transaction connections, DELETE/EXTRA/FK, alternating
+writer/read-batch admission, rollback and unknown-commit errors. `internal/application`
+owns atomic workflows and durable finalization/refresh jobs. Disconnect does not cancel
+accepted work; shutdown drains HTTP/background work under the shared OS lock.
 
-The following thread/event-loop details describe the retained Python reference engine:
+Both engines retain two-second SQLite busy and four-second admission bounds, not
+request/header/drain deadlines. Interrupted waiters remove their counts. Contention
+returns **503**, `Retry-After: 1`; retry the original key under unchanged fences.
+Unknown commits require reconciliation, not blind retry. Backup can outwait busy bounds.
 
-SQLite uses DELETE journaling, `synchronous=EXTRA`, short transactions and a two-second
-busy timeout. The process-local gate alternates writers with waiting read batches;
-admission has a separate four-second bound. Timed-out/interrupted waiters remove their
-queue counts. Contention returns **503**, `Retry-After: 1`; retry the original request/key
-under unchanged writer/result fences.
-
-SQLite stays in request workers, not the event loop; the JSON-only contention handler
-is async so it needs no additional worker slot. Cancellation/disconnection cannot retract
-a running transaction, which may commit; unfinished transactions roll back on connection
-close. Gate, SQLite, worker-queue and route waits can accumulate: these are not an overall
-latency deadline or forced transaction termination. Backup can also outwait the busy timeout.
-See [transaction guidance](development.md#route-permissions-and-transactions) and
-[contention regressions](../tests/test_contention.py). Service adoption remains operator-owned
-under [deployment safeguards](deployment.md#standing-authority-for-compatible-upgrades).
-Unit tests shorten fault waits, not safety semantics; [the standalone probe](../tests/envelope_probe.py)
-owns production timing/load evidence.
+The retained Python reference uses synchronous request workers and an async busy-response
+handler, not Go goroutines. See [native/reference transaction guidance](development.md#route-permissions-and-transactions),
+[contention tests](../tests/test_contention.py) and the [production probe](../tests/envelope_probe.py).
+Unit fault timings do not change safety semantics; [adoption remains operator-owned](deployment.md#standing-authority-for-compatible-upgrades).
 
 ## Intake and supported commands
 

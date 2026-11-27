@@ -1,16 +1,13 @@
 # Versioned deployment tooling
 
-`python -m phalanx deploy` provides credential-free installation templates, literal
-environment loading, foreground service entrypoints and a CLI wrapper. It does not launch
-native sessions, schedule tasks, grant trust, migrate directories or restart live services.
-See the [deployment diagram](architecture.md#deployment-and-recovery-boundaries) for ownership
-boundaries. Keep installed revisions, private paths and rollout receipts in the operator's
-private runbook, not this repository.
+`python -m phalanx deploy` provides credential-free templates, literal environment
+loading, foreground entrypoints and a CLI wrapper, not native launches, task scheduling,
+trust grants, directory migration or live restarts. See [ownership](architecture.md#deployment-and-recovery-boundaries).
+Keep installed revisions, private paths and rollout receipts in the operator's runbook.
 
 The [packaged Go server](go-server-release.md) is the supported repository default.
 Python HTTP is [deprecated with explicit temporary rollback](python-server-deprecation.md).
-Python CLI/reconciler/admin remain supported. An installation's live engine and
-revision are separate operator-recorded facts, never inferred from this default.
+Python CLI/reconciler/admin remain supported. Live engine/revision needs separate receipts.
 
 ## Standing authority for compatible upgrades
 
@@ -76,18 +73,17 @@ python -m phalanx deploy init
 python -m phalanx deploy init --home D:\.phalanx_muster --port 8765
 ```
 
-Default home is `~/.phalanx_muster` on every OS; explicit `--home`, then `PHALANX_HOME`,
-override it. Initialization refuses an existing directory, even empty, and never follows
-the discovery locator or updates an installation. `--port` generates matching server/client
-defaults; `--api-url` overrides client URLs for a reverse proxy/hosted API. URLs require
-HTTPS or loopback HTTP without credentials. Server launch binds loopback; hosted access
+Home precedence: `--home`, `PHALANX_HOME`, then `~/.phalanx_muster` on every OS.
+Initialization refuses existing directories, even empty; it never follows the locator
+or updates an installation. `--port` sets matching client/server defaults; `--api-url`
+overrides client URLs. Require HTTPS or credential-free loopback HTTP; hosted access
 needs a TLS proxy.
 
 Generated files contain no credentials, database or live state:
 
 | File | Configure before use |
 | --- | --- |
-| `deployment.json` | Absolute private environment, shift config, reconciler config/scratch paths and server host/port/engine. New templates select `go`; set `server.go_binary` to the verified extracted package's absolute binary path. |
+| `deployment.json` | Absolute environment/client/scratch paths, host/port and new default `engine: "go"`; set `server.go_binary` to the verified package's absolute binary. |
 | `private.env.example` | Copy privately to `private.env`; supply owner/runner/GitHub tokens. Restrict to the service account (POSIX mode 600 or a private Windows ACL). The new directory requests POSIX mode 700; Windows permissions need owner verification. |
 | `shift.json`, `charter.toml`, `reconciler.json` | Runtime/workspace, repository mappings, goal and stable reconciler ID. See [Captain configuration and charter](direct-path.md#run-a-captain-on-the-direct-path). |
 
@@ -107,23 +103,17 @@ python -m phalanx deploy run --home D:\.phalanx_muster reconciler
 python -m phalanx deploy cli --home D:\.phalanx_muster -- shift status
 ```
 
-Never put initialization in persistent commands. `server initialize` requires an
-absolute `PHALANX_DB`, reserves a new file under the service lock and creates the
-canonical schema without starting Python HTTP. Go startup refuses missing databases;
-initialization refuses existing files. Retained `--initialize-database` is accepted
-only for an explicit Python engine on a new store, not for Go or recovery.
-Only the server and explicit offline server-admin commands open storage.
-Python (one Uvicorn worker) or Go (one foreground server)
-holds the database-adjacent OS lock throughout its lifetime. Reconciler scratch
-locks are separate.
+Never persist initialization. `server initialize` exclusively creates a new canonical
+store at absolute `PHALANX_DB` under the service lock, without HTTP. Existing files are
+refused; Go refuses missing stores. `--initialize-database` remains Python-only/new-store-only.
+Only HTTP servers and explicit offline admin open storage. Either engine holds the
+database-adjacent OS lock throughout its lifetime; reconciler scratch locks are separate.
 
-Both services remain foreground processes. Configure **one** host supervisor per service
-(Windows service/task supervisor, systemd or launchd), using the absolute installed Python,
-a fixed working directory outside repositories, the service account's environment,
-restart-on-failure/backoff and private log retention. Stop that supervisor and its exact
-owned process tree before replacing commands. Do not stack watchdogs, script restart loops
-and supervisor policies. Raw Uvicorn does not acquire the deployment lock: inventory and
-retire preexisting launchers with their owner.
+Configure **one** supervisor per foreground service (Windows service/task, systemd or
+launchd): absolute installed interpreter, fixed working directory outside repositories,
+service-account environment, restart backoff and private logs. Stop its exact owned tree
+before replacement; never stack watchdogs/restart loops. Raw Uvicorn lacks the deployment
+lock: inventory and retire old launchers with their owner.
 
 ### Windows critical-service scheduling under host load
 
@@ -138,15 +128,12 @@ choose High/Realtime and fail visibly if Windows rejects the operation. Other pl
 CLI commands and writers are unchanged. Keep the supervisors correct too;
 the services do not edit tasks or other processes.
 
-Git commands in checkout verification, preparation and reconciliation have a 60-second
-completion limit. On timeout or interruption the caller stops only its owned Git process
-tree; Windows tree cleanup and direct-child reap each have a five-second limit. Start,
-timeout and cleanup errors surface to the caller, including unchecked ref probes.
-Only the documented absent-ref exit counts as absence. A failed reconciler item keeps its
-last-known observation (which can become stale), logs the error and does not stop other
-items from being observed. Priority, `/health` and Git timeout bounds alone do not prove
-host-load latency, bounded admission or same-writer continuity; verify affected authenticated
-operations under comparable load.
+Git commands have a 60-second completion limit; timeout/interruption stops only their
+owned tree. Windows cleanup and direct-child reap each allow five seconds. Surface start/
+timeout/cleanup failures, including ref probes; only documented absent-ref exits mean
+absence. Reconciler failures retain last-known observations, log errors and preserve
+unrelated passes. Priority, health and Git bounds do not prove host-load latency,
+admission or writer continuity; verify affected authenticated operations under comparable load.
 
 ## Environment and local shims
 
@@ -174,10 +161,9 @@ directly. Keep settings, credentials and minimal shims outside Git; reusable beh
 in the pinned package. Use supported runtime discovery/trust tools, not private app SQLite
 queries or ad-hoc trust probes. Only the owner grants repository trust.
 
-Engine selection is explicit CLI `--engine`, saved `server.engine`, then Go.
-`--go-binary` overrides saved `server.go_binary` for Go; neither rewrites files.
-The reconciler ignores saved HTTP engine/package fields and rejects HTTP CLI options.
-No missing/failed Go launch automatically falls back to Python.
+[Engine precedence](configuration.md#http-engine-and-package-selection): CLI, saved, then Go;
+CLI package overrides saved package. Neither rewrites files or automatically falls back.
+Reconciler remains Python and rejects HTTP-only CLI options.
 
 For prepared Windows npm environments, retain dependencies, browsers and `lock.sha256`
 externally. Any shim delegates to pinned `scripts/checks.ps1 -EnvironmentRoot $PSScriptRoot`
@@ -192,12 +178,10 @@ Existing homes, explicit `captain.json` and service/worktree/session paths remai
 database to adopt a spelling.** The raw API default `.phalanx/phalanx.sqlite3` is unchanged;
 new setup writes explicit absolute paths.
 
-Before upgrading an implicit Python launch, its service owner must either pin
-`--engine python`/`"engine": "python"` temporarily or complete the Go rehearsal and
-configure the verified binary. Existing explicit engine choices are honored.
-No tracked command rewrites live configuration or scheduled tasks for this change.
-Retain previous packages and current-data rollback evidence, including historical Python
-packages; never delete them as part of deprecation.
+Before upgrading an implicit Python launch, its owner must pin `--engine python`/
+`"engine": "python"` or complete Go rehearsal and configure the package.
+Explicit engines remain honored; no live config/task rewrite occurs.
+Keep historical packages and current-data rollback evidence.
 
 Prepare a new local config referencing the existing paths, without copying private values:
 
@@ -235,13 +219,11 @@ Use the upgrade procedure above before relying on new routes or generated instru
 Instruction/CLI-only changes do not inherently require a service restart; inspect the actual
 diff and preserve unrelated installed changes.
 
-Existing sessions need explicit instruction delivery through supported messaging. Relay
-reviewed canonical sections verbatim, expand placeholders for the recipient's configured
-commands, and record recipient, revision and acknowledged receipt. A printed worker template
-is not a fresh kickoff: never reserve a second writer to refresh instructions or contact an
-ended writer. Captain refresh follows [the operating guide](direct-path.md#captain-shifts-and-handoff).
-Private charters and schedules remain under their existing owner; preserve unrelated authority,
-output ceilings and repository protections.
+Refresh sessions through supported messaging: relay reviewed canonical sections verbatim,
+expand configured commands and record recipient/revision/acknowledgment. Printed templates
+are not kickoffs; never reserve another writer for refresh or contact ended writers.
+Follow [Captain refresh](direct-path.md#captain-shifts-and-handoff). Private charters/schedules
+retain their owners; preserve authority, output ceilings and repository protections.
 
 Keep package/schema verification, external configuration and retained-instruction receipts
 separate. Adoption remains partial until the applicable receipts are verified; a sent message
