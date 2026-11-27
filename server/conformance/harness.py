@@ -128,7 +128,7 @@ def vector_manifest():
     paths += sorted((ROOT / "server" / "internal" / "httpapi" / "contract-docs").glob("*"))
     paths += sorted((ROOT / "server" / "internal" / "testdb").glob("*.sql"))
     paths += sorted((ROOT / "phalanx").glob("*.py")) + sorted((ROOT / "tests").glob("*.py"))
-    paths += [ROOT / "pyproject.toml", ROOT / "requirements.lock", HERE / "requirements.lock"]
+    paths += [ROOT / ".gitattributes", ROOT / "pyproject.toml", ROOT / "requirements.lock", HERE / "requirements.lock"]
     tests = []
     for path in paths:
         if path.name.endswith("_test.go"):

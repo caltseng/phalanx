@@ -1,14 +1,14 @@
 # Versioned deployment tooling
 
-`python -m phalanx deploy` provides credential-free templates, literal environment
-loading, foreground entrypoints and a CLI wrapper, not native launches, task scheduling,
-trust grants, directory migration or live restarts. See [ownership](architecture.md#deployment-and-recovery-boundaries).
-Keep installed revisions, private paths and rollout receipts in the operator's runbook.
+The deployment CLI provides templates, explicit environment loading and foreground
+entrypoints, not scheduling, trust grants or live changes.
+Keep revisions and private rollout receipts in the operator's runbook.
+See [ownership](architecture.md#deployment-and-recovery-boundaries).
 
 The [packaged Go server](go-server-release.md) is the supported repository default.
 Python HTTP is [removed](python-server-deprecation.md); coordinated rollback uses a
 separately retained known-good package, not the current installation.
-Python CLI/reconciler/admin remain supported. Live engine/revision needs separate receipts.
+Python clients/admin remain supported. Live adoption needs separate receipts.
 
 ## Standing authority for compatible upgrades
 
@@ -177,15 +177,14 @@ use their repository's prepared checks prefix, not this Windows helper.
 
 Existing homes, explicit `captain.json` and service/worktree/session paths remain valid.
 **Never run `deploy init` on a live home, rename it, change its locator or relocate its
-database to adopt a spelling.** The raw API default `.phalanx/phalanx.sqlite3` is unchanged;
-new setup writes explicit absolute paths.
+database to adopt a spelling.** Existing absolute database paths remain unchanged.
 
 Before upgrading a Python launch, its owner must complete Go rehearsal and explicitly
 configure the verified package, or retain the separate known-good installation.
 Current Python selections fail with migration guidance; no live config/task rewrite occurs.
 Keep historical packages and current-data rollback evidence.
 
-Prepare a new local config referencing the existing paths, without copying private values:
+Reference existing paths without copying private values:
 
 ```json
 {

@@ -1,0 +1,4 @@
+/phalanx/*.py text eol=lf
+/tests/*.py text eol=lf
+/pyproject.toml text eol=lf
+/requirements.lock text eol=lf
