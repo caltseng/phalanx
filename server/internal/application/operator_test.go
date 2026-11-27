@@ -4,12 +4,94 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
+
+func TestStoredStateDefaultsAndReadOnlyNullMode(t *testing.T) {
+	for _, test := range []struct {
+		name, fields string
+		status       Status
+		mode         PublicationMode
+		nullMode     bool
+		invalid      bool
+	}{
+		{name: "omitted", status: Queued, mode: ReadyMode},
+		{name: "explicit", fields: `,"status":"running","publication_mode":"draft"`, status: Running, mode: DraftMode},
+		{name: "null mode", fields: `,"publication_mode":null`, status: Queued, mode: ReadyMode, nullMode: true},
+		{name: "last null mode", fields: `,"publication_mode":"draft","publication_mode":null`, status: Queued, mode: ReadyMode, nullMode: true},
+		{name: "null then explicit", fields: `,"status":null,"status":"running","publication_mode":null,"publication_mode":"draft"`, status: Running, mode: DraftMode},
+		{name: "null status", fields: `,"status":null`, invalid: true},
+		{name: "invalid mode", fields: `,"publication_mode":"invalid"`, invalid: true},
+		{name: "invalid wait", fields: `,"wait":{"reason":"","trigger":"resume"}`, invalid: true},
+		{name: "invalid intent", fields: `,"stopping":"invalid"`, invalid: true},
+		{name: "terminal without output", fields: `,"status":"completed"`, invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			data := json.RawMessage(`{"target":"checked_in","stage":"development"` + test.fields + `}`)
+			state, mode, err := decodeStoredState(data, true)
+			if (err != nil) != test.invalid {
+				t.Fatalf("read-only state error = %v", err)
+			}
+			if !test.invalid && (state.Status != test.status || state.PublicationMode != test.mode ||
+				(mode == nil) != test.nullMode || mode != nil && *mode != test.mode) {
+				t.Fatalf("state=%+v mode=%v", state, mode)
+			}
+			_, err = readState(data)
+			if (err != nil) != (test.invalid || test.nullMode) {
+				t.Fatalf("authoritative state error = %v", err)
+			}
+		})
+	}
+}
+
+func TestOperatorWaitReusesDecodedState(t *testing.T) {
+	state := Start(MergedTarget, ReadyMode)
+	stopping := Cancelled
+	state.Stopping = &stopping
+	row := sqlite.OperatorRow{Status: "queued", StateJSON: "must not decode this again"}
+	wait, _, decision, err := operatorWait(row, state, time.Now(), operatorContext{})
+	if err != nil || wait == nil || decision == nil || decision.Code != "closing" {
+		t.Fatalf("wait=%+v decision=%+v err=%v", wait, decision, err)
+	}
+}
+
+func TestOperatorSummaryDefersDeploymentDecodeToResponseProjection(t *testing.T) {
+	goal, deployment := "Stored deployment", `{"unknown":999999999999999999999999999999,"ratio":1e0}`
+	row := sqlite.OperatorRow{
+		StateJSON: `{"target":"checked_in","stage":"development","publication_mode":null}`,
+		Stage:     "development", Status: "queued", Goal: &goal, DeploymentJSON: &deployment,
+	}
+	item, err := operatorSummary(row, time.Now(), operatorContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.PublicationMode != nil || string(item.Deployment) != deployment || item.Pickup == nil {
+		t.Fatalf("null mode, raw deployment or pickup changed: %+v", item)
+	}
+	body, err := responseValue(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(responseJSON(t, body))
+	if !strings.Contains(text, `"unknown":999999999999999999999999999999`) ||
+		!strings.Contains(text, `"publication_mode":null`) ||
+		strings.Contains(text, `"acceptance_criteria"`) {
+		t.Fatal("summary projection changed numeric/null/optional fields", text)
+	}
+	row.DeploymentJSON = &goal
+	item, err = operatorSummary(row, time.Now(), operatorContext{})
+	if err != nil {
+		t.Fatal("summary parsed deployment before the response boundary", err)
+	}
+	if _, err := responseValue(item); err == nil {
+		t.Fatal("invalid stored deployment did not fail response projection")
+	}
+}
 
 func TestFilteredOperatorPageContinuesAfterExactCandidateWindow(t *testing.T) {
 	app, db := writerStore(t, 2, 1)
