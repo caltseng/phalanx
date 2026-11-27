@@ -43,9 +43,14 @@ func recordedSessionKey(reference, runtime string) sessionKey {
 	return sessionKey{runtime, sessionIdentity(reference)}
 }
 
-func sessionTarget(reference, runtime, identity, availability string, explicitURL bool) map[string]any {
+type SessionLink struct {
+	URL    *string `json:"url"`
+	Reason string  `json:"reason"`
+}
+
+func sessionTarget(reference, runtime, identity, availability string, explicitURL bool) SessionLink {
 	if availability == "missing" || availability == "deleted" {
-		return map[string]any{"url": nil, "reason": "session " + availability}
+		return SessionLink{Reason: "session " + availability}
 	}
 	prefix := ""
 	for _, known := range nativePrefixes {
@@ -101,5 +106,5 @@ func sessionTarget(reference, runtime, identity, availability string, explicitUR
 			reason = "session last reported present"
 		}
 	}
-	return map[string]any{"url": target, "reason": reason}
+	return SessionLink{URL: target, Reason: reason}
 }

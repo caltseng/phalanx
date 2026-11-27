@@ -3,56 +3,58 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
-func archiveStatus(tx *sqlite.Tx, sessionID string) (map[string]any, error) {
+type ArchiveStatusView struct {
+	Record  *sqlite.Archive        `json:"record"`
+	Writers []sqlite.ArchiveWriter `json:"writers"`
+	Active  bool                   `json:"active"`
+}
+
+func archiveStatus(tx *sqlite.Tx, sessionID string) (ArchiveStatusView, error) {
+	var result ArchiveStatusView
 	record, err := tx.Archive(sessionID)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	writers, err := tx.ArchiveWriters(sessionID)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	active := false
 	for _, writer := range writers {
-		item, ok := writer["item_id"].(string)
-		if !ok {
-			return nil, errors.New("Archived writer item identity is not text")
-		}
-		found, err := tx.ItemHasWriter(item)
-		if err != nil {
-			return nil, err
-		}
-		active = active || found
+		active = active || writer.ItemActive
 	}
 	captains, err := tx.AllCaptains()
 	if err != nil {
-		return nil, err
+		return result, err
 	}
+	ids := []string{}
+	matching := []sqlite.Captain{}
 	for _, captain := range captains {
 		if sessionIdentity(captain.SessionRef) != sessionID {
 			continue
 		}
-		details, err := tx.CaptainDetails(captain.ID)
-		if err != nil {
-			return nil, err
-		}
+		ids = append(ids, captain.ID)
+		matching = append(matching, captain)
+	}
+	details, err := tx.CaptainDetailsBatch(ids)
+	if err != nil {
+		return result, err
+	}
+	for _, captain := range matching {
+		detail := details[captain.ID]
 		clean := captain.HandoffNote != nil && strings.HasPrefix(*captain.HandoffNote, "Stop condition met:")
 		if !clean {
-			clean, err = tx.CaptainHasSuccessor(captain.ID)
-			if err != nil {
-				return nil, err
-			}
+			clean = len(detail.Successors) > 0
 		}
-		active = active || captain.State != "ended" || len(details.OpenIntents) > 0 || details.CleanupPending > 0 || !clean
+		active = active || captain.State != "ended" || len(detail.OpenIntents) > 0 || detail.CleanupPending > 0 || !clean
 	}
-	return map[string]any{"record": record, "writers": writers, "active": active}, nil
+	return ArchiveStatusView{Record: record, Writers: writers, Active: active}, nil
 }
 
 func (a *App) ArchiveStatus(ctx context.Context, sessionID string) (json.RawMessage, error) {
@@ -75,17 +77,10 @@ func (a *App) RecordArchive(ctx context.Context, request contract.SessionArchive
 		if err != nil {
 			return err
 		}
-		active, ok := status["active"].(bool)
-		if !ok {
-			return errors.New("Archive activity is not a boolean")
-		}
-		if active && request.Outcome == "archived" {
+		if status.Active && request.Outcome == "archived" {
 			return &Conflict{"The session still owns a writer or an unfinished Captain handoff"}
 		}
-		previous, err := tx.Archive(request.SessionID)
-		if err != nil {
-			return err
-		}
+		previous := status.Record
 		if previous != nil && (previous.Outcome == "archived" || previous.Outcome == "refused" && request.Outcome != "archived") {
 			result, err = encoded(previous)
 			return err

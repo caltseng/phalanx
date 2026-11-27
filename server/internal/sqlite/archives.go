@@ -20,34 +20,31 @@ func (tx *Tx) Archive(sessionID string) (*Archive, error) {
 	return &result, err
 }
 
-func (tx *Tx) ArchiveWriters(sessionID string) ([]map[string]any, error) {
-	rows, err := tx.conn.QueryContext(tx.ctx, "SELECT id,item_id,execution_id,ended_at FROM writers WHERE session_id=?", sessionID)
+type ArchiveWriter struct {
+	ID          string  `json:"id"`
+	ItemID      string  `json:"item_id"`
+	ExecutionID string  `json:"execution_id"`
+	EndedAt     *string `json:"ended_at"`
+	ItemActive  bool    `json:"-"`
+}
+
+func (tx *Tx) ArchiveWriters(sessionID string) ([]ArchiveWriter, error) {
+	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT w.id,w.item_id,w.execution_id,w.ended_at,
+		EXISTS (SELECT 1 FROM writers active WHERE active.item_id=w.item_id AND active.ended_at IS NULL)
+		FROM writers w WHERE w.session_id=?`, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := []map[string]any{}
+	result := []ArchiveWriter{}
 	for rows.Next() {
-		var id, item, execution string
-		var ended *string
-		if err := rows.Scan(&id, &item, &execution, &ended); err != nil {
+		var row ArchiveWriter
+		if err := rows.Scan(&row.ID, &row.ItemID, &row.ExecutionID, &row.EndedAt, &row.ItemActive); err != nil {
 			return nil, err
 		}
-		result = append(result, map[string]any{"id": id, "item_id": item, "execution_id": execution, "ended_at": ended})
+		result = append(result, row)
 	}
 	return result, rows.Err()
-}
-
-func (tx *Tx) ItemHasWriter(itemID string) (bool, error) {
-	var active bool
-	err := tx.conn.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM writers WHERE item_id=? AND ended_at IS NULL)", itemID).Scan(&active)
-	return active, err
-}
-
-func (tx *Tx) CaptainHasSuccessor(captainID string) (bool, error) {
-	var exists bool
-	err := tx.conn.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM captains WHERE parent_id=?)", captainID).Scan(&exists)
-	return exists, err
 }
 
 func (tx *Tx) RecordArchive(sessionID, outcome, reason, reportedBy, now string) error {

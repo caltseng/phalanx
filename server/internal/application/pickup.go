@@ -22,30 +22,8 @@ type pickupContext struct {
 	Live        map[string]sqlite.Captain
 	Captains    []pickupCaptain
 	Holds       map[string]string
-	Capacity    sqlite.DispatchSettings
-	Rework      *string
-	Admission   map[Stage]*string
-}
-
-func liveSnapshot(tx *sqlite.Tx, now time.Time) ([]sqlite.Captain, map[string]sqlite.Captain, error) {
-	rows, err := tx.AllCaptains()
-	if err != nil {
-		return nil, nil, err
-	}
-	live := map[string]sqlite.Captain{}
-	for _, row := range rows {
-		if row.State == "ended" {
-			continue
-		}
-		gone, err := captainGone(row)
-		if err != nil {
-			return nil, nil, err
-		}
-		if now.Before(gone) {
-			live[row.ID] = row
-		}
-	}
-	return rows, live, nil
+	admissionContext
+	Admission map[Stage]*string
 }
 
 func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
@@ -92,7 +70,7 @@ func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 		}
 		result.Captains = append(result.Captains, pickupCaptain{ID: row.ID, Repositories: scope, RawPickup: value})
 	}
-	holds, err := tx.ActiveCaptainHolds(pythonStamp(now.Add(-30 * time.Minute)))
+	holds, err := tx.ActiveCaptainHolds(pythonStamp(now.Add(-captainHoldDuration)))
 	if err != nil {
 		return result, err
 	}
@@ -101,29 +79,12 @@ func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 			result.Holds[hold.ExecutionID] = hold.Reason
 		}
 	}
-	result.Capacity, err = tx.DispatchSettings()
-	if err != nil {
-		return result, err
-	}
-	result.Rework, err = tx.FirstRework(time.Now().UnixMilli())
+	result.admissionContext, err = admissionSnapshot(tx, nil)
 	if err != nil {
 		return result, err
 	}
 	for _, stage := range []Stage{Development, SelfReview, ReportDrafting, ReportReview, ReportStorage, Publication, Delivery} {
-		reason := ""
-		if result.Capacity.Paused {
-			reason = "Dispatch is paused"
-		} else if result.Capacity.ActiveWriters >= result.Capacity.MaxWriters {
-			reason = fmt.Sprintf("Total capacity exhausted: max_writers=%d", result.Capacity.MaxWriters)
-		} else if needsBuilding(stage) {
-			result.Admission[stage] = buildingReason(result.Capacity, result.Rework, "")
-			continue
-		}
-		var wait *string
-		if reason != "" {
-			wait = &reason
-		}
-		result.Admission[stage] = wait
+		result.Admission[stage] = admissionReason(result.Capacity, result.Rework, stage)
 	}
 	return result, nil
 }

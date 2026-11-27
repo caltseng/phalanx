@@ -234,18 +234,6 @@ func (tx *Tx) ActiveWriters() ([]WriterRecord, error) {
 	return result, rows.Err()
 }
 
-type CaptainRecord struct {
-	ID, State, HeartbeatAt string
-	EndingAt               *string
-}
-
-func (tx *Tx) CaptainRecord(id string) (CaptainRecord, error) {
-	var result CaptainRecord
-	err := tx.conn.QueryRowContext(tx.ctx, "SELECT id,state,heartbeat_at,ending_at FROM captains WHERE id=?", id).
-		Scan(&result.ID, &result.State, &result.HeartbeatAt, &result.EndingAt)
-	return result, err
-}
-
 func (tx *Tx) ConfirmWriter(writerID, owner, state, now string, sessionID, sessionURL *string, confirming, abandon, stateReported bool) error {
 	var confirmedAt *string
 	if confirming {

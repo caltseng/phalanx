@@ -15,7 +15,11 @@ import (
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
-const derivedLimit = 200
+const (
+	derivedLimit       = 200
+	queueBacklogDelay  = 30 * time.Minute
+	activeOverdueDelay = 90 * time.Minute
+)
 
 type FlagView struct {
 	contract.FlagKey
@@ -105,7 +109,7 @@ func captainStaleFlags(current pickupContext) ([]FlagView, error) {
 			return nil, err
 		}
 		reason := "No heartbeat since " + row.HeartbeatAt
-		if row.EndingAt != nil && gone.Before(heartbeat.Add(15*time.Minute)) {
+		if row.EndingAt != nil && gone.Before(heartbeat.Add(captainHeartbeatTimeout)) {
 			reason = "Ending since " + *row.EndingAt + " without finishing its handoff"
 		}
 		result = append(result, serverFlag("captain_stale", reason,
@@ -173,7 +177,7 @@ func idleCaptainFlags(tx *sqlite.Tx, now time.Time, current pickupContext) ([]Fl
 	if len(current.Live) == 0 {
 		return result, nil
 	}
-	rows, err := tx.OverdueQueue(now.Add(-30*time.Minute).UnixMicro() / 1000)
+	rows, err := tx.OverdueQueue(now.Add(-queueBacklogDelay).UnixMicro() / 1000)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +210,7 @@ func idleCaptainFlags(tx *sqlite.Tx, now time.Time, current pickupContext) ([]Fl
 		if hold := current.Holds[row.ID]; hold != "" {
 			reason += ". Captain hold: " + hold
 		}
-		delay := 30 * time.Minute
+		delay := queueBacklogDelay
 		if kind == "captain_idle_with_work" {
 			delay = 60 * time.Minute
 		}
@@ -462,7 +466,7 @@ func activeOverdueFlags(tx *sqlite.Tx, now time.Time, known []FlagView, executio
 	for _, flag := range known {
 		byExecution[flag.ExecutionID] = append(byExecution[flag.ExecutionID], flag)
 	}
-	rows, err := tx.ActiveOverdue(pythonStamp(now.Add(-90*time.Minute)), executionID, derivedLimit)
+	rows, err := tx.ActiveOverdue(pythonStamp(now.Add(-activeOverdueDelay)), executionID, derivedLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +525,7 @@ func activeOverdueFlags(tx *sqlite.Tx, now time.Time, known []FlagView, executio
 			captainID = *row.CaptainID
 		}
 		result = append(result, serverFlag("active_overdue", firstRunes(reason, 16000), firstRunes(action, 16000),
-			pythonStamp(started.Add(90*time.Minute)), contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ID, CaptainID: captainID}, false))
+			pythonStamp(started.Add(activeOverdueDelay)), contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ID, CaptainID: captainID}, false))
 	}
 	return result, nil
 }
@@ -533,11 +537,7 @@ func scopedFlagContext(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 	if err != nil {
 		return current, err
 	}
-	current.Capacity, err = tx.DispatchSettings()
-	if err != nil {
-		return current, err
-	}
-	current.Rework, err = tx.FirstRework(time.Now().UnixMilli())
+	current.admissionContext, err = admissionSnapshot(tx, nil)
 	return current, err
 }
 
@@ -633,7 +633,7 @@ func (a *App) CurrentWriter(ctx context.Context, writerID string) (json.RawMessa
 		if err != nil {
 			return err
 		}
-		view, err := bindingWithContext(tx, writer, &current)
+		view, err := bindingWithContext(tx, writer, &current.admissionContext)
 		if err != nil {
 			return err
 		}
