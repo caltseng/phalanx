@@ -83,13 +83,21 @@ type FinalOutput struct {
 }
 
 func (output FinalOutput) MarshalJSON() ([]byte, error) {
+	value, err := output.JSONValue()
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
+func (output FinalOutput) JSONValue() (any, error) {
 	if (output.PR == nil) == (output.Report == nil) {
 		return nil, errors.New("Exactly one final output variant is required")
 	}
 	if output.PR != nil {
-		return json.Marshal(output.PR)
+		return output.PR, nil
 	}
-	return json.Marshal(output.Report)
+	return output.Report, nil
 }
 
 func (output *FinalOutput) UnmarshalJSON(data []byte) error {

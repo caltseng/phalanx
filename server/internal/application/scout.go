@@ -105,21 +105,21 @@ func scoutStatus(tx *sqlite.Tx, now time.Time) (map[string]any, error) {
 	}, "state": state, "last_pass": latest, "counts": counts, "resume_trigger": recovery}, nil
 }
 
-func (a *App) ScoutStatus(ctx context.Context) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ScoutStatus(ctx context.Context) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		view, err := scoutStatus(tx, a.Clock().UTC())
 		if err != nil {
 			return err
 		}
-		result, err = encoded(view)
+		result, err = responseValue(view)
 		return err
 	})
 	return result, err
 }
 
-func (a *App) ConfigureScout(ctx context.Context, request contract.ScoutSettings) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ConfigureScout(ctx context.Context, request contract.ScoutSettings) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		current, _, err := scoutSettings(tx)
 		if err != nil {
@@ -154,7 +154,7 @@ func (a *App) ConfigureScout(ctx context.Context, request contract.ScoutSettings
 		if err != nil {
 			return err
 		}
-		result, err = encoded(view)
+		result, err = responseValue(view)
 		return err
 	})
 	return result, err
@@ -191,8 +191,8 @@ func checkScoutPass(tx *sqlite.Tx, passID, claimID, now string) (*sqlite.ScoutPa
 	return row, nil
 }
 
-func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		configuration, repositories, err := scoutSettings(tx)
 		if err != nil {
@@ -231,11 +231,11 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json
 		view["claim"] = nil
 		if captain.State != "active" || !now.Before(gone) || !covered {
 			view["blocked_reason"] = "Scout requires a live active Captain covering all configured repositories"
-			result, err = encoded(view)
+			result, err = responseValue(view)
 			return err
 		}
 		if !configuration.Enabled {
-			result, err = encoded(view)
+			result, err = responseValue(view)
 			return err
 		}
 		row, err := tx.OpenScoutPass()
@@ -253,7 +253,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json
 					return err
 				}
 				if owner.State == "active" {
-					result, err = encoded(view)
+					result, err = responseValue(view)
 					return err
 				}
 			}
@@ -264,7 +264,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json
 				return errors.New("Enabled scout configuration has no due time")
 			}
 			if *configuration.DueAt > stamp {
-				result, err = encoded(view)
+				result, err = responseValue(view)
 				return err
 			}
 			passID, err = a.ID()
@@ -276,7 +276,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json
 			}
 		} else {
 			if present(row.RetryAt) && *row.RetryAt > stamp {
-				result, err = encoded(view)
+				result, err = responseValue(view)
 				return err
 			}
 			passID = row.ID
@@ -305,11 +305,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json
 		if err != nil {
 			return err
 		}
-		raw, err := encoded(row)
-		if err != nil {
-			return err
-		}
-		value, _, err = contract.Decode(raw)
+		value, err = responseValue(row)
 		if err != nil {
 			return err
 		}
@@ -323,7 +319,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (json
 			return err
 		}
 		view["claim"] = claim
-		result, err = encoded(view)
+		result, err = responseValue(view)
 		return err
 	})
 	return result, err
@@ -478,11 +474,15 @@ func (a *App) observeScout(tx *sqlite.Tx, repositoryID, repository string, issue
 				if err != nil {
 					return "", err
 				}
-				var item struct{ ID string }
-				if err := json.Unmarshal(imported, &item); err != nil {
-					return "", err
+				item, ok := contract.ObjectValues(imported)
+				if !ok {
+					return "", errors.New("Imported item is not an object")
 				}
-				source.ItemID, source.State, source.Reason = &item.ID, "imported", "Owner approved this issue revision"
+				id, ok := item["id"].(string)
+				if !ok {
+					return "", errors.New("Imported item has no id")
+				}
+				source.ItemID, source.State, source.Reason = &id, "imported", "Owner approved this issue revision"
 				if own {
 					source.Reason = "Configured verified author"
 				}
@@ -522,12 +522,12 @@ func incrementScoutCount(body map[string]any, state string) error {
 	return nil
 }
 
-func (a *App) ScoutPage(ctx context.Context, passID string, request contract.ScoutPage) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ScoutPage(ctx context.Context, passID string, request contract.ScoutPage) (any, error) {
+	var result any
 	key := request.ClaimID + ":" + request.RepositoryID + ":" + string(request.Page)
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "issue-scout:"+passID, &key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "issue-scout:"+passID, &key, request, func() (any, error) {
 			now := a.Clock().UTC()
 			row, err := checkScoutPass(tx, passID, request.ClaimID, timestamp(now))
 			if err != nil {
@@ -617,18 +617,18 @@ func (a *App) ScoutPage(ctx context.Context, passID string, request contract.Sco
 			if err != nil {
 				return nil, err
 			}
-			return encoded(view)
+			return responseValue(view)
 		})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) ScoutFailure(ctx context.Context, passID string, request contract.ScoutFailure) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ScoutFailure(ctx context.Context, passID string, request contract.ScoutFailure) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "issue-scout-failure:"+passID, &request.ClaimID, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "issue-scout-failure:"+passID, &request.ClaimID, request, func() (any, error) {
 			now := a.Clock().UTC()
 			if _, err := checkScoutPass(tx, passID, request.ClaimID, timestamp(now)); err != nil {
 				return nil, err
@@ -653,15 +653,15 @@ func (a *App) ScoutFailure(ctx context.Context, passID string, request contract.
 			if err != nil {
 				return nil, err
 			}
-			return encoded(view)
+			return responseValue(view)
 		})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) ScoutDecision(ctx context.Context, repositoryID string, number json.Number, request contract.ScoutDecision) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ScoutDecision(ctx context.Context, repositoryID string, number json.Number, request contract.ScoutDecision) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		number, err := number.Int64()
 		if err != nil {
@@ -693,7 +693,7 @@ func (a *App) ScoutDecision(ctx context.Context, repositoryID string, number jso
 		if err != nil {
 			return err
 		}
-		result, err = encoded(view)
+		result, err = responseValue(view)
 		return err
 	})
 	return result, err

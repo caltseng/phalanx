@@ -35,13 +35,13 @@ func TestUnavailableFinalizerReturnsCommittedPendingIntent(t *testing.T) {
 		t.Fatal("committed intent was lost when phase-two store access failed", err)
 	}
 	var row sqlite.Execution
-	if err := json.Unmarshal(result, &row); err != nil {
+	if err := json.Unmarshal(responseJSON(t, result), &row); err != nil {
 		t.Fatal(err)
 	}
 	state, err := readState(row.State)
 	if err != nil || row.Version != 2 || state.PendingOutput == nil || *state.PendingOutput != Cancelled ||
 		state.Status != WaitingForExternal || state.FinalOutput != nil {
-		t.Fatal("store failure was normalized into a false closed success", string(result), err)
+		t.Fatal("store failure was normalized into a false closed success", string(responseJSON(t, result)), err)
 	}
 	var intents, reports int
 	if err := db.QueryRow("SELECT count(*) FROM report_finalizations WHERE execution_id='stop'").Scan(&intents); err != nil {

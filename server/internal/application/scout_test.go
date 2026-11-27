@@ -28,12 +28,12 @@ func scoutStore(t *testing.T) (*App, *sql.DB) {
 	return app, db
 }
 
-func decodeScoutClaim(t *testing.T, raw json.RawMessage) *sqlite.ScoutPass {
+func decodeScoutClaim(t *testing.T, raw any) *sqlite.ScoutPass {
 	t.Helper()
 	var response struct {
 		Claim *sqlite.ScoutPass `json:"claim"`
 	}
-	if err := json.Unmarshal(raw, &response); err != nil {
+	if err := json.Unmarshal(responseJSON(t, raw), &response); err != nil {
 		t.Fatal(err)
 	}
 	return response.Claim
@@ -58,7 +58,7 @@ func TestScoutIntakeSourceCursorAndReceiptsRollbackThenRaceTogether(t *testing.T
 	}
 	claim := decodeScoutClaim(t, raw)
 	if claim == nil {
-		t.Fatal("no actual scout allocation", string(raw))
+		t.Fatal("no actual scout allocation", string(responseJSON(t, raw)))
 	}
 	request := nativeScoutPage(claim)
 	var baselineItems int
@@ -92,7 +92,7 @@ func TestScoutIntakeSourceCursorAndReceiptsRollbackThenRaceTogether(t *testing.T
 	if _, err := db.Exec("DROP TRIGGER abort_scout_cursor"); err != nil {
 		t.Fatal(err)
 	}
-	results := make([]json.RawMessage, 2)
+	results := make([]any, 2)
 	failures := make([]error, 2)
 	var writers sync.WaitGroup
 	for index := range 2 {
@@ -108,8 +108,8 @@ func TestScoutIntakeSourceCursorAndReceiptsRollbackThenRaceTogether(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	if string(results[0]) != string(results[1]) {
-		t.Fatal("page receipt replay replaced its captured response", string(results[0]), string(results[1]))
+	if string(responseJSON(t, results[0])) != string(responseJSON(t, results[1])) {
+		t.Fatal("page receipt replay replaced its captured response", string(responseJSON(t, results[0])), string(responseJSON(t, results[1])))
 	}
 	if err := db.QueryRow("SELECT count(*) FROM work_items").Scan(&items); err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestScoutSingleClaimHandoffAndSettingsSupersedeFenceOldPages(t *testing.T) 
 		t.Fatal(err)
 	}
 	captains := []string{"captain", "successor"}
-	responses := make([]json.RawMessage, 2)
+	responses := make([]any, 2)
 	failures := make([]error, 2)
 	var workers sync.WaitGroup
 	for index, captain := range captains {
@@ -178,7 +178,7 @@ func TestScoutSingleClaimHandoffAndSettingsSupersedeFenceOldPages(t *testing.T) 
 	}
 	current := decodeScoutClaim(t, newRaw)
 	if current == nil || current.ID != claim.ID || sameText(current.ClaimID, claim.ClaimID) || *current.CaptainID != successor {
-		t.Fatal("successor did not reclaim the same durable cursor", string(newRaw))
+		t.Fatal("successor did not reclaim the same durable cursor", string(responseJSON(t, newRaw)))
 	}
 	var conflict *Conflict
 	if _, err := app.ScoutPage(ctx, claim.ID, oldPage); !errors.As(err, &conflict) {

@@ -2,18 +2,17 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
-func (a *App) Reply(ctx context.Context, itemID, executionID string, request contract.Reply, key string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Reply(ctx context.Context, itemID, executionID string, request contract.Reply, key string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		result, err = replay(tx, "reply:"+itemID+":"+executionID, &key, request, func() (json.RawMessage, error) {
+		result, err = replay(tx, "reply:"+itemID+":"+executionID, &key, request, func() (any, error) {
 			row, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
 			if err != nil {
 				return nil, err
@@ -37,7 +36,7 @@ func (a *App) Reply(ctx context.Context, itemID, executionID string, request con
 			if err != nil {
 				return nil, err
 			}
-			return encoded(view)
+			return responseValue(view)
 		})
 		return err
 	})

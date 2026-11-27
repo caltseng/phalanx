@@ -26,7 +26,7 @@ func pendingReport(t *testing.T, app *application.App, path string, stage applic
 		ID        string           `json:"id"`
 		Execution sqlite.Execution `json:"execution"`
 	}
-	if err := json.Unmarshal(body, &item); err != nil {
+	if err := json.Unmarshal(responseJSON(t, body), &item); err != nil {
 		t.Fatal(err)
 	}
 	revision := contract.Digest(markdown)
@@ -120,12 +120,12 @@ func TestFinalizationSavepointBackoffAndOwnerRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	var restored sqlite.Execution
-	if err := json.Unmarshal(result, &restored); err != nil {
+	if err := json.Unmarshal(responseJSON(t, result), &restored); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(restored.State, &state); err != nil || state.Status != application.Completed ||
 		state.FinalOutput == nil || state.FinalOutput.Report == nil || restored.Version != 9 {
-		t.Fatal("repaired report did not resume and close through owner retry", string(result), err)
+		t.Fatal("repaired report did not resume and close through owner retry", result, err)
 	}
 	var markdown string
 	if err := db.QueryRow("SELECT markdown FROM reports WHERE execution_id=?", executionID).Scan(&markdown); err != nil ||
@@ -210,7 +210,7 @@ func TestReportFinalizationRefreshesDependenciesWithoutAdvancingTheirVersion(t *
 	var item struct {
 		Execution sqlite.Execution `json:"execution"`
 	}
-	if err := json.Unmarshal(raw, &item); err != nil {
+	if err := json.Unmarshal(responseJSON(t, raw), &item); err != nil {
 		t.Fatal(err)
 	}
 	db := testdb.Open(t, path)

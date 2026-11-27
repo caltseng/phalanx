@@ -36,7 +36,7 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 		Source: "synthetic-source", SourceVersion: "v1", Epoch: "synthetic-epoch", Sequence: "1",
 		WindowStart: stamp, Cutoff: stamp, ObservedAt: stamp, Scope: "item_exclusive", Status: "observed",
 		Reason: "Synthetic coverage", Tokens: contract.Tokens{Input: &input, Output: &output}}
-	results := make([]json.RawMessage, 2)
+	results := make([]any, 2)
 	failures := make([]error, 2)
 	var workers sync.WaitGroup
 	for index := range 2 {
@@ -53,7 +53,7 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 			t.Fatal(err)
 		}
 		var response struct{ Accepted bool }
-		if err := json.Unmarshal(results[index], &response); err != nil {
+		if err := json.Unmarshal(responseJSON(t, results[index]), &response); err != nil {
 			t.Fatal(err)
 		}
 		if response.Accepted {
@@ -72,7 +72,7 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 		t.Fatal(err)
 	}
 	if version != row.Version || ended != nil {
-		t.Fatal("usage affected execution or current attempt", version, ended, string(before))
+		t.Fatal("usage affected execution or current attempt", version, ended, string(responseJSON(t, before)))
 	}
 	snapshot.Sequence, snapshot.Status, snapshot.Reason, snapshot.Tokens = "2", "unavailable", "Synthetic acquisition gap", contract.Tokens{}
 	if _, err := app.OwnUsage(ctx, writerID, snapshot); err != nil {

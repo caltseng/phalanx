@@ -63,7 +63,7 @@ func TestObservationAndDeliveryRollbackTogetherThenReplay(t *testing.T) {
 	}
 	var group sync.WaitGroup
 	failures := make([]error, 2)
-	responses := make([]json.RawMessage, 2)
+	responses := make([]any, 2)
 	for index := range 2 {
 		group.Add(1)
 		go func(index int) {
@@ -78,7 +78,7 @@ func TestObservationAndDeliveryRollbackTogetherThenReplay(t *testing.T) {
 			t.Fatal(err)
 		}
 		var response struct{ Recorded bool }
-		if err := json.Unmarshal(responses[index], &response); err != nil {
+		if err := json.Unmarshal(responseJSON(t, responses[index]), &response); err != nil {
 			t.Fatal(err)
 		}
 		if response.Recorded {
@@ -129,11 +129,11 @@ func TestWriterResultsContinueSameWriterThroughPublicationAndReply(t *testing.T)
 	}
 	row, sameID, reviewAttempt := decodeBinding(t, review)
 	if sameID != id || row.Version != 4 || reviewAttempt == nil || *reviewAttempt == *firstAttempt {
-		t.Fatal("development did not continue the same writer into self-review", string(review))
+		t.Fatal("development did not continue the same writer into self-review", string(responseJSON(t, review)))
 	}
 	replay, err := app.WriterResult(ctx, "up", "execution", id, dev, &key)
-	if err != nil || string(replay) != string(review) {
-		t.Fatal("stage receipt replay re-claimed or rewrote the original binding", string(replay), err)
+	if err != nil || string(responseJSON(t, replay)) != string(responseJSON(t, review)) {
+		t.Fatal("stage receipt replay re-claimed or rewrote the original binding", string(responseJSON(t, replay)), err)
 	}
 	published, err := app.WriterResult(ctx, "up", "execution", id, contract.WriterResult{
 		ExpectedVersion: "4", AttemptID: reviewAttempt, Stage: "self_review", Outcome: "succeeded",
@@ -143,7 +143,7 @@ func TestWriterResultsContinueSameWriterThroughPublicationAndReply(t *testing.T)
 	}
 	row, sameID, publicationAttempt := decodeBinding(t, published)
 	if sameID != id || row.Version != 6 || publicationAttempt == nil {
-		t.Fatal("review did not continue the same writer into publication", string(published))
+		t.Fatal("review did not continue the same writer into publication", string(responseJSON(t, published)))
 	}
 	if err := app.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		writer, err := tx.WriterRecord(id)
@@ -162,7 +162,7 @@ func TestWriterResultsContinueSameWriterThroughPublicationAndReply(t *testing.T)
 	}
 	row, sameID, deliveryAttempt := decodeBinding(t, delivering)
 	if sameID != id || row.Version != 7 || deliveryAttempt != nil {
-		t.Fatal("publication did not retain an attempt-free delivery binding", string(delivering))
+		t.Fatal("publication did not retain an attempt-free delivery binding", string(responseJSON(t, delivering)))
 	}
 	question := &contract.Question{Prompt: "Owner direction", Options: []string{"Retry", "Stop"}, Handoff: "Retain this PR"}
 	waiting, err := app.WriterResult(ctx, "up", "execution", id, contract.WriterResult{
@@ -172,14 +172,14 @@ func TestWriterResultsContinueSameWriterThroughPublicationAndReply(t *testing.T)
 	}
 	row, sameID, _ = decodeBinding(t, waiting)
 	if sameID != id || row.Version != 8 {
-		t.Fatal("attempt-free question changed writer identity", string(waiting))
+		t.Fatal("attempt-free question changed writer identity", string(responseJSON(t, waiting)))
 	}
 	reply, err := app.Reply(ctx, "up", "execution", contract.Reply{ExpectedVersion: "8", Answer: "Retry", AnsweredBy: "owner"}, "owner-reply")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal(reply, &row); err != nil || row.Version != 9 {
-		t.Fatal("owner reply did not queue the current stage", string(reply), err)
+	if err := json.Unmarshal(responseJSON(t, reply), &row); err != nil || row.Version != 9 {
+		t.Fatal("owner reply did not queue the current stage", string(responseJSON(t, reply)), err)
 	}
 	resumed, err := app.WriterNext(ctx, id)
 	if err != nil {
@@ -187,7 +187,7 @@ func TestWriterResultsContinueSameWriterThroughPublicationAndReply(t *testing.T)
 	}
 	row, sameID, deliveryAttempt = decodeBinding(t, resumed)
 	if sameID != id || row.Version != 10 || deliveryAttempt == nil {
-		t.Fatal("owner reply did not resume the retained writer", string(resumed))
+		t.Fatal("owner reply did not resume the retained writer", string(responseJSON(t, resumed)))
 	}
 }
 
@@ -277,6 +277,6 @@ func TestResultReceiptFailureRollsBackStageClaimAndBuildingRelease(t *testing.T)
 	}
 	row, _, _ = decodeBinding(t, published)
 	if row.Version != 6 {
-		t.Fatal("retry did not advance exactly once into publication", string(published))
+		t.Fatal("retry did not advance exactly once into publication", string(responseJSON(t, published)))
 	}
 }
