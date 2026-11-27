@@ -14,8 +14,9 @@ results referring to them are not instructions for a second execution path.
 
 The separate [native Go candidate](../server/README.md) implements the public
 HTTP/application/schema26 SQLite families with pinned P0/D0 conformance fixtures.
-It is not a deployment entrypoint or proof of replacement of the running Python
-API. Its immutable-source/raw-wire/current-data evidence and
+Its opt-in [versioned server entrypoint and existing launch adapter](go-server-release.md)
+are not proof of replacement of the running Python API. Python remains the default.
+Its immutable-source/raw-wire/current-data evidence and
 [owner-approved named transport limits](http-server-migration.md#411-separately-approved-named-transport-changes)
 remain separate from exact-head review, required CI and installation adoption.
 
@@ -26,6 +27,7 @@ remain separate from exact-head review, required CI and installation adoption.
 | `server/internal/application` | Authoritative atomic workflows, writer/capacity continuation, reconciliation, usage, scouting, pickup/flags/operator projection and existing finalization/refresh jobs |
 | `server/internal/sqlite` | Schema26 query/storage, connection-local PRAGMAs, admission, rollback and unknown-commit outcomes; no migration or new scheduler |
 | `server/internal/instancelock` | Database-adjacent sole-instance lock |
+| `server/cmd/phalanx-server`, `server/package.py`, `phalanx/deployment.py` | Versioned server-only binary/assets and explicit existing-supervisor engine selection; no live adoption or client replacement |
 | `server/cmd/conformance-*`, `server/conformance` | Disposable-only fixture adapters, pinned Python oracles, raw wire/typed-store differential and package-only current-data rehearsal; no runtime Python proxy |
 
 ## Components and ownership
