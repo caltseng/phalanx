@@ -5,6 +5,32 @@ import (
 	"testing"
 )
 
+func TestTextPatternValidationDoesNotAllocate(t *testing.T) {
+	for _, test := range []struct {
+		pattern string
+		value   string
+	}{
+		{IdentifierPattern, "repository"},
+		{URLPattern, "runtime://native-session"},
+		{`\S`, "\u001c"},
+	} {
+		t.Run(test.pattern, func(t *testing.T) {
+			v := validator{}
+			loc := []any{"body", "value"}
+			value := any(test.value)
+			allocations := testing.AllocsPerRun(100, func() {
+				v.text(value, loc, false, 0, 0, test.pattern)
+			})
+			if len(v.issues) != 0 {
+				t.Fatal(v.issues)
+			}
+			if allocations != 0 {
+				t.Fatalf("pattern validation allocated %g times per field", allocations)
+			}
+		})
+	}
+}
+
 func TestCanonicalUnicodeDefaultsPresenceAndRetiredField(t *testing.T) {
 	value, keys, err := Decode([]byte(`{"repository_id":"repo","goal":" \u96ea \ud83d\ude80 \u001c "}`))
 	if err != nil {
