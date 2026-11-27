@@ -1,5 +1,5 @@
 from argparse import Namespace
-from contextlib import nullcontext, redirect_stdout
+from contextlib import redirect_stdout
 from datetime import timedelta
 import hashlib
 import io
@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import signal
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -23,19 +24,13 @@ from phalanx.workspaces import any_file_lock
 from timing import WAIT_SECONDS
 
 
-# Ask the real CLI/server to stop in its interpreter, not its Windows venv launcher.
 DEPLOYMENT_PROCESS = """
+import os
 import signal
-import sys
-from threading import Thread
 
 from phalanx.__main__ import main
 
-def stop_on_eof():
-    sys.stdin.buffer.read()
-    signal.raise_signal(signal.SIGINT)
-
-Thread(target=stop_on_eof, daemon=True).start()
+signal.signal(signal.SIGBREAK if os.name == 'nt' else signal.SIGTERM, lambda *_: None)
 main()
 """
 
@@ -45,6 +40,7 @@ class DeploymentTest(unittest.TestCase):
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
+        self.binary = Path(os.environ["PHALANX_TEST_SERVER"]).resolve(strict=True)
         self.enterContext(patch.dict(os.environ))
         for key in list(os.environ):
             if key.startswith("PHALANX_"):
@@ -175,7 +171,7 @@ class DeploymentTest(unittest.TestCase):
                 deployment.configuration(path)
             self.assertNotIn("do-not-print-this", str(caught.exception))
 
-    def test_server_refuses_missing_database_and_duplicate_owner(self):
+    def test_server_refuses_missing_database_and_removed_python_before_side_effects(self):
         home = self.install()
         config, env = deployment.configuration(home / "deployment.json")
         database = Path(env["PHALANX_DB"])
@@ -186,9 +182,8 @@ class DeploymentTest(unittest.TestCase):
             self.assertFalse(database.parent.exists())
             database.parent.mkdir()
             database.write_bytes(b"existing database identity")
-            with any_file_lock([database.with_name(database.name + ".service.lock")]):
-                with self.assertRaisesRegex(ValueError, "already owns"):
-                    deployment.run_service(config, env, "server", engine="python", serve=Mock())
+            with self.assertRaisesRegex(ValueError, "Python HTTP server has been removed"):
+                deployment.run_service(config, env, "server", engine="python")
             call.assert_not_called()
             with self.assertRaisesRegex(ValueError, "only for a new"):
                 deployment.run_service(config, env, "server", initialize_database=True)
@@ -203,10 +198,8 @@ class DeploymentTest(unittest.TestCase):
                 sys.executable, "-P", "-m", "phalanx", "reconcile", "--config",
                 config["reconciler_config"], "--state", config["reconciler_state"], "--once"])
             self.assertEqual(call.call_args.kwargs["env"], env)
-            serve = Mock()
-            self.assertEqual(deployment.run_service(
-                config, env, "server", engine="python", initialize_database=True, serve=serve), 0)
-            serve.assert_called_once_with(host="127.0.0.1", port=8000)
+            with self.assertRaisesRegex(ValueError, "Python HTTP server has been removed"):
+                deployment.run_service(config, env, "server", engine="python", initialize_database=True)
             with patch("sys.argv", ["phalanx", "deploy", "cli", "--config",
                                    str(home / "deployment.json"), "--", "shift", "status"]):
                 with self.assertRaises(SystemExit) as caught:
@@ -222,15 +215,15 @@ class DeploymentTest(unittest.TestCase):
         database.parent.mkdir()
         database.write_bytes(b"existing database")
 
-        def acquire(paths):
+        def launch(command, *, env):
             database.unlink()
-            return nullcontext(paths[0])
+            result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=WAIT_SECONDS)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Phalanx server failed", result.stderr)
+            return result.returncode
 
-        serve = Mock()
-        with patch.object(deployment, "any_file_lock", side_effect=acquire):
-            with self.assertRaisesRegex(ValueError, "disappeared before startup"):
-                deployment.run_service(config, env, "server", engine="python", serve=serve)
-        serve.assert_not_called()
+        with patch.object(deployment.subprocess, "call", side_effect=launch):
+            self.assertNotEqual(deployment.run_service(config, env, "server", go_binary=self.binary), 0)
         self.assertFalse(database.exists())
 
     def test_go_default_and_explicit_engine_child_owns_the_existing_lock(self):
@@ -243,7 +236,7 @@ class DeploymentTest(unittest.TestCase):
         binary.parent.mkdir()
         binary.write_bytes(b"synthetic executable")
         for selected in (None, "go"):
-            with self.subTest(engine=selected), patch.object(deployment, "any_file_lock") as lock, \
+            with self.subTest(engine=selected), patch("phalanx.file_lock.lock") as lock, \
                     patch.object(deployment.subprocess, "call", return_value=7) as call:
                 self.assertEqual(deployment.run_service(
                     config, env, "server", engine=selected, go_binary=binary), 7)
@@ -278,8 +271,10 @@ class DeploymentTest(unittest.TestCase):
         with patch("sys.argv", ["phalanx", "deploy", "run", "--config", str(path), "server"]), \
                 patch("phalanx.server_admin.serve") as serve, \
                 patch.object(deployment.subprocess, "call") as call:
-            main()
-            serve.assert_called_once_with(host="127.0.0.1", port=8000)
+            with self.assertRaises(SystemExit) as caught, redirect_stdout(io.StringIO()):
+                main()
+            self.assertEqual(caught.exception.code, 1)
+            serve.assert_not_called()
             call.assert_not_called()
         for arguments in (["--engine", "go"], ["--engine", "go", "--go-binary", str(binary)]):
             with self.subTest(arguments=arguments), \
@@ -305,14 +300,11 @@ class DeploymentTest(unittest.TestCase):
         database.write_bytes(b"existing database")
         before = path.read_bytes()
         with patch.object(deployment.subprocess, "call") as call:
-            serve = Mock()
             with self.assertRaisesRegex(ValueError, "no Python fallback"):
-                deployment.run_service(actual, env, "server", serve=serve)
+                deployment.run_service(actual, env, "server")
             call.assert_not_called()
-            serve.assert_not_called()
-            self.assertEqual(deployment.run_service(
-                actual, env, "server", engine="python", serve=serve), 0)
-            serve.assert_called_once()
+            with self.assertRaisesRegex(ValueError, "Python HTTP server has been removed"):
+                deployment.run_service(actual, env, "server", engine="python")
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(database.read_bytes(), b"existing database")
 
@@ -361,18 +353,27 @@ class DeploymentTest(unittest.TestCase):
         path = home / "deployment.json"
         config = json.loads(path.read_text())
         config["server"]["port"] = port
-        config["server"]["engine"] = "python"
+        config["server"].update(engine="go", go_binary=str(self.binary))
         path.write_text(json.dumps(config))
         env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+        _, server_env = deployment.configuration(path)
+        initialized = subprocess.run(
+            [sys.executable, "-m", "phalanx", "server", "initialize"],
+            env=server_env, capture_output=True, text=True, timeout=WAIT_SECONDS)
+        self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        # A reviewed package's assets are selected alongside its binary.
+        assets = self.binary.parent / "assets"
+        self.assertTrue(assets.is_dir())
         command = [sys.executable, "-m", "phalanx", "deploy", "run",
                    "--config", str(path), "server"]
         url = f"http://127.0.0.1:{port}"
         for first in (True, False):
             with (home / "service-test.log").open("w+") as log:
                 process = subprocess.Popen(
-                    [sys.executable, "-c", DEPLOYMENT_PROCESS, *command[3:],
-                     *(["--initialize-database"] if first else [])],
-                    env=env, stdin=subprocess.PIPE, stdout=log, stderr=log)
+                    [sys.executable, "-c", DEPLOYMENT_PROCESS, *command[3:]],
+                    env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    start_new_session=os.name != "nt")
                 try:
                     deadline = time.monotonic() + WAIT_SECONDS
                     while True:
@@ -397,9 +398,13 @@ class DeploymentTest(unittest.TestCase):
                     duplicate = subprocess.run(command, env=env, capture_output=True,
                                                text=True, timeout=WAIT_SECONDS)
                     self.assertNotEqual(duplicate.returncode, 0)
-                    self.assertIn("already owns", duplicate.stderr)
+                    self.assertIn("sole server ownership", duplicate.stderr)
                 finally:
-                    process.stdin.close()
+                    if process.poll() is None:
+                        if os.name == "nt":
+                            process.send_signal(signal.CTRL_BREAK_EVENT)
+                        else:
+                            os.killpg(process.pid, signal.SIGTERM)
                     try:
                         process.wait(timeout=30)
                     except subprocess.TimeoutExpired:
@@ -407,7 +412,7 @@ class DeploymentTest(unittest.TestCase):
                         process.wait(timeout=30)
                         raise
                 log.seek(0)
-                self.assertIn("Application shutdown complete.", log.read())
+                self.assertNotIn("server failed", log.read())
                 self.assertEqual(process.returncode, 0)
                 with any_file_lock([home / "db" / "phalanx.sqlite3.service.lock"]) as locked:
                     self.assertIsNotNone(locked, "Stopped deployment retained its service lock")

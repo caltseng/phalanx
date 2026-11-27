@@ -110,12 +110,7 @@ def main() -> None:
                 raise ValueError("PHALANX_OWNER_TOKEN is required for this command")
             api = APIClient(args.api_url, token, timeout=10).call
         if args.command == "deploy":
-            if args.deploy_command == "run" and args.service == "server":
-                from .server_admin import serve
-
-                code = run_deploy(args, serve=serve)
-            else:
-                code = run_deploy(args)
+            code = run_deploy(args)
             if code:
                 parser.exit(code)
         elif args.command == "server":

@@ -2,16 +2,11 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
 from pydantic import Field, model_validator
 
-from . import dispatch
-from .auth import authenticate_board_read, require_owner, require_same_origin
-from .intake_api import run
 from .intake_models import Payload
 
 
-router = APIRouter(prefix="/v1")
 
 
 class DispatchSettings(Payload):
@@ -27,14 +22,3 @@ class DispatchSettings(Payload):
         if any(value is None for value in values.values()):
             raise ValueError("Dispatch settings cannot be null; omit unchanged fields")
         return values
-
-
-@router.get("/dispatch/settings", dependencies=[Depends(authenticate_board_read)])
-def read_settings(request: Request):
-    return run(request, dispatch.settings)
-
-
-@router.put("/dispatch/settings",
-            dependencies=[Depends(require_owner), Depends(require_same_origin)])
-def settings(request: Request, body: DispatchSettings):
-    return run(request, dispatch.set_dispatch, body, write=True)

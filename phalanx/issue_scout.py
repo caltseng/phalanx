@@ -10,12 +10,9 @@ import re
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
 from pydantic import Field, StringConstraints, model_validator
 
 from . import captains, intake
-from .auth import authenticate_board_read, require_coordinator, require_owner, require_same_origin
-from .intake_api import run
 from .intake_models import Identifier, Intake, Payload, RevisionID
 from .pr_models import github_issue_key, github_repository
 
@@ -24,7 +21,6 @@ Author = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9-]{0,9
 Positive = Annotated[int, Field(strict=True, gt=0)]
 LEASE = timedelta(minutes=10)
 PAGE_SIZE = 30
-router = APIRouter(prefix="/v1/issue-scout")
 
 
 class Settings(Payload):
@@ -343,37 +339,3 @@ def decide(db, repository_id, number, payload):
     # Approval during a paged pass must be revisited even if its cursor passed this issue.
     db.execute("UPDATE issue_scout_settings SET due_at=? WHERE id=1", (now,))
     return status(db)
-
-
-@router.get("", dependencies=[Depends(authenticate_board_read)])
-def read_status(request: Request):
-    return run(request, status)
-
-
-@router.put("/settings", dependencies=[Depends(require_owner), Depends(require_same_origin)])
-def save_settings(request: Request, body: Settings):
-    return run(request, configure, body, write=True)
-
-
-@router.post("/claim", dependencies=[Depends(require_coordinator)])
-def claim_pass(request: Request, body: Claim):
-    return run(request, claim, body, write=True)
-
-
-@router.post("/passes/{pass_id}/page", dependencies=[Depends(require_coordinator)])
-def submit_page(request: Request, pass_id: Identifier, body: Page):
-    return run(request, page, pass_id, body, write=True,
-               scope=f"issue-scout:{pass_id}", key=f"{body.claim_id}:{body.repository_id}:{body.page}",
-               payload=body.model_dump(mode="json"))
-
-
-@router.post("/passes/{pass_id}/failure", dependencies=[Depends(require_coordinator)])
-def submit_failure(request: Request, pass_id: Identifier, body: Failure):
-    return run(request, fail, pass_id, body, write=True,
-               scope=f"issue-scout-failure:{pass_id}", key=body.claim_id, payload=body.model_dump())
-
-
-@router.post("/issues/{repository_id}/{number}/decision",
-             dependencies=[Depends(require_owner), Depends(require_same_origin)])
-def owner_decision(request: Request, repository_id: Identifier, number: int, body: Decision):
-    return run(request, decide, repository_id, number, body, write=True)

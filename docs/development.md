@@ -2,7 +2,16 @@
 
 ## Run the tests
 
-Run the localhost HTTP and persistence tests with `python -m unittest discover -s tests -v`. Before opening or updating a PR, run only the modules that cover the change, as [AGENTS.md](../AGENTS.md) describes. Test modules share fixtures by importing sibling modules such as `test_bootstrap`, so run one module with `python -m unittest discover -s tests -p test_intake.py` rather than `python -m unittest tests.test_intake`. Tests use the standard library and the runtime dependencies. Git fixtures set their own commit identity and address bare repositories with `--git-dir`, so they need no global Git configuration and work with `safe.bareRepository=explicit`.
+Build `server/cmd/phalanx-server` with the prepared Go environment, outside the checkout,
+and set `PHALANX_TEST_SERVER` to that absolute binary path. Copy `phalanx/static` to its
+sibling `assets` directory for deployment/package tests. Run localhost HTTP and persistence
+tests with `python -m unittest discover -s tests -v`. Before opening or updating a PR,
+run only the modules that cover the change, as [AGENTS.md](../AGENTS.md) describes.
+Test modules import sibling fixtures, so use discovery with `-p test_intake.py`, not
+`python -m unittest tests.test_intake`. Tests use standard-library unittest and locked
+Python client/admin dependencies; historical oracle dependencies have their own
+`server/conformance/requirements.lock`. Git fixtures set their own identity and use
+`--git-dir`, requiring no global Git configuration.
 
 ### CI shards and timing profiles
 
@@ -29,12 +38,11 @@ estimates alone are not performance acceptance evidence.
 
 ### Shared fixtures
 
-HTTP tests use isolated API applications running in-process on real loopback sockets
-and selector event loops (avoiding Windows Proactor reset/teardown leaks), so urllib
-and CLI subprocesses still exercise HTTP, authentication and background tasks.
-Each fixture start runs a fresh application lifespan; explicit restart tests still
-stop and start it against the same database. The bootstrap backup/restore test retains
-real server-process launches to cover process boundaries and durable recovery.
+HTTP tests use the actual native Go production executable on isolated loopback sockets,
+so urllib and unchanged CLI subprocesses exercise HTTP, authentication and background
+tasks. Fixtures create synthetic stores with retained offline schema helpers; Go never
+initializes a missing store. Every start owns a separate process group and stops/drains
+that exact process before cleanup. Restart tests reuse the same evolved database.
 Shared Git and HTTP fixtures live in `tests/test_bootstrap.py`. Register temporary
 directories with `self.enterContext(TemporaryDirectory())` before starting a server
 so fixture cleanup stops the server before deleting its database.
@@ -44,23 +52,20 @@ capturing stdout, stderr and the exit code while restoring arguments, environmen
 working directory after each call. The isolated deployment lifecycle test retains
 `python -m phalanx` subprocess coverage for startup, restart and exclusive ownership.
 
-HTTP unit tests use `ServerFixture` with a fresh in-process app by default; pass `app=`
-for fixture routes or `in_process=False, script=` for a deliberately separate server.
-Do not patch the shared `SERVER_PROCESS` constant. Contention regressions use short
-fault timeouts, then restore normal admission bounds before concurrent recovery;
-the standalone envelope probe retains real-process production-bound coverage.
+`ServerFixture` does not accept Python apps or custom HTTP routes. Native internal
+admission faults live in Go tests; production HTTP contention uses real external SQLite
+locks and unchanged refusal/replay assertions. Python offline fixture/store unit tests
+retain their own explicit short fault seams, not claimed Go coverage. The standalone
+envelope probe also launches the real Go executable.
 Operator tests seed only the rows they need, keeping the large keyset-paging dataset
 in the deep-paging case.
 
 `tests/operator-create-fixture.html` exercises the real shell/client with mocked transport,
-including owner connections (`?owner`) and tokenless local mode. For the real-API flow, use
-an isolated temporary database/server bound to loopback with `PHALANX_LOCAL_BOARD=1` and
-one test repository registered. In that test app only, mount the repository root at
-`/fixtures` using `StaticFiles`, then open `/fixtures/tests/operator-create-fixture.html?live`.
-It creates a report work item, changes the isolated canonical capacity, and checks server
-validation, persistence, tokenless requests, focus restoration and unchanged `/v1`
-authorization. Never expose this fixture mount or run
-its writes on a production muster. No browser package installation is required.
+including owner connections (`?owner`) and tokenless local mode. The production Go
+route/asset flows are covered by `test_operator_web.py` and the Scribe conformance
+family on disposable loopback stores. There is no Python fixture mount or production
+`/fixtures` route. Never run fixture writes on a production muster; no browser
+visual/layout recertification is inferred from HTTP tests.
 
 ## Route permissions and transactions
 
@@ -83,41 +88,22 @@ on isolated synthetic fresh/retained stores. The independent
 are evidence, not permission to normalize a failure or refreeze P0/D0.
 Unix race/OS exclusion and the complete Python suite remain required CI.
 
-Original Python HTTP assertions can run against the production Go binary through a
+Original Python HTTP assertions run against the production Go binary through a
 startup/teardown adapter; retain exact selected IDs/exclusions and complete typed state.
 Python monkeypatch/clock/SQL-spy tests remain Python reference tests, not claimed Go
 coverage. Keep auth, writer CLI, muster and reconciler tests even after HTTP deprecation.
 `test_deployment.py` covers default/saved/explicit engine precedence, no fallback,
-unmodified configuration and retained Python single ownership. `test_server_admin.py`
+unmodified configuration, removed-Python refusals and actual Go single ownership. `test_server_admin.py`
 covers exclusive new-store initialization without launching HTTP or overwriting data.
 
-### Retained Python reference engine
+### Retained Python offline helpers
 
-The following FastAPI/thread-specific implementation guidance applies to the deprecated
-HTTP reference/temporary rollback path, not Go goroutines:
-
-Use `phalanx.auth` route dependencies: `require_owner` for owner writes,
-`require_runner` for trusted reconciler writes, `require_coordinator` for owner/runner
-coordination, and `require_writer` for scoped writer operations. Board reads use the
-separate opt-in local-read dependency, never write authorization. See the
-[architecture map](architecture.md) for ownership and code entry points.
-Only explicitly selected `/operator/api/` actions use `require_board_owner`, plus
-`require_same_origin` for writes. That dependency admits trusted local dashboard requests
-under the explicit local-board flag, without returning or injecting the server's owner token.
-Do not apply it to a shared API router or unrelated owner/runner/writer routes.
-
-Synchronous handlers read one consistent snapshot with `phalanx.store.read_transaction(path)` and the path in `request.app.state.database_path`. It takes its read lock between serialized writes: a read that arrives during a write starts before the next writer, and one that arrives while a writer waits starts right after that writer. Admission has a four-second timeout separate from SQLite's two-second busy timeout; it does not interrupt an admitted transaction. Timed-out or interrupted waiters must remove their count from whichever queue currently owns it, including a read batch already handed off by a completed writer. Don't call it inside a write transaction.
-
-Use `phalanx.store.write_transaction(path)` for writes, including all reads that inform a write. It serializes write transactions in the server process, starts with `BEGIN IMMEDIATE`, and commits or rolls back on exit. Keep the transaction short and do all external I/O outside it.
-
-Connections use foreign-key enforcement, `synchronous=EXTRA` and a two-second busy timeout. When the store stays locked or busy past that timeout, any route returns 503 with `Retry-After: 1` and the detail `SQLite store unavailable (<SQLite reason>); retry the same request`. Current writer/attempt fencing, expected versions and idempotency keys protect retries; direct writers do not renew expiring leases. Other SQLite operational errors, such as a missing table or a read-only file, stay 500 because retrying won't fix them.
-
-The contention exception handler is async and only constructs the JSON response: it must
-not acquire another request-worker slot to report that storage is busy. Keep SQLite in
-synchronous route/authentication workers, or `asyncio.to_thread` for background refresh
-and report finalization, not on the event loop. Canceling an async await or disconnecting
-an HTTP caller does not cancel the underlying transaction thread; reconcile durable state
-before retrying an uncertain mutation.
+Python clients, models, admin/schema/backup and synthetic domain fixtures remain.
+`tests/operator_fixture.py` retains only offline expected projections, not routes,
+request/response framework classes, application startup or a server. Mixed domain
+modules retain the helpers consumed by fixture seeding and assertions, with their
+HTTP imports/decorators removed. P0/D0 exports and historical goldens remain immutable
+independent evidence in conformance; they are not current production implementations.
 
 Follow [AGENTS.md](../AGENTS.md) and decision 67 before adding schema changes; do not
 add migrations or compatibility machinery without authorization. `store.initialize`

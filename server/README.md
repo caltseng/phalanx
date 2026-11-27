@@ -2,10 +2,10 @@
 
 **Supported repository default; not automatically deployed.** The native server implements the
 [HTTP server migration specification](../docs/http-server-migration.md).
-`deploy run` defaults to the verified Go package unless an explicit CLI/saved engine
-selects otherwise. It never rewrites live configuration/tasks, migrates a database,
+`deploy run` selects the verified Go package; explicit CLI/saved Python selections
+fail with migration guidance. It never rewrites live configuration/tasks, migrates a database,
 or changes Python clients/reconciler/Scribe. Python HTTP is
-[deprecated with explicit temporary rollback](../docs/python-server-deprecation.md);
+[removed; rollback uses a retained known-good package](../docs/python-server-deprecation.md);
 the live installation's engine/revision remains a separate operator-owned fact.
 Implemented HTTP operations are `/health`, the owner/runner role probes,
 repository registration/listing, owner intake, scoped item reads, display-title

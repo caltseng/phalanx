@@ -8,14 +8,11 @@ from datetime import UTC, datetime, timedelta
 import json
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
 from pydantic import StringConstraints
 
 from . import dispatch, intake, pickup, reconciliation
-from .auth import authenticate_board_read, require_coordinator
 from .captains import IDLE_WITH_WORK, STALE, gone_at, live_captains, successor_name
 from .flag_models import flag
-from .intake_api import run
 from .intake_models import Payload, Text
 from .operator_schema import ACTIVE_STARTED_AT, OPEN
 from .session_links import session_id
@@ -29,7 +26,6 @@ ACTIVE_OVERDUE = timedelta(minutes=90)
 DISPATCH_OVERDUE = timedelta(minutes=60)
 DERIVED_LIMIT = 200
 
-router = APIRouter(prefix="/v1")
 
 
 class FlagKey(Payload):
@@ -368,18 +364,3 @@ def execution_flags(db, execution_id=None, *, now=None, current=None):
         flags.extend(derive(db, now, **options))
     flags.extend(active_overdue(db, now, flags, execution_id=execution_id))
     return {"flags": sorted(flags, key=lambda item: (item["first_seen"], item["kind"]))}
-
-
-@router.put("/flags", dependencies=[Depends(require_coordinator)])
-def put_flag(request: Request, body: Flag):
-    return run(request, raise_flag, body, write=True)
-
-
-@router.post("/flags/clear", dependencies=[Depends(require_coordinator)])
-def post_clear(request: Request, body: FlagKey):
-    return run(request, clear_flag, body, write=True)
-
-
-@router.get("/flags", dependencies=[Depends(authenticate_board_read)])
-def get_flags(request: Request):
-    return run(request, all_flags)

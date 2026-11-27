@@ -1,7 +1,6 @@
 """Explicit installation and foreground service entrypoints; never discover live processes."""
 
 import argparse
-from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -12,7 +11,6 @@ from .api_client import validate_api_url
 from .json_utils import unique_object
 from .muster import read_environment, resolve_home
 from .shift import SHIFT_DEFAULTS
-from .workspaces import any_file_lock
 
 DEFAULT_HOME = ".phalanx_muster"
 
@@ -137,19 +135,7 @@ def configuration(path):
     return config, env
 
 
-@contextmanager
-def service_environment(env):
-    previous = dict(os.environ)
-    os.environ.clear()
-    os.environ.update(env)
-    try:
-        yield
-    finally:
-        os.environ.clear()
-        os.environ.update(previous)
-
-
-def run_service(config, env, service, *, initialize_database=False, once=False, serve=None,
+def run_service(config, env, service, *, initialize_database=False, once=False,
                 engine=None, go_binary=None):
     if engine is not None and engine not in ("python", "go"):
         raise ValueError("Server engine must be python or go")
@@ -162,6 +148,11 @@ def run_service(config, env, service, *, initialize_database=False, once=False, 
             command.append("--once")
         return subprocess.call(command, env=env)
     engine = engine if engine is not None else config["server"].get("engine", "go")
+    if engine == "python":
+        raise ValueError("Python HTTP server has been removed. Use a verified Go server package "
+                         "with --engine go and --go-binary (or server.go_binary); "
+                         "see docs/python-server-deprecation.md. For rollback, use the retained "
+                         "known-good package, not this installation. No configuration or data was changed")
     if engine not in ("python", "go"):
         raise ValueError("Server engine must be python or go")
     if go_binary is not None and engine != "go":
@@ -192,19 +183,6 @@ def run_service(config, env, service, *, initialize_database=False, once=False, 
         return subprocess.call([str(binary), "--host", config["server"]["host"],
                                 "--port", str(config["server"]["port"]),
                                 "--assets", str(binary.parent / "assets")], env=env)
-    if serve is None:
-        raise ValueError("Server launch requires the server-host entrypoint")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with any_file_lock([path.with_name(path.name + ".service.lock")]) as locked:
-        if locked is None:
-            raise ValueError("A deployment server already owns this database")
-        if path.exists() and initialize_database:
-            raise ValueError("--initialize-database is only for a new database")
-        if not initialize_database and not path.is_file():
-            raise ValueError("Recorded database disappeared before startup; refusing to create a replacement")
-        with service_environment(env):
-            serve(host=config["server"]["host"], port=config["server"]["port"])
-        return 0
 
 
 def add_deploy_command(commands):
@@ -224,13 +202,13 @@ def add_deploy_command(commands):
             action.add_argument("--once", action="store_true")
             action.add_argument("--engine", choices=("python", "go"),
                                 help="server only; overrides server.engine (default: go); "
-                                     "python is deprecated, retained for temporary rollback")
+                                     "python is removed and fails with migration guidance")
             action.add_argument("--go-binary", type=Path, help="absolute versioned Go package binary")
         elif name == "cli":
             action.add_argument("arguments", nargs=argparse.REMAINDER)
 
 
-def run_deploy(args, *, serve=None):
+def run_deploy(args):
     if args.deploy_command == "init":
         print(f"Templates created in {initialize(args.home, api_url=args.api_url, port=args.port)}; "
               "configure credentials, mappings, runtime and charter before starting anything.")
@@ -261,5 +239,5 @@ def run_deploy(args, *, serve=None):
     if args.once and args.service != "reconciler":
         raise ValueError("--once applies only to the reconciler")
     return run_service(config, env, args.service,
-                       initialize_database=args.initialize_database, once=args.once, serve=serve,
+                       initialize_database=args.initialize_database, once=args.once,
                        engine=getattr(args, "engine", None), go_binary=getattr(args, "go_binary", None))

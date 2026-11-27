@@ -1,5 +1,9 @@
 # PH-03 local operating envelope
 
+Historical Python-server pilot evidence below is provenance, not current launch
+guidance. Current HTTP tests and the envelope probe use native Go; see
+[development](../development.md) and [retirement](../python-server-deprecation.md).
+
 ## Decision for PH-04
 
 Use **CPython 3.14** as the deployment and pilot baseline, with **FastAPI**, **plain Uvicorn**, and Python's standard-library **`sqlite3`** with explicit SQL migrations. Target CPython 3.12 and later for compatibility, with PH-04 validating the supported versions, including the 3.12 floor and 3.14 deployment baseline. Lock runtime and test dependencies when the service lands. Use standard-library `unittest` and an HTTP smoke test from a separate process. FastAPI supplies request validation and an OpenAPI contract. Uvicorn runs the same app on Windows and on a hosted Linux instance. A single process with one local database file is sufficient to bootstrap the API. [FastAPI deployment documentation](https://fastapi.tiangolo.com/deployment/manually/)

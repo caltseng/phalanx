@@ -5,13 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "phalanx"
 version = "0.1.0"
-description = "Local HTTP service for Phalanx"
+description = "Python clients and offline administration for the Phalanx Go HTTP service"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["pydantic>=2,<3"]
-
-[project.optional-dependencies]
-server = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1"]
 
 [tool.setuptools]
 include-package-data = false

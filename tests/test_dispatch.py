@@ -13,7 +13,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
         directory = self.enterContext(TemporaryDirectory())
         self.path = Path(directory) / "queue.sqlite3"
         initialize(self.path)
-        self.start_server(self.path)
+        self.server = self.start_server(self.path)
         self.request("/v1/repositories", OWNER, {"id": "repo", "remote": "https://github.com/e/r.git"})
 
     def test_capacity_is_owner_controlled_validated_and_persistent(self):
@@ -50,6 +50,7 @@ class DispatchTest(ServerFixture, unittest.TestCase):
             row = db.execute("SELECT * FROM dispatch_settings").fetchone()
             self.assertEqual((row["paused"], row["max_writers"]), (1, 6))
         # A fresh server process reads the same saved limit, not a charter or a default.
+        self.stop_server(self.server)
         self.start_server(self.path)
         self.assertEqual(self.get(route, OWNER), (200, saved))
 

@@ -43,7 +43,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from phalanx import dispatch, intake  # noqa: E402
-from phalanx.dispatch_api import DispatchSettings  # noqa: E402
+from phalanx.dispatch_models import DispatchSettings  # noqa: E402
 from phalanx.intake_models import Intake  # noqa: E402
 from phalanx.store import connect, initialize, write_transaction  # noqa: E402
 from phalanx.transitions import Event, Outcome, Wait  # noqa: E402
@@ -56,28 +56,6 @@ LANES = ["urgent-lane", "fanout-source", "fanout", "prereq", "dependent", "throt
          "interrupt"]
 PRIORITY_NAMES = ("low", "normal", "urgent")
 REQUEST_TIMEOUT = 60
-
-SERVER = """
-import os
-from pathlib import Path
-import sys
-from threading import Thread
-
-import uvicorn
-
-Path(sys.argv[2]).write_text(str(os.getpid()))
-server = uvicorn.Server(uvicorn.Config("phalanx.api:app", host="127.0.0.1", port=int(sys.argv[1]),
-                                     timeout_graceful_shutdown=5, access_log=False,
-                                     log_level="warning"))
-
-def stop_on_eof():
-    sys.stdin.buffer.read()
-    server.should_exit = True
-
-Thread(target=stop_on_eof, daemon=True).start()
-server.run()
-"""
-
 
 class Stopped(Exception):
     pass
@@ -316,14 +294,18 @@ class Probe:
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
             port = listener.getsockname()[1]
-        pid_file = self.path.with_name(f"server-{port}.pid")
-        env = dict(os.environ, PHALANX_DB=str(self.path), PHALANX_OWNER_TOKEN=OWNER,
-                   PHALANX_RUNNER_TOKEN=RUNNER,
-                   PYTHONPATH=os.pathsep.join(filter(None, (str(ROOT), os.environ.get("PYTHONPATH")))))
+        binary = Path(os.environ["PHALANX_TEST_SERVER"]).resolve(strict=True)
+        env = {key: value for key, value in os.environ.items() if not key.startswith("PHALANX_")}
+        env.update(PHALANX_DB=str(self.path), PHALANX_OWNER_TOKEN=OWNER,
+                   PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0")
         log = self.path.with_name(f"server-{port}.log").open("w")
-        self.server = subprocess.Popen([sys.executable, "-c", SERVER, str(port), str(pid_file)],
-                                       env=env, stdin=subprocess.PIPE, stdout=log,
-                                       stderr=subprocess.STDOUT)
+        self.server = subprocess.Popen(
+            [str(binary), "--host", "127.0.0.1", "--port", str(port),
+             "--assets", str(ROOT / "phalanx" / "static")],
+            env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+            start_new_session=os.name != "nt",
+        )
         log.close()
         self.base = ("127.0.0.1", port)
         deadline = time.monotonic() + 60
@@ -335,7 +317,7 @@ class Probe:
             status, _ = client.call("health", "GET", "/health", retry=False, record=False)
             if status == 200:
                 client.close()
-                self.pid = int(pid_file.read_text())
+                self.pid = self.server.pid
                 return
             time.sleep(0.05)
         raise RuntimeError(f"Server did not start: {self.path.with_name(f'server-{port}.log').read_text()}")
@@ -343,23 +325,21 @@ class Probe:
     def kill_server(self):
         os.kill(self.pid, getattr(signal, "SIGKILL", signal.SIGTERM))
         self.server.wait(timeout=30)
-        self.server.stdin.close()
 
     def stop_server(self):
         for client in self.clients:
             client.close()
-        if self.server is None:
+        if self.server is None or self.server.poll() is not None:
             return
-        if self.server.stdin and not self.server.stdin.closed:
-            self.server.stdin.close()
-        for stop in (None, self.server.terminate, self.server.kill):
-            if stop:
-                stop()
-            try:
-                self.server.wait(timeout=15)
-                return
-            except subprocess.TimeoutExpired:
-                pass
+        self.server.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+        try:
+            self.server.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            self.server.kill()
+            self.server.wait(timeout=15)
+            raise RuntimeError("Go envelope server did not gracefully drain") from None
+        if self.server.returncode != 0:
+            raise RuntimeError(f"Go envelope server exited with {self.server.returncode}")
 
     # Shared worker helpers -------------------------------------------------------------------
 

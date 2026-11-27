@@ -110,5 +110,6 @@ python -m phalanx server restore C:\muster\backups\phalanx-01.sqlite3
 ```
 
 Restart with the recorded service entrypoint/supervisor and restored path. Do not start
-a raw Uvicorn process alongside a deployment-managed server. See
+a second API process alongside a deployment-managed server. Python HTTP is removed
+from current packages; historical rollback uses its separately retained installation. See
 [deployment and recovery boundaries](architecture.md#deployment-and-recovery-boundaries).

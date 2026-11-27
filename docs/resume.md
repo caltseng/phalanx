@@ -10,10 +10,11 @@ For an install already using [tracked deployment tooling](deployment.md), resume
 `reconciler` command under the recorded single service owner. Never add
 `--initialize-database` during recovery. Do not move an existing `phalanx-muster` directory
 to `.phalanx_muster`; the new spelling is only the new-install default.
-Go is now the supported repository default. Before a package upgrade, preserve a
+Go is the only supported HTTP runtime. Before a package upgrade, preserve a
 recorded explicit `server.engine`/`--engine` choice and verified package path;
-an old implicit Python command needs an explicit `--engine python` for temporary
-rollback, not a silently changed task. See [engine precedence](configuration.md#http-engine-and-package-selection).
+an old Python command/selection fails with migration guidance in this package.
+Coordinate explicit Go adoption, or use the separately retained known-good rollback
+package, not a silently changed task. See [engine precedence](configuration.md#http-engine-and-package-selection).
 Missing Go packages fail rather than starting Python. Never run `server initialize`
 to repair an existing installation.
 
@@ -21,16 +22,10 @@ to repair an existing installation.
 
 1. Check the recorded API's `/health`. If it answers, keep it. Otherwise load the existing
    owner/runner tokens and database path. If the recorded path is missing, stop and
-   investigate; raw Uvicorn would create an empty store. Use the existing supervisor
-   and entrypoint. The raw alternative below is only for an installation already
-   managed that way, after verifying the file exists. It is a deprecated historical
-   Python-only recovery command, not the supported new-install/default launch:
-
-   ```powershell
-   $env:PHALANX_DB = "<recorded absolute path>"
-   # Load existing PHALANX_OWNER_TOKEN and PHALANX_RUNNER_TOKEN privately.
-   python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
-   ```
+   investigate. Use the existing sole-owner supervisor and verified packaged Go
+   entrypoint; this package cannot resume a Python HTTP task. For a required rollback,
+   follow the [retained-package procedure](go-server-release.md#temporary-python-http-rollback)
+   on the same evolved current data. Never initialize or restore an older snapshot over it.
 
 2. Verify authenticated `/v1/owner/status` and `/v1/runner/status`. Resume the
    [reconciler](direct-path.md#run-the-github-reconciler) with its original config and scratch directory.

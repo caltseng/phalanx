@@ -4,11 +4,8 @@ from datetime import datetime
 from decimal import Decimal
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
 
 from . import captains, intake, writers
-from .auth import require_coordinator, require_writer
-from .intake_api import run
 from .intake_models import Identifier, Payload
 from .usage_models import MAX_COUNTER, Snapshot, TOKEN_FIELDS
 
@@ -90,7 +87,7 @@ def captain_observation(db, item_id, execution_id, writer_id, body):
         db, body.captain_id, message="An ended Captain cannot act on writers")
     repository = db.execute("SELECT repository_id FROM work_items WHERE id=?", (item_id,)).fetchone()[0]
     if repository not in json.loads(captain["pickup_json"])["repositories"]:
-        raise HTTPException(403, "Usage observation is outside this Captain's repository scope")
+        raise PermissionError("Usage observation is outside this Captain's repository scope")
     return observe(db, writer, body.snapshot)
 
 
@@ -153,18 +150,3 @@ def projection(db, item_id, execution_id):
             "codex-app": "Automatic App-bound export unverified; authorized native observation required",
         },
     }
-
-
-router = APIRouter(prefix="/v1")
-
-
-@router.post("/writer/usage", dependencies=[Depends(require_writer)])
-def post_own(request: Request, body: Snapshot):
-    return run(request, own_observation, request.state.writer["id"], body, write=True)
-
-
-@router.post("/items/{item_id}/executions/{execution_id}/writers/{writer_id}/usage",
-             dependencies=[Depends(require_coordinator)])
-def post_captain(request: Request, item_id: Identifier, execution_id: Identifier,
-                 writer_id: Identifier, body: CaptainObservation):
-    return run(request, captain_observation, item_id, execution_id, writer_id, body, write=True)

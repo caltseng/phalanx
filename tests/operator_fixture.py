@@ -1,4 +1,4 @@
-"""Read-only, execution-scoped views for the operator board."""
+"""Offline expected projections for retained synthetic fixtures, never HTTP handlers."""
 
 from base64 import b64decode, urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
@@ -7,25 +7,18 @@ import json
 import re
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from fastapi.responses import PlainTextResponse, Response
 
-from . import dispatch, issue_scout, pickup
-from .auth import authenticate_board_read
-from .captains import availability_reports
-from .display_text import reason_text, short_title
-from .flags import LAUNCH_UNCONFIRMED, launch_wait
-from .intake import report as stored_report
-from .intake_api import run
-from .intake_models import LABEL_PATTERN, Identifier
-from .operator_schema import ACTIVE_STARTED_AT, CLOSED, INPUT_RANK, OPEN
-from .session_links import session_key, session_target
-from .store import read_transaction
-from .transitions import Stage, Status
+from phalanx import dispatch, issue_scout, pickup
+from phalanx.captains import availability_reports
+from phalanx.display_text import reason_text, short_title
+from phalanx.flags import LAUNCH_UNCONFIRMED, launch_wait
+from phalanx.intake import report as stored_report
+from phalanx.intake_models import LABEL_PATTERN, Identifier
+from phalanx.operator_schema import ACTIVE_STARTED_AT, CLOSED, INPUT_RANK, OPEN
+from phalanx.session_links import session_key, session_target
+from phalanx.store import read_transaction
+from phalanx.transitions import Stage, Status
 
-router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate_board_read)])
-Limit = Annotated[int, Query(ge=1, le=100)]
-Cursor = Annotated[str | None, Query(max_length=512)]
 STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00")
 ID = re.compile(r"[0-9a-f]{32}")
 PR_NUMBER = re.compile(r"#?([0-9]{1,18})")
@@ -100,7 +93,7 @@ def decode_cursor(cursor, scope, patterns):
             return key
     except (ValueError, TypeError):
         pass
-    raise HTTPException(400, "Invalid cursor")
+    raise ValueError("Invalid cursor")
 
 
 def is_stamp(value):
@@ -167,7 +160,7 @@ def dispatch_context(db, now):
     return {"pickup": pickup.context(db, now), "session_reports": availability_reports(db)}
 
 
-def conditional_read(request, response, db, now, context=None, *, scouting=None):
+def validator(db, now, path, query="", context=None, *, scouting=None):
     # Weak validators ignore ticking display ages, but not deadlines that change row meaning.
     token = db.execute("SELECT token FROM operator_change").fetchone()[0]
     deadlines = tuple(db.execute(
@@ -184,15 +177,9 @@ def conditional_read(request, response, db, now, context=None, *, scouting=None)
     holds = tuple(sorted(context["pickup"]["holds"]))
     sessions = tuple(sorted(context["session_reports"].items(), key=repr))
     live_pickup = context["pickup"]["captains"]
-    key = f"{token}:{request.url.path}?{request.url.query}:{deadlines}:{holds}:{sessions}:{live_pickup}:{scouting}"
+    key = f"{token}:{path}?{query}:{deadlines}:{holds}:{sessions}:{live_pickup}:{scouting}"
     etag = 'W/"' + sha256(key.encode()).hexdigest() + '"'
-    response.headers["ETag"] = etag
-    response.headers["Cache-Control"] = "private, no-cache"
-    supplied = request.headers.get("if-none-match", "")
-    tags = {tag.strip().removeprefix("W/") for tag in supplied.split(",")}
-    if "*" in tags or etag.removeprefix("W/") in tags:
-        return Response(status_code=304, headers=dict(response.headers))
-    return None
+    return etag
 
 
 def summary_wait(row, state, now, context):
@@ -473,320 +460,3 @@ def filtered_closed_page(db, after, size, where, params, closed_after):
     if len(rows) > size:
         return rows[:size], closed_key(rows[size - 1])
     return rows, last if len(keys) == SCAN_LIMIT else None
-
-
-@router.get("/operator/executions")
-def list_executions(
-    request: Request, response: Response, kind: Literal["open", "closed"] = "open", limit: Limit = 25, cursor: Cursor = None,
-    repository: Annotated[str | None, Query(pattern=r"^[A-Za-z0-9_-]{1,100}$")] = None,
-    label: Annotated[str | None, Query(pattern=LABEL_PATTERN)] = None,
-    status: Status | None = None,
-    stage: Stage | None = None,
-    outcome: Outcome | None = None,
-    q: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
-    closed_after: datetime | None = None,
-):
-    if kind == "open" and (outcome or closed_after):
-        raise HTTPException(400, "outcome and closed_after apply only to closed executions")
-    if status is not None and (status in CLOSED_STATUSES) != (kind == "closed"):
-        raise HTTPException(400, f"Status {status} is not a {kind} status")
-    if closed_after is not None:
-        moment = closed_after if closed_after.tzinfo else closed_after.replace(tzinfo=UTC)
-        closed_after = stamp(moment.astimezone(UTC))
-    filters = {name: str(value) for name, value in (
-        ("repository", repository), ("label", label), ("status", status), ("stage", stage),
-        ("outcome", outcome), ("q", q), ("closed_after", closed_after),
-    ) if value is not None}
-    # Unfiltered cursors keep their original scope; filtered cursors are bound to their filters.
-    scope = kind
-    if filters:
-        digest = sha256(json.dumps(filters, sort_keys=True).encode()).hexdigest()[:16]
-        scope = f"{kind}:{digest}"
-    patterns = (is_rank, is_stamp, is_id) if kind == "open" else (is_stamp, is_id)
-    after = decode_cursor(cursor, scope, patterns)
-    where, params = filter_clause(filters)
-    now = datetime.now(UTC)
-    with read_transaction(request.app.state.database_path) as db:
-        context = dispatch_context(db, now)
-        unchanged = conditional_read(request, response, db, now, context)
-        if unchanged is not None:
-            return unchanged
-        if kind == "open":
-            if filters:
-                rows, next_key = filtered_open_page(db, after, limit, where, params)
-            else:
-                rows = open_page(db, after, limit + 1)
-                next_key = open_key(rows[limit - 1]) if len(rows) > limit else None
-                rows = rows[:limit]
-        else:
-            if filters:
-                rows, next_key = filtered_closed_page(db, after, limit, where, params, closed_after)
-            else:
-                rows = closed_page(db, after, limit + 1)
-                next_key = closed_key(rows[limit - 1]) if len(rows) > limit else None
-                rows = rows[:limit]
-    return {
-        "items": [summary(row, now, context) for row in rows],
-        "next_cursor": encode_cursor(scope, next_key) if next_key else None,
-    }
-
-
-@router.get("/operator/overview")
-def overview(request: Request, response: Response):
-    now = datetime.now(UTC)
-    now_ms = int(now.timestamp() * 1000)
-    with read_transaction(request.app.state.database_path) as db:
-        context = dispatch_context(db, now)
-        scouting = issue_scout.status(db)
-        unchanged = conditional_read(request, response, db, now, context, scouting=scouting)
-        if unchanged is not None:
-            return unchanged
-        open_counts = db.execute(
-            f"""SELECT status, dependency_wait_json IS NOT NULL AS blocked, count(*) AS count
-                FROM executions WHERE {OPEN} GROUP BY status, blocked"""
-        ).fetchall()
-        closed_counts = db.execute(
-            f"""SELECT outcome, count(*) AS count FROM executions
-                WHERE {CLOSED} AND updated_at >= ? GROUP BY outcome""",
-            (stamp(now - timedelta(days=1)),),
-        ).fetchall()
-        oldest = db.execute(
-            """SELECT min(ready_since) FROM executions
-               WHERE status = 'queued' AND dependency_wait_json IS NULL AND ready_since <= ?""",
-            (now_ms,),
-        ).fetchone()[0]
-        scout_needs_owner = issue_scout.needs_owner(db)
-    sections = {"needs_you": 0, "running": 0, "waiting_on_checks": 0, "queued": 0, "blocked": 0}
-    for row in open_counts:
-        if row["status"] == Status.QUEUED:
-            sections["blocked" if row["blocked"] else "queued"] += row["count"]
-        else:
-            section = {Status.WAITING_FOR_INPUT: "needs_you", Status.RUNNING: "running",
-                       Status.WAITING_FOR_EXTERNAL: "waiting_on_checks"}[row["status"]]
-            sections[section] += row["count"]
-    closed = {name: 0 for name in Outcome.__args__}
-    closed.update({row["outcome"]: row["count"] for row in closed_counts})
-    sections["delivered_24h"] = sum(closed[name] for name in DELIVERED)
-    sections["needs_you"] += scouting["counts"].get("needs_owner", 0)
-    return {
-        "issue_scout": scouting,
-        "issue_scout_needs_owner": scout_needs_owner,
-        "generated_at": stamp(now),
-        "sections": sections,
-        "closed_24h": closed,
-        "dispatch": {"paused": context["pickup"]["capacity"]["paused"]},
-        "oldest_queued_since": (
-            stamp(datetime.fromtimestamp(oldest / 1000, UTC)) if oldest is not None else None
-        ),
-        "oldest_queued_age_seconds": max(0, (now_ms - oldest) // 1000) if oldest is not None else None,
-    }
-
-
-CURRENT = "NOT EXISTS (SELECT 1 FROM executions AS later WHERE later.previous_id = execution.id)"
-
-
-def brief(db, item_id):
-    row = db.execute(
-        """SELECT json_extract(request_json, '$.acceptance_criteria') AS criteria,
-                  json_extract(request_json, '$.context_links') AS context
-           FROM work_items WHERE id=?""", (item_id,),
-    ).fetchone()
-    return {"acceptance_criteria": json.loads(row["criteria"] or "[]"),
-            "context_links": json.loads(row["context"] or "[]")}
-
-
-@router.get("/operator/items/{item_id}")
-def current_item(request: Request, response: Response, item_id: Identifier):
-    now = datetime.now(UTC)
-    with read_transaction(request.app.state.database_path) as db:
-        if db.execute("SELECT 1 FROM work_items WHERE id=?", (item_id,)).fetchone() is None:
-            raise HTTPException(404, "Item not found")
-        context = dispatch_context(db, now)
-        unchanged = conditional_read(request, response, db, now, context)
-        if unchanged is not None:
-            return unchanged
-        row = db.execute(f"{SUMMARY} WHERE execution.item_id = ? AND {CURRENT}", (item_id,)).fetchone()
-        work_brief = brief(db, item_id)
-    return {"item": {**summary(row, now, context), **work_brief}}
-
-
-@router.get("/operator/groups/{label}")
-def group(request: Request, response: Response, label: Annotated[str, Path(pattern=LABEL_PATTERN)],
-          limit: Limit = 25, cursor: Cursor = None):
-    scope = f"group:{label}"
-    after = decode_cursor(cursor, scope, (is_stamp, is_id))
-    now = datetime.now(UTC)
-    with read_transaction(request.app.state.database_path) as db:
-        if db.execute("SELECT 1 FROM work_items WHERE label=? LIMIT 1", (label,)).fetchone() is None:
-            raise HTTPException(404, "No work items have this label")
-        context = dispatch_context(db, now)
-        unchanged = conditional_read(request, response, db, now, context)
-        if unchanged is not None:
-            return unchanged
-        boundary = "AND (item.created_at, item.id) > (?, ?)" if after else ""
-        rows = db.execute(
-            f"""WITH group_page AS MATERIALIZED (
-                    SELECT item.id FROM work_items AS item WHERE item.label = ? {boundary}
-                    ORDER BY item.created_at, item.id LIMIT ?
-                )
-                {SUMMARY} WHERE item.id IN (SELECT id FROM group_page) AND {CURRENT}
-                ORDER BY item.created_at, item.id""",
-            (label, *(after or ()), limit + 1),
-        ).fetchall()
-    closed = {name: 0 for name in Outcome.__args__}
-    page = rows[:limit]
-    items = [summary(row, now, context) for row in page]
-    for item in items:
-        if item["outcome"]:
-            closed[item["outcome"]] += 1
-
-    def known_sum(column):
-        values = [row[column] for row in page if row[column] is not None]
-        return sum(values) if values else None
-
-    rollup = {
-        "scope": "page",
-        "items": len(page),
-        "open": sum(row["status"] not in CLOSED_STATUSES for row in page),
-        "additions": known_sum("pr_additions"),
-        "deletions": known_sum("pr_deletions"),
-        "size_unknown_count": sum(row["pr_url"] is not None and
-                                  (row["pr_additions"] is None or row["pr_deletions"] is None)
-                                  for row in page),
-        "first_created_at": min((row["item_created_at"] for row in page), default=None),
-        "last_closed_at": max((row["updated_at"] for row in page
-                               if row["status"] in CLOSED_STATUSES), default=None),
-        "oldest_open_since": min((row["created_at"] for row in page
-                                 if row["status"] not in CLOSED_STATUSES), default=None),
-        "outcomes": closed,
-    }
-    return {
-        "label": label,
-        "rollup": rollup,
-        "items": items,
-        "next_cursor": page_cursor(rows, limit, scope,
-                                   lambda row: [row["item_created_at"], row["item_id"]]),
-    }
-
-
-@router.get("/items/{item_id}/executions/{execution_id}/report", response_class=PlainTextResponse)
-def report(request: Request, item_id: Identifier, execution_id: Identifier):
-    return run(request, stored_report, item_id, execution_id)
-
-
-@router.get("/operator/executions/{execution_id}/timeline")
-def timeline(request: Request, execution_id: Identifier, limit: Limit = 25, cursor: Cursor = None):
-    scope = f"timeline:{execution_id}"
-    after = decode_cursor(cursor, scope, (is_version, is_stamp))
-    with read_transaction(request.app.state.database_path) as db:
-        execution = db.execute(
-            f"{SUMMARY} WHERE execution.id = ?", (execution_id,)
-        ).fetchone()
-        if execution is None:
-            raise HTTPException(404, "Execution not found")
-        relatives = db.execute(
-            """SELECT previous_id,
-                      (SELECT id FROM executions AS later WHERE later.previous_id = execution.id) AS next_id
-               FROM executions AS execution WHERE id = ?""",
-            (execution_id,),
-        ).fetchone()
-        prerequisites = db.execute(
-            """SELECT json_extract(block.value, '$.upstream_id') AS item_id,
-                      coalesce((SELECT title FROM item_titles WHERE item_id = upstream.id
-                                ORDER BY revision DESC LIMIT 1),
-                               json_extract(upstream.request_json, '$.goal')) AS title,
-                      json_extract(block.value, '$.milestone') AS milestone,
-                      json_extract(block.value, '$.reason') AS reason
-               FROM executions AS execution
-               JOIN json_each(execution.dependency_wait_json) AS block
-               JOIN work_items AS upstream ON upstream.id = json_extract(block.value, '$.upstream_id')
-               WHERE execution.id = ?
-               ORDER BY block.key""",
-            (execution_id,),
-        ).fetchall()
-        boundary, params = ("WHERE (events.version, events.created_at) < (?, ?)", after) if after else ("", ())
-        question = None
-        if execution["status"] == "waiting_for_input":
-            asked = db.execute(
-                """SELECT json_extract(details_json, '$.question') AS question FROM transition_history
-                   WHERE execution_id = ? AND version = ?""",
-                (execution_id, execution["version"]),
-            ).fetchone()
-            question = json.loads(asked["question"]) if asked and asked["question"] else None
-        rows = db.execute(
-            f"""WITH events AS (
-                SELECT event.version, event.event, event.created_at, event.attempt_id,
-                       json_extract(event.state_json, '$.stage') AS stage,
-                       json_extract(event.state_json, '$.status') AS status,
-                       CASE WHEN json_extract(prior.state_json, '$.stage')
-                                 <> json_extract(event.state_json, '$.stage')
-                            THEN json_extract(prior.state_json, '$.stage') END AS from_stage,
-                       coalesce(json_extract(event.details_json, '$.reason'),
-                                CASE WHEN event.event = 'reply' THEN 'Answered by ' || coalesce(
-                                    json_extract(event.details_json, '$.answered_by'), 'owner') END,
-                                json_extract(event.state_json, '$.wait.reason')) AS reason,
-                       CASE WHEN event.event = 'reply' THEN coalesce(
-                           json_extract(event.details_json, '$.answered_by'), 'owner') END
-                           AS answered_by,
-                       event.details_json AS details
-                FROM transition_history AS event
-                LEFT JOIN transition_history AS prior
-                    ON prior.execution_id = event.execution_id AND prior.version = event.version - 1
-                WHERE event.execution_id = ?
-                UNION ALL
-                SELECT observation.version, 'github_observation', observation.observed_at, NULL,
-                       json_extract(observed.state_json, '$.stage'),
-                       json_extract(observed.state_json, '$.status'),
-                       NULL, coalesce(
-                           'Observed ' || json_extract(observation.observation_json, '$.pr.url')
-                               || ' ' || json_extract(observation.observation_json, '$.pr.state')
-                               || ' at ' || observation.head_sha,
-                           'Observed no PR for the item branch'), NULL, NULL
-                FROM github_observations AS observation
-                JOIN transition_history AS observed
-                    ON observed.execution_id = observation.execution_id
-                   AND observed.version = observation.version
-                WHERE observation.execution_id = ?
-                UNION ALL
-                SELECT result.version, 'local_checks', result.checked_at, NULL,
-                       json_extract(checked.state_json, '$.stage'),
-                       json_extract(checked.state_json, '$.status'),
-                       NULL, CASE WHEN json_array_length(result.failures_json) = 0
-                                  THEN 'Local checks passed on ' ELSE 'Local checks failed on ' END
-                           || result.head_sha, NULL, NULL
-                FROM local_check_results AS result
-                JOIN transition_history AS checked
-                    ON checked.execution_id = result.execution_id AND checked.version = result.version
-                WHERE result.execution_id = ?
-                UNION ALL
-                SELECT action.version, 'captain_action', action.created_at, NULL,
-                       json_extract(acted.state_json, '$.stage'),
-                       json_extract(acted.state_json, '$.status'),
-                       NULL, 'Captain ' || substr(action.captain_id, 1, 8) || ' ' || action.action
-                           || ': ' || action.reason, NULL, NULL
-                FROM captain_actions AS action
-                JOIN transition_history AS acted
-                    ON acted.execution_id = action.execution_id AND acted.version = action.version
-                WHERE action.execution_id = ?
-            )
-            SELECT events.* FROM events
-            {boundary}
-            ORDER BY events.version DESC, events.created_at DESC LIMIT ?""",
-            (execution_id, execution_id, execution_id, execution_id, *params, limit + 1),
-        ).fetchall()
-        from .usage import projection
-        usage = projection(db, execution["item_id"], execution_id)
-        now = datetime.now(UTC)
-        context = dispatch_context(db, now)
-        work_brief = brief(db, execution["item_id"])
-    return {
-        "item": {**summary(execution, now, context), **work_brief},
-        "usage": usage,
-        "attempt": execution["stage_owner"],
-        "previous_execution_id": relatives["previous_id"],
-        "next_execution_id": relatives["next_id"],
-        "prerequisites": [{**row, "title": short_title(row["title"])} for row in map(dict, prerequisites)],
-        "question": question,
-        "events": [timeline_event(row) for row in rows[:limit]],
-        "next_cursor": page_cursor(rows, limit, scope, lambda row: [row["version"], row["created_at"]]),
-    }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -186,6 +187,7 @@ func TestExplicitInterruptionWaitingForAdmissionDoesNotCommit(t *testing.T) {
 	if _, err := app.Intake(ctx, request, &key); !errors.Is(err, context.Canceled) {
 		t.Fatal("explicit interruption was detached", err)
 	}
+
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -198,5 +200,106 @@ func TestExplicitInterruptionWaitingForAdmissionDoesNotCommit(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAdmissionRefusalsKeepWorkerIndependentResponsesAndRecover(t *testing.T) {
+	app := fixtureApp(t)
+	held, release := make(chan struct{}), make(chan struct{})
+	holderDone := make(chan error, 1)
+	go func() {
+		holderDone <- app.Store.Write(context.Background(), func(*sqlite.Tx) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	deadline(t, held)
+	unblock := sync.OnceFunc(func() {
+		close(release)
+		if err := <-holderDone; err != nil {
+			t.Error(err)
+		}
+	})
+	defer unblock()
+	handler := &Handler{App: app, Owner: "owner", Runner: "runner"}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	post := func() (*http.Response, error) {
+		request, err := http.NewRequest("POST", server.URL+"/v1/items",
+			strings.NewReader(`{"repository_id":"fixture","goal":"Admission refusal recovery"}`))
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Authorization", "Bearer owner")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", "admission-refusal")
+		return server.Client().Do(request)
+	}
+	type reply struct {
+		status int
+		retry  string
+		body   string
+		err    error
+	}
+	replies := make(chan reply, 20)
+	for range 20 {
+		go func() {
+			response, err := post()
+			if err != nil {
+				replies <- reply{err: err}
+				return
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			replies <- reply{response.StatusCode, response.Header.Get("Retry-After"), string(body), err}
+		}()
+	}
+	for _, path := range []string{"/health", "/v1/owner/status"} {
+		request := httptest.NewRequest("GET", path, nil)
+		request.Header.Set("Authorization", "Bearer owner")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatal("storage admission blocked an independent response", response.Code, response.Body)
+		}
+	}
+	for range 20 {
+		select {
+		case result := <-replies:
+			if result.err != nil || result.status != http.StatusServiceUnavailable || result.retry != "1" ||
+				!strings.Contains(result.body, "retry the same request") {
+				t.Fatal("lost worker-independent admission refusal", result)
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("admission refusal did not complete")
+		}
+	}
+	// Release the actual native gate; the same process/key must recover without prior effects.
+	unblock()
+	if err := app.Store.Read(context.Background(), func(tx *sqlite.Tx) error {
+		_, err := tx.Receipt("intake", "admission-refusal")
+		if err != sql.ErrNoRows {
+			return fmt.Errorf("refusal wrote an immutable receipt: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var accepted []byte
+	for range 2 {
+		response, err := post()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil || response.StatusCode != http.StatusCreated {
+			t.Fatal("same-process recovery failed", response.StatusCode, string(body), err)
+		}
+		if accepted != nil && !bytes.Equal(accepted, body) {
+			t.Fatal("recovered-key replay changed the original response")
+		}
+		accepted = body
 	}
 }
