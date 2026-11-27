@@ -3,5 +3,7 @@
 *.mod text eol=lf
 *.sum text eol=lf
 *.json text eol=lf
+*.html text eol=lf
+internal/httpapi/contract-docs/*.html whitespace=-trailing-space,-blank-at-eof
 *.md text eol=lf
 .gitattributes text eol=lf

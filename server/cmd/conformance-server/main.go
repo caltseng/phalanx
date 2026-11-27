@@ -32,6 +32,8 @@ func main() {
 func run() error {
 	database := flag.String("fixture", "", "existing disposable fixture database")
 	idStart := flag.Uint64("id-start", 0, "deterministic fixture ID starting ordinal")
+	localBoard := flag.Bool("local-board", false, "enable direct loopback-only disposable board authority")
+	fixtureAssets := flag.Bool("fixture-assets", false, "serve pinned assets copied into this disposable fixture")
 	flag.Parse()
 	if *database == "" {
 		return fmt.Errorf("--fixture is required; no environment/config discovery")
@@ -59,16 +61,34 @@ func run() error {
 	var counter atomic.Uint64
 	counter.Store(*idStart)
 	app.ID = func() (string, error) { return fmt.Sprintf("%032x", counter.Add(1)), nil }
+	if err := app.StartReconciliation(context.Background()); err != nil {
+		return err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
+	home := filepath.Dir(path)
+	assets := filepath.Join("phalanx", "static")
+	if *fixtureAssets {
+		assets = filepath.Join(home, "assets")
+	}
 	server := &http.Server{
-		Handler:           &httpapi.Handler{App: app, Owner: "conformance-owner-only-0000000000000000", Runner: "conformance-runner-only-0000000000000000", Logger: slog.Default()},
+		Handler:           &httpapi.Handler{App: app, Owner: "conformance-owner-only-0000000000000000", Runner: "conformance-runner-only-0000000000000000", Logger: slog.Default(), Home: &home, LocalBoard: *localBoard, AssetsDirectory: assets},
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	jobsContext, stopJobs := context.WithCancel(context.Background())
+	jobsDone := make(chan struct{})
+	go func() {
+		defer close(jobsDone)
+		app.RunBackground(jobsContext, slog.Default())
+	}()
+	defer func() {
+		stopJobs()
+		<-jobsDone
+	}()
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	inputClosed := make(chan error, 1)

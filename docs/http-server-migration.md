@@ -97,6 +97,53 @@ No Captain best guess is relabeled owner approval. Review of this report approve
 
 There is no second production writer. Test two services only on separate isolated database copies; read-only production export for rehearsal is operator-owned and sanitized/privately held.
 
+### 4.1.1 Separately approved named transport changes
+
+The owner explicitly accepted two separate choices in execution
+`22f0004de8634d7b9aa8523aa3c62d77`, reply **v12**, 2026-11-27.
+These amend only the exact named requests in
+[`framework.py`](../server/conformance/framework.py), whose approved expectations
+bind each request's SHA-256. P0 and D0 agree; these are **not P0-bug exceptions**.
+All predecision raw evidence and immutable source/runtime pins remain unchanged.
+
+| Exact case | P0/D0 | Approved native Go |
+| --- | --- | --- |
+| `duplicate-host` | HTTP/1.1 400, `Invalid HTTP request received.` | HTTP/1.1 400, `400 Bad Request` |
+| `missing-host` | HTTP/1.1 400, same pinned text | HTTP/1.1 400, `400 Bad Request: missing required Host header` |
+| `invalid-version` | HTTP/1.1 400, same pinned text | HTTP/1.1 400, `400 Bad Request` |
+| `conflicting-content-length` | HTTP/1.1 400, same pinned text | HTTP/1.1 400, `400 Bad Request` |
+| `invalid-header-name` | HTTP/1.1 400, same pinned text | HTTP/1.1 400, `400 Bad Request: invalid header name` |
+| `invalid-method` | HTTP/1.1 400, same pinned text | HTTP/1.1 400, `400 Bad Request` |
+| `invalid-percent-url` | HTTP/1.1 404, `application/json`, `{"detail":"Not Found"}` | HTTP/1.1 400, `text/plain; charset=utf-8`, `400 Bad Request` |
+| `unsupported-transfer-encoding` | HTTP/1.1 400, pinned refusal text | HTTP/1.1 501, `Unsupported transfer encoding` |
+| `http-1.0-without-host` (separate valid-transport choice) | HTTP/1.1 200, `Connection: close`, `{"status":"ok"}` | HTTP/1.0 200, no explicit Connection header, identical JSON |
+
+The eight malformed cases must strictly reject before routing/auth/storage,
+actually close the connection, and have zero durable effects. Their content
+type is `text/plain; charset=utf-8` and `Connection: close` except the explicitly
+listed P0/D0 JSON refusal. The separate valid HTTP/1.0 case retains
+`application/json`, exact body, actual close and every other recorded field.
+This is not a claim that every external client is unaffected.
+
+Comparison retains raw requests/responses, protocol, status, headers,
+Connection, content type, body and actual close. Only already-reviewed generated
+Date/Server/length/chunking differences are transport-only. No global field
+dropping, body/status normalization, oracle refreeze, broader malformed-input
+acceptance, speculative parser/connection adapter or Python proxy is authorized.
+Every other valid/application/model/default/error/auth/durable-byte/receipt/hash/
+target/capacity contract remains binding. Qualified independent exact-final-head
+review must cover these changes; full framework/domain/Python/required-CI/Unix-
+race/fault/restart/shutdown/current-data rollback and actual merge gates remain.
+This decision grants no deployment, schema, data, credential or trust changes.
+
+The subsequent reviewed candidate restores P0/D0 HTTP/1.1 responses and
+`Connection: close` for parsed HTTP/1.0 requests on every route, including the
+health case and keep-alive requests. Thus the separately permitted valid-transport
+deviation is no longer used; its original owner decision and raw evidence remain
+historical, not broadened to other endpoints. The additional authenticated and
+denied repositories/health cases compare strictly against P0/D0. This restoration
+does not add a request parser/listener adapter or alter body/auth/storage handling.
+
 ### 4.2 Routes and authority
 
 Appendix A is the generated exhaustive P0 request/parameter inventory (66 operations, 51 schemas). It supplements, not substitutes for, the domain rules below. Auth codes: O=owner bearer; R=trusted runner; C=owner or runner coordinator; W=current scoped writer; B=board-read token or explicitly authorized direct local board. A valid writer may read only its own item/execution routes where the route admits that role. Exact source dependencies determine role errors, not "all authenticated" middleware.

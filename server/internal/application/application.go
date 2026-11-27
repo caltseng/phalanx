@@ -23,10 +23,19 @@ type Conflict struct{ Message string }
 
 func (e *Conflict) Error() string { return e.Message }
 
+type Forbidden struct{ Message string }
+
+func (e *Forbidden) Error() string { return e.Message }
+
+type BadRequest struct{ Message string }
+
+func (e *BadRequest) Error() string { return e.Message }
+
 type App struct {
-	Store *sqlite.Store
-	Clock func() time.Time
-	ID    func() (string, error)
+	Store       *sqlite.Store
+	Clock       func() time.Time
+	ID          func() (string, error)
+	afterIntent func() // test-only barrier after the intent commits, never wire/config input
 }
 
 func New(store *sqlite.Store) *App {
@@ -134,6 +143,16 @@ func inspect(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
 }
 
 func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) (json.RawMessage, error) {
+	var result json.RawMessage
+	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
+		var err error
+		result, err = a.intake(tx, request, key)
+		return err
+	})
+	return result, err
+}
+
+func (a *App) intake(tx *sqlite.Tx, request contract.Intake, key *string) (json.RawMessage, error) {
 	material, err := request.Material()
 	if err != nil {
 		return nil, err
@@ -147,50 +166,29 @@ func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) 
 	if err != nil {
 		return nil, err
 	}
-	var result json.RawMessage
-	err = a.Store.Write(ctx, func(tx *sqlite.Tx) error {
-		if key != nil {
-			receipt, err := tx.Receipt("intake", *key)
-			if err == nil {
-				if receipt.Digest != contract.Digest(compatible) && receipt.Digest != contract.Digest(current) {
-					return &Conflict{"Idempotency key was already used with a different request"}
-				}
-				// Do not inspect mutable item state or rewrite the receipt.
-				result = json.RawMessage(receipt.Response)
-				return nil
+	if key != nil {
+		receipt, err := tx.Receipt("intake", *key)
+		if err == nil {
+			if receipt.Digest != contract.Digest(compatible) && receipt.Digest != contract.Digest(current) {
+				return nil, &Conflict{"Idempotency key was already used with a different request"}
 			}
-			if err != sql.ErrNoRows {
-				return err
-			}
+			// Do not inspect mutable item state or rewrite the receipt.
+			return json.RawMessage(receipt.Response), nil
 		}
-		var err error
-		result, err = a.create(tx, request)
-		if err != nil {
-			return err
+		if err != sql.ErrNoRows {
+			return nil, err
 		}
-		if key != nil {
-			return tx.SaveReceipt("intake", *key, contract.Digest(compatible), string(result))
+	}
+	result, err := a.create(tx, request)
+	if err != nil {
+		return nil, err
+	}
+	if key != nil {
+		if err := tx.SaveReceipt("intake", *key, contract.Digest(compatible), string(result)); err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	return result, err
-}
-
-type initialState struct {
-	Target               string  `json:"target"`
-	Stage                string  `json:"stage"`
-	Status               string  `json:"status"`
-	Candidate            *string `json:"candidate"`
-	PrimaryPR            *string `json:"primary_pr"`
-	ReportDraft          *string `json:"report_draft"`
-	Wait                 any     `json:"wait"`
-	Stopping             *string `json:"stopping"`
-	PendingOutput        *string `json:"pending_output"`
-	ReadyRevision        any     `json:"ready_revision"`
-	FinalOutput          any     `json:"final_output"`
-	ReportReviewFindings *string `json:"report_review_findings"`
-	Findings             *string `json:"findings"`
-	PublicationMode      string  `json:"publication_mode"`
+	}
+	return result, nil
 }
 
 func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, error) {
@@ -219,39 +217,8 @@ func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, e
 	if err := tx.InsertItem(sqlite.Item{ID: itemID, RepositoryID: request.RepositoryID, Request: text, CreatedAt: timestamp(a.Clock())}); err != nil {
 		return nil, err
 	}
-	seen := map[string]bool{}
-	for _, dependency := range request.Dependencies {
-		if dependency.UpstreamID == itemID {
-			return nil, &Conflict{"A work item cannot depend on itself"}
-		}
-		if seen[dependency.UpstreamID] {
-			return nil, &Conflict{"Duplicate prerequisite " + dependency.UpstreamID}
-		}
-		seen[dependency.UpstreamID] = true
-		upstream, err := tx.CurrentExecution(dependency.UpstreamID)
-		if err == sql.ErrNoRows {
-			return nil, &Missing{"Work item not found"}
-		}
-		if err != nil {
-			return nil, err
-		}
-		var state dependencyState
-		if err := json.Unmarshal(upstream.State, &state); err != nil {
-			return nil, err
-		}
-		if (state.Target == "report") != (dependency.Milestone == "report") {
-			return nil, &Conflict{"Prerequisite " + dependency.UpstreamID + " has an incompatible output type"}
-		}
-		cycle, err := tx.Cycle(dependency.UpstreamID, itemID)
-		if err != nil {
-			return nil, err
-		}
-		if cycle {
-			return nil, &Conflict{"Prerequisite " + dependency.UpstreamID + " would create a dependency cycle"}
-		}
-	}
-	for _, dependency := range request.Dependencies {
-		if err := tx.InsertLink(itemID, sqlite.Link{UpstreamID: dependency.UpstreamID, Milestone: dependency.Milestone}); err != nil {
+	if len(request.Dependencies) > 0 {
+		if err := replaceDependencies(tx, itemID, request.Dependencies); err != nil {
 			return nil, err
 		}
 	}
@@ -259,17 +226,13 @@ func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, e
 	if err != nil {
 		return nil, err
 	}
-	stage := "development"
-	if request.Target == "report" {
-		stage = "report_drafting"
-	}
-	state, err := contract.Canonical(initialState{Target: request.Target, Stage: stage, Status: "queued", PublicationMode: request.PublicationMode})
+	state, err := contract.Canonical(Start(Target(request.Target), PublicationMode(request.PublicationMode)))
 	if err != nil {
 		return nil, err
 	}
 	now := a.Clock()
 	priority := map[string]int{"low": 0, "normal": 1, "urgent": 2}[request.Priority]
-	if err := tx.InsertExecution(executionID, itemID, state, timestamp(now), request.RepositoryID, priority, now.UnixMilli()); err != nil {
+	if err := tx.InsertExecution(executionID, itemID, state, timestamp(now), request.RepositoryID, priority, now.UnixMilli(), nil); err != nil {
 		return nil, err
 	}
 	unmet, err := unmetDependencies(tx, itemID)

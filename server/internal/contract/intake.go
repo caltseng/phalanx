@@ -87,10 +87,19 @@ func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern
 		v.issue("string_too_short", fmt.Sprintf("String should have at least %d character", min), loc, value, map[string]any{"min_length": min})
 	} else if max > 0 && size > max {
 		v.issue("string_too_long", fmt.Sprintf("String should have at most %d characters", max), loc, value, map[string]any{"max_length": max})
-	} else if pattern != "" && !regexp.MustCompile(pattern).MatchString(text) {
+	} else if pattern != "" && !pythonPattern(pattern).MatchString(text) {
 		v.issue("string_pattern_mismatch", fmt.Sprintf("String should match pattern '%s'", pattern), loc, value, map[string]any{"pattern": pattern})
 	}
 	return text
+}
+
+func pythonPattern(pattern string) *regexp.Regexp {
+	// Rust/Pydantic's \S uses Unicode White_Space; Go's Perl class is ASCII.
+	const atom = `[^\x09-\x0d\x20\x85\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]`
+	pattern = strings.ReplaceAll(pattern, `\S`, atom)
+	// Go RE2 caps individual repetition bounds at 1000.
+	pattern = strings.ReplaceAll(pattern, atom+"{1,2000}", atom+"{1,1000}"+atom+"{0,1000}")
+	return regexp.MustCompile(pattern)
 }
 
 func (v *validator) choice(value any, loc []any, choices []string, literal bool) string {

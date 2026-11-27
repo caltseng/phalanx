@@ -6,9 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"sort"
 	"strconv"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -33,8 +35,8 @@ func ObjectKeys(value any) []string {
 }
 
 // Canonical is Python json.dumps(sort_keys=True, separators=(",", ":"),
-// ensure_ascii=True, allow_nan=False) for the slice's string/null/list objects.
-// Numeric state/response values are decoded as json.Number, never float64.
+// ensure_ascii=True, allow_nan=False). Integer tokens retain arbitrary precision;
+// decimal/exponent tokens use Python json.loads' binary64 representation.
 func Canonical(value any) (string, error) {
 	var buffer bytes.Buffer
 	err := writeValue(&buffer, value)
@@ -83,12 +85,32 @@ func writeValue(buffer *bytes.Buffer, value any) error {
 	case bool:
 		buffer.WriteString(strconv.FormatBool(x))
 	case json.Number:
+		if x == "Infinity" || x == "-Infinity" || x == "NaN" {
+			name := map[json.Number]string{"Infinity": "inf", "-Infinity": "-inf", "NaN": "nan"}[x]
+			return fmt.Errorf("Out of range float values are not JSON compliant: %s", name)
+		}
+		if strings.ContainsAny(string(x), ".eE") {
+			number, err := strconv.ParseFloat(string(x), 64)
+			if err != nil || math.IsInf(number, 0) || math.IsNaN(number) {
+				name := "inf"
+				if number < 0 {
+					name = "-inf"
+				}
+				return fmt.Errorf("Out of range float values are not JSON compliant: %s", name)
+			}
+			buffer.WriteString(pythonFloat(number))
+			break
+		}
 		integer, ok := new(big.Int).SetString(string(x), 10)
 		if !ok {
-			return fmt.Errorf("non-integer canonical number %q is outside the foundation contract", x)
+			return fmt.Errorf("invalid canonical number %q", x)
 		}
 		buffer.WriteString(integer.String())
 	case map[string]any:
+		if x == nil {
+			buffer.WriteString("null")
+			break
+		}
 		buffer.WriteByte('{')
 		for i, key := range ObjectKeys(x) {
 			if i > 0 {
@@ -104,6 +126,10 @@ func writeValue(buffer *bytes.Buffer, value any) error {
 	case *orderedObject:
 		return writeValue(buffer, x.values)
 	case []any:
+		if x == nil {
+			buffer.WriteString("null")
+			break
+		}
 		buffer.WriteByte('[')
 		for i, entry := range x {
 			if i > 0 {
@@ -126,6 +152,20 @@ func writeValue(buffer *bytes.Buffer, value any) error {
 		return writeValue(buffer, decoded)
 	}
 	return nil
+}
+
+func pythonFloat(value float64) string {
+	exponential := strconv.FormatFloat(value, 'e', -1, 64)
+	at := strings.IndexByte(exponential, 'e')
+	exponent, _ := strconv.Atoi(exponential[at+1:])
+	if exponent < -4 || exponent >= 16 {
+		return exponential
+	}
+	result := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.ContainsRune(result, '.') {
+		result += ".0"
+	}
+	return result
 }
 
 func Digest(text string) string {

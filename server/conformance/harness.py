@@ -98,16 +98,89 @@ def verify_manifest():
 
 
 def vector_manifest():
+    import cancellation
+    import decisions
+    import history
+    import inbox
+    import numbers
+    import writers
+    import results
+    import steering
+    import captains
+    import archives
+    import reconciliation
+    import datetimes
+    import usage
+    import scout
+    import flags
+    import operator_views
+    import operator_defaults
+    import scribe
+    import route_models
+    import framework
+
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
               ROOT / "server" / ".gitattributes",
               HERE / "golden-fresh.json", HERE / "golden-retained.json"]
+    paths += sorted((ROOT / "server" / "internal" / "httpapi" / "contract-docs").glob("*"))
     tests = []
     for path in paths:
         if path.name.endswith("_test.go"):
             tests += [str(path.relative_to(ROOT)).replace(os.sep, "/") + ":" + name
                       for name in re.findall(r"^func (Test\w+)\(", path.read_text(encoding="utf-8"), re.M)]
+    domain_requests = [{**request, "id": str(index)} for index, request in enumerate(decisions.corpus())]
+    domain_bytes = "".join(json.dumps(request, separators=(",", ":")) + "\n" for request in domain_requests).encode()
+    numeric_requests = list(numbers.cases())
+    numeric_bytes = ("\n".join(numeric_requests) + "\n").encode()
     return {"request_ids": [case["id"] for case in cases()], "request_count": len(cases()),
+            "additional_corpora": {
+                "history": {"request_ids": [case["id"] for case in history.cases()],
+                            "request_count": len(history.cases())},
+                "cancellation": {"request_ids": [case["id"] for case in cancellation.cases()],
+                                 "request_count": len(cancellation.cases())},
+                "inbox": {"request_ids": [case["id"] for case in inbox.cases()],
+                          "request_count": len(inbox.cases())},
+                "writers": {"request_ids": [case["id"] for case in writers.cases()],
+                            "request_count": len(writers.cases())},
+                "results": {"request_ids": [case["id"] for case in results.cases()],
+                            "request_count": len(results.cases())},
+                "steering": {"request_ids": [case["id"] for case in steering.cases()],
+                             "request_count": len(steering.cases())},
+                "captains": {"request_ids": [case["id"] for case in captains.cases()],
+                             "request_count": len(captains.cases())},
+                "archives": {"request_ids": [case["id"] for case in archives.cases()],
+                             "request_count": len(archives.cases())},
+                "reconciliation": {"request_ids": [case["id"] for case in reconciliation.cases()],
+                                   "request_count": len(reconciliation.cases())},
+                "datetimes": {"request_count": len(datetimes.requests()),
+                              "request_sha256": digest(json.dumps(datetimes.requests()).encode()),
+                              "models": ["AwareDatetime", "datetime"]},
+                "usage": {"request_ids": [case["id"] for case in usage.cases()],
+                          "request_count": len(usage.cases())},
+                "scout": {"request_ids": [case["id"] for case in scout.cases()],
+                          "request_count": len(scout.cases())},
+                "flags": {"request_ids": [case["id"] for case in flags.cases()],
+                          "request_count": len(flags.cases())},
+                "operator": {"request_ids": [case["id"] for case in operator_views.cases()],
+                             "request_count": len(operator_views.cases()),
+                             "semantic_exception": "operator-current-item/absent-publication-mode"},
+                "operator_defaults": {"request_ids": [case["id"] for case in operator_defaults.cases()],
+                                      "request_count": len(operator_defaults.cases()),
+                                      "classification_versions": [4, 9]},
+                "scribe": {"request_ids": [case["id"] for case in scribe.cases()],
+                           "request_count": len(scribe.cases()), "local_board_modes": [False, True],
+                           "assets": list(scribe.ASSETS)},
+                "route_models": {"operation_ids": [case["id"] for case in route_models.inventory()[1]],
+                                 "operation_count": len(route_models.inventory()[1]),
+                                 "model_count": len(route_models.inventory()[0]["components"]["schemas"])},
+                "framework": {"request_ids": [case["id"] for case in framework.cases()],
+                              "request_count": len(framework.cases())},
+                "rehearsal": {"reference_packages": ["P0", "D0"], "schema_shapes": ["fresh", "retained"],
+                              "package_only_stages": 8},
+                "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},
+                "numbers": {"request_count": len(numeric_requests), "request_sha256": digest(numeric_bytes)},
+            },
             "implementations": ["P0", "D0", "Go"], "schema_shapes": ["fresh", "retained"],
             "go_tests": tests, "go_test_count": len(tests),
             "files": {str(path.relative_to(ROOT)).replace(os.sep, "/"): digest(path.read_bytes())
@@ -659,7 +732,7 @@ def differential(binary, output, freeze=False):
         switch_and_fault_checks(binary, root, sources, output)
         busy_checks(binary, root, sources, output)
     if freeze:
-        (HERE / "vectors-manifest.json").write_text(json.dumps(vector_manifest(), indent=2), encoding="utf-8")
+        (HERE / "vectors-manifest.json").write_text(json.dumps(vector_manifest(), indent=2), encoding="utf-8", newline="\n")
 
 
 @contextmanager
@@ -685,7 +758,16 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--freeze", action="store_true")
     parser.add_argument("--freeze-manifest", action="store_true")
+    parser.add_argument("--record-vectors", action="store_true")
     args = parser.parse_args()
+    if args.record_vectors:
+        verify_manifest()
+        previous = json.loads((HERE / "vectors-manifest.json").read_text(encoding="utf-8"))
+        for name in ("golden-fresh.json", "golden-retained.json"):
+            if previous["files"]["server/conformance/" + name] != digest((HERE / name).read_bytes()):
+                raise AssertionError("Recording new vectors cannot change immutable foundation goldens")
+        (HERE / "vectors-manifest.json").write_text(json.dumps(vector_manifest(), indent=2), encoding="utf-8", newline="\n")
+        return
     if args.freeze_manifest:
         (HERE / "manifest.json").write_text(json.dumps(source_manifest(), indent=2), encoding="utf-8")
         return
