@@ -35,16 +35,26 @@ def parameters(binary, database):
 
 
 @contextmanager
-def production(binary, database, directory, python_source=None):
+def production(binary, database, directory, python_source=None, *, default_engine=False):
     command, url = parameters(binary, database)
-    if python_source is not None:
+    if default_engine:
+        command = [sys.executable, "-P", "-c",
+                   "import json,os,signal,sys; "
+                   "sys.path.insert(0,sys.argv.pop(1)); "
+                   "from phalanx.deployment import run_service; "
+                   "signal.signal(signal.SIGBREAK if os.name=='nt' else signal.SIGTERM,lambda *_:None); "
+                   "sys.exit(run_service(json.loads(sys.argv[1]),dict(os.environ),'server'))",
+                   str(h.ROOT), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port,
+                                                      "go_binary": str(binary)}})]
+    elif python_source is not None:
         command = [sys.executable, "-P", "-c",
                    "import json,os,signal,sys; from threading import Thread; "
                    "sys.path.insert(0,sys.argv.pop(1)); "
                    "from phalanx.deployment import run_service; from phalanx.server_admin import serve; "
                    "Thread(target=lambda:(sys.stdin.buffer.read(),signal.raise_signal(signal.SIGINT)),daemon=True).start(); "
                    "sys.exit(run_service(json.loads(sys.argv[1]),dict(os.environ),'server',serve=serve))",
-                   str(python_source), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port}})]
+                   str(python_source), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port,
+                                                            "engine": "python"}})]
     with (directory / "server.log").open("ab") as log:
         log_offset = log.tell()
         process = subprocess.Popen(command, env=environment(database), cwd=directory,
@@ -87,6 +97,27 @@ def production(binary, database, directory, python_source=None):
                     raise AssertionError("Owned synthetic server did not gracefully drain; forced cleanup is not PASS")
             if process.returncode != 0:
                 raise AssertionError(f"Packaged server exit was not clean: {process.returncode}")
+
+
+def default_engine_check(binary, database, directory, output):
+    before = h.snapshot(database)
+    with production(binary, database, directory, default_engine=True) as (url, _):
+        body = {"repository_id": "fixture", "goal": "Default packaged Go launch"}
+        accepted = h.mutation(url, body, "default-packaged-go")
+        if accepted["status"] != 201:
+            raise AssertionError("Default launch did not accept a real packaged Go mutation")
+    evolved = h.snapshot(database)
+    if evolved["ddl"] != before["ddl"]:
+        raise AssertionError("Default launch changed the schema")
+    with production(binary, database, directory, python_source=h.ROOT) as (url, _):
+        replay = h.mutation(url, body, "default-packaged-go")
+        if h.comparable(replay) != h.comparable(accepted) or h.snapshot(database) != evolved:
+            raise AssertionError("Explicit current Python rollback lost default Go-accepted current data")
+    output.write_text(json.dumps({
+        "default_go_response": accepted, "explicit_python_replay": replay,
+        "current_data": evolved, "before": before,
+        "launch": "run_service with no engine and saved packaged go_binary; no mocked child",
+    }, sort_keys=True), encoding="utf-8")
 
 
 def requests():
@@ -319,6 +350,7 @@ def release(package, output):
         for retained in (False, True):
             directory = root / ("release-retained" if retained else "release-fresh")
             database = h.fresh(directory, sources, retained)
+            default_engine_check(binary, database, directory, output / f"default-engine-{retained}.json")
             initial = h.snapshot(database)
             receipts = {}
             body = {"repository_id": "fixture", "goal": "Real release current data \u96ea"}

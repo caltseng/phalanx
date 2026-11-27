@@ -6,21 +6,25 @@ This implementation map describes shipped code, not proof that a particular inst
 [direct sessions](direct-sessions.md) specifies the coordination contract.
 
 **Relay-free does not mean server-free.** The retired relay was the Captain chat
-transport used by the old scheduling loop. The FastAPI HTTP API and Scribe dashboard
-are still running components. The old `captain`, `relay` and `attended*` CLI paths,
+transport used by the old scheduling loop. The HTTP API and Scribe dashboard
+are still components, now supported by the packaged Go server by default.
+The old `captain`, `relay` and `attended*` CLI paths,
 numbered slots, runner-only PR executors and client SQLite journals are retired.
 Historical decisions and pilot
 results referring to them are not instructions for a second execution path.
 
-The separate [native Go candidate](../server/README.md) implements the public
+The [native Go server](../server/README.md) implements the public
 HTTP/application/schema26 SQLite families with pinned P0/D0 conformance fixtures.
-Its opt-in [versioned server entrypoint and existing launch adapter](go-server-release.md)
-are not proof of replacement of the running Python API. Python remains the default.
+Its [versioned entrypoint and existing launch adapter](go-server-release.md) are the
+repository default, not proof of any installation's live engine/revision.
+Python HTTP is deprecated but retained for explicit rollback. Python clients,
+reconciler and admin remain supported; [removal boundaries](python-server-deprecation.md)
+retain shared domain/model/schema and historical oracle dependencies.
 Its immutable-source/raw-wire/current-data evidence and
 [owner-approved named transport limits](http-server-migration.md#411-separately-approved-named-transport-changes)
 remain separate from exact-head review, required CI and installation adoption.
 
-| Native candidate boundary | Responsibility |
+| Supported native boundary | Responsibility |
 | --- | --- |
 | `server/internal/httpapi` | Route/role/scope/browser authority, exact response/error projection, Scribe/static assets and pinned documentation |
 | `server/internal/contract` | Presence/default/model validation, datetime and exact receipt/usage JSON encoding |
@@ -63,7 +67,7 @@ It does not launch sessions, write GitHub, or merge PRs.
 
 | Boundary | Authoritative state / responsibility | Implementation |
 | --- | --- | --- |
-| API and database | Items, dependencies, executions, attempts, questions/replies, reports, bindings, actions, observations and flags; atomic transitions and finalization | [API startup](../phalanx/api.py), [store](../phalanx/store.py), [intake](../phalanx/intake.py), [transitions](../phalanx/transitions.py) |
+| API and database | Items, dependencies, executions, attempts, questions/replies, reports, bindings, actions, observations and flags; atomic transitions and finalization | [Go startup](../server/cmd/phalanx-server/main.go), [application](../server/internal/application), [storage](../server/internal/sqlite); retained Python reference: [API](../phalanx/api.py), [store](../phalanx/store.py), [intake](../phalanx/intake.py), shared [transitions](../phalanx/transitions.py) |
 | Python API clients | One authenticated, no-redirect transport with explicit full routes, HTTP status/details and uncertain-mutation diagnostics; shared CLI JSON output | [APIClient.call](../phalanx/api_client.py), [print_json](../phalanx/json_utils.py) |
 | GitHub | PR identity, actual head/base, checks, feedback, merge and deployment facts | [GitHub reader](../phalanx/github.py), [reconciliation](../phalanx/reconciliation.py) |
 | Captain runtime | Native launch/discovery, coordination, trust-block escalation, shift handoff and creator-owned cleanup | [shift client](../phalanx/shift.py), [Captain prompt](../phalanx/prompts/captain.md), [keeper prompt](../phalanx/prompts/keeper.md) |
@@ -86,7 +90,7 @@ page-wide queries, with the 100-ended-writer limit applied separately to each Ca
 Flags share one request-local live-Captain snapshot with pickup and hold decisions;
 native-session archive membership and latest overdue-work actions are also read in batches.
 
-Execution clients never open the queue database. `server backup` and `server restore`
+Execution clients never open the queue database. `server initialize`, `server backup` and `server restore`
 are explicit **server-host-only administration**, not an alternative client state path.
 The API and reconciler reuse the storage-free [own-process priority helper](../phalanx/priority.py);
 the reconciler never imports server-host administration or queue storage for scheduling.
@@ -100,6 +104,15 @@ defers bookkeeping through existing fenced results and GitHub observations; it a
 queue, offline transitions or admission bypass.
 
 ### SQLite contention and request threads
+
+Go's `internal/sqlite` owns connection-per-transaction admission, DELETE/EXTRA/FK,
+rollback and explicit unknown-commit errors. `internal/application` owns atomic domain
+operations plus durable report-finalization/dependency-refresh jobs. HTTP disconnect
+does not cancel accepted work; shutdown drains dispatched work/background jobs while
+holding the cross-engine OS lock. No request/header/drain deadline is inferred from
+the four-second admission bound. See [native contributor guidance](development.md#native-go-server).
+
+The following thread/event-loop details describe the retained Python reference engine:
 
 SQLite uses DELETE journaling, `synchronous=EXTRA`, short transactions and a two-second
 busy timeout. The process-local gate alternates writers with waiting read batches;
@@ -122,7 +135,7 @@ owns production timing/load evidence.
 
 The [CLI dispatcher](../phalanx/__main__.py) exposes `register`, `intake`, `ingest-issue`,
 `inspect`, `inbox`, `reply`, `cancel`, `onboard`, `shift`, `work`, `reconcile`, `muster`,
-`deploy` and server-host `server backup|restore`. `phx` in the guides is a configured
+`deploy` and server-host `server initialize|backup|restore`. `phx` in the guides is a configured
 local shorthand, not a separately installed executable.
 
 - Owner `intake`, the owner API and Scribe's **New work item** use the same intake

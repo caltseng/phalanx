@@ -7,7 +7,10 @@ See the [deployment diagram](architecture.md#deployment-and-recovery-boundaries)
 boundaries. Keep installed revisions, private paths and rollout receipts in the operator's
 private runbook, not this repository.
 
-[Go cutover](go-server-release.md) is opt-in; Python remains default.
+The [packaged Go server](go-server-release.md) is the supported repository default.
+Python HTTP is [deprecated with explicit temporary rollback](python-server-deprecation.md).
+Python CLI/reconciler/admin remain supported. An installation's live engine and
+revision are separate operator-recorded facts, never inferred from this default.
 
 ## Standing authority for compatible upgrades
 
@@ -84,7 +87,7 @@ Generated files contain no credentials, database or live state:
 
 | File | Configure before use |
 | --- | --- |
-| `deployment.json` | Absolute private environment, shift config, reconciler config/scratch paths and server host/port. |
+| `deployment.json` | Absolute private environment, shift config, reconciler config/scratch paths and server host/port/engine. New templates select `go`; set `server.go_binary` to the verified extracted package's absolute binary path. |
 | `private.env.example` | Copy privately to `private.env`; supply owner/runner/GitHub tokens. Restrict to the service account (POSIX mode 600 or a private Windows ACL). The new directory requests POSIX mode 700; Windows permissions need owner verification. |
 | `shift.json`, `charter.toml`, `reconciler.json` | Runtime/workspace, repository mappings, goal and stable reconciler ID. See [Captain configuration and charter](direct-path.md#run-a-captain-on-the-direct-path). |
 
@@ -95,16 +98,22 @@ or the existing `~/.phalanx/muster.json` locator. See [direct-path configuration
 
 ```powershell
 # Only for a NEW installation, after configuring private.env:
-python -m phalanx deploy run --home D:\.phalanx_muster server --initialize-database
+python -m phalanx deploy cli --home D:\.phalanx_muster -- server initialize
+# After setting server.go_binary to the reviewed package:
+python -m phalanx deploy run --home D:\.phalanx_muster server
 # In a second shell, after health/authentication and repository setup:
 python -m phalanx deploy run --home D:\.phalanx_muster reconciler --once
 python -m phalanx deploy run --home D:\.phalanx_muster reconciler
 python -m phalanx deploy cli --home D:\.phalanx_muster -- shift status
 ```
 
-Remove `--initialize-database` from persistent commands. Startup refuses missing
-databases; initialization refuses existing files. Only the server opens storage
-and validates schema. Python (one Uvicorn worker) or Go (one foreground server)
+Never put initialization in persistent commands. `server initialize` requires an
+absolute `PHALANX_DB`, reserves a new file under the service lock and creates the
+canonical schema without starting Python HTTP. Go startup refuses missing databases;
+initialization refuses existing files. Retained `--initialize-database` is accepted
+only for an explicit Python engine on a new store, not for Go or recovery.
+Only the server and explicit offline server-admin commands open storage.
+Python (one Uvicorn worker) or Go (one foreground server)
 holds the database-adjacent OS lock throughout its lifetime. Reconciler scratch
 locks are separate.
 
@@ -165,6 +174,11 @@ directly. Keep settings, credentials and minimal shims outside Git; reusable beh
 in the pinned package. Use supported runtime discovery/trust tools, not private app SQLite
 queries or ad-hoc trust probes. Only the owner grants repository trust.
 
+Engine selection is explicit CLI `--engine`, saved `server.engine`, then Go.
+`--go-binary` overrides saved `server.go_binary` for Go; neither rewrites files.
+The reconciler ignores saved HTTP engine/package fields and rejects HTTP CLI options.
+No missing/failed Go launch automatically falls back to Python.
+
 For prepared Windows npm environments, retain dependencies, browsers and `lock.sha256`
 externally. Any shim delegates to pinned `scripts/checks.ps1 -EnvironmentRoot $PSScriptRoot`
 with `@args`. See [prepared checks environments](direct-path.md#prepared-checks-environments)
@@ -177,6 +191,13 @@ Existing homes, explicit `captain.json` and service/worktree/session paths remai
 **Never run `deploy init` on a live home, rename it, change its locator or relocate its
 database to adopt a spelling.** The raw API default `.phalanx/phalanx.sqlite3` is unchanged;
 new setup writes explicit absolute paths.
+
+Before upgrading an implicit Python launch, its service owner must either pin
+`--engine python`/`"engine": "python"` temporarily or complete the Go rehearsal and
+configure the verified binary. Existing explicit engine choices are honored.
+No tracked command rewrites live configuration or scheduled tasks for this change.
+Retain previous packages and current-data rollback evidence, including historical Python
+packages; never delete them as part of deprecation.
 
 Prepare a new local config referencing the existing paths, without copying private values:
 

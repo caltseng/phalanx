@@ -17,7 +17,7 @@ SERVER = {
 }
 # Contracts and storage-free helpers both sides import. They depend only on each other.
 SHARED = {"display_text", "intake_models", "pr_models", "session_links", "transitions", "validation",
-          "usage_models", "priority"}
+          "usage_models", "priority", "file_lock"}
 SERVER_PACKAGES = {"fastapi", "starlette", "uvicorn"}
 MODULES = sorted(path.stem for path in PACKAGE.glob("*.py") if path.stem != "__init__")
 CLIENT = [name for name in MODULES if name not in SERVER | SHARED]

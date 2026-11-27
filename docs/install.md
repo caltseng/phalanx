@@ -28,6 +28,12 @@ under running workers. [Resume an existing install](resume.md) uses the recorded
 
 ## Install the package
 
+The supported HTTP default is a verified [Go server package](go-server-release.md).
+Python HTTP is deprecated, not removed; Python CLI/Captain/writer/reconciler and
+offline admin remain supported. Install Python tooling below and extract the reviewed
+Go package with its unchanged `assets` beside the binary. Record both revisions/digests.
+Repository defaults do not prove an existing installation runs that engine.
+
 Use CPython 3.14 for deployment and pilot runs. Phalanx supports CPython 3.12 and later. The CLI, native sessions and reconciler run on Windows, macOS and Linux; CI tests all three. From the repository root in PowerShell on Windows:
 
 ```powershell
@@ -46,7 +52,7 @@ python -m pip install -r requirements.lock -e .
 
 The `python -m phalanx` commands in these docs are the same in either shell once the virtual environment is active. Examples use Windows paths such as `C:\phalanx-runner` for the runner state directory and `C:/enlistments/example` for a checkout. On macOS or Linux use paths such as `~/phalanx-runner` on the command line and absolute paths such as `/Users/you/src/example` in JSON config. Set environment variables with `$env:NAME = "value"` in PowerShell or `export NAME="value"` in a POSIX shell. On macOS, configure checkout and state paths with their exact on-disk letter case.
 
-If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs, while the package metadata keeps compatible ranges for downstream installs. Add the `server` extra (`pip install -e ".[server]"`) on the server host when not using the lock file.
+If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs, while the package metadata keeps compatible ranges for downstream installs. The `server` extra (`pip install -e ".[server]"`) is needed only for retained Python HTTP rollback/reference tests when not using the lock file; do not remove locked oracle/rollback dependencies during deprecation.
 
 ## Create credentials and start the server
 
@@ -57,7 +63,8 @@ $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsaf
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_DB = Join-Path $HOME ".phalanx_muster\db\phalanx.sqlite3"
 $env:PHALANX_LOCAL_BOARD = "1"
-python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
+python -m phalanx server initialize
+& "C:\packages\reviewed\phalanx-server.exe" --host 127.0.0.1 --port 8000 --assets "C:\packages\reviewed\assets"
 ```
 
 In a POSIX shell:
@@ -67,10 +74,19 @@ export PHALANX_OWNER_TOKEN="$(python -c 'import secrets; print(secrets.token_url
 export PHALANX_RUNNER_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 export PHALANX_DB="$HOME/.phalanx_muster/db/phalanx.sqlite3"
 export PHALANX_LOCAL_BOARD=1
-python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
+python -m phalanx server initialize
+/opt/phalanx/reviewed/phalanx-server --host 127.0.0.1 --port 8000 --assets /opt/phalanx/reviewed/assets
 ```
 
-`PHALANX_DB` defaults to `.phalanx/phalanx.sqlite3` resolved against the server's working directory, so set an absolute path. The server creates the file and its directory if they are missing, or applies pending schema steps to an existing store, before serving requests. It refuses a Phalanx store older than schema version 12 rather than upgrading it. Use one server process per database and local storage. Arrange HTTPS before exposing the API beyond loopback. See [Configuration](configuration.md) for every server setting, including the local-only `PHALANX_LOCAL_BOARD` flag. Direct writers have no timed lease expiry.
+Replace example package paths with the verified extracted package. `server initialize`
+is offline new-store administration: it requires an absolute `PHALANX_DB`, creates
+schema26 under the shared service lock and refuses every existing file. Go requires
+that existing supported database and never creates, migrates or restores one.
+For managed setup use [deployment templates and foreground entrypoints](deployment.md#new-installation)
+with an absolute `server.go_binary`; the default engine is Go and explicit saved/CLI
+engines are preserved. Use one authoritative server per database and local storage.
+Arrange HTTPS before exposing the API beyond loopback. See [Configuration](configuration.md)
+for settings, including local-only `PHALANX_LOCAL_BOARD`. Direct writers have no timed lease expiry.
 
 ## Check health and credentials
 

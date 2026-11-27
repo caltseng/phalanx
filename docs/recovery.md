@@ -88,6 +88,11 @@ environment and absolute `PHALANX_DB`. Backup uses SQLite's snapshot API while t
 The destination directory must exist and support hard links. Commands validate copies and
 refuse to overwrite existing files.
 
+These Python admin commands remain supported with the default Go HTTP server.
+For an engine/package regression follow [temporary Python HTTP rollback](go-server-release.md#temporary-python-http-rollback)
+on the same evolved current database, not the snapshot-restore procedure below.
+Never use `server initialize` for recovery; it is only for a new empty installation.
+
 ```powershell
 python -m phalanx server backup C:\muster\backups\phalanx-01.sqlite3
 ```
