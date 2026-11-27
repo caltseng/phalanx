@@ -102,6 +102,23 @@ def requests():
     return result
 
 
+def delayed_header(url):
+    target = urlsplit(url)
+    with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+        client.sendall((f"GET /v1/owner/status HTTP/1.1\r\nHost: {target.netloc}\r\n"
+                        f"Authorization: Bearer {h.OWNER}").encode())
+        time.sleep(5.25)
+        client.sendall(b"\r\nConnection: close\r\n\r\n")
+        parts = []
+        while block := client.recv(65536):
+            parts.append(block)
+    raw = b"".join(parts)
+    header, separator, body = raw.partition(b"\r\n\r\n")
+    if not separator or not header.startswith(b"HTTP/1.1 200 ") or json.loads(body) != {"role": "owner"}:
+        raise AssertionError("Production launcher imposed an unapproved request-header deadline")
+    return {"delay_seconds": 5.25, "raw_response": raw.decode("latin1")}
+
+
 def measure(url, run):
     def request(case):
         headers = [("Authorization", "Bearer " + h.OWNER), ("Content-Type", "application/json")]
@@ -230,6 +247,7 @@ def release(package, output):
                 with manager as running:
                     startup_seconds = time.perf_counter() - start
                     url = running[0]
+                    header_proof = delayed_header(url) if not retained else None
                     for _ in range(12):
                         response = h.wire(url, "GET", "/v1/dispatch/settings", [("Authorization", "Bearer " + h.OWNER)], "")
                         if response["status"] != 200:
@@ -248,7 +266,7 @@ def release(package, output):
                         (output / f"load-{label}-{retained}-{index}-durable.json").write_text(data, encoding="utf-8")
                         runs.append(result)
                 loads.append({"implementation": label, "retained": retained,
-                              "startup_seconds": startup_seconds, "runs": runs})
+                              "startup_seconds": startup_seconds, "delayed_header": header_proof, "runs": runs})
                 print(f"{label}/{retained}: three matched load runs PASS", flush=True)
         (output / "runtime-load.json").write_text(json.dumps({
             "build": package_manifest["build"], "package_sha256": h.digest(package.read_bytes()),

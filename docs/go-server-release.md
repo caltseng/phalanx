@@ -46,6 +46,9 @@ disconnect. Graceful shutdown stops HTTP admission, drains dispatched requests
 and existing durable finalization/dependency batches, then releases that lock.
 There is no newly approved operation/drain deadline. Forced termination requires
 current-data receipt/job reconciliation, not a success-shaped response.
+The existing five-second idle keep-alive timeout is retained without imposing
+a new five-second request-header deadline; the real-entrypoint proof delays an
+authenticated request header beyond five seconds on P0, D0 and Go.
 Windows corrects only the service's own inherited Idle/BelowNormal priority to
 Normal, preserving higher priorities.
 

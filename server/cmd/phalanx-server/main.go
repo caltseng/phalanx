@@ -134,7 +134,7 @@ func serve(ctx context.Context, config configuration) (result error) {
 	server := &http.Server{
 		Handler: &httpapi.Handler{App: app, Owner: config.owner, Runner: config.runner,
 			Logger: slog.Default(), Home: config.home, LocalBoard: config.localBoard, AssetsDirectory: config.assets},
-		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout: 5 * time.Second,
 	}
 	jobsContext, stopJobs := context.WithCancel(context.Background())
 	jobsDone := make(chan struct{})
