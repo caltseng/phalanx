@@ -1,7 +1,6 @@
 package application
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 
@@ -31,22 +30,18 @@ func unmetDependencies(tx *sqlite.Tx, itemID string) ([]unmet, error) {
 }
 
 func resolveDependencies(tx *sqlite.Tx, itemID string) ([]resolved, []unmet, error) {
-	links, err := tx.Links(itemID)
+	links, err := tx.Dependencies(itemID)
 	if err != nil {
 		return nil, nil, err
 	}
 	result := []unmet{}
 	resolved := []resolved{}
 	for _, link := range links {
-		row, err := tx.CurrentExecution(link.UpstreamID)
-		if err == sql.ErrNoRows {
+		if link.ExecutionID == nil {
 			result = append(result, unmet{link.UpstreamID, link.Milestone, nil, "Prerequisite execution is missing. Repair or replace it."})
 			continue
 		}
-		if err != nil {
-			return nil, nil, err
-		}
-		state, err := readState(row.State)
+		state, err := readState([]byte(*link.State))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -67,17 +62,13 @@ func resolveDependencies(tx *sqlite.Tx, itemID string) ([]resolved, []unmet, err
 			}
 			reason = "Prerequisite status is " + string(closing) + ". Rerun or replace the prerequisite."
 		} else if link.Milestone == "report" {
-			exists, err := tx.ReportExists(row.ID)
-			if err != nil {
-				return nil, nil, err
-			}
-			if state.Status == Completed && state.Target == ReportTarget && report != nil && present(report.DraftRevision) && exists {
-				resolved = append(resolved, resolvedDependency(link, row.ID, report.Reference, *report.DraftRevision, nil))
+			if state.Status == Completed && state.Target == ReportTarget && report != nil && present(report.DraftRevision) && link.ReportExists {
+				resolved = append(resolved, resolvedDependency(link.Link, *link.ExecutionID, report.Reference, *report.DraftRevision, nil))
 				continue
 			}
 		} else if link.Milestone == "checked_in" {
 			if state.Status == Completed && pr != nil && present(pr.MergeCommit) {
-				resolved = append(resolved, resolvedDependency(link, row.ID, pr.URL, *pr.MergeCommit, &pr.Revision))
+				resolved = append(resolved, resolvedDependency(link.Link, *link.ExecutionID, pr.URL, *pr.MergeCommit, &pr.Revision))
 				continue
 			}
 			if state.Status == Completed {
@@ -88,16 +79,15 @@ func resolveDependencies(tx *sqlite.Tx, itemID string) ([]resolved, []unmet, err
 				}
 			}
 		} else if state.Status == Completed && pr != nil && !pr.Draft {
-			resolved = append(resolved, resolvedDependency(link, row.ID, pr.URL, pr.Revision.Head, &pr.Revision))
+			resolved = append(resolved, resolvedDependency(link.Link, *link.ExecutionID, pr.URL, pr.Revision.Head, &pr.Revision))
 			continue
 		} else if state.Status == Completed && pr != nil && pr.Draft {
 			reason = "Prerequisite completed as a draft, not ready for check-in. Rerun or replace it."
 		} else if state.Stage == Delivery && state.ReadyRevision != nil && present(state.PrimaryPR) && state.Candidate != nil && state.ReadyRevision.Head == *state.Candidate {
-			resolved = append(resolved, resolvedDependency(link, row.ID, *state.PrimaryPR, state.ReadyRevision.Head, state.ReadyRevision))
+			resolved = append(resolved, resolvedDependency(link.Link, *link.ExecutionID, *state.PrimaryPR, state.ReadyRevision.Head, state.ReadyRevision))
 			continue
 		}
-		id := row.ID
-		result = append(result, unmet{link.UpstreamID, link.Milestone, &id, reason})
+		result = append(result, unmet{link.UpstreamID, link.Milestone, link.ExecutionID, reason})
 	}
 	return resolved, result, nil
 }
