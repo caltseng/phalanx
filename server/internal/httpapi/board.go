@@ -9,21 +9,6 @@ import (
 
 var directLocalHost = regexp.MustCompile(`(?i)^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?$`)
 
-func boardRead(kind string) bool {
-	switch kind {
-	case "operator-list", "operator-overview", "operator-item", "operator-group", "operator-timeline",
-		"dispatch", "captains", "captain", "captain-current", "flags", "scout-status", "report":
-		return true
-	default:
-		return false
-	}
-}
-
-func boardAction(kind string) bool {
-	return kind == "board-repositories" || kind == "board-intake" || kind == "board-dispatch" ||
-		kind == "board-set-dispatch" || kind == "board-scout-decision"
-}
-
 func (h *Handler) localBoardAuthority(r *http.Request) bool {
 	if !h.LocalBoard {
 		return false
