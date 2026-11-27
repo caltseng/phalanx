@@ -89,16 +89,30 @@ func (tx *Tx) InsertCaptainAction(id, executionID, captainID string, version int
 	return err
 }
 
-type CaptainDetails struct {
-	OpenIntents    []map[string]any `json:"open_intents"`
-	Successors     []string         `json:"successors"`
-	CleanupPending int64            `json:"cleanup_pending"`
-	EndedWriters   []map[string]any `json:"ended_writers"`
+type CaptainIntent struct {
+	WriterID    string `json:"writer_id"`
+	ItemID      string `json:"item_id"`
+	ExecutionID string `json:"execution_id"`
+	Nonce       string `json:"nonce"`
+	CreatedAt   string `json:"created_at"`
 }
 
-func (tx *Tx) CaptainDetails(captainID string) (CaptainDetails, error) {
-	details, err := tx.CaptainDetailsBatch([]string{captainID})
-	return details[captainID], err
+type EndedCaptainWriter struct {
+	ID             string  `json:"id"`
+	ItemID         string  `json:"item_id"`
+	ExecutionID    string  `json:"execution_id"`
+	SessionID      *string `json:"session_id"`
+	EndedAt        *string `json:"ended_at"`
+	EndReason      *string `json:"end_reason"`
+	ArchiveOutcome *string `json:"archive_outcome"`
+	ArchiveReason  *string `json:"archive_reason"`
+}
+
+type CaptainDetails struct {
+	OpenIntents    []CaptainIntent      `json:"open_intents"`
+	Successors     []string             `json:"successors"`
+	CleanupPending int64                `json:"cleanup_pending"`
+	EndedWriters   []EndedCaptainWriter `json:"ended_writers"`
 }
 
 func (tx *Tx) CaptainDetailsBatch(captainIDs []string) (map[string]CaptainDetails, error) {
@@ -108,7 +122,7 @@ func (tx *Tx) CaptainDetailsBatch(captainIDs []string) (map[string]CaptainDetail
 		if _, exists := result[id]; exists {
 			continue
 		}
-		result[id] = CaptainDetails{OpenIntents: []map[string]any{}, Successors: []string{}, EndedWriters: []map[string]any{}}
+		result[id] = CaptainDetails{OpenIntents: []CaptainIntent{}, Successors: []string{}, EndedWriters: []EndedCaptainWriter{}}
 		parameters = append(parameters, id)
 	}
 	if len(parameters) == 0 {
@@ -128,7 +142,7 @@ func (tx *Tx) CaptainDetailsBatch(captainIDs []string) (map[string]CaptainDetail
 			return result, err
 		}
 		detail := result[captainID]
-		detail.OpenIntents = append(detail.OpenIntents, map[string]any{"writer_id": id, "item_id": item, "execution_id": execution, "nonce": nonce, "created_at": created})
+		detail.OpenIntents = append(detail.OpenIntents, CaptainIntent{WriterID: id, ItemID: item, ExecutionID: execution, Nonce: nonce, CreatedAt: created})
 		result[captainID] = detail
 	}
 	if err := rows.Err(); err != nil {
@@ -196,8 +210,8 @@ func (tx *Tx) CaptainDetailsBatch(captainIDs []string) (map[string]CaptainDetail
 			return result, err
 		}
 		detail := result[captainID]
-		detail.EndedWriters = append(detail.EndedWriters, map[string]any{"id": id, "item_id": item, "execution_id": execution,
-			"session_id": session, "ended_at": ended, "end_reason": reason, "archive_outcome": outcome, "archive_reason": archiveReason})
+		detail.EndedWriters = append(detail.EndedWriters, EndedCaptainWriter{ID: id, ItemID: item, ExecutionID: execution,
+			SessionID: session, EndedAt: ended, EndReason: reason, ArchiveOutcome: outcome, ArchiveReason: archiveReason})
 		result[captainID] = detail
 	}
 	return result, rows.Err()

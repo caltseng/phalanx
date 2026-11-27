@@ -10,22 +10,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caltseng/phalanx/server/internal/testdb"
 	driver "modernc.org/sqlite"
 )
 
 func fixture(t *testing.T) *Store {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fixture.sqlite3")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
+	path, db := testdb.New(t)
+	if _, err := db.Exec(`CREATE TABLE parent(id INTEGER PRIMARY KEY);
+		CREATE TABLE child(id INTEGER REFERENCES parent(id));`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`PRAGMA application_id=1346915416; PRAGMA user_version=26;
-		CREATE TABLE parent(id INTEGER PRIMARY KEY);
-		CREATE TABLE child(id INTEGER REFERENCES parent(id));
-		CREATE TABLE request_receipts(scope TEXT, idempotency_key TEXT, request_digest TEXT, response_json TEXT);`)
-	db.Close()
-	if err != nil {
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	store, err := Open(path)
@@ -45,10 +41,7 @@ func TestIdentityMissingAndJournalRefusal(t *testing.T) {
 	}
 	store := fixture(t)
 	for _, sqlText := range []string{"PRAGMA user_version=25", "PRAGMA application_id=0", "PRAGMA journal_mode=WAL"} {
-		db, err := sql.Open("sqlite", store.path)
-		if err != nil {
-			t.Fatal(err)
-		}
+		db := testdb.Open(t, store.path)
 		if _, err := db.Exec(sqlText); err != nil {
 			t.Fatal(err)
 		}
@@ -56,11 +49,8 @@ func TestIdentityMissingAndJournalRefusal(t *testing.T) {
 		if _, err := Open(store.path); err == nil {
 			t.Fatal("accepted unsupported database", sqlText)
 		}
-		db, err = sql.Open("sqlite", store.path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, err = db.Exec("PRAGMA application_id=1346915416; PRAGMA user_version=26; PRAGMA journal_mode=DELETE")
+		db = testdb.Open(t, store.path)
+		_, err := db.Exec("PRAGMA application_id=1346915416; PRAGMA user_version=26; PRAGMA journal_mode=DELETE")
 		db.Close()
 		if err != nil {
 			t.Fatal(err)

@@ -145,17 +145,6 @@ func (tx *Tx) Cycle(upstream, itemID string) (bool, error) {
 	return err == nil, err
 }
 
-func (tx *Tx) ReportExists(executionID string) (bool, error) {
-	var found bool
-	err := tx.conn.QueryRowContext(tx.ctx, "SELECT EXISTS (SELECT 1 FROM reports WHERE execution_id=?)", executionID).Scan(&found)
-	return found, err
-}
-
-func (tx *Tx) DependencyWait(executionID string, wait *string) error {
-	_, err := tx.conn.ExecContext(tx.ctx, "UPDATE executions SET dependency_wait_json=? WHERE id=?", wait, executionID)
-	return err
-}
-
 type Reply struct {
 	Version    int64  `json:"version"`
 	CreatedAt  string `json:"created_at"`

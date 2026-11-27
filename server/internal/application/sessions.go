@@ -10,6 +10,7 @@ import (
 )
 
 var nativeID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var ipvFutureHost = regexp.MustCompile(`^v[0-9A-Fa-f]+\..+$`)
 
 var nativePrefixes = []struct{ runtime, prefix string }{
 	{"copilot-app", "ghapp://sessions/"},
@@ -42,9 +43,14 @@ func recordedSessionKey(reference, runtime string) sessionKey {
 	return sessionKey{runtime, sessionIdentity(reference)}
 }
 
-func sessionTarget(reference, runtime, identity, availability string, explicitURL bool) map[string]any {
+type SessionLink struct {
+	URL    *string `json:"url"`
+	Reason string  `json:"reason"`
+}
+
+func sessionTarget(reference, runtime, identity, availability string, explicitURL bool) SessionLink {
 	if availability == "missing" || availability == "deleted" {
-		return map[string]any{"url": nil, "reason": "session " + availability}
+		return SessionLink{Reason: "session " + availability}
 	}
 	prefix := ""
 	for _, known := range nativePrefixes {
@@ -77,7 +83,7 @@ func sessionTarget(reference, runtime, identity, availability string, explicitUR
 					}
 					if strings.HasPrefix(parsed.Host, "[") {
 						host := parsed.Hostname()
-						valid = valid && (net.ParseIP(host) != nil || regexp.MustCompile(`^v[0-9A-Fa-f]+\..+$`).MatchString(host))
+						valid = valid && (net.ParseIP(host) != nil || ipvFutureHost.MatchString(host))
 					}
 					if valid {
 						target = &reference
@@ -100,5 +106,5 @@ func sessionTarget(reference, runtime, identity, availability string, explicitUR
 			reason = "session last reported present"
 		}
 	}
-	return map[string]any{"url": target, "reason": reason}
+	return SessionLink{URL: target, Reason: reason}
 }

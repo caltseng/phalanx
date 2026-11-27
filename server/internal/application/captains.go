@@ -15,6 +15,13 @@ import (
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
+const (
+	captainHeartbeatTimeout      = 15 * time.Minute
+	captainHandoffGrace          = 30 * time.Minute
+	captainReinforcementInterval = 90 * time.Minute
+	captainHoldDuration          = 30 * time.Minute
+)
+
 func captainRow(tx *sqlite.Tx, id string) (sqlite.Captain, error) {
 	row, err := tx.Captain(id)
 	if err == sql.ErrNoRows {
@@ -31,48 +38,55 @@ func captainGone(row sqlite.Captain) (time.Time, error) {
 	if row.State == "ended" {
 		return heartbeat, nil
 	}
-	gone := heartbeat.Add(15 * time.Minute)
+	gone := heartbeat.Add(captainHeartbeatTimeout)
 	if row.EndingAt != nil {
 		ending, err := time.Parse(time.RFC3339Nano, *row.EndingAt)
 		if err != nil {
 			return time.Time{}, err
 		}
-		if ending.Add(30 * time.Minute).Before(gone) {
-			gone = ending.Add(30 * time.Minute)
+		if ending.Add(captainHandoffGrace).Before(gone) {
+			gone = ending.Add(captainHandoffGrace)
 		}
 	}
 	return gone, nil
 }
 
-func liveCaptainRows(tx *sqlite.Tx, now time.Time) ([]sqlite.Captain, error) {
+func liveSnapshot(tx *sqlite.Tx, now time.Time) ([]sqlite.Captain, map[string]sqlite.Captain, error) {
 	rows, err := tx.AllCaptains()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	result := []sqlite.Captain{}
+	live := map[string]sqlite.Captain{}
 	for _, row := range rows {
 		if row.State == "ended" {
 			continue
 		}
 		gone, err := captainGone(row)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if now.Before(gone) {
-			result = append(result, row)
+			live[row.ID] = row
 		}
 	}
-	return result, nil
+	return rows, live, nil
 }
 
-func reinforcement(row sqlite.Captain, now time.Time) (map[string]any, error) {
+type ReinforcementView struct {
+	IntervalMinutes      int64 `json:"interval_minutes"`
+	Interval             int64 `json:"interval"`
+	AcknowledgedInterval int64 `json:"acknowledged_interval"`
+	Due                  bool  `json:"due"`
+}
+
+func reinforcement(row sqlite.Captain, now time.Time) (ReinforcementView, error) {
 	created, err := time.Parse(time.RFC3339Nano, row.CreatedAt)
 	if err != nil {
-		return nil, err
+		return ReinforcementView{}, err
 	}
-	interval := max(int64(0), (now.UnixMicro()-created.UnixMicro())/int64((90*time.Minute)/time.Microsecond))
-	return map[string]any{"interval_minutes": 90, "interval": interval,
-		"acknowledged_interval": row.ReinforcedInterval, "due": row.State == "active" && interval > row.ReinforcedInterval}, nil
+	interval := max(int64(0), (now.UnixMicro()-created.UnixMicro())/int64(captainReinforcementInterval/time.Microsecond))
+	return ReinforcementView{IntervalMinutes: int64(captainReinforcementInterval / time.Minute), Interval: interval,
+		AcknowledgedInterval: row.ReinforcedInterval, Due: row.State == "active" && interval > row.ReinforcedInterval}, nil
 }
 
 func captainView(tx *sqlite.Tx, row sqlite.Captain, now time.Time) (json.RawMessage, error) {
@@ -80,17 +94,13 @@ func captainView(tx *sqlite.Tx, row sqlite.Captain, now time.Time) (json.RawMess
 	if err != nil {
 		return nil, err
 	}
-	return views[0], nil
+	return encoded(views[0])
 }
 
-func captainViews(tx *sqlite.Tx, rows []sqlite.Captain, now time.Time) ([]json.RawMessage, error) {
-	current, err := liveCaptainRows(tx, now)
+func captainViews(tx *sqlite.Tx, rows []sqlite.Captain, now time.Time) ([]CaptainView, error) {
+	_, live, err := liveSnapshot(tx, now)
 	if err != nil {
 		return nil, err
-	}
-	live := make(map[string]bool, len(current))
-	for _, row := range current {
-		live[row.ID] = true
 	}
 	reports, err := sessionReportsSnapshot(tx)
 	if err != nil {
@@ -104,9 +114,10 @@ func captainViews(tx *sqlite.Tx, rows []sqlite.Captain, now time.Time) ([]json.R
 	if err != nil {
 		return nil, err
 	}
-	views := make([]json.RawMessage, 0, len(rows))
+	views := make([]CaptainView, 0, len(rows))
 	for _, row := range rows {
-		view, err := captainViewWithContext(row, now, live[row.ID], reports, details[row.ID])
+		_, isLive := live[row.ID]
+		view, err := captainViewWithContext(row, now, isLive, reports, details[row.ID])
 		if err != nil {
 			return nil, err
 		}
@@ -136,41 +147,64 @@ func sessionReportsSnapshot(tx *sqlite.Tx) (map[sessionKey]string, error) {
 	return reports, nil
 }
 
-func captainViewWithContext(row sqlite.Captain, now time.Time, live bool, reports map[sessionKey]string, details sqlite.CaptainDetails) (json.RawMessage, error) {
+type CaptainView struct {
+	ID                  string            `json:"id"`
+	SessionRef          string            `json:"session_ref"`
+	CharterRevision     string            `json:"charter_revision"`
+	Pickup              any               `json:"pickup"`
+	SessionAvailability string            `json:"session_availability"`
+	SessionLink         SessionLink       `json:"session_link"`
+	ParentID            *string           `json:"parent_id"`
+	State               string            `json:"state"`
+	WakeCount           int64             `json:"wake_count"`
+	CompactionCount     *int64            `json:"compaction_count"`
+	Reinforcement       ReinforcementView `json:"reinforcement"`
+	Focus               any               `json:"focus"`
+	Sessions            any               `json:"sessions"`
+	HandoffNote         *string           `json:"handoff_note"`
+	CreatedAt           string            `json:"created_at"`
+	HeartbeatAt         string            `json:"heartbeat_at"`
+	EndingAt            *string           `json:"ending_at"`
+	Live                bool              `json:"live"`
+	Stale               bool              `json:"stale"`
+	sqlite.CaptainDetails
+	SuccessorName string `json:"successor_name"`
+}
+
+func captainViewWithContext(row sqlite.Captain, now time.Time, live bool, reports map[sessionKey]string, details sqlite.CaptainDetails) (CaptainView, error) {
 	observed := reports[recordedSessionKey(row.SessionRef, "")]
 	if observed == "" {
 		observed = "unverified"
 	}
 	pickup, _, err := contract.Decode([]byte(row.PickupJSON))
 	if err != nil {
-		return nil, err
+		return CaptainView{}, err
 	}
 	focus, _, err := contract.Decode([]byte(row.FocusJSON))
 	if err != nil {
-		return nil, err
+		return CaptainView{}, err
 	}
 	sessions, _, err := contract.Decode([]byte(row.SessionsJSON))
 	if err != nil {
-		return nil, err
+		return CaptainView{}, err
 	}
 	reinforced, err := reinforcement(row, now)
 	if err != nil {
-		return nil, err
+		return CaptainView{}, err
 	}
 	short := row.ID
 	if len(short) > 8 {
 		short = short[:8]
 	}
-	return encoded(map[string]any{
-		"id": row.ID, "session_ref": row.SessionRef, "charter_revision": row.CharterRevision, "pickup": pickup,
-		"session_availability": observed, "session_link": sessionTarget(row.SessionRef, "", "", observed, false),
-		"parent_id": row.ParentID, "state": row.State, "wake_count": row.WakeCount, "compaction_count": row.CompactionCount,
-		"reinforcement": reinforced, "focus": focus, "sessions": sessions, "handoff_note": row.HandoffNote,
-		"created_at": row.CreatedAt, "heartbeat_at": row.HeartbeatAt, "ending_at": row.EndingAt,
-		"live": live, "stale": row.State != "ended" && !live, "open_intents": details.OpenIntents,
-		"successors": details.Successors, "cleanup_pending": details.CleanupPending, "ended_writers": details.EndedWriters,
-		"successor_name": "phx captain " + short,
-	})
+	return CaptainView{
+		ID: row.ID, SessionRef: row.SessionRef, CharterRevision: row.CharterRevision, Pickup: pickup,
+		SessionAvailability: observed, SessionLink: sessionTarget(row.SessionRef, "", "", observed, false),
+		ParentID: row.ParentID, State: row.State, WakeCount: row.WakeCount, CompactionCount: row.CompactionCount,
+		Reinforcement: reinforced, Focus: focus, Sessions: sessions, HandoffNote: row.HandoffNote,
+		CreatedAt: row.CreatedAt, HeartbeatAt: row.HeartbeatAt, EndingAt: row.EndingAt,
+		Live: live, Stale: row.State != "ended" && !live, CaptainDetails: details,
+		SuccessorName: "phx captain " + short,
+	}, nil
 }
 
 func (a *App) Captain(ctx context.Context, id string) (json.RawMessage, error) {
@@ -368,11 +402,7 @@ func (a *App) CaptainReinforcement(ctx context.Context, id string, request contr
 		if err != nil {
 			return err
 		}
-		due, ok := current["interval"].(int64)
-		if !ok {
-			return errors.New("Reinforcement interval is not an integer")
-		}
-		if interval > max(due, row.ReinforcedInterval) {
+		if interval > max(current.Interval, row.ReinforcedInterval) {
 			return &Conflict{"Cannot acknowledge a future reinforcement interval"}
 		}
 		if err := tx.CaptainReinforcement(id, interval); err != nil {
@@ -396,9 +426,15 @@ func (a *App) CurrentCaptain(ctx context.Context) (json.RawMessage, error) {
 	var result json.RawMessage
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		now := a.Clock().UTC()
-		live, err := liveCaptainRows(tx, now)
+		rows, current, err := liveSnapshot(tx, now)
 		if err != nil {
 			return err
+		}
+		live := make([]sqlite.Captain, 0, len(current))
+		for _, row := range rows {
+			if _, ok := current[row.ID]; ok {
+				live = append(live, row)
+			}
 		}
 		sort.Slice(live, func(i, j int) bool {
 			if live[i].CreatedAt != live[j].CreatedAt {
@@ -406,25 +442,26 @@ func (a *App) CurrentCaptain(ctx context.Context) (json.RawMessage, error) {
 			}
 			return live[i].ID < live[j].ID
 		})
-		candidates := []map[string]any{}
+		type candidate struct {
+			ID         string `json:"id"`
+			SessionRef string `json:"session_ref"`
+		}
+		candidates := []candidate{}
 		for _, row := range live {
 			if row.State == "active" {
-				candidates = append(candidates, map[string]any{"id": row.ID, "session_ref": row.SessionRef})
+				candidates = append(candidates, candidate{ID: row.ID, SessionRef: row.SessionRef})
 			}
 		}
-		var captain map[string]any
+		var captain *candidate
 		reason := "No live active Captain; ending, ended and stale registrations are not routing destinations"
 		if len(candidates) > 1 {
 			reason = fmt.Sprintf("%d live active Captains; no unique routing destination", len(candidates))
 		} else if len(candidates) == 1 {
-			reference, ok := candidates[0]["session_ref"].(string)
-			if !ok {
-				return errors.New("Captain session reference is not text")
-			}
+			reference := candidates[0].SessionRef
 			if strings.TrimFunc(reference, func(r rune) bool { return unicode.IsSpace(r) || r >= 0x1c && r <= 0x1f }) == "" {
 				reason = "The live active Captain has no native session binding"
 			} else {
-				captain = candidates[0]
+				captain = &candidates[0]
 				reason = "Unique live active registration; verify its session_ref and conversation link in the runtime"
 			}
 		}

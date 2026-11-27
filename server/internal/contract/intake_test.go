@@ -2,8 +2,78 @@ package contract
 
 import (
 	"encoding/json"
+	"go/ast"
+	goparser "go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"strconv"
 	"testing"
 )
+
+func TestRegexCompilationIsPackageScoped(t *testing.T) {
+	fset := token.NewFileSet()
+	err := filepath.WalkDir("..", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || filepath.Ext(path) != ".go" {
+			return err
+		}
+		file, err := goparser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, imp := range file.Imports {
+			source, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				return err
+			}
+			if source != "regexp" {
+				continue
+			}
+			name := "regexp"
+			if imp.Name != nil {
+				name = imp.Name.Name
+			}
+			ast.Inspect(file, func(node ast.Node) bool {
+				var body *ast.BlockStmt
+				switch node := node.(type) {
+				case *ast.FuncDecl:
+					body = node.Body
+				case *ast.FuncLit:
+					body = node.Body
+				}
+				if body == nil {
+					return true
+				}
+				ast.Inspect(body, func(node ast.Node) bool {
+					call, ok := node.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					function := ""
+					switch target := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						if pkg, ok := target.X.(*ast.Ident); ok && pkg.Name == name {
+							function = target.Sel.Name
+						}
+					case *ast.Ident:
+						if name == "." {
+							function = target.Name
+						}
+					}
+					if function == "Compile" || function == "MustCompile" {
+						t.Errorf("%s: compile regexes at package scope, not per call", fset.Position(call.Pos()))
+					}
+					return true
+				})
+				return false
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestCanonicalUnicodeDefaultsPresenceAndRetiredField(t *testing.T) {
 	value, keys, err := Decode([]byte(`{"repository_id":"repo","goal":" \u96ea \ud83d\ude80 \u001c "}`))

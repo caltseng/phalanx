@@ -125,6 +125,7 @@ def vector_manifest():
               ROOT / "server" / ".gitattributes",
               HERE / "golden-fresh.json", HERE / "golden-retained.json"]
     paths += sorted((ROOT / "server" / "internal" / "httpapi" / "contract-docs").glob("*"))
+    paths += sorted((ROOT / "server" / "internal" / "testdb").glob("*.sql"))
     tests = []
     for path in paths:
         if path.name.endswith("_test.go"):

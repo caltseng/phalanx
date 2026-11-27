@@ -222,33 +222,31 @@ func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, e
 			return nil, err
 		}
 	}
-	executionID, err := a.ID()
+	priority, err := requestPriority(body)
 	if err != nil {
 		return nil, err
 	}
-	state, err := contract.Canonical(Start(Target(request.Target), PublicationMode(request.PublicationMode)))
-	if err != nil {
+	if _, err := a.createExecution(tx, itemID, request.RepositoryID, Target(request.Target), PublicationMode(request.PublicationMode), priority, nil); err != nil {
 		return nil, err
-	}
-	now := a.Clock()
-	priority := map[string]int{"low": 0, "normal": 1, "urgent": 2}[request.Priority]
-	if err := tx.InsertExecution(executionID, itemID, state, timestamp(now), request.RepositoryID, priority, now.UnixMilli(), nil); err != nil {
-		return nil, err
-	}
-	unmet, err := unmetDependencies(tx, itemID)
-	if err != nil {
-		return nil, err
-	}
-	if len(unmet) > 0 {
-		// Python update_wait uses ordinary insertion-order JSON, not sorted
-		// canonical JSON. Preserve these stored bytes too.
-		data, err := pythonOrderedJSON(unmet)
-		if err != nil {
-			return nil, err
-		}
-		if err := tx.DependencyWait(executionID, &data); err != nil {
-			return nil, err
-		}
 	}
 	return inspect(tx, itemID)
+}
+
+func (a *App) createExecution(tx *sqlite.Tx, itemID, repositoryID string, target Target, mode PublicationMode, priority int, previousID *string) (string, error) {
+	executionID, err := a.ID()
+	if err != nil {
+		return "", err
+	}
+	state, err := contract.Canonical(Start(target, mode))
+	if err != nil {
+		return "", err
+	}
+	now := a.Clock()
+	if err := tx.InsertExecution(executionID, itemID, state, timestamp(now), repositoryID, priority, now.UnixMilli(), previousID); err != nil {
+		return "", err
+	}
+	if err := refreshWait(tx, itemID, executionID, now.UnixMilli()); err != nil {
+		return "", err
+	}
+	return executionID, nil
 }

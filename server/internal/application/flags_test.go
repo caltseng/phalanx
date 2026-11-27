@@ -114,7 +114,7 @@ func TestPickupKeepsEmptyPersistedDependencyWaitAsBlocker(t *testing.T) {
 	ready, empty := now.UnixMilli()-1, "[]"
 	row := sqlite.QueueProjection{ID: "execution", ItemID: "item", RepositoryID: "fixture", Stage: "development",
 		StateJSON: state, ReadySince: &ready, DependencyWait: &empty}
-	current := pickupContext{Capacity: sqlite.DispatchSettings{MaxWriters: 2, MaxBuildingWriters: 1},
+	current := pickupContext{admissionContext: admissionContext{Capacity: sqlite.DispatchSettings{MaxWriters: 2, MaxBuildingWriters: 1}},
 		Captains:  []pickupCaptain{{ID: "captain", Repositories: map[string]*string{"fixture": nil}}},
 		Admission: map[Stage]*string{Development: nil}, Holds: map[string]string{}}
 	decision, err := pickupDecision(row, now, current)
