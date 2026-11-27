@@ -2,6 +2,36 @@ package sqlite
 
 import "database/sql"
 
+type Dependency struct {
+	Link
+	ExecutionID  *string
+	State        *string
+	ReportExists bool
+}
+
+func (tx *Tx) Dependencies(itemID string) ([]Dependency, error) {
+	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT link.upstream_id, link.milestone,
+		current.id, current.state_json,
+		EXISTS (SELECT 1 FROM reports WHERE execution_id=current.id)
+		FROM work_dependencies AS link
+		LEFT JOIN executions AS current ON current.item_id=link.upstream_id
+			AND NOT EXISTS (SELECT 1 FROM executions WHERE previous_id=current.id)
+		WHERE link.item_id=? ORDER BY link.upstream_id`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []Dependency{}
+	for rows.Next() {
+		var row Dependency
+		if err := rows.Scan(&row.UpstreamID, &row.Milestone, &row.ExecutionID, &row.State, &row.ReportExists); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
 func (tx *Tx) UpdateDependencyWait(executionID string, wait *string, nowMS int64) error {
 	_, err := tx.conn.ExecContext(tx.ctx, `UPDATE executions SET dependency_wait_json=?,
 		ready_since=CASE WHEN ? IS NULL AND dependency_wait_json IS NOT NULL
