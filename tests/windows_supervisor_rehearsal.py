@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from unittest.mock import patch
 from xml.sax.saxutils import escape
@@ -76,6 +77,12 @@ if ($request.operation -eq 'register') {
     $task=$folder.GetTask($request.name)
     if ($task.GetInstances(0).Count -ne 0) { $task.Stop(0) }
     $folder.DeleteTask($request.name,0)
+} elseif ($request.operation -eq 'status') {
+    $task=$folder.GetTask($request.name)
+    @{state=[int]$task.State;last_result=[long]$task.LastTaskResult;
+      instances=@($task.GetInstances(0)|ForEach-Object{
+          @{instance=[string]$_.InstanceGuid;engine_pid=[long]$_.EnginePID}
+      })}|ConvertTo-Json -Depth 5 -Compress
 } else { throw 'Unsupported fixture operation' }
 """
 
@@ -123,6 +130,11 @@ def task_rehearsal(args):
         raise SystemExit("REQUIRED ENVIRONMENT GAP: use the existing isolated Windows CI host; "
                          "Task Scheduler proof must not run or be counted as skipped on a shared host")
     args.output.mkdir(parents=True, exist_ok=False)
+    (args.output / "attempt.json").write_text(json.dumps({
+        "status": "in_progress", "scope": "owned disposable isolated Windows TaskScheduler proof",
+        "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "binary_sha256": h.digest(args.binary.read_bytes()), "passed": False,
+    }, indent=2), encoding="utf-8")
     with h.disposable_root() as root, ExitStack() as stack:
         sources = {label: h.export(label, root) for label in h.PINS}
         database = h.fresh(root / "owned", sources)
@@ -173,7 +185,26 @@ def task_rehearsal(args):
 
         def start():
             powershell(TASK_FIXTURE, {"operation": "run", "name": name})
-            wait_for(lambda: record.exists(), "ownership record")
+            failure = record.with_suffix(".failure.json")
+
+            def recorded():
+                if failure.is_file():
+                    details = json.loads(failure.read_text())
+                    (args.output / "worker-failure.json").write_text(json.dumps(details, indent=2))
+                    raise AssertionError("Owned fixture supervisor failed: " + details["error"])
+                if record.is_file():
+                    try:
+                        return json.loads(record.read_text())
+                    except json.JSONDecodeError:
+                        return False
+                return False
+
+            try:
+                wait_for(recorded, "ownership record")
+            except BaseException:
+                status = powershell(TASK_FIXTURE, {"operation": "status", "name": name})
+                (args.output / "task-status-at-failure.json").write_text(status, encoding="utf-8")
+                raise
             wait_for(healthy, "owned Go readiness")
             owned = json.loads(record.read_text())
             native = w._native()
@@ -267,7 +298,14 @@ def main():
         for key in list(os.environ):
             if key.startswith("PHALANX_") and key != "PHALANX_WINDOWS_TASK_ISOLATION":
                 del os.environ[key]
-        return fixture_supervise(args)
+        try:
+            return fixture_supervise(args)
+        except BaseException as error:
+            details = {"error": str(error), "type": type(error).__name__,
+                       "traceback": traceback.format_exc(), "historical_cause": "UNKNOWN"}
+            args.record.with_suffix(".failure.json").write_text(
+                json.dumps(details, indent=2), encoding="utf-8")
+            raise
     task_rehearsal(args)
     return 0
 
