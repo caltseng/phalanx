@@ -279,32 +279,63 @@ def transport_checks(url, database):
     return records
 
 
-def drain_check(url, process, database, sources, python=False):
+@contextmanager
+def prepared_lock_probe(source, database):
     started = time.monotonic()
-    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
-        blocker.execute("BEGIN EXCLUSIVE")
-        with ThreadPoolExecutor(max_workers=1) as caller:
-            pending = caller.submit(h.mutation, url, {"repository_id": "fixture", "goal": "Real shutdown drain"}, "final-drain")
-            time.sleep(.15)
-            if python:
-                process.stdin.close()
-            else:
-                process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
-            probe_started = time.monotonic()
-            probe = h.invoke("lock", sources["P0"], database, capture_output=True, text=True)
-            probe_seconds = time.monotonic() - probe_started
-            if process.poll() is not None or probe.stdout.strip() != "excluded":
-                raise AssertionError("Shutdown released sole ownership before its active mutation drained")
-            blocker.execute("ROLLBACK")
-            response = pending.result(timeout=10)
-            if response["status"] != 201:
-                raise AssertionError("Shutdown cancelled an accepted/dispatched operation: " + json.dumps({
-                    "response": response, "lock_probe_seconds": probe_seconds,
-                    "total_seconds": time.monotonic() - started,
-                }))
-            process.wait(timeout=15)
+    with (database.parent / "drain-lock-probe.log").open("a", encoding="utf-8") as errors:
+        probe = subprocess.Popen(
+            [sys.executable, "-P", str(h.HERE / "oracle.py"), "ready-lock", str(source), str(database)],
+            cwd=h.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+            text=True, encoding="utf-8", start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        try:
+            with ThreadPoolExecutor(max_workers=1) as reader:
+                ready = reader.submit(probe.stdout.readline)
+                try:
+                    line = ready.result(timeout=20)
+                except TimeoutError:
+                    kill_tree(probe)
+                    raise AssertionError("Lock probe did not finish preparation")
+            if line.strip() != "ready":
+                raise AssertionError("Lock probe failed preparation: " + line)
+            yield probe, time.monotonic() - started
+        finally:
+            if probe.poll() is None:
+                kill_tree(probe)
+            probe.stdin.close()
+            probe.stdout.close()
+
+
+def drain_check(url, process, database, sources, python=False):
+    # Cold Python imports must not consume the server's SQLite busy window.
+    with prepared_lock_probe(sources["P0"], database) as (probe, preparation_seconds):
+        started = time.monotonic()
+        with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
+            blocker.execute("BEGIN EXCLUSIVE")
+            with ThreadPoolExecutor(max_workers=1) as caller:
+                pending = caller.submit(h.mutation, url, {"repository_id": "fixture", "goal": "Real shutdown drain"}, "final-drain")
+                time.sleep(.15)
+                if python:
+                    process.stdin.close()
+                else:
+                    process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+                probe_started = time.monotonic()
+                output, _ = probe.communicate("probe\n", timeout=10)
+                probe_seconds = time.monotonic() - probe_started
+                if probe.returncode != 0 or process.poll() is not None or output.strip() != "excluded":
+                    raise AssertionError("Shutdown released sole ownership before its active mutation drained")
+                blocker.execute("ROLLBACK")
+                response = pending.result(timeout=10)
+                if response["status"] != 201:
+                    raise AssertionError("Shutdown cancelled an accepted/dispatched operation: " + json.dumps({
+                        "response": response, "lock_probe_seconds": probe_seconds,
+                        "lock_probe_prepare_seconds": preparation_seconds,
+                        "total_seconds": time.monotonic() - started,
+                    }))
+                process.wait(timeout=15)
     return {"response": response, "durable": h.snapshot(database), "clean_exit": process.returncode == 0,
-            "lock_probe_seconds": probe_seconds, "total_seconds": time.monotonic() - started}
+            "lock_probe_prepare_seconds": preparation_seconds, "lock_probe_seconds": probe_seconds,
+            "total_seconds": time.monotonic() - started}
 
 
 def measure(url, run):
@@ -384,7 +415,8 @@ def release(package, output):
                         raise AssertionError("Two real Go servers acquired authority")
                     (output / f"go-{retained}-{reference}.json").write_text(
                         json.dumps({"response": response, "durable": h.snapshot(database), "pid": process.pid}), encoding="utf-8")
-                    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
+                    with prepared_lock_probe(sources[reference], database) as (probe, preparation_seconds), \
+                            closing(sqlite3.connect(database, isolation_level=None)) as blocker:
                         blocker.execute("BEGIN EXCLUSIVE")
                         with ThreadPoolExecutor(max_workers=1) as caller:
                             pending = caller.submit(h.mutation, url, body, "drain-" + reference)
@@ -392,8 +424,10 @@ def release(package, output):
                             process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
                             if process.poll() is not None:
                                 raise AssertionError("Shutdown released sole ownership before dispatched write drained")
-                            probe = h.invoke("lock", sources[reference], database, capture_output=True, text=True)
-                            if probe.stdout.strip() != "excluded":
+                            probe_started = time.monotonic()
+                            probe_output, _ = probe.communicate("probe\n", timeout=10)
+                            probe_seconds = time.monotonic() - probe_started
+                            if probe.returncode != 0 or probe_output.strip() != "excluded":
                                 raise AssertionError("Shutdown released the shared OS lock during admission wait")
                             blocker.execute("ROLLBACK")
                             response = pending.result(timeout=10)
@@ -401,6 +435,10 @@ def release(package, output):
                                 raise AssertionError("Graceful shutdown cancelled a dispatched mutation")
                             receipts["drain-" + reference] = response
                             process.wait(timeout=15)
+                    (output / f"drain-{retained}-{reference}.json").write_text(json.dumps({
+                        "response": response, "lock_probe_prepare_seconds": preparation_seconds,
+                        "lock_probe_seconds": probe_seconds, "durable": h.snapshot(database),
+                    }), encoding="utf-8")
                 command = [sys.executable, "-P", str(h.HERE / "oracle.py"), "serve", str(sources[reference]),
                            str(database), "--id-start", "1048576" if reference == "P0" else "2097152"]
                 with h.server(command, directory) as url:

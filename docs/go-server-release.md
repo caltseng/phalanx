@@ -101,6 +101,16 @@ Drain failures retain the actual response, lock-probe elapsed time and complete
 typed after-state; diagnostic capture does not change the workload, lock
 assertions, busy timeout or required successful drain.
 
+The package harness prepares a separate pinned Python lock-probe process before
+holding the intentional SQLite EXCLUSIVE blocker. After shutdown is signaled, that
+same process runs the unchanged pinned OS-lock function and must report exclusion;
+the mutation must still return 201, persist and drain before ownership releases.
+Preparation and critical-probe durations are recorded separately. Cold interpreter/
+model imports inside the blocker could otherwise consume the unchanged two-second
+SQLite busy window. This is a labeled test-sequencing correction, not a longer timeout,
+weaker assertion, production fix or explanation erasing earlier negative drain results.
+Retain those results separately; changed scheduling is not matched performance evidence.
+
 ## Compatibility evidence and limits
 
 P0 is `9af29396b37f86816fd274e01632164a47718a57`; public installed-source
