@@ -119,6 +119,127 @@ def delayed_header(url):
     return {"delay_seconds": 5.25, "raw_response": raw.decode("latin1")}
 
 
+def role_request(url, close=False):
+    return (f"GET /v1/owner/status HTTP/1.1\r\nHost: {urlsplit(url).netloc}\r\n"
+            f"Authorization: Bearer {h.OWNER}\r\n" +
+            ("Connection: close\r\n" if close else "") + "\r\n").encode()
+
+
+def role_response(client):
+    raw = b""
+    while b"\r\n\r\n" not in raw:
+        block = client.recv(65536)
+        if not block:
+            raise AssertionError("Role response closed before headers: " + raw.hex())
+        raw += block
+    header, _, body = raw.partition(b"\r\n\r\n")
+    lengths = [line.split(b":", 1)[1].strip() for line in header.split(b"\r\n")[1:]
+               if line.lower().startswith(b"content-length:")]
+    if len(lengths) != 1:
+        raise AssertionError("Expected a complete fixed-length role response")
+    while len(body) < int(lengths[0]):
+        block = client.recv(65536)
+        if not block:
+            raise AssertionError("Role response closed before body: " + raw.hex())
+        raw += block
+        body += block
+    if (not header.startswith(b"HTTP/1.1 200 ") or b"content-type: application/json" not in header.lower()
+            or json.loads(body) != {"role": "owner"}):
+        raise AssertionError("Fragmented request changed role response: " + raw.hex())
+    return raw.decode("latin1")
+
+
+def transport_checks(url, database):
+    records = {"initial_header": delayed_header(url)}
+    target = urlsplit(url)
+    with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+        first = role_request(url)
+        client.sendall(first)
+        first_response = role_response(client)
+        time.sleep(2)
+        second = role_request(url, close=True)
+        client.sendall(second[:-2])
+        time.sleep(5.25)
+        client.sendall(second[-2:])
+        records["keepalive_fragment"] = {
+            "prefix_before_idle_seconds": 2, "fragment_delay_seconds": 5.25,
+            "first_request": first.decode(), "first_response": first_response,
+            "second_request": second.decode(), "second_response": role_response(client)}
+    with socket.create_connection((target.hostname, target.port), timeout=8) as client:
+        request = role_request(url)
+        client.sendall(request)
+        response = role_response(client)
+        start = time.monotonic()
+        closed = client.recv(1)
+        elapsed = time.monotonic() - start
+        if closed or not 4 <= elapsed <= 6.5:
+            raise AssertionError("Genuine idle expiry changed: " + str(elapsed))
+        records["idle_expiry"] = {"seconds": elapsed, "request": request.decode(), "response": response}
+    body = json.dumps({"repository_id": "fixture", "goal": "Real fragmented body \u96ea"}).encode()
+    def prefix(key):
+        return (f"POST /v1/items HTTP/1.1\r\nHost: {target.netloc}\r\n"
+                f"Authorization: Bearer {h.OWNER}\r\nContent-Type: application/json\r\n"
+                f"Idempotency-Key: {key}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode()
+    with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+        request = prefix("fragmented-body")
+        client.sendall(request + body[:len(body)//2])
+        time.sleep(5.25)
+        client.sendall(body[len(body)//2:])
+        raw = b""
+        while block := client.recv(65536):
+            raw += block
+        if not raw.startswith(b"HTTP/1.1 201 "):
+            raise AssertionError("Request body acquired an unapproved deadline: " + raw.hex())
+        records["body_fragment"] = {"delay_seconds": 5.25, "request": (request+body).decode(), "response": raw.decode("latin1")}
+    before = h.snapshot(database)
+    with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+        partial = prefix("incomplete-disconnect") + body[:len(body)//2]
+        client.sendall(partial)
+    time.sleep(.25)
+    if h.snapshot(database) != before:
+        raise AssertionError("Incomplete disconnected body caused durable effects")
+    records["incomplete_disconnect"] = {"sent": partial.decode(), "durable_unchanged": True}
+    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
+        blocker.execute("BEGIN EXCLUSIVE")
+        with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+            complete = prefix("complete-disconnect") + body
+            client.sendall(complete)
+            time.sleep(.15)
+        blocker.execute("ROLLBACK")
+    deadline = time.monotonic() + 10
+    while True:
+        with closing(sqlite3.connect(database)) as db:
+            row = db.execute("SELECT response_json FROM request_receipts WHERE scope='intake' AND idempotency_key='complete-disconnect'").fetchone()
+        if row is not None:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError("Dispatched complete body was cancelled by caller loss")
+        time.sleep(.05)
+    records["complete_disconnect"] = {"sent": complete.decode(), "committed_receipt": json.loads(row[0])}
+    return records
+
+
+def drain_check(url, process, database, sources, python=False):
+    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
+        blocker.execute("BEGIN EXCLUSIVE")
+        with ThreadPoolExecutor(max_workers=1) as caller:
+            pending = caller.submit(h.mutation, url, {"repository_id": "fixture", "goal": "Real shutdown drain"}, "final-drain")
+            time.sleep(.15)
+            if python:
+                process.stdin.close()
+            else:
+                process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+            probe = h.invoke("lock", sources["P0"], database, capture_output=True, text=True)
+            if process.poll() is not None or probe.stdout.strip() != "excluded":
+                raise AssertionError("Shutdown released sole ownership before its active mutation drained")
+            blocker.execute("ROLLBACK")
+            response = pending.result(timeout=10)
+            if response["status"] != 201:
+                raise AssertionError("Shutdown cancelled an accepted/dispatched operation")
+            process.wait(timeout=15)
+    return {"response": response, "durable": h.snapshot(database), "clean_exit": process.returncode == 0}
+
+
 def measure(url, run):
     def request(case):
         headers = [("Authorization", "Bearer " + h.OWNER), ("Content-Type", "application/json")]
@@ -247,7 +368,8 @@ def release(package, output):
                 with manager as running:
                     startup_seconds = time.perf_counter() - start
                     url = running[0]
-                    header_proof = delayed_header(url) if not retained else None
+                    transport_proof = transport_checks(url, database) if not retained else None
+                    baseline = h.snapshot(database)
                     for _ in range(12):
                         response = h.wire(url, "GET", "/v1/dispatch/settings", [("Authorization", "Bearer " + h.OWNER)], "")
                         if response["status"] != 200:
@@ -265,8 +387,10 @@ def release(package, output):
                         result["durable_sha256"] = h.digest(data.encode())
                         (output / f"load-{label}-{retained}-{index}-durable.json").write_text(data, encoding="utf-8")
                         runs.append(result)
+                    drain_proof = drain_check(url, running[1], database, sources, python=label != "Go") if not retained else None
                 loads.append({"implementation": label, "retained": retained,
-                              "startup_seconds": startup_seconds, "delayed_header": header_proof, "runs": runs})
+                              "startup_seconds": startup_seconds, "transport": transport_proof,
+                              "drain": drain_proof, "baseline_items": len(baseline["tables"]["work_items"]["rows"]), "runs": runs})
                 print(f"{label}/{retained}: three matched load runs PASS", flush=True)
         (output / "runtime-load.json").write_text(json.dumps({
             "build": package_manifest["build"], "package_sha256": h.digest(package.read_bytes()),

@@ -49,6 +49,9 @@ current-data receipt/job reconciliation, not a success-shaped response.
 The existing five-second idle keep-alive timeout is retained without imposing
 a new five-second request-header deadline; the real-entrypoint proof delays an
 authenticated request header beyond five seconds on P0, D0 and Go.
+It also fragments a keep-alive header after a prefix before idle expiry,
+separately checks genuine idle closure, delayed bodies, incomplete/complete
+caller disconnects and active-write drain under the same shared OS lock.
 Windows corrects only the service's own inherited Idle/BelowNormal priority to
 Normal, preserving higher priorities.
 
