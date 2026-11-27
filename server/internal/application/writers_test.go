@@ -3,16 +3,239 @@ package application
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
+	driverSQLite "modernc.org/sqlite"
 )
+
+var dispatchReadCounterID atomic.Uint64
+
+func countDispatchReads(t *testing.T, db *sql.DB) *atomic.Int64 {
+	t.Helper()
+	count := &atomic.Int64{}
+	name := fmt.Sprintf("count_dispatch_reads_%d", dispatchReadCounterID.Add(1))
+	if err := driverSQLite.RegisterScalarFunction(name, 0,
+		func(_ *driverSQLite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+			count.Add(1)
+			return int64(1), nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`ALTER TABLE dispatch_settings RENAME TO dispatch_settings_rows;
+		CREATE VIEW dispatch_settings AS SELECT * FROM dispatch_settings_rows WHERE ` + name + `()=1`); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestWriterClaimsReadSettingsOnce(t *testing.T) {
+	app, db := writerStore(t, 2, 1)
+	count := countDispatchReads(t, db)
+	ctx := context.Background()
+	request := contract.WriterRegistration{ExpectedVersion: "1", CaptainID: "captain",
+		Runtime: "synthetic-runtime", Nonce: "snapshot-nonce-0001", TokenDigest: contract.Digest("snapshot-token")}
+	first, err := app.RegisterWriter(ctx, "up", "execution", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads := count.Swap(0); reads != 1 {
+		t.Fatal("new admission settings reads", reads)
+	}
+	_, oldID, _ := decodeBinding(t, first)
+	if _, err := db.Exec("UPDATE writers SET building=0 WHERE id=?", oldID); err != nil {
+		t.Fatal(err)
+	}
+	request.ExpectedVersion, request.Nonce = "2", "snapshot-nonce-0002"
+	request.TokenDigest = contract.Digest("replacement-snapshot-token")
+	request.Replaces, request.ReplacedStopped = &oldID, true
+	replaced, err := app.RegisterWriter(ctx, "up", "execution", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads := count.Swap(0); reads != 1 {
+		t.Fatal("replacement claim settings reads", reads)
+	}
+	_, id, attempt := decodeBinding(t, replaced)
+	if _, err := db.Exec("UPDATE attempts SET ended_at=? WHERE id=?", timestamp(time.Now()), *attempt); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := contract.Canonical(Start(MergedTarget, ReadyMode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("UPDATE executions SET state_json=?,ready_since=? WHERE id='execution'", queued, time.Now().UnixMilli()-1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE writers SET building=0 WHERE id=?;
+		UPDATE dispatch_settings_rows SET paused=1`, id); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := app.WriterNext(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reads := count.Load(); reads != 1 {
+		t.Fatal("blocked claim and binding did not share settings", reads)
+	}
+	var response struct {
+		Writer struct {
+			Building     bool    `json:"building"`
+			CapacityWait *string `json:"capacity_wait"`
+		} `json:"writer"`
+	}
+	_, _, blockedAttempt := decodeBinding(t, blocked)
+	if err := json.Unmarshal(blocked, &response); err != nil {
+		t.Fatal(err)
+	}
+	if blockedAttempt != nil || response.Writer.Building || response.Writer.CapacityWait == nil ||
+		*response.Writer.CapacityWait != "Dispatch is paused" {
+		t.Fatal("paused claim lost its allocation wait", string(blocked))
+	}
+}
+
+func TestCaptainLivenessBoundariesAgreeAcrossViews(t *testing.T) {
+	for _, ending := range []bool{false, true} {
+		for _, offset := range []time.Duration{-time.Microsecond, 0, time.Microsecond} {
+			t.Run(fmt.Sprintf("ending=%t/offset=%s", ending, offset), func(t *testing.T) {
+				app, db := writerStore(t, 2, 1)
+				now := time.Now().UTC().Truncate(time.Microsecond)
+				app.Clock = func() time.Time { return now }
+				heartbeat := timestamp(now.Add(-captainHeartbeatTimeout - offset))
+				var endingAt *string
+				if ending {
+					heartbeat = timestamp(now)
+					endingAt = pointer(timestamp(now.Add(-captainHandoffGrace - offset)))
+				}
+				if _, err := db.Exec("UPDATE captains SET heartbeat_at=?,ending_at=?", heartbeat, endingAt); err != nil {
+					t.Fatal(err)
+				}
+				wantLive := offset < 0
+				if err := app.Store.Read(context.Background(), func(tx *sqlite.Tx) error {
+					current, err := pickupSnapshot(tx, now)
+					if err != nil {
+						return err
+					}
+					_, live := current.Live["captain"]
+					if live != wantLive {
+						t.Fatal("pickup liveness", live, wantLive)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := app.Captain(context.Background(), "captain")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var captain CaptainView
+				if err := json.Unmarshal(raw, &captain); err != nil {
+					t.Fatal(err)
+				}
+				if captain.Live != wantLive || captain.Stale == wantLive {
+					t.Fatal("Captain view liveness", string(raw))
+				}
+				raw, err = app.CurrentCaptain(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var current struct {
+					Captain *struct {
+						ID string `json:"id"`
+					} `json:"captain"`
+				}
+				if err := json.Unmarshal(raw, &current); err != nil {
+					t.Fatal(err)
+				}
+				if (current.Captain != nil) != wantLive {
+					t.Fatal("current routing liveness", string(raw))
+				}
+			})
+		}
+	}
+}
+
+func TestArchiveStatusRetainsReplacementAndCaptainBlockers(t *testing.T) {
+	app, db := writerStore(t, 2, 1)
+	ctx := context.Background()
+	stamp := timestamp(time.Now())
+	session := "00000000-0000-0000-0000-000000000001"
+	reference := "ghapp://sessions/" + session
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	for index := range 12 {
+		id := fmt.Sprintf("archived-%02d", index)
+		if _, err := tx.Exec(`INSERT INTO captains(id,session_ref,charter_revision,state,created_at,heartbeat_at,handoff_note)
+			VALUES (?,?,'charter','ended',?,?,'Stop condition met: complete')`, id, reference, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(`INSERT INTO writers
+			(id,execution_id,item_id,captain_id,runtime,nonce,token_digest,state,created_at,ended_at,session_id)
+			VALUES (?,'execution','up',?,'synthetic-runtime',?,?,'stopped',?,?,?)`,
+			id, id, id, contract.Digest(id), stamp, stamp, session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	check := func(wantActive bool) {
+		t.Helper()
+		raw, err := app.ArchiveStatus(ctx, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var view ArchiveStatusView
+		if err := json.Unmarshal(raw, &view); err != nil {
+			t.Fatal(err)
+		}
+		if view.Active != wantActive || len(view.Writers) != 12 {
+			t.Fatal("archive blockers or writer membership changed", string(raw))
+		}
+	}
+	// Archiving a writer session does not discard its Captains' unfinished cleanup.
+	check(true)
+	if _, err := app.RecordArchive(ctx, contract.SessionArchive{SessionID: session, Outcome: "refused",
+		Reason: "Retain local work", ReportedBy: "fixture"}); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	if _, err := db.Exec("UPDATE captains SET handoff_note=NULL WHERE id='archived-00'"); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	if _, err := db.Exec(`INSERT INTO captains(id,session_ref,charter_revision,state,created_at,heartbeat_at,parent_id)
+		VALUES ('successor','successor-session','charter','ended',?,?,'archived-00')`, stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	check(false)
+	registered, err := app.RegisterWriter(ctx, "up", "execution", contract.WriterRegistration{
+		ExpectedVersion: "1", CaptainID: "captain", Runtime: "synthetic-runtime",
+		Nonce: "archive-replacement-0001", TokenDigest: contract.Digest("replacement")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, writerID, _ := decodeBinding(t, registered)
+	if _, err := db.Exec("UPDATE writers SET session_id='different-session' WHERE id=?", writerID); err != nil {
+		t.Fatal(err)
+	}
+	check(true)
+	if _, err := app.RecordArchive(ctx, contract.SessionArchive{SessionID: session, Outcome: "archived",
+		Reason: "Attempt unsafe cleanup", ReportedBy: "fixture"}); err == nil {
+		t.Fatal("another session's replacement writer did not prevent archive")
+	}
+}
 
 func TestCaptainListRetainsPerCaptainCleanupLimit(t *testing.T) {
 	app, db := writerStore(t, 2, 1)

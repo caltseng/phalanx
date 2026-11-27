@@ -251,6 +251,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 }
 
 func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *string, view sqlite.Execution) (json.RawMessage, error) {
+	var snapshot *admissionContext
 	writer, err := writerRecord(tx, writerID)
 	if err != nil {
 		return nil, err
@@ -284,7 +285,8 @@ func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *str
 					return nil, err
 				}
 			}
-			if err := a.claimNext(tx, writer, previousAttempt); err != nil {
+			snapshot, err = a.claimNext(tx, writer, previousAttempt, nil)
+			if err != nil {
 				return nil, err
 			}
 		}
@@ -293,7 +295,7 @@ func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *str
 	if err != nil {
 		return nil, err
 	}
-	return binding(tx, writer)
+	return bindingWithContext(tx, writer, snapshot)
 }
 
 func (a *App) WriterResult(ctx context.Context, itemID, executionID, writerID string, request contract.WriterResult, key *string) (json.RawMessage, error) {

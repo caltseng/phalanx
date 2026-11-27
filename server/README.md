@@ -34,6 +34,14 @@ Native report finalization and bounded dependency refresh use the existing
 schema26 jobs. Every pinned public operation is inventoried; complete whole-port
 fault/race/framework/rollback and final delivery proof still remain required.
 
+Captain routing, pickup, flags and unconfirmed-intent recovery share the same
+named heartbeat/handoff cutoffs and live-row scan. Pickup and writer admission
+share the capacity/rework decision; claims reuse their settings snapshot when
+projecting a blocked binding. Captain/reinforcement/session-link and archive
+views are typed without changing their JSON contract. Archive status uses at
+most seven SQL queries regardless of writer or matching Captain count, retaining
+replacement-writer, pending-cleanup and unfinished-handoff blockers.
+
 ## Boundaries and pinned build
 
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
