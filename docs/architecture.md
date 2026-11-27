@@ -32,6 +32,7 @@ remain separate from exact-head review, required CI and installation adoption.
 | `server/internal/sqlite` | Schema26 query/storage, connection-local PRAGMAs, admission, rollback and unknown-commit outcomes; no migration or new scheduler |
 | `server/internal/instancelock` | Database-adjacent sole-instance lock |
 | `server/cmd/phalanx-server`, `server/package.py`, `phalanx/deployment.py` | Versioned server-only binary/assets and explicit existing-supervisor engine selection; no live adoption or client replacement |
+| `phalanx/windows_supervisor.py`, `phalanx/windows_task.ps1` | Opt-in same-task foreground Windows Job containment, retained-native-handle exact-task stop and exclusion receipts; no uninstrumented live-tree adoption or task mutation; [operator boundary](windows-api-supervisor.md) |
 | `server/cmd/conformance-*`, `server/conformance` | Disposable-only fixture adapters, pinned Python oracles, raw wire/typed-store differential and package-only current-data rehearsal; no runtime Python proxy |
 
 ## Components and ownership

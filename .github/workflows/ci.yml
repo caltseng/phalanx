@@ -181,6 +181,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $env:PHALANX_CONFORMANCE_PYTHON conformance\identity.py --binary "$env:RUNNER_TEMP\identity-server.exe" --output "$env:RUNNER_TEMP\identity-proof"
 
+      - name: Prove isolated existing-task owned-tree stop and original-key restart
+        if: runner.os == 'Windows'
+        env:
+          PHALANX_WINDOWS_TASK_ISOLATION: "1"
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP "windows-supervisor-package"
+          New-Item -ItemType Directory -Path (Join-Path $package "assets") | Out-Null
+          Copy-Item phalanx\static\* (Join-Path $package "assets")
+          Set-Location server
+          go build -trimpath -buildvcs=false -o "$package\phalanx-server.exe" ./cmd/phalanx-server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Set-Location ..
+          & $env:PHALANX_CONFORMANCE_PYTHON tests\windows_supervisor_rehearsal.py --binary "$package\phalanx-server.exe" --output "$env:RUNNER_TEMP\windows-supervisor-proof"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Preserve Windows supervisor exclusion and replay evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-supervisor-proof
+          path: ${{ runner.temp }}/windows-supervisor-proof
+          if-no-files-found: error
+
       - name: Preserve production proxy and identity evidence
         if: always()
         uses: actions/upload-artifact@v6

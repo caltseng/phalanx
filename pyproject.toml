@@ -20,4 +20,4 @@ include-package-data = false
 include = ["phalanx"]
 
 [tool.setuptools.package-data]
-phalanx = ["static/*.html", "static/*.css", "static/*.js", "static/*.svg", "prompts/*.md"]
+phalanx = ["static/*.html", "static/*.css", "static/*.js", "static/*.svg", "prompts/*.md", "windows_task.ps1"]
