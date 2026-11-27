@@ -37,7 +37,7 @@ operator bootstrap boundary. Stop receipts require original-handle, full Job,
 listener and shared-lock exclusion; hard-stop caller outcomes remain transport-
 unknown until original-key/current-data reconciliation. No task settings, service
 timeouts, new daemon or API route are implied; see the
-[explicit invocation and recovery contract](docs/deployment.md#opt-in-windows-foreground-api-ownership-and-stop-receipts).
+[explicit invocation and recovery contract](docs/windows-api-supervisor.md).
 On Windows the API and reconciler entrypoints normalize their own inherited Idle/BelowNormal CPU priority
 to Normal, preserving explicitly higher priorities; supervisor tasks should also use Normal.
 This prevents routine host load from starving API control and writer traffic without changing

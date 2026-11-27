@@ -118,7 +118,8 @@ def durable_identities(database):
 
 
 def task_rehearsal(args):
-    if os.name != "nt" or os.environ.get("PHALANX_WINDOWS_TASK_ISOLATION") != "1":
+    if (os.name != "nt" or os.environ.get("PHALANX_WINDOWS_TASK_ISOLATION") != "1"
+            or os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_OS") != "Windows"):
         raise SystemExit("REQUIRED ENVIRONMENT GAP: use the existing isolated Windows CI host; "
                          "Task Scheduler proof must not run or be counted as skipped on a shared host")
     args.output.mkdir(parents=True, exist_ok=False)
@@ -237,6 +238,8 @@ def task_rehearsal(args):
             assert store.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         (args.output / "proof.json").write_text(json.dumps({
             "passed": True, "scope": "owned disposable cmd/deploy/Go task; no production adoption",
+            "source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+            "binary_sha256": h.digest(args.binary.read_bytes()),
             "accepted_original_key_replay": True, "transport_unknown_original_key_reconciliation": True,
             "durable_identities_unchanged": True, "receipt_count": len(receipts),
             "unrelated_task_preserved": True, "database_rollback": False,

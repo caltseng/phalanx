@@ -176,7 +176,7 @@ class WindowsJobTest(unittest.TestCase):
         self.assertEqual(copied.read(lambda pids: [])["classification"], "original-exit-proven")
         self.assertNotIn("TerminateProcess", str(copied.read(lambda pids: [])))
 
-    def test_real_original_handle_handoff_survives_supervisor_stop(self):
+    def _real_handoff(self, *, cleanup_failure=False):
         record = self.root / "ownership.json"
         database = self.root / "synthetic.sqlite3"
         database.write_bytes(b"owned synthetic lock fixture; not a production database")
@@ -195,6 +195,7 @@ class WindowsJobTest(unittest.TestCase):
             " w._write_new(root/'ownership.json',{'format':1,'task_path':'\\\\synthetic',"
             "'task':{'fixture':'not-real-task-control'},'supervisor':s.expected,"
             "'lineage':[{'identity':s.expected,'handle':s.handle}],"
+            "'engine':{'identity':s.expected,'handle':s.handle},"
             "'job_handle':j.handle,'root_handle':j.root,'root':j.root_identity,'root_pid':p,"
             "'config_hash':w.digest(str(root/'deployment.json')),"
             "'database_path_hash':w.digest(str(root/'synthetic.sqlite3')),'port':12345})\n"
@@ -223,14 +224,69 @@ class WindowsJobTest(unittest.TestCase):
                 return {"task_excluded": process.poll() is not None, "listeners": []}
             return {"task": owned["task"]}
 
-        with patch.object(w, "task_control", side_effect=control):
-            result = w.stop(config_path, {"server": {"port": 12345}}, {"PHALANX_DB": str(database)},
-                            task="\\synthetic", record=record, receipt=self.root / "stop.json")
-        self.assertTrue(result["stopped"], result)
+        actual_close = w.Original.close
+        failed = False
+
+        def close(original):
+            nonlocal failed
+            actual_close(original)
+            if cleanup_failure and not failed:
+                failed = True
+                raise w.OwnershipError("injected cleanup receipt failure")
+
+        with patch.object(w, "task_control", side_effect=control), patch.object(w.Original, "close", close):
+            if cleanup_failure:
+                with self.assertRaisesRegex(w.OwnershipError, "cleanup receipt failure"):
+                    w.stop(config_path, {"server": {"port": 12345}}, {"PHALANX_DB": str(database)},
+                           task="\\synthetic", record=record, receipt=self.root / "stop.json")
+                result = json.loads((self.root / "stop.json").read_text())
+                self.assertFalse(result["stopped"])
+            else:
+                result = w.stop(config_path, {"server": {"port": 12345}}, {"PHALANX_DB": str(database)},
+                                task="\\synthetic", record=record, receipt=self.root / "stop.json")
+                self.assertTrue(result["stopped"], result)
         self.assertTrue(result["original_handles_exited"])
         self.assertTrue(result["job_empty"])
         self.assertEqual(operations.count("stop"), 1)
         self.assertEqual(json.loads((self.root / "stop.json").read_text()), result)
+
+    def test_real_original_handle_handoff_survives_supervisor_stop(self):
+        self._real_handoff()
+
+    def test_stop_cleanup_failure_cannot_leave_a_success_receipt(self):
+        self._real_handoff(cleanup_failure=True)
+
+    def test_native_launch_and_partial_capture_do_not_leak_process_or_thread_handles(self):
+        function = self.native.api.GetProcessHandleCount
+        function.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        function.restype = ctypes.c_int
+
+        def count():
+            value = ctypes.c_ulong()
+            self.native.check(function(self.native.api.GetCurrentProcess(), ctypes.byref(value)), "Count own handles")
+            return value.value
+
+        # Exclude one-time process-global Win32/Python launch initialization.
+        warmup = w.Job(self.native)
+        try:
+            warmup.launch([sys.executable, "-c", "pass"], dict(os.environ), self.root)
+            warmup.wait_empty()
+        finally:
+            warmup.close()
+        before = count()
+        for fail in (False, True, False, True):
+            job = w.Job(self.native)
+            try:
+                if fail:
+                    with patch.object(self.native, "image", side_effect=w.OwnershipError("capture fault")):
+                        with self.assertRaises(w.OwnershipError):
+                            job.launch([sys.executable, "-c", "pass"], dict(os.environ), self.root)
+                else:
+                    job.launch([sys.executable, "-c", "pass"], dict(os.environ), self.root)
+                    job.wait_empty()
+            finally:
+                job.close()
+        self.assertEqual(count(), before)
 
 
 if __name__ == "__main__":

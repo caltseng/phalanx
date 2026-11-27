@@ -439,6 +439,12 @@ def supervise(config_path, config, env, *, task, record, engine, go_binary):
         # EnginePID is only an association check, never a termination target or ownership grant.
         if proof["engine_pid"] not in (current.pid, current.expected["parent"]):
             raise OwnershipError("Task engine/action lineage is not proven")
+        engine = current
+        if proof["engine_pid"] != current.pid:
+            engine = Original.capture(native, proof["engine_pid"], _query)
+            stack.callback(engine.close)
+            if engine.created > current.created:
+                raise OwnershipError("Task engine PID was reused after action creation")
         if task_control("inspect", task=task)["task"] != proof:
             raise OwnershipError("Task changed before contained launch")
         preflight = task_control("excluded", task=task, port=config["server"]["port"])
@@ -459,6 +465,7 @@ def supervise(config_path, config, env, *, task, record, engine, go_binary):
         root_pid = job.launch(command, env, Path.cwd())
         _write_new(record, {"format": 1, "task_path": task, "task": proof,
                             "supervisor": supervisor.expected, "lineage": lineage,
+                            "engine": {"identity": engine.expected, "handle": engine.handle},
                             "job_handle": job.handle, "containment_id": job.identity,
                             "root_handle": job.root, "root": job.root_identity,
                             "root_pid": root_pid,
@@ -505,6 +512,13 @@ def stop(config_path, config, env, *, task, record, receipt):
                 original = Original.retained(native, supervisor.handle, entry["handle"], entry["identity"])
                 originals.append(original)
                 stack.callback(original.close)
+            engine_entry = owned["engine"]
+            engine = Original.retained(native, supervisor.handle, engine_entry["handle"],
+                                       engine_entry["identity"])
+            stack.callback(engine.close)
+            result["engine"] = engine.read(_query)
+            if result["engine"]["classification"] != "active-match":
+                raise OwnershipError("Original task engine association is stale or unavailable")
             # Duplicate from the verified original supervisor, not a name or new PID.
             job = native.duplicate(supervisor.handle, owned["job_handle"])
             stack.callback(native.close, job)

@@ -66,6 +66,7 @@ function Get-TaskProof($Task, $Instances) {
     if (-not [IO.Path]::IsPathRooted($executable)) { throw 'Task executable must be absolute' }
     return [ordered]@{
         definition_hash = Get-Hash $Task.Xml
+        security_hash = Get-Hash ($Task.GetSecurityDescriptor(7))
         instance = [string] $Instances.Item(1).InstanceGuid
         engine_pid = [long] $Instances.Item(1).EnginePID
         action_executable_hash = Get-Hash ([IO.Path]::GetFullPath($executable).ToLowerInvariant())
