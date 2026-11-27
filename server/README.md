@@ -178,16 +178,21 @@ adoption, or a performance/SLO claim.
 `framework.py` retains raw HTTP requests/responses and complete zero-effect
 snapshots for twelve parser/framing cases. Invalid chunk-body reads now match
 the pinned 400 refusal instead of returning 500. Eight standard-library parser
-differences remain explicit, unclassified blockers: duplicate Host, missing Host,
+differences are explicitly owner-approved named changes: duplicate Host, missing Host,
 invalid HTTP version, conflicting Content-Length, invalid header name and
 invalid method have different 400 text bodies; invalid percent URL is pinned
 404 versus Go 400; unsupported transfer encoding is pinned 400 versus Go 501.
 The valid HTTP/1.0-without-Host case additionally returns pinned HTTP/1.1 with
 `Connection: close` versus Go HTTP/1.0 without that header; both return the exact
 200 JSON payload and close. Protocol and Connection differences are retained,
-not silently excluded from comparison. No body/status rewriting, broad framework
-exemption or silent normalization is authorized. Exact scoped classification or
-native compatibility and independent final-head review remain prerequisites.
+not silently excluded from comparison. The owner accepted these two separate
+choices in execution22f0004de8634d7b9aa8523aa3c62d77 replyv12; the
+[tracked exact limits](../docs/http-server-migration.md#411-separately-approved-named-transport-changes)
+and request-SHA-bound expectations preserve strict rejection, actual close and
+zero effects on both schema shapes. Every other comparison remains strict.
+No body/status rewriting, broad framework exemption or silent normalization
+is authorized. Independent final-head review and all remaining full-proof gates
+still apply.
 
 ## Native domain extension evidence (in development)
 
@@ -215,7 +220,7 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `operator_defaults.py` | 24 on each schema shape | Explicit v4/v9 named read omissions, ready/draft/null preservation, malformed-state refusal and exact complete D0 responses with zero read effects |
 | `scribe.py` | 90 on each schema shape and authority mode | Canonical unchanged assets/CSP, file/range/conditional/HEAD behavior, documentation URLs and direct local-board/owner/proxy/host/origin boundaries |
 | `route_models.py` | All 66 operations / 51 schemas on each shape | Complete pinned generated request-schema comparison and actual read/refusal wire/store inventory; not a substitute for each family’s positive/fault corpus |
-| `framework.py` | 12 raw HTTP cases | Complete raw parser/body characterization and zero-effect snapshots; eight malformed-parser discrepancies plus one valid HTTP/1.0 response-transport difference remain unclassified blockers |
+| `framework.py` | 12 raw HTTP cases on each shape | Exact owner-v12 request-SHA-bound expectations for eight malformed refusals and separately one HTTP/1.0 response; full raw fields/actual close/zero effects, all other comparisons strict |
 | `rehearsal.py` | Eight phases per reference/shape | Package-only P0/Go and D0/Go alternation on evolved data; same-writer/grants, caller-loss receipt reconciliation, report/scout/usage continuation and immutable receipts |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |

@@ -139,6 +139,21 @@ loopback-only listener and explicit configuration before rollout; review/merge i
 | 96 | API-independent work continuity | A control-plane outage alone does not gate already-authorized development, validation, publication or check-in by the same live writer under verified held capacity. Make best-effort API updates and distinguish actual local/GitHub effects from missing receipts; reconcile accepted versions, pinned attempts and actual merges through existing fenced/idempotent controls. No unconfirmed admission/acquisition, offline queue, revived credentials or bypass of known stop/cancel/401, ready-only/report/draft ceilings or exact-head GitHub merge gates. Source check-in is separate from installation and retained-session adoption | Caleb: "let's not gate progress in these PRs on API uptime. We try our best, but should continue development and get stuff checked in." and "^ Start a session to codify this also", relayed 2026-11-25. [Operating policy](writer-operations.md#control-plane-outages) defines uncertainty and recovery without changing server authority | Caleb (continuity and source check-in); dedicated implementation session (protocol details) |
 | 97 | Captain outage continuity | Shared API/transport/authentication-service failures, repeated dependency errors and unpersisted heartbeats are visible blocked/unknown control-plane state, not safety-handoff or replacement triggers. Preserve the same Captain/writers and five-minute reconciliation; resume the same active unsuperseded registration after recovery. Keep the original 24-hour rotation clock, deferring handoff until authority/outcome can be verified. Keeper recovery needs authoritative API and exact native evidence; resume available sessions, wait on unknown state, and replace only verified native loss/local degradation. Preserve owner stop, missing/invalid authority, sole-writer/trust/privacy and review/CI/merge safeguards. Local instruction adoption is separate from source merge and must not deploy unrelated schema changes | Caleb: "I don't want API failures to continually spawn new captains. Cuz this means that outages will just continually fail." and "Do this locally and also make the change in phalanx repo", relayed 2026-11-25. Implement directly in a local session, not through the unavailable API | Caleb (outage continuity and local/repository delivery); local implementation session (recovery details) |
 
+## Owner-approved HTTP migration transport limits
+
+On 2026-11-27 the owner explicitly accepted two separate choices, recorded as
+`answered_by: owner`, execution `22f0004de8634d7b9aa8523aa3c62d77`, reply **v12**:
+eight exact malformed pre-handler native Go rejections and separately the exact
+valid `http-1.0-without-host` response protocol/Connection behavior.
+The [named expectation table and limits](http-server-migration.md#411-separately-approved-named-transport-changes)
+and request-SHA-bound `server/conformance/framework.py` define their complete
+scope. P0/D0 agree; this is an explicit transport requirement change, not a
+Captain P0-bug classification or blanket compatibility waiver. Preserve raw
+originals, strict rejection, actual connection close, zero effects and every
+other valid-wire/application/auth/durability contract. Independent exact-final-
+head review and all original validation/merge gates remain; no live adoption,
+schema/data/credential/trust change or speculative parser adapter is authorized.
+
 ## Ordinary-performance case closeout (decision 94)
 
 GitHub reads on 2026-11-25 confirmed [#252](https://github.com/caltseng/phalanx/pull/252)

@@ -1,4 +1,4 @@
-"""Raw HTTP parser/body edge characterization; differences remain explicit blockers."""
+"""Exact owner-v12 transport expectations; all other comparisons remain strict."""
 
 import argparse
 from copy import deepcopy
@@ -9,6 +9,19 @@ import sys
 from urllib.parse import urlsplit
 
 import harness as h
+
+
+APPROVED = {
+    "duplicate-host": ("471e3e2f6d2c72470f3aa20c8b94dbabd22df5e7fad3241cc031d97a8d9f1a8a", 400, "400 Bad Request"),
+    "missing-host": ("2b318cedffd6575d4e21f3dbc669c0d1fa8439fe3fe2aa85d330884eefa0c339", 400, "400 Bad Request: missing required Host header"),
+    "invalid-version": ("cb2fe1fd72032dbe27c5709a61f4c73525edf3ab464a7a324e0b0ebf99ee1a2e", 400, "400 Bad Request"),
+    "invalid-percent-url": ("26f6c87d088320bbd58f7c65c5ad5c6040f188f7f844b3b82b80ec37a1cd6926", 400, "400 Bad Request"),
+    "conflicting-content-length": ("d980e8cc60543985cdc348f1289187b76f66f570029efe9210e715bbd9ed2415", 400, "400 Bad Request"),
+    "unsupported-transfer-encoding": ("350cd2844bc80f47ea29ae316290157214580cd3a7b4ec428e102b8ec4ba2f6b", 501, "Unsupported transfer encoding"),
+    "invalid-header-name": ("f646284d23f24055b86c49360646a245fb9fbc173adf7248f75b8319d3720b29", 400, "400 Bad Request: invalid header name"),
+    "invalid-method": ("30e482d51ee56170b24720f7ba17a4a775beb30b23ac17b80425e422d7c9f81c", 400, "400 Bad Request"),
+    "http-1.0-without-host": ("cac883dada9b6ffa1aff1c0860a9f87e188775c15c195b30bf7cb3eca1e18133", 200, '{"status":"ok"}'),
+}
 
 
 def cases():
@@ -35,12 +48,17 @@ def wire(url, data):
     with socket.create_connection((parsed.hostname, parsed.port), timeout=5) as client:
         client.sendall(data.encode("ascii"))
         response = bytearray()
+        closed = False
         while True:
             try:
                 chunk = client.recv(65536)
-            except (socket.timeout, ConnectionResetError):
+            except socket.timeout:
+                break
+            except ConnectionResetError:
+                closed = True
                 break
             if not chunk:
+                closed = True
                 break
             response.extend(chunk)
     header, _, body = bytes(response).partition(b"\r\n\r\n")
@@ -62,7 +80,7 @@ def wire(url, data):
             remaining = remaining[length+2:]
         decoded = bytes(chunks)
     return {"raw_hex": bytes(response).hex(), "protocol": status_line[0] if status_line else None,
-            "status": status, "headers": headers,
+            "status": status, "headers": headers, "closed": closed,
             "body_hex": body.hex(), "decoded_body_hex": decoded.hex()}
 
 
@@ -70,48 +88,74 @@ def comparable(response):
     response = deepcopy(response)
     response["headers"] = sorted((name, value) for name, value in response["headers"]
                                 if name not in ("date", "server", "content-length", "transfer-encoding"))
-    return response["protocol"], response["status"], response["headers"], response["decoded_body_hex"]
+    return response["protocol"], response["status"], response["headers"], response["decoded_body_hex"], response["closed"]
+
+
+def approved_go(case):
+    if case["id"] not in APPROVED:
+        return None
+    digest, status, body = APPROVED[case["id"]]
+    if h.digest(case["raw"].encode("ascii")) != digest:
+        raise AssertionError("Owner transport classification does not cover changed request: " + case["id"])
+    valid = case["id"] == "http-1.0-without-host"
+    headers = [("content-type", "application/json" if valid else "text/plain; charset=utf-8")]
+    if not valid:
+        headers.append(("connection", "close"))
+    return "HTTP/1.0" if valid else "HTTP/1.1", status, sorted(headers), body.encode().hex(), True
 
 
 def characterize(binary, output):
     h.verify_manifest()
     h.verify_vectors()
     output.mkdir(parents=True, exist_ok=True)
-    mismatches = []
+    mismatches, failures = [], []
     with h.disposable_root() as root:
         sources = {label: h.export(label, root) for label in h.PINS}
-        expected = None
-        for label in ("P0", "D0", "Go"):
-            directory = root / ("framework-" + label)
-            database = h.fresh(directory, sources, True)
-            command = [str(binary), "--fixture", str(database)] if label == "Go" else [
-                sys.executable, "-P", str(h.HERE / "oracle.py"), "serve", str(sources[label]), str(database)]
-            actual = []
-            with h.server(command, directory) as url:
-                for case in cases():
-                    before = h.snapshot(database)
-                    response = wire(url, case["raw"])
-                    after = h.snapshot(database)
-                    if before != after:
-                        raise AssertionError("Raw HTTP framing changed durable state: " + case["id"])
-                    actual.append({"case": case, "response": response, "durable": after})
-            (output / f"framework-{label}.json").write_text(json.dumps(actual, indent=2), encoding="utf-8")
-            if expected is None:
-                expected = actual
-            else:
-                for first, second in zip(expected, actual, strict=True):
-                    if comparable(first["response"]) != comparable(second["response"]):
-                        mismatches.append({"implementation": label, "case": first["case"]["id"],
-                            "P0_protocol": first["response"]["protocol"], "actual_protocol": second["response"]["protocol"],
-                            "P0_headers": comparable(first["response"])[2], "actual_headers": comparable(second["response"])[2],
-                            "P0_status": first["response"]["status"], "actual_status": second["response"]["status"],
-                            "P0_body": bytes.fromhex(first["response"]["decoded_body_hex"]).decode("latin-1"),
-                            "actual_body": bytes.fromhex(second["response"]["decoded_body_hex"]).decode("latin-1")})
+        for retained in (False, True):
+            shape, expected = "retained" if retained else "fresh", None
+            for label in ("P0", "D0", "Go"):
+                directory = root / ("framework-" + shape + "-" + label)
+                database = h.fresh(directory, sources, retained)
+                command = [str(binary), "--fixture", str(database)] if label == "Go" else [
+                    sys.executable, "-P", str(h.HERE / "oracle.py"), "serve", str(sources[label]), str(database)]
+                actual = []
+                with h.server(command, directory) as url:
+                    for case in cases():
+                        before = h.snapshot(database)
+                        response = wire(url, case["raw"])
+                        after = h.snapshot(database)
+                        if before != after:
+                            raise AssertionError("Raw HTTP framing changed durable state: " + case["id"])
+                        if not response["closed"]:
+                            failures.append({"shape": shape, "implementation": label, "case": case["id"], "error": "connection did not close"})
+                        actual.append({"case": case, "request_sha256": h.digest(case["raw"].encode("ascii")),
+                                       "response": response, "durable": after})
+                (output / f"framework-{shape}-{label}.json").write_text(json.dumps(actual, indent=2), encoding="utf-8")
+                if expected is None:
+                    expected = actual
+                else:
+                    for first, second in zip(expected, actual, strict=True):
+                        reference = comparable(first["response"])
+                        accepted = approved_go(second["case"]) if label == "Go" else None
+                        target = accepted if accepted is not None else reference
+                        if comparable(second["response"]) != target:
+                            failures.append({"shape": shape, "implementation": label, "case": second["case"]["id"],
+                                             "expected": target, "actual": comparable(second["response"])})
+                        if reference != comparable(second["response"]):
+                            mismatches.append({"shape": shape, "implementation": label, "case": first["case"]["id"],
+                                "P0_protocol": first["response"]["protocol"], "actual_protocol": second["response"]["protocol"],
+                                "P0_headers": reference[2], "actual_headers": comparable(second["response"])[2],
+                                "P0_status": first["response"]["status"], "actual_status": second["response"]["status"],
+                                "P0_body": bytes.fromhex(first["response"]["decoded_body_hex"]).decode("latin-1"),
+                                "actual_body": bytes.fromhex(second["response"]["decoded_body_hex"]).decode("latin-1")})
     result = {"pins": h.PINS, "request_count": len(cases()), "mismatches": mismatches,
+              "failures": failures, "schema_shapes": ["fresh", "retained"],
               "effect": "All raw framing/read/refusal cases zero durable effects",
-              "classification": "Unresolved parser-level differences are blockers until explicitly classified; no status/body normalization"}
+              "classification": "Explicit owner reply v12, execution22f0004de8634d7b9aa8523aa3c62d77: eight exact malformed requests and separately one valid HTTP1.0 request; all other fields/requests strict"}
     (output / "framework-characterization.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    print(json.dumps(result, indent=2))
+    if failures:
+        raise AssertionError(json.dumps(failures, indent=2))
+    print(f"Framework: {len(cases())} requests x two shapes x P0/D0/Go PASS; {len(mismatches)} exact owner-approved raw differences retained")
 
 
 def main():

@@ -1295,7 +1295,7 @@
     "server/conformance/datetimes.py": "bc39e852c0fc8e2b3dc86f747a1c48b04dae767292a96549b45cf7cf227ec6a4",
     "server/conformance/decisions.py": "759a0e459d4c870ce2132b6ca55ed7feda09189d8254b9fd077629fa1d77c397",
     "server/conformance/flags.py": "91b89a7cf0ff3a9fba636c3afac3b4b00066ccefd6ce2762844f251ba5521b30",
-    "server/conformance/framework.py": "d4964e4aa07ff6b62a971c7da9445415521cbebcc7f54d8f6dc5e6fbb96fc3b4",
+    "server/conformance/framework.py": "6786af35b8d25083290fff4d10d70426a5041fe4293fce499856a55782037c1c",
     "server/conformance/harness.py": "977565fde171746bbb10fae66cd9d5040b8b9e6b9da52b1141adcbb4241534c4",
     "server/conformance/history.py": "42c51c6d1120e7906486095383690332e4fd6d1fc724701b3b4c1f04b3af0700",
     "server/conformance/inbox.py": "bd82a37d28efcafa1d12bce1e18513c9d2b1eb84ae29007d69c49c56aef25563",
