@@ -10,6 +10,12 @@ For an install already using [tracked deployment tooling](deployment.md), resume
 `reconciler` command under the recorded single service owner. Never add
 `--initialize-database` during recovery. Do not move an existing `phalanx-muster` directory
 to `.phalanx_muster`; the new spelling is only the new-install default.
+Go is now the supported repository default. Before a package upgrade, preserve a
+recorded explicit `server.engine`/`--engine` choice and verified package path;
+an old implicit Python command needs an explicit `--engine python` for temporary
+rollback, not a silently changed task. See [engine precedence](configuration.md#http-engine-and-package-selection).
+Missing Go packages fail rather than starting Python. Never run `server initialize`
+to repair an existing installation.
 
 ## Restart in order
 
@@ -17,7 +23,8 @@ to `.phalanx_muster`; the new spelling is only the new-install default.
    owner/runner tokens and database path. If the recorded path is missing, stop and
    investigate; raw Uvicorn would create an empty store. Use the existing supervisor
    and entrypoint. The raw alternative below is only for an installation already
-   managed that way, after verifying the file exists:
+   managed that way, after verifying the file exists. It is a deprecated historical
+   Python-only recovery command, not the supported new-install/default launch:
 
    ```powershell
    $env:PHALANX_DB = "<recorded absolute path>"

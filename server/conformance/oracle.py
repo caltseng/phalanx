@@ -147,9 +147,13 @@ def client(source, url, output):
     output.write_text(json.dumps(first, sort_keys=True), encoding="utf-8")
 
 
-def lock_probe(source, database, hold):
+def lock_probe(source, database, hold, ready=False):
     load(source)
     from phalanx.workspaces import _lock
+    if ready:
+        print("ready", flush=True)
+        if sys.stdin.readline() != "probe\n":
+            raise AssertionError("Prepared lock probe requires an explicit trigger")
     with Path(str(database.resolve()) + ".service.lock").open("a+b") as handle:
         try:
             _lock(handle)
@@ -163,7 +167,8 @@ def lock_probe(source, database, hold):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("initialize", "seed", "serve", "client", "lock", "hold-lock", "schema", "contract-docs"))
+    parser.add_argument("action", choices=("initialize", "seed", "serve", "client", "lock", "hold-lock",
+                                          "ready-lock", "schema", "contract-docs"))
     parser.add_argument("source", type=Path)
     parser.add_argument("target")
     parser.add_argument("--output", type=Path)
@@ -206,7 +211,7 @@ def main():
             response = asyncio.run(route.endpoint(request))
             (target / files[route.path]).write_bytes(response.body)
     else:
-        lock_probe(args.source, Path(args.target), args.action == "hold-lock")
+        lock_probe(args.source, Path(args.target), args.action == "hold-lock", args.action == "ready-lock")
 
 
 if __name__ == "__main__":

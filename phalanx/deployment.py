@@ -33,7 +33,7 @@ def initialize(home=None, *, api_url=None, port=8000):
         "deployment.json": {
             "environment_file": str(root / "private.env"),
             "shift_config": str(root / "shift.json"),
-            "server": {"host": "127.0.0.1", "port": port},
+            "server": {"host": "127.0.0.1", "port": port, "engine": "go"},
             "reconciler_config": str(root / "reconciler.json"),
             "reconciler_state": str(root / "reconciler"),
         },
@@ -122,10 +122,16 @@ def configuration(path):
         if not isinstance(config[name], str) or not Path(config[name]).is_absolute():
             raise ValueError(f"Deployment {name} must be an absolute path")
     server = config["server"]
-    if (not isinstance(server, dict) or set(server) != {"host", "port"}
+    if (not isinstance(server, dict) or not {"host", "port"} <= set(server)
+            or set(server) - {"host", "port", "engine", "go_binary"}
             or server["host"] not in ("127.0.0.1", "::1", "localhost")
             or type(server["port"]) is not int or not 1 <= server["port"] <= 65535):
         raise ValueError("Deployment server needs a loopback host and a port between 1 and 65535")
+    if "engine" in server and server["engine"] not in ("python", "go"):
+        raise ValueError("Deployment server engine must be python or go")
+    if "go_binary" in server and (not isinstance(server["go_binary"], str)
+                                or not Path(server["go_binary"]).is_absolute()):
+        raise ValueError("Deployment server go_binary must be an absolute packaged binary path")
     env = {**read_environment(Path(config["environment_file"])), **os.environ}
     env.setdefault("PHALANX_SHIFT_CONFIG", config["shift_config"])
     return config, env
@@ -144,33 +150,40 @@ def service_environment(env):
 
 
 def run_service(config, env, service, *, initialize_database=False, once=False, serve=None,
-                engine="python", go_binary=None):
-    if engine not in ("python", "go"):
+                engine=None, go_binary=None):
+    if engine is not None and engine not in ("python", "go"):
         raise ValueError("Server engine must be python or go")
-    if (engine != "python" or go_binary is not None) and service != "server":
+    if (engine is not None or go_binary is not None) and service != "server":
         raise ValueError("Engine selection applies only to the server")
-    if go_binary is not None and engine != "go":
-        raise ValueError("--go-binary requires explicit --engine go")
     if service == "reconciler":
         command = [sys.executable, "-P", "-m", "phalanx", "reconcile",
                    "--config", config["reconciler_config"], "--state", config["reconciler_state"]]
         if once:
             command.append("--once")
         return subprocess.call(command, env=env)
+    engine = engine if engine is not None else config["server"].get("engine", "go")
+    if engine not in ("python", "go"):
+        raise ValueError("Server engine must be python or go")
+    if go_binary is not None and engine != "go":
+        raise ValueError("--go-binary requires the Go engine")
+    if engine == "go" and go_binary is None:
+        go_binary = config["server"].get("go_binary")
     database = env.get("PHALANX_DB", "")
     if not database or not Path(database).is_absolute():
         raise ValueError("Server requires an explicit absolute PHALANX_DB")
     path = Path(database).resolve()
     if not path.is_file() and not initialize_database:
         raise ValueError("Recorded database is missing; refuse to create a replacement. "
-                         "For a new install only, pass --initialize-database")
+                         "For a new install only, run python -m phalanx server initialize")
     if path.exists() and initialize_database:
         raise ValueError("--initialize-database is only for a new database")
     if engine == "go":
         if initialize_database:
-            raise ValueError("Go cutover requires an existing database; initialization is not supported")
+            raise ValueError("Go requires an existing database; for a new install only, "
+                             "run python -m phalanx server initialize first")
         if go_binary is None or not Path(go_binary).is_absolute() or not Path(go_binary).is_file():
-            raise ValueError("Go cutover requires an explicit absolute packaged --go-binary")
+            raise ValueError("Go requires an absolute packaged --go-binary or server.go_binary; "
+                             "no Python fallback is automatic")
         binary = Path(go_binary).resolve()
         # The Go child owns the same OS lock; acquiring it here would fence our child.
         from .priority import foreground_priority
@@ -209,8 +222,9 @@ def add_deploy_command(commands):
             action.add_argument("service", choices=("server", "reconciler"))
             action.add_argument("--initialize-database", action="store_true")
             action.add_argument("--once", action="store_true")
-            action.add_argument("--engine", choices=("python", "go"), default="python",
-                                help="server only; Go requires a separately validated operator cutover")
+            action.add_argument("--engine", choices=("python", "go"),
+                                help="server only; overrides server.engine (default: go); "
+                                     "python is deprecated, retained for temporary rollback")
             action.add_argument("--go-binary", type=Path, help="absolute versioned Go package binary")
         elif name == "cli":
             action.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -248,4 +262,4 @@ def run_deploy(args, *, serve=None):
         raise ValueError("--once applies only to the reconciler")
     return run_service(config, env, args.service,
                        initialize_database=args.initialize_database, once=args.once, serve=serve,
-                       engine=getattr(args, "engine", "python"), go_binary=getattr(args, "go_binary", None))
+                       engine=getattr(args, "engine", None), go_binary=getattr(args, "go_binary", None))

@@ -66,7 +66,13 @@ results and recovery information. Every closed execution records a verified PR o
 
 ## Quickstart: new install
 
-Use CPython 3.12 or later (3.14 for deployment), Git, and a runtime with native visible
+The packaged **Go HTTP server is the supported default**. The Python HTTP server is
+deprecated and temporarily retained for [explicit rollback](docs/python-server-deprecation.md).
+Python CLI, Captain/writer clients, reconciler and server-host admin remain supported;
+Scribe assets are unchanged. Repository defaults do not change any live installation.
+
+Use CPython 3.12 or later (3.14 for deployment/admin), Git, a verified
+[Go server package](docs/go-server-release.md), and a runtime with native visible
 sessions. From the repository root in PowerShell:
 
 ```powershell
@@ -88,10 +94,15 @@ $env:PHALANX_OWNER_TOKEN = python -c "import secrets; print(secrets.token_urlsaf
 $env:PHALANX_RUNNER_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
 $env:PHALANX_DB = Join-Path $HOME ".phalanx_muster\db\phalanx.sqlite3"
 $env:PHALANX_LOCAL_BOARD = "1"
-python -m uvicorn phalanx.api:app --host 127.0.0.1 --port 8000
+python -m phalanx server initialize
+& "C:\packages\reviewed\phalanx-server.exe" --host 127.0.0.1 --port 8000 --assets "C:\packages\reviewed\assets"
 ```
 
-Record the database path, API URL and credential locations in a private runbook.
+Replace the example package path with the verified extracted package. Initialization
+is a new-store-only offline admin operation, not a Python HTTP launch or a migration;
+it refuses existing data. For supervised operation use `deploy run` with `server.go_binary`
+or `--go-binary` as described in [deployment](docs/deployment.md).
+Record the database path, package revision/digest, API URL and credential locations in a private runbook.
 From a second shell with the same environment activated and stored owner token set:
 
 ```powershell
@@ -137,7 +148,8 @@ checks and shared fixtures, use [Develop Phalanx](docs/development.md).
 - [Writer operations](docs/writer-operations.md): publication, validation flags and delivery.
 - [Recovery](docs/recovery.md): writer replacement, troubleshooting, backup and restore.
 - [Architecture](docs/architecture.md): implementation map and ownership diagrams.
-- [HTTP server migration draft](docs/http-server-migration.md): compatibility specification for collaborative review; no implementation or deployment approval.
+- [Python HTTP deprecation](docs/python-server-deprecation.md): reviewed parity findings, retained Python scope, follow-on removal inventory and temporary rollback.
+- [HTTP server migration](docs/http-server-migration.md): historical proposal/decision evidence and current implementation pointer; not a live-deployment receipt.
 - [API reference](docs/api.md): routes, scoped attempts and correlated timelines.
 - [Develop Phalanx](docs/development.md): tests, CI, fixtures and transactions.
 - [Validation policy](docs/validation-policy.md): trusted local checks and required GitHub checks.

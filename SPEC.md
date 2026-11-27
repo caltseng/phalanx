@@ -14,6 +14,18 @@ and OS locks, not SQLite queues or publication journals.
 The [implementation map and diagrams](docs/architecture.md) trace current code ownership
 and deployment boundaries. The relay's removal did not remove the HTTP API or Scribe.
 
+The supported HTTP default is the versioned Go server; Python HTTP is deprecated,
+retained only for explicit temporary rollback and historical compatibility evidence.
+Python CLI/Captain/writer/reconciler, shared domain models, offline server admin and
+Scribe assets remain supported. See [the deprecation perimeter](docs/python-server-deprecation.md).
+Repository defaults are not evidence of live adoption. No setup command rewrites
+existing configuration, tasks, credentials or data. `deploy run` resolves an explicit
+CLI engine first, then saved `server.engine`, then Go; a missing verified Go binary
+fails visibly, never falls back to Python. Existing Python commands/configurations
+must remain explicit across an upgrade. Go opens only an existing supported store;
+`server initialize` exclusively creates a new canonical database under the shared
+service lock without starting an HTTP server or modifying an existing file.
+
 Operational policy lives in the [worker prompt](phalanx/prompts/worker.md) and
 [Captain prompt](phalanx/prompts/captain.md); this spec defines persisted contracts.
 For transport failures use the worker's [outage protocol](phalanx/prompts/worker.md#control-plane-outages).

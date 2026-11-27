@@ -1,9 +1,12 @@
 # Go HTTP server and disposable compatibility proof
 
-**Not automatically deployed.** The native server implements the
+**Supported repository default; not automatically deployed.** The native server implements the
 [HTTP server migration specification](../docs/http-server-migration.md).
-It does not replace the Python service by default, discover
-operator configuration, migrate a database, or change Python clients/reconciler/Scribe.
+`deploy run` defaults to the verified Go package unless an explicit CLI/saved engine
+selects otherwise. It never rewrites live configuration/tasks, migrates a database,
+or changes Python clients/reconciler/Scribe. Python HTTP is
+[deprecated with explicit temporary rollback](../docs/python-server-deprecation.md);
+the live installation's engine/revision remains a separate operator-owned fact.
 Implemented HTTP operations are `/health`, the owner/runner role probes,
 repository registration/listing, owner intake, scoped item reads, display-title
 reads/writes, execution history/timeline, draft reads, owner cancel/close-failure,
@@ -65,7 +68,19 @@ boundary. `internal/instancelock` holds the Python-compatible database-adjacent 
 lock for the entire server lifetime. The explicitly selected
 `cmd/phalanx-server` and deterministic `package.py` produce a server-only package
 for [operator-owned rehearsal/cutover/rollback](../docs/go-server-release.md).
-The existing `deploy run` adapter defaults to Python; Go cannot initialize a DB.
+The existing `deploy run` adapter defaults to Go and requires an absolute verified
+package binary through `server.go_binary` or `--go-binary`; it never falls back
+automatically. Explicit Python selection remains available temporarily. Go cannot
+initialize a DB: new-install-only `python -m phalanx server initialize` uses retained
+offline Python schema/admin tooling under the same lock without starting Python HTTP.
+
+The [independent parity audit and fix map](../docs/python-server-deprecation.md#reviewed-parity-evidence)
+retain exact audited/fix heads and all four original findings. Inventory/family labels
+alone never established full parity: real-entrypoint `identity.py` now covers proxy/
+home identity, retirement tests require actual disabled effects, and `headers.py`
+preserves incomplete-header refusal, complete/coalesced positive controls and framing.
+Prior failed wire/drain/resource evidence and P0/D0 packages remain historical evidence,
+not deleted or relabeled PASS by this default change.
 
 Go **1.27.4**, `modernc.org/sqlite` **v1.63.0** (observed SQLite **3.54.1**),
 `golang.org/x/sys` **v0.50.0** and the

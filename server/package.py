@@ -65,7 +65,8 @@ def package(binary, output):
                 "files": {name: sha256(data) for name, data in sorted(files.items())},
                 "build_flags": ["-trimpath", "-buildvcs=false", "-ldflags=-X main.revision=" + revision],
                 "clients": "unchanged Python CLI/reconciler and canonical Scribe",
-                "deployment": "operator-only explicit engine selection; no default replacement"}
+                "deployment": "supported default Go HTTP server; operator-owned adoption; "
+                              "explicit deprecated Python rollback retained"}
     files["manifest.json"] = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     output = output.resolve()
     if output.is_relative_to(ROOT):

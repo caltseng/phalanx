@@ -19,6 +19,9 @@ from urllib.parse import urlsplit
 
 import harness as h
 
+sys.path.insert(0, str(h.ROOT))
+from phalanx.local_checks import kill_tree
+
 
 def environment(database):
     return {**{key: value for key, value in os.environ.items() if not key.startswith("PHALANX_")},
@@ -35,21 +38,32 @@ def parameters(binary, database):
 
 
 @contextmanager
-def production(binary, database, directory, python_source=None):
+def production(binary, database, directory, python_source=None, *, default_engine=False):
     command, url = parameters(binary, database)
-    if python_source is not None:
+    if default_engine:
+        command = [sys.executable, "-P", "-c",
+                   "import json,os,signal,sys; "
+                   "sys.path.insert(0,sys.argv.pop(1)); "
+                   "from phalanx.deployment import run_service; "
+                   "signal.signal(signal.SIGBREAK if os.name=='nt' else signal.SIGTERM,lambda *_:None); "
+                   "sys.exit(run_service(json.loads(sys.argv[1]),dict(os.environ),'server'))",
+                   str(h.ROOT), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port,
+                                                      "go_binary": str(binary)}})]
+    elif python_source is not None:
         command = [sys.executable, "-P", "-c",
                    "import json,os,signal,sys; from threading import Thread; "
                    "sys.path.insert(0,sys.argv.pop(1)); "
                    "from phalanx.deployment import run_service; from phalanx.server_admin import serve; "
                    "Thread(target=lambda:(sys.stdin.buffer.read(),signal.raise_signal(signal.SIGINT)),daemon=True).start(); "
                    "sys.exit(run_service(json.loads(sys.argv[1]),dict(os.environ),'server',serve=serve))",
-                   str(python_source), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port}})]
+                   str(python_source), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port,
+                                                            "engine": "python"}})]
     with (directory / "server.log").open("ab") as log:
         log_offset = log.tell()
         process = subprocess.Popen(command, env=environment(database), cwd=directory,
                                    stdin=subprocess.PIPE if python_source is not None else subprocess.DEVNULL,
                                    stdout=log, stderr=log,
+                                   start_new_session=os.name != "nt",
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
         try:
             deadline = time.monotonic() + 15
@@ -77,16 +91,38 @@ def production(binary, database, directory, python_source=None):
             if process.poll() is None:
                 if python_source is not None:
                     process.stdin.close()
+                elif default_engine and os.name != "nt":
+                    os.killpg(process.pid, signal.SIGTERM)
                 else:
                     process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
                 try:
                     process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
+                    kill_tree(process)
                     raise AssertionError("Owned synthetic server did not gracefully drain; forced cleanup is not PASS")
             if process.returncode != 0:
                 raise AssertionError(f"Packaged server exit was not clean: {process.returncode}")
+
+
+def default_engine_check(binary, database, directory, output):
+    before = h.snapshot(database)
+    with production(binary, database, directory, default_engine=True) as (url, _):
+        body = {"repository_id": "fixture", "goal": "Default packaged Go launch"}
+        accepted = h.mutation(url, body, "default-packaged-go")
+        if accepted["status"] != 201:
+            raise AssertionError("Default launch did not accept a real packaged Go mutation")
+    evolved = h.snapshot(database)
+    if evolved["ddl"] != before["ddl"]:
+        raise AssertionError("Default launch changed the schema")
+    with production(binary, database, directory, python_source=h.ROOT) as (url, _):
+        replay = h.mutation(url, body, "default-packaged-go")
+        if h.comparable(replay) != h.comparable(accepted) or h.snapshot(database) != evolved:
+            raise AssertionError("Explicit current Python rollback lost default Go-accepted current data")
+    output.write_text(json.dumps({
+        "default_go_response": accepted, "explicit_python_replay": replay,
+        "current_data": evolved, "before": before,
+        "launch": "run_service with no engine and saved packaged go_binary; no mocked child",
+    }, sort_keys=True), encoding="utf-8")
 
 
 def requests():
@@ -243,32 +279,63 @@ def transport_checks(url, database):
     return records
 
 
-def drain_check(url, process, database, sources, python=False):
+@contextmanager
+def prepared_lock_probe(source, database):
     started = time.monotonic()
-    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
-        blocker.execute("BEGIN EXCLUSIVE")
-        with ThreadPoolExecutor(max_workers=1) as caller:
-            pending = caller.submit(h.mutation, url, {"repository_id": "fixture", "goal": "Real shutdown drain"}, "final-drain")
-            time.sleep(.15)
-            if python:
-                process.stdin.close()
-            else:
-                process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
-            probe_started = time.monotonic()
-            probe = h.invoke("lock", sources["P0"], database, capture_output=True, text=True)
-            probe_seconds = time.monotonic() - probe_started
-            if process.poll() is not None or probe.stdout.strip() != "excluded":
-                raise AssertionError("Shutdown released sole ownership before its active mutation drained")
-            blocker.execute("ROLLBACK")
-            response = pending.result(timeout=10)
-            if response["status"] != 201:
-                raise AssertionError("Shutdown cancelled an accepted/dispatched operation: " + json.dumps({
-                    "response": response, "lock_probe_seconds": probe_seconds,
-                    "total_seconds": time.monotonic() - started,
-                }))
-            process.wait(timeout=15)
+    with (database.parent / "drain-lock-probe.log").open("a", encoding="utf-8") as errors:
+        probe = subprocess.Popen(
+            [sys.executable, "-P", str(h.HERE / "oracle.py"), "ready-lock", str(source), str(database)],
+            cwd=h.ROOT, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+            text=True, encoding="utf-8", start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+        try:
+            with ThreadPoolExecutor(max_workers=1) as reader:
+                ready = reader.submit(probe.stdout.readline)
+                try:
+                    line = ready.result(timeout=20)
+                except TimeoutError:
+                    kill_tree(probe)
+                    raise AssertionError("Lock probe did not finish preparation")
+            if line.strip() != "ready":
+                raise AssertionError("Lock probe failed preparation: " + line)
+            yield probe, time.monotonic() - started
+        finally:
+            if probe.poll() is None:
+                kill_tree(probe)
+            probe.stdin.close()
+            probe.stdout.close()
+
+
+def drain_check(url, process, database, sources, python=False):
+    # Cold Python imports must not consume the server's SQLite busy window.
+    with prepared_lock_probe(sources["P0"], database) as (probe, preparation_seconds):
+        started = time.monotonic()
+        with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
+            blocker.execute("BEGIN EXCLUSIVE")
+            with ThreadPoolExecutor(max_workers=1) as caller:
+                pending = caller.submit(h.mutation, url, {"repository_id": "fixture", "goal": "Real shutdown drain"}, "final-drain")
+                time.sleep(.15)
+                if python:
+                    process.stdin.close()
+                else:
+                    process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+                probe_started = time.monotonic()
+                output, _ = probe.communicate("probe\n", timeout=10)
+                probe_seconds = time.monotonic() - probe_started
+                if probe.returncode != 0 or process.poll() is not None or output.strip() != "excluded":
+                    raise AssertionError("Shutdown released sole ownership before its active mutation drained")
+                blocker.execute("ROLLBACK")
+                response = pending.result(timeout=10)
+                if response["status"] != 201:
+                    raise AssertionError("Shutdown cancelled an accepted/dispatched operation: " + json.dumps({
+                        "response": response, "lock_probe_seconds": probe_seconds,
+                        "lock_probe_prepare_seconds": preparation_seconds,
+                        "total_seconds": time.monotonic() - started,
+                    }))
+                process.wait(timeout=15)
     return {"response": response, "durable": h.snapshot(database), "clean_exit": process.returncode == 0,
-            "lock_probe_seconds": probe_seconds, "total_seconds": time.monotonic() - started}
+            "lock_probe_prepare_seconds": preparation_seconds, "lock_probe_seconds": probe_seconds,
+            "total_seconds": time.monotonic() - started}
 
 
 def measure(url, run):
@@ -282,7 +349,10 @@ def measure(url, run):
         elapsed = time.perf_counter() - start
         expected = 201 if case["body"] is not None else 200
         if response["status"] != expected:
-            raise AssertionError(f"Load request {case['id']} failed: {response['status']}")
+            raise AssertionError("Load request failed: " + json.dumps({
+                "request": case, "response": response, "expected_status": expected,
+                "elapsed_seconds": elapsed,
+            }))
         return {"id": case["id"], "seconds": elapsed, "status": response["status"]}
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -319,6 +389,7 @@ def release(package, output):
         for retained in (False, True):
             directory = root / ("release-retained" if retained else "release-fresh")
             database = h.fresh(directory, sources, retained)
+            default_engine_check(binary, database, directory, output / f"default-engine-{retained}.json")
             initial = h.snapshot(database)
             receipts = {}
             body = {"repository_id": "fixture", "goal": "Real release current data \u96ea"}
@@ -347,7 +418,8 @@ def release(package, output):
                         raise AssertionError("Two real Go servers acquired authority")
                     (output / f"go-{retained}-{reference}.json").write_text(
                         json.dumps({"response": response, "durable": h.snapshot(database), "pid": process.pid}), encoding="utf-8")
-                    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
+                    with prepared_lock_probe(sources[reference], database) as (probe, preparation_seconds), \
+                            closing(sqlite3.connect(database, isolation_level=None)) as blocker:
                         blocker.execute("BEGIN EXCLUSIVE")
                         with ThreadPoolExecutor(max_workers=1) as caller:
                             pending = caller.submit(h.mutation, url, body, "drain-" + reference)
@@ -355,8 +427,10 @@ def release(package, output):
                             process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
                             if process.poll() is not None:
                                 raise AssertionError("Shutdown released sole ownership before dispatched write drained")
-                            probe = h.invoke("lock", sources[reference], database, capture_output=True, text=True)
-                            if probe.stdout.strip() != "excluded":
+                            probe_started = time.monotonic()
+                            probe_output, _ = probe.communicate("probe\n", timeout=10)
+                            probe_seconds = time.monotonic() - probe_started
+                            if probe.returncode != 0 or probe_output.strip() != "excluded":
                                 raise AssertionError("Shutdown released the shared OS lock during admission wait")
                             blocker.execute("ROLLBACK")
                             response = pending.result(timeout=10)
@@ -364,6 +438,10 @@ def release(package, output):
                                 raise AssertionError("Graceful shutdown cancelled a dispatched mutation")
                             receipts["drain-" + reference] = response
                             process.wait(timeout=15)
+                    (output / f"drain-{retained}-{reference}.json").write_text(json.dumps({
+                        "response": response, "lock_probe_prepare_seconds": preparation_seconds,
+                        "lock_probe_seconds": probe_seconds, "durable": h.snapshot(database),
+                    }), encoding="utf-8")
                 command = [sys.executable, "-P", str(h.HERE / "oracle.py"), "serve", str(sources[reference]),
                            str(database), "--id-start", "1048576" if reference == "P0" else "2097152"]
                 with h.server(command, directory) as url:
@@ -407,7 +485,12 @@ def release(package, output):
                             raise AssertionError("Warmup failed")
                     runs = []
                     for index in range(3):
-                        result = measure(url, index)
+                        try:
+                            result = measure(url, index)
+                        except AssertionError:
+                            (output / f"load-failure-{label}-{retained}-{index}-durable.json").write_text(
+                                json.dumps(h.snapshot(database), sort_keys=True), encoding="utf-8")
+                            raise
                         durable = h.snapshot(database)
                         for table in ("work_items", "request_receipts"):
                             if len(durable["tables"][table]["rows"]) != len(baseline["tables"][table]["rows"]) + 30 * (index + 1):

@@ -37,6 +37,7 @@ def main() -> None:
     server = commands.add_parser(
         "server", help="server-host-only admin; opens PHALANX_DB directly, never through the API")
     admin = server.add_subparsers(dest="server_command", required=True)
+    admin.add_parser("initialize", help="create a NEW database only; never starts an HTTP server")
     backup = admin.add_parser("backup", help="snapshot PHALANX_DB to a new file")
     backup.add_argument("destination", type=Path)
     restore = admin.add_parser("restore", help="restore a snapshot to a new PHALANX_DB path")

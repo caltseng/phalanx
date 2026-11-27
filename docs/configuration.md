@@ -9,6 +9,22 @@ privately; never initialize a second store to repair discovery.
 shift/reconciler paths and loopback host/port. Explicit existing locations stay valid.
 This setup never renames or upgrades live directories.
 
+## HTTP engine and package selection
+
+The supported default is the packaged Go HTTP server. `deploy run ... server`
+selects `--engine`, then saved `server.engine`, then `go`. Set an absolute
+`server.go_binary` in `deployment.json` or pass `--go-binary`; it must name the
+verified extracted package's binary, beside its `assets` directory. Missing
+packages fail explicitly; there is no automatic Python fallback or PATH search.
+An explicit `--engine python` or `"engine": "python"` retains the deprecated Python
+HTTP server temporarily. CLI overrides do not rewrite the saved configuration.
+These options apply only to `server`; the reconciler remains Python.
+
+Existing configs with only `host`/`port` remain readable, but now select Go when no
+engine is specified. Before upgrading a Python supervisor's package, its owner must
+explicitly retain Python or complete the [reviewed Go adoption](go-server-release.md);
+the upgrade does not edit its command/task. See [deprecation and rollback](python-server-deprecation.md).
+
 ## Direct muster discovery and status
 
 For an existing direct muster, discovery uses `--home <absolute directory>` first, then
@@ -74,7 +90,7 @@ timeline, see the [paginated API example](api.md#read-one-items-correlated-timel
 
 | Variable | Used by | Meaning |
 | --- | --- | --- |
-| `PHALANX_DB` | Server, `server backup`/`restore` | SQLite file. Defaults to `.phalanx/phalanx.sqlite3`, resolved against the working directory. Use an absolute path. The server creates the file if it is missing, or applies pending schema steps to an existing store, before serving. It refuses a store older than schema version 12 rather than upgrading it. |
+| `PHALANX_DB` | Server, `server initialize`/`backup`/`restore` | Explicit absolute SQLite path for supported launch/setup. Go refuses missing files, unsupported application/schema identity and non-DELETE journals; no startup migrations. New-store-only `server initialize` creates canonical schema26 offline and refuses existing files. Retained Python raw/admin path defaults are not the supported launch configuration. |
 | `PHALANX_HOME` | Direct discovery; API identity | Existing absolute muster directory, overridden by `--home` for clients. The API reports its configured home in `/v1/muster/status`; that identity must match the client's selected home. It does not choose `PHALANX_DB` or start any process. |
 | `PHALANX_SHIFT_CONFIG` | `shift` | Explicit shift JSON path when `--config` is absent. Explicit config preserves existing layouts and does not load the discovered `private.env`; an explicit `--home` selects the muster layout instead. |
 | `PHALANX_OWNER_TOKEN` | Server, owner CLI commands | Owner bearer token. |
@@ -82,6 +98,7 @@ timeline, see the [paginated API example](api.md#read-one-items-correlated-timel
 | `PHALANX_LOCAL_BOARD` | Server | Set to `1` only on a directly accessed, loopback-bound server to allow tokenless board reads and same-origin `/operator/api/` actions. Local Host and actual loopback peer are required; forwarding headers are rejected. All `/v1` writes retain bearer authorization. Leave unset on hosted servers, reverse proxies and tunnels. See [Work items](work-items.md#operator-work-board). |
 | `PHALANX_API_URL` | Owner CLI commands | API base URL; defaults to `http://127.0.0.1:8000`. `--api-url` before the command overrides it. |
 | `PHALANX_GITHUB_TOKEN` | Reconciler, `onboard`, `ingest-issue` | Local GitHub reads, onboarding CI discovery and issue import. Direct writers publish using their configured Git/GitHub credentials. |
+| `FORWARDED_ALLOW_IPS` | HTTP server | Trusted proxy peer IPs/networks; unset trusts only `127.0.0.1`, explicit empty trusts none, explicit `*` trusts all peers. Trusted forwarded scheme affects bearer same-origin checks and redirects, never tokenless local-board authority. Configure privately in the supervisor environment; this setting is not accepted by `private.env`'s current allowlist. |
 
 Use one server process per database and local storage. The server defaults to loopback HTTP; arrange HTTPS before exposing it beyond loopback. Rotate tokens by replacing the environment values and restarting the server.
 
