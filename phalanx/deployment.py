@@ -192,11 +192,20 @@ def add_deploy_command(commands):
     init.add_argument("--home", type=Path, help="new absolute directory (default: ~/.phalanx_muster)")
     init.add_argument("--api-url", help="client API URL (default: loopback at --port)")
     init.add_argument("--port", type=int, default=8000)
-    for name in ("check", "run", "cli"):
+    for name in ("check", "run", "cli", "supervise", "stop"):
         action = actions.add_parser(name)
         action.add_argument("--config", type=Path, help="explicit deployment.json, including existing layouts")
         action.add_argument("--home", help="existing home; otherwise PHALANX_HOME or locator")
-        if name == "run":
+        if name in ("supervise", "stop"):
+            action.add_argument("--task", required=True, help="exact existing Windows task path")
+            action.add_argument("--record", type=Path, required=True, help="private containment ownership record")
+            if name == "stop":
+                action.add_argument("--receipt", type=Path, required=True, help="new private stop receipt")
+            else:
+                action.add_argument("--engine", choices=("python", "go"),
+                                    help="overrides server.engine; otherwise uses the deploy run selection")
+                action.add_argument("--go-binary", type=Path)
+        elif name == "run":
             action.add_argument("service", choices=("server", "reconciler"))
             action.add_argument("--initialize-database", action="store_true")
             action.add_argument("--once", action="store_true")
@@ -217,6 +226,17 @@ def run_deploy(args):
         raise ValueError("Use either --config or --home")
     path = args.config if args.config is not None else resolve_home(args.home) / "deployment.json"
     config, env = configuration(path)
+    if args.deploy_command in ("supervise", "stop"):
+        from . import windows_supervisor
+
+        if args.deploy_command == "supervise":
+            return windows_supervisor.supervise(
+                path.resolve(), config, env, task=args.task, record=args.record,
+                engine=args.engine, go_binary=args.go_binary)
+        result = windows_supervisor.stop(
+            path.resolve(), config, env, task=args.task, record=args.record, receipt=args.receipt)
+        print(json.dumps(result, indent=2))
+        return 0
     if args.deploy_command == "check":
         database = env.get("PHALANX_DB", "")
         if not database or not Path(database).is_absolute() or not Path(database).is_file():

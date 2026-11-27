@@ -130,6 +130,8 @@ choose High/Realtime and fail visibly if Windows rejects the operation. Other pl
 CLI commands and writers are unchanged. Keep the supervisors correct too;
 the services do not edit tasks or other processes.
 
+[Windows API supervision](windows-api-supervisor.md).
+
 Git commands have a 60-second completion limit; timeout/interruption stops only their
 owned tree. Windows cleanup and direct-child reap each allow five seconds. Surface start/
 timeout/cleanup failures, including ref probes; only documented absent-ref exits mean
