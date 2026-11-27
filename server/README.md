@@ -212,6 +212,51 @@ Authoritative state decoding now refuses explicit-null publication mode before
 mutation; the named operator projections still return null without effects,
 and omitted mode retains its ready default.
 
+### Deployment retirement and incomplete-header regression
+
+The original unchanged Python writer regression
+`test_deployment_observations_refresh_flags_without_reopening_delivery` found
+a Go 500 when a heartbeat disabled a real latest deployment with
+`{"deployment_checks":{"repo":null}}`. Validation already accepted that null.
+Retirement removed the generated stored PR URL but revalidated the decoded
+object's stale original key list. The edited PR now uses its actual map keys;
+request validation still rejects a caller-supplied PR URL. The strengthened
+`reconciliation.py` uses a strictly earlier deployment timestamp, checks that
+the latest signal actually becomes disabled, retains complete before/after
+typed stores, and asserts every unrelated table stays unchanged. This avoids
+the former equal-timestamp fixture's vacuous success. Absent and null bodies,
+absent configuration, null per-repository names and refused malformed
+configuration retain the actual Python contract.
+
+**Unresolved compatibility gap, not an approved exception:** `headers.py`
+exercises P0, D0 and Go through their real production launchers on both schema
+shapes. Run from the repository root with the approved Python checks prefix:
+
+```text
+server\conformance\headers.py --binary <outside-checkout>\phalanx-server.exe --output <outside-checkout>\headers
+```
+
+The strict command currently fails for Go. `--record-only` preserves all
+observations without claiming parity. It retains exact request segments, raw
+replies, early-refusal timing, actual close, valid neighboring connections and
+every typed table/DDL before and after each request, including an authenticated
+mutation Python refuses without effects. The pinned Windows production parser
+is Uvicorn's h11 implementation: an incomplete receive event larger than
+16,384 bytes is refused with HTTP/1.1 400, plain-text
+`Invalid HTTP request received.` and `Connection: close` before the terminator.
+An event of exactly 16,384 bytes may wait; a complete oversized head in the same
+receive event can be accepted. Splitting at or below the boundary then
+coalescing the rest with the terminator differs from crossing it while still
+incomplete. Body and pipeline cases retain their measured receive-event
+segmentation; one client `sendall` is not proof of one server receive event.
+
+Go's global `MaxHeaderBytes` is not an equivalent fix. Neither a blanket size
+cap, a request deadline, a broader malformed-input exception nor a replacement
+parser is approved. A proposed framing observer must first resolve the
+existing adapter restriction and prove body/pipeline alignment and all prior
+first-byte idle, buffered-prefix, disconnect and drain contracts. Until that
+gap is resolved, this characterization is not Go replacement readiness.
+
 ## Native domain extension evidence (in development)
 
 The immutable foundation's 114 vectors and both golden files are unchanged.
@@ -229,7 +274,7 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `steering.py` | 22 on each schema shape | Version-fenced owner steering and rerun, exact receipt replay and unchanged scope on refusals |
 | `captains.py` | 41 on each schema shape | Lifecycle, current routing, reinforcement, session field-error ordering, preserved null/duplicate first-seen values and missing-key refusal |
 | `archives.py` | 14 on each schema shape | Active-ownership refusal, immutable terminal archive outcomes and authorization |
-| `reconciliation.py` | 76 on each schema shape | Exact observation digests/timestamps, immutable local checks, heartbeat/retirement, delivery handoff/Building fencing, ready-output enrichment, stop/merge precedence and deployment retirement |
+| `reconciliation.py` | 84 on each schema shape | Exact observation digests/timestamps, immutable local checks, heartbeat/retirement, delivery handoff/Building fencing, ready-output enrichment, stop/merge precedence and nonvacuous deployment retirement with null/absent/malformed configuration boundaries |
 | `datetimes.py` | 1,449 | Exact pinned aware-datetime coercion, serialization and error envelopes, including numeric precision, calendar/offset boundaries and deterministic randomized timestamps |
 | `usage.py` | 71 on each schema shape | Exact JSON storage, cumulative replay/monotonicity, attribution/scope, acquisition-gap retention, provided decimal quantities and late observations; every other durable table is unchanged |
 | `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |

@@ -307,6 +307,8 @@ func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request 
 						return errors.New("Stored deployment is not an object")
 					}
 					delete(pr, "url")
+					// Revalidate the edited values, not the decoded object's original key order.
+					body["pr"] = pr
 					deployment["state"], body["observed_at"] = "disabled", now
 					observation, issues := contract.ValidateObservation(body, contract.ObjectKeys(body))
 					if len(issues) != 0 {

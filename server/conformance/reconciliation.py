@@ -52,6 +52,7 @@ def cases():
             ("unmerged-merge-details", {**body, "pr": {**pull, "merged_at": STAMP}}),
             ("unmerged-deployment", {**body, "deployment": {"commit": MERGE, "check_name": "Deploy", "state": "pending"}}),
             ("future-observation", {**body, "observed_at": "9999-01-01T00:00:00Z"}),
+            ("generated-url-refused", {**body, "pr": {**pull, "url": URL}}),
             ("nested-errors", {"observed_at": None, "pr": {"number": True, "state": None,
                             "merged": [], "draft": None, "head_ref": "", "head_sha": "X",
                             "base_ref": None, "base_sha": "", "additions": -1}, "checks": "invalid",
@@ -91,8 +92,18 @@ def cases():
                            "merge_commit": MERGE, "merge_method": "merge", "merged_at": STAMP}}
     add("completed-ready-enriched", merged)
     add("completed-ready-enrichment-replay", merged)
-    add("delivered-deployment", {**merged, "deployment": {"commit": MERGE, "check_name": "Deploy", "state": "pending"}})
+    add("delivered-deployment", {**merged, "observed_at": "2026-01-02T03:04:04Z",
+                               "deployment": {"commit": MERGE, "check_name": "Deploy", "state": "pending"}},
+        clear_observations=True)
+    for name, config in (("absent", {}), ("null", {"deployment_checks": None}),
+                         ("object", {"deployment_checks": {"fixture": {}}}),
+                         ("list", {"deployment_checks": []}),
+                         ("boolean", {"deployment_checks": {"fixture": False}}),
+                         ("unknown", {"deployment_checks": {"fixture": None}, "extra": None})):
+        add("deployment-retirement-" + name, config, path="/v1/reconcilers/synthetic/heartbeat")
     add("deployment-config-retirement", {"deployment_checks": {"fixture": None}},
+        path="/v1/reconcilers/synthetic/heartbeat")
+    add("deployment-config-retirement-replay", {"deployment_checks": {"fixture": None}},
         path="/v1/reconcilers/synthetic/heartbeat")
     add("closed-checks-refused", {"head": HEAD}, path=base + "/local-checks")
     add("merged-stop-precedence", merged, delivery={"target": "checked_in", "stopping": "cancelled", "building": 1})
@@ -144,12 +155,27 @@ def differential(binary, output):
                         before = h.snapshot(database)
                         response = h.wire(url, case["method"], case["path"], case["headers"], case["body"])
                         after = h.snapshot(database)
-                        if response["status"] >= 400 and before != after:
-                            raise AssertionError("Observation refusal changed durable data: " + case["id"])
                         token = after["tables"]["operator_change"]["rows"][0][0]["value"]
                         tokens.setdefault(token, len(tokens))
-                        actual.append({"request": case, "response": response, "durable": after,
+                        actual.append({"request": case, "response": response, "before": before, "durable": after,
                                        "change_token_ordinal": tokens[token]})
+                        (output / f"reconciliation-{shape}-{label}.json").write_text(
+                            json.dumps(actual, ensure_ascii=True), encoding="utf-8")
+                        if case["id"] == "deployment-config-retirement":
+                            with closing(sqlite3.connect(database)) as db:
+                                payload, = db.execute(
+                                    "SELECT observation_json FROM github_observations "
+                                    "ORDER BY last_observed_at DESC,observed_at DESC LIMIT 1"
+                                ).fetchone()
+                            if json.loads(payload)["deployment"]["state"] != "disabled":
+                                raise AssertionError(f"{shape}/{label}: retirement did not disable deployment: {response}")
+                            for table in before["tables"]:
+                                if table in ("reconcilers", "github_observations", "operator_change"):
+                                    continue
+                                if before["tables"][table] != after["tables"][table]:
+                                    raise AssertionError("Retirement changed closed delivery: " + table)
+                        if response["status"] >= 400 and before != after:
+                            raise AssertionError("Observation refusal changed durable data: " + case["id"])
                 (output / f"reconciliation-{shape}-{label}.json").write_text(
                     json.dumps(actual, ensure_ascii=True), encoding="utf-8")
                 if expected is None:
