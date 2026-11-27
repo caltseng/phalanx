@@ -166,6 +166,29 @@ jobs:
           go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/conformance-lock" ./cmd/conformance-server
           python conformance/locks.py --binary "$RUNNER_TEMP/conformance-lock" --output "$RUNNER_TEMP/lock-proof"
 
+      - name: Compare production proxy and home identity on Unix
+        if: runner.os != 'Windows'
+        working-directory: server
+        run: |
+          go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/phalanx-server" ./cmd/phalanx-server
+          python conformance/identity.py --binary "$RUNNER_TEMP/phalanx-server" --output "$RUNNER_TEMP/identity-proof"
+
+      - name: Compare production proxy and home identity on Windows
+        if: runner.os == 'Windows'
+        working-directory: server
+        run: |
+          go build -trimpath -buildvcs=false -o "$env:RUNNER_TEMP\identity-server.exe" ./cmd/phalanx-server
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:PHALANX_CONFORMANCE_PYTHON conformance\identity.py --binary "$env:RUNNER_TEMP\identity-server.exe" --output "$env:RUNNER_TEMP\identity-proof"
+
+      - name: Preserve production proxy and identity evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: go-identity-${{ matrix.os }}
+          path: ${{ runner.temp }}/identity-proof
+          if-no-files-found: error
+
       - name: Prove actual Python-Go sole locks on Windows
         if: runner.os == 'Windows'
         working-directory: server

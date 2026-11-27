@@ -29,14 +29,20 @@ var revision = "unversioned"
 
 type configuration struct {
 	database, owner, runner, assets, host string
+	forwardedAllowIPs                     string
 	home                                  *string
 	port                                  int
 	localBoard                            bool
 }
 
-func configure(host string, port int, assets string, getenv func(string) string) (configuration, error) {
+func configure(host string, port int, assets string, lookup func(string) (string, bool)) (configuration, error) {
+	getenv := func(key string) string { value, _ := lookup(key); return value }
 	config := configuration{host: host, port: port, assets: assets,
-		database: getenv("PHALANX_DB"), owner: getenv("PHALANX_OWNER_TOKEN"), runner: getenv("PHALANX_RUNNER_TOKEN")}
+		database: getenv("PHALANX_DB"), owner: getenv("PHALANX_OWNER_TOKEN"), runner: getenv("PHALANX_RUNNER_TOKEN"),
+		forwardedAllowIPs: "127.0.0.1"}
+	if value, present := lookup("FORWARDED_ALLOW_IPS"); present {
+		config.forwardedAllowIPs = value
+	}
 	if host != "127.0.0.1" && host != "::1" && host != "localhost" {
 		return config, errors.New("Server host must be loopback; retain the existing TLS proxy")
 	}
@@ -62,8 +68,10 @@ func configure(host string, port int, assets string, getenv func(string) string)
 	default:
 		return config, errors.New("PHALANX_LOCAL_BOARD must be 1 to open the local board, or 0 or unset")
 	}
-	if home := getenv("PHALANX_HOME"); home != "" {
-		config.home = &home
+	var err error
+	config.home, err = configuredHome(getenv("PHALANX_HOME"), lookup)
+	if err != nil {
+		return config, fmt.Errorf("Cannot resolve PHALANX_HOME: %w", err)
 	}
 	if !filepath.IsAbs(assets) {
 		return config, errors.New("Server requires an absolute packaged assets directory")
@@ -98,7 +106,7 @@ func main() {
 		}
 		return
 	}
-	config, err := configure(*host, *port, *assets, os.Getenv)
+	config, err := configure(*host, *port, *assets, os.LookupEnv)
 	if err == nil {
 		err = foregroundPriority()
 	}
@@ -132,8 +140,9 @@ func serve(ctx context.Context, config configuration) (result error) {
 		return err
 	}
 	server := &http.Server{
-		Handler: &httpapi.Handler{App: app, Owner: config.owner, Runner: config.runner,
+		Handler: httpapi.ProxyHeaders(&httpapi.Handler{App: app, Owner: config.owner, Runner: config.runner,
 			Logger: slog.Default(), Home: config.home, LocalBoard: config.localBoard, AssetsDirectory: config.assets},
+			config.forwardedAllowIPs),
 		IdleTimeout: 5 * time.Second,
 		ConnState:   idleState,
 		// h11 bounds incomplete events, not the number of fields in a complete one.
