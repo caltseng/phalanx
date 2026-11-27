@@ -11,14 +11,9 @@ import tempfile
 import time
 from urllib.parse import unquote, urlsplit
 
+from .file_lock import lock as _lock
 from .git import git_text
 from .transitions import item_branch
-
-if os.name == "nt":
-    import msvcrt
-else:
-    import fcntl
-
 
 class WorkspaceError(RuntimeError):
     """Workspace preparation, verification, or cleanup could not proceed."""
@@ -92,15 +87,6 @@ def _item_branch(item_id: str) -> str:
     if not item_id:
         raise WorkspaceError("A work item ID is required")
     return item_branch(item_id)
-
-
-def _lock(handle) -> None:
-    """Take a nonblocking exclusive lock on an open file; raise OSError when held."""
-    if os.name == "nt":
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    else:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 @contextmanager

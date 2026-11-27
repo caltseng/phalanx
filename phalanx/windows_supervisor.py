@@ -459,7 +459,9 @@ def supervise(config_path, config, env, *, task, record, engine, go_binary):
         job = Job(native)
         stack.callback(job.close)
         command = [sys.executable, "-P", "-m", "phalanx", "deploy", "run",
-                   "--config", str(config_path), "server", "--engine", engine]
+                   "--config", str(config_path), "server"]
+        if engine is not None:
+            command.extend(["--engine", engine])
         if go_binary is not None:
             command.extend(["--go-binary", str(go_binary)])
         root_pid = job.launch(command, env, Path.cwd())

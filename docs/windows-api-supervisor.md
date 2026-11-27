@@ -20,7 +20,9 @@ python -P -m phalanx deploy supervise --config D:\muster\deployment.json `
 ```
 
 Use the installed, pinned interpreter/package, not an incidental checkout import.
-Python remains the default engine. The action must be a single absolute executable
+Engine/package selection delegates unchanged to `deploy run`: CLI overrides saved
+configuration, then the supported Go default; Python requires an explicit temporary
+rollback selection. The action must be a single absolute executable
 action in the supervisor's proven native ancestor chain, with exactly one running
 instance. Asynchronous shells which exit before that association is captured are
 not a supported launch contract. The task engine is an association check only;

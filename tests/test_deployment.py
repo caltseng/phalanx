@@ -65,6 +65,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertEqual(home, self.root / ".phalanx_muster")
         config = json.loads((home / "deployment.json").read_text())
         self.assertEqual(config["server"]["port"], 8765)
+        self.assertEqual(config["server"]["engine"], "go")
         self.assertEqual(Path(config["reconciler_state"]), home / "reconciler")
         self.assertFalse((home / "private.env").exists())
         self.assertFalse((home / "db").exists())
@@ -187,7 +188,7 @@ class DeploymentTest(unittest.TestCase):
             database.write_bytes(b"existing database identity")
             with any_file_lock([database.with_name(database.name + ".service.lock")]):
                 with self.assertRaisesRegex(ValueError, "already owns"):
-                    deployment.run_service(config, env, "server", serve=Mock())
+                    deployment.run_service(config, env, "server", engine="python", serve=Mock())
             call.assert_not_called()
             with self.assertRaisesRegex(ValueError, "only for a new"):
                 deployment.run_service(config, env, "server", initialize_database=True)
@@ -204,7 +205,7 @@ class DeploymentTest(unittest.TestCase):
             self.assertEqual(call.call_args.kwargs["env"], env)
             serve = Mock()
             self.assertEqual(deployment.run_service(
-                config, env, "server", initialize_database=True, serve=serve), 0)
+                config, env, "server", engine="python", initialize_database=True, serve=serve), 0)
             serve.assert_called_once_with(host="127.0.0.1", port=8000)
             with patch("sys.argv", ["phalanx", "deploy", "cli", "--config",
                                    str(home / "deployment.json"), "--", "shift", "status"]):
@@ -228,11 +229,11 @@ class DeploymentTest(unittest.TestCase):
         serve = Mock()
         with patch.object(deployment, "any_file_lock", side_effect=acquire):
             with self.assertRaisesRegex(ValueError, "disappeared before startup"):
-                deployment.run_service(config, env, "server", serve=serve)
+                deployment.run_service(config, env, "server", engine="python", serve=serve)
         serve.assert_not_called()
         self.assertFalse(database.exists())
 
-    def test_go_engine_is_explicit_and_child_owns_the_existing_lock(self):
+    def test_go_default_and_explicit_engine_child_owns_the_existing_lock(self):
         home = self.install()
         config, env = deployment.configuration(home / "deployment.json")
         database = Path(env["PHALANX_DB"])
@@ -241,15 +242,16 @@ class DeploymentTest(unittest.TestCase):
         binary = self.root / "versioned-package" / "phalanx-server.exe"
         binary.parent.mkdir()
         binary.write_bytes(b"synthetic executable")
-        with patch.object(deployment, "any_file_lock") as lock, \
-                patch.object(deployment.subprocess, "call", return_value=7) as call:
-            self.assertEqual(deployment.run_service(
-                config, env, "server", engine="go", go_binary=binary), 7)
-            call.assert_called_once_with([
-                str(binary), "--host", "127.0.0.1", "--port", "8000",
-                "--assets", str(binary.parent / "assets")], env=env)
-            lock.assert_not_called()
-            self.assertEqual(database.read_bytes(), b"existing database")
+        for selected in (None, "go"):
+            with self.subTest(engine=selected), patch.object(deployment, "any_file_lock") as lock, \
+                    patch.object(deployment.subprocess, "call", return_value=7) as call:
+                self.assertEqual(deployment.run_service(
+                    config, env, "server", engine=selected, go_binary=binary), 7)
+                call.assert_called_once_with([
+                    str(binary), "--host", "127.0.0.1", "--port", "8000",
+                    "--assets", str(binary.parent / "assets")], env=env)
+                lock.assert_not_called()
+                self.assertEqual(database.read_bytes(), b"existing database")
         for options in (
                 {"engine": "go"}, {"engine": "python", "go_binary": binary},
                 {"engine": "go", "go_binary": Path("relative.exe")},
@@ -260,6 +262,59 @@ class DeploymentTest(unittest.TestCase):
                 call.assert_not_called()
         with self.assertRaisesRegex(ValueError, "only to the server"):
             deployment.run_service(config, env, "reconciler", engine="go", go_binary=binary)
+
+    def test_saved_engine_is_preserved_and_cli_overrides_without_writing_config(self):
+        home = self.install()
+        path = home / "deployment.json"
+        config = json.loads(path.read_text())
+        database = home / "db" / "phalanx.sqlite3"
+        database.parent.mkdir()
+        database.write_bytes(b"existing database")
+        binary = self.root / "phalanx-server.exe"
+        binary.write_bytes(b"synthetic executable")
+        config["server"].update(engine="python", go_binary=str(binary))
+        path.write_text(json.dumps(config))
+        before = path.read_bytes()
+        with patch("sys.argv", ["phalanx", "deploy", "run", "--config", str(path), "server"]), \
+                patch("phalanx.server_admin.serve") as serve, \
+                patch.object(deployment.subprocess, "call") as call:
+            main()
+            serve.assert_called_once_with(host="127.0.0.1", port=8000)
+            call.assert_not_called()
+        for arguments in (["--engine", "go"], ["--engine", "go", "--go-binary", str(binary)]):
+            with self.subTest(arguments=arguments), \
+                    patch("sys.argv", ["phalanx", "deploy", "run", "--config", str(path),
+                                       "server", *arguments]), \
+                    patch("phalanx.server_admin.serve") as serve, \
+                    patch.object(deployment.subprocess, "call", return_value=0) as call:
+                main()
+                serve.assert_not_called()
+                self.assertEqual(call.call_args.args[0][0], str(binary))
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(database.read_bytes(), b"existing database")
+
+    def test_legacy_config_without_engine_defaults_go_and_never_falls_back(self):
+        home = self.install()
+        path = home / "deployment.json"
+        config = json.loads(path.read_text())
+        del config["server"]["engine"]
+        path.write_text(json.dumps(config))
+        actual, env = deployment.configuration(path)
+        database = Path(env["PHALANX_DB"])
+        database.parent.mkdir()
+        database.write_bytes(b"existing database")
+        before = path.read_bytes()
+        with patch.object(deployment.subprocess, "call") as call:
+            serve = Mock()
+            with self.assertRaisesRegex(ValueError, "no Python fallback"):
+                deployment.run_service(actual, env, "server", serve=serve)
+            call.assert_not_called()
+            serve.assert_not_called()
+            self.assertEqual(deployment.run_service(
+                actual, env, "server", engine="python", serve=serve), 0)
+            serve.assert_called_once()
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(database.read_bytes(), b"existing database")
 
     def test_read_only_check_has_no_service_or_database_side_effects(self):
         home = self.install()
@@ -285,6 +340,8 @@ class DeploymentTest(unittest.TestCase):
             {**config, "environment_file": "relative.env"},
             {**config, "server": {"host": "0.0.0.0", "port": 8000}},
             {**config, "server": {"host": "127.0.0.1", "port": True}},
+            {**config, "server": {"host": "127.0.0.1", "port": 8000, "engine": None}},
+            {**config, "server": {"host": "127.0.0.1", "port": 8000, "go_binary": "relative"}},
             {**config, "token": "never-display"},
         ):
             path.write_text(json.dumps(invalid))
@@ -304,6 +361,7 @@ class DeploymentTest(unittest.TestCase):
         path = home / "deployment.json"
         config = json.loads(path.read_text())
         config["server"]["port"] = port
+        config["server"]["engine"] = "python"
         path.write_text(json.dumps(config))
         env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
         command = [sys.executable, "-m", "phalanx", "deploy", "run",

@@ -100,7 +100,7 @@ class IdentityTest(unittest.TestCase):
             self.assertEqual(result["request_outcomes"], "transport-unknown")
 
     def test_supervise_keeps_server_engine_separate_from_task_engine_identity(self):
-        for selected in ("python", "go"):
+        for selected in (None, "python", "go"):
             with self.subTest(engine=selected), TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
                 database = root / "synthetic.sqlite3"
@@ -125,7 +125,10 @@ class IdentityTest(unittest.TestCase):
                                        {"PHALANX_DB": str(database)}, task="\\synthetic",
                                        record=root / "record.json", engine=selected, go_binary=None)
                 command = job.launch.call_args.args[0]
-                self.assertEqual(command[command.index("--engine") + 1], selected)
+                if selected is None:
+                    self.assertNotIn("--engine", command)
+                else:
+                    self.assertEqual(command[command.index("--engine") + 1], selected)
                 self.assertEqual(code, 17)
 
 
