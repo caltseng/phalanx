@@ -282,8 +282,12 @@ authority. Buffered read-ahead does not count as new idle input, and native
 pending-read aborts are transient, not cached connection failures. The native
 500-field default is disabled because Python accepts complete multi-field
 events above that count; no new global byte/count limit or timeout is added.
+The current-head first byte also follows h11's early control/space refusal;
+otherwise native Go's POST CR/LF tolerance can silently bypass observation.
+This check applies only at head boundaries, never to fixed/chunked body bytes.
 
-The corpus includes 29 header boundary/segmentation/body/pipeline cases, the
+The corpus includes 29 header boundary/segmentation/body/pipeline cases, 26
+initial/post-body/coalesced CR/LF/space/tab boundary cases, the
 18 unchanged framework requests with their exact v12 classifications, full
 typed-store refusal checks, and a valid same-key intake receipt after a refused
 request. Raw response bytes remain recorded; only the existing generated
@@ -291,6 +295,16 @@ Date/Server/length/chunk-framing allowances are used for semantic comparison.
 Original first-byte idle, buffered-prefix, body, disconnect, lock and drain
 checks remain required alongside exact-head independent review and fresh CI.
 An authorized experiment or source merge is not deployment readiness.
+
+**The observer prototype remains blocked on refused-connection delivery.**
+Repeated real Windows entrypoint requests with coalesced body/next-head input
+exposed TCP resets that can discard the 400 or the entire response, while both
+pinned Python implementations delivered complete replies. A direct Windows
+`SHUT_RDWR`-before-close experiment did not eliminate that loss and was removed.
+Keep the raw responses, reset errors, complete typed stores and exact repetition
+manifest. Do not treat a single passing matrix or package run as resolving the
+reproducible closure discrepancy, add an arbitrary close delay/drain deadline,
+or broaden the transport experiment without an explicit decision.
 
 ## Native domain extension evidence (in development)
 

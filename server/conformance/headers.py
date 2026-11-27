@@ -63,6 +63,81 @@ def cases():
     return result
 
 
+def post_prefix_cases():
+    prefixes = [("leading-cr", b"\r"), ("leading-lf", b"\n"),
+                ("leading-crlf", b"\r\n"), ("leading-space", b" "),
+                ("leading-tab", b"\t"),
+                ("prefixed-get", b"\r\nGET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")]
+    return [(f"{context}/{name}", prefix, context)
+            for context in ("initial", "post-empty", "post-fixed", "post-chunked",
+                            "coalesced-fixed", "coalesced-chunked")
+            for name, prefix in prefixes
+            if context == "post-empty" or name not in ("leading-crlf", "prefixed-get")]
+
+
+def paused_response(client, timeout=.3):
+    client.settimeout(timeout)
+    raw, closed, close_error = b"", False, None
+    while True:
+        try:
+            block = client.recv(65536)
+        except TimeoutError:
+            break
+        except (ConnectionResetError, ConnectionAbortedError) as error:
+            closed = True
+            close_error = repr(error)
+            break
+        if not block:
+            closed = True
+            break
+        raw += block
+    return raw, closed, close_error
+
+
+def post_prefixes(url, database):
+    target = urlsplit(url)
+    result = []
+    initial = f"POST /health HTTP/1.1\r\nHost: {target.netloc}\r\n".encode()
+    body = b'{"paused":false}'
+    oversized = ((f"PUT /v1/dispatch/settings HTTP/1.1\r\nHost: {target.netloc}\r\n"
+                  f"Authorization: Bearer {h.OWNER}\r\nContent-Type: application/json\r\n"
+                  f"Content-Length: {len(body)}\r\nConnection: close\r\nX-Boundary: ").encode()
+                 + b"x" * 17000)
+    for name, prefix, context in post_prefix_cases():
+        if context == "initial":
+            requests = (prefix, oversized)
+        else:
+            if context.endswith("fixed"):
+                first = initial + b"Content-Length: 2\r\n\r\n{}"
+            elif context.endswith("chunked"):
+                first = initial + b"Transfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n"
+            else:
+                first = initial + b"Content-Length: 0\r\n\r\n"
+            requests = (first + prefix, oversized) if context.startswith("coalesced") else (first, prefix, oversized)
+        stages = []
+        with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+            for index, request in enumerate(requests):
+                before = h.snapshot(database)
+                client.sendall(request)
+                raw, closed, close_error = paused_response(client)
+                early = raw
+                suffix = b""
+                if index == len(requests) - 1 and not raw and not closed:
+                    suffix = b"\r\n\r\n" + body
+                    client.sendall(suffix)
+                    raw, closed, close_error = paused_response(client, timeout=10)
+                after = h.snapshot(database)
+                stages.append({"request_hex": request.hex(), "suffix_hex": suffix.hex(),
+                               "early_raw_hex": early.hex(), "raw_hex": raw.hex(),
+                               "responses": comparable_responses(raw), "closed": closed,
+                               "close_error": close_error,
+                               "before": before, "after": after, "durable_unchanged": before == after})
+                if closed:
+                    break
+        result.append({"id": name, "stages": stages})
+    return result
+
+
 def exchange(url, case):
     name, size, split, terminator, mutation = case
     target = urlsplit(url)
@@ -104,6 +179,7 @@ def exchange(url, case):
         parts[0] = previous + parts[0]
     raw = b""
     early = False
+    closed, close_error = False, None
     started = time.monotonic()
     first_elapsed = None
     with socket.create_connection((target.hostname, target.port), timeout=10) as client:
@@ -115,21 +191,25 @@ def exchange(url, case):
                     block = client.recv(65536)
                 except TimeoutError:
                     break
+                except (ConnectionResetError, ConnectionAbortedError) as error:
+                    closed, close_error = True, repr(error)
+                    break
                 if not block:
+                    closed = True
                     break
                 if not raw:
                     first_elapsed = time.monotonic() - started
                 raw += block
             early = b"HTTP/1.1 400 " in raw
         client.settimeout(10)
-        if not early and len(parts) == 2:
+        if not early and not closed and len(parts) == 2:
             client.sendall(parts[1])
-        closed = False
-        while True:
+        while not closed:
             try:
                 block = client.recv(65536)
-            except (ConnectionResetError, ConnectionAbortedError):
+            except (ConnectionResetError, ConnectionAbortedError) as error:
                 closed = True
+                close_error = repr(error)
                 break
             if not block:
                 closed = True
@@ -141,6 +221,7 @@ def exchange(url, case):
     return {"id": name, "parts_hex": [part.hex() for part in parts], "early": early,
             "first_response_seconds": first_elapsed, "total_seconds": time.monotonic() - started,
             "closed": closed, "raw_response": raw.decode("latin1"),
+            "close_error": close_error,
             "refusals_hex": [part.hex() for part in refusals],
             "responses": comparable_responses(raw),
             "statuses": [int(status) for status in re.findall(rb"HTTP/1\.[01] (\d{3}) ", raw)],
@@ -177,6 +258,8 @@ def differential(binary, output, record_only=False):
                         framing.append({"case": case, "response": response, "before": before, "after": after})
                         if before != after:
                             failures.append(f"{shape}/{label}/{case['id']}: native framing changed durable state")
+                    prefixes = post_prefixes(url, database)
+                    (output / f"post-prefixes-{shape}-{label}.json").write_text(json.dumps(prefixes), encoding="utf-8")
                     neighbor = h.wire(url, "GET", "/health", [], "")
                     if neighbor["status"] != 200 or neighbor["json"] != {"status": "ok"}:
                         raise AssertionError("Refusal affected a valid neighboring connection")
@@ -199,6 +282,7 @@ def differential(binary, output, record_only=False):
                 if expected is None:
                     expected = actual
                     expected_framing = framing
+                    expected_prefixes = prefixes
                 for first, second in zip(expected, actual, strict=True):
                     for key in ("responses", "early", "closed", "durable_unchanged"):
                         if first[key] != second[key]:
@@ -211,6 +295,13 @@ def differential(binary, output, record_only=False):
                         target = framework.comparable(first["response"])
                     if framework.comparable(second["response"]) != target:
                         failures.append(f"{shape}/{label}/{second['case']['id']}: native framing precedence changed")
+                for first, second in zip(expected_prefixes, prefixes, strict=True):
+                    if len(first["stages"]) != len(second["stages"]):
+                        failures.append(f"{shape}/{label}/{second['id']}: malformed prefix did not close at its boundary")
+                    for before, after in zip(first["stages"], second["stages"]):
+                        for key in ("responses", "closed", "durable_unchanged"):
+                            if before[key] != after[key]:
+                                failures.append(f"{shape}/{label}/{second['id']}/{key}: prefix alignment differs")
                 print(f"{shape}/{label}: {len(actual)} production header cases recorded", flush=True)
     (output / "failures.json").write_text(json.dumps(failures, indent=2), encoding="utf-8")
     if failures and not record_only:

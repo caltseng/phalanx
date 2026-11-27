@@ -74,6 +74,11 @@ func (g *headEvents) receive(data []byte) bool {
 			return true
 		case headFields:
 			g.fields = append(g.fields, data...)
+			// h11 refuses this first byte even before a line is complete.
+			// net/http otherwise tolerates leading CR/LF after POST.
+			if g.fields[0] < 0x21 {
+				return false
+			}
 			end := blankLine(g.fields)
 			if end == 0 {
 				return len(g.fields) <= incompleteHeadLimit

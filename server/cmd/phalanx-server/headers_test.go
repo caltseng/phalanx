@@ -166,3 +166,26 @@ func TestHeadReadAheadRetainsBufferedPrefixExpiry(t *testing.T) {
 		t.Fatal("read-ahead was incorrectly counted as new idle input", err)
 	}
 }
+
+func TestCurrentHeadControlPrefixRefusesBeforeNativePostTolerance(t *testing.T) {
+	for _, prefix := range []string{"\r", "\n", "\r\n", " ", "\t"} {
+		guard := headEvents{}
+		if guard.receive([]byte(prefix)) {
+			t.Fatal("initial incomplete invalid request line was accepted", []byte(prefix))
+		}
+		for _, request := range []string{
+			"POST /health HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n",
+			"POST /health HTTP/1.1\r\nHost: localhost\r\nContent-Length: 6\r\n\r\n \r\n\t{}",
+			"POST /health HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n6\r\n \r\n\t{}\r\n0\r\n\r\n",
+		} {
+			guard = headEvents{}
+			if !guard.receive([]byte(request)) || !guard.idle() || guard.receive([]byte(prefix)) {
+				t.Fatal("post-body prefix was not refused at the next head boundary", []byte(prefix))
+			}
+			guard = headEvents{}
+			if !guard.receive([]byte(request+prefix)) || guard.idle() {
+				t.Fatal("coalesced prefix was not deferred until native idle", []byte(prefix))
+			}
+		}
+	}
+}

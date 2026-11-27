@@ -179,6 +179,7 @@ def vector_manifest():
                               "request_count": len(framework.cases())},
                 "headers": {"request_ids": [case[0] for case in headers.cases()],
                             "request_count": len(headers.cases()),
+                            "post_prefix_request_ids": [case[0] for case in headers.post_prefix_cases()],
                             "production_framework_count": len(framework.cases()),
                             "receipt_neighbor": "header-refusal-neighbor"},
                 "rehearsal": {"reference_packages": ["P0", "D0"], "schema_shapes": ["fresh", "retained"],

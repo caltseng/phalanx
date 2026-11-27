@@ -67,7 +67,7 @@ idle peek, including retained expiry for already buffered partial prefixes.
 Windows corrects only the service's own inherited Idle/BelowNormal priority to
 Normal, preserving higher priorities.
 
-The separately authorized incomplete-header observer preserves the pinned
+The separately authorized incomplete-header observer experiment targets the pinned
 h11 receive-event boundary, not a blanket 16 KiB header limit. Complete
 coalesced oversized heads remain valid; an incomplete event above 16,384
 bytes returns the pinned early 400/close without dispatch or durable effects.
@@ -78,6 +78,9 @@ Native `net/http` still parses unchanged request bytes; this adds no request,
 body, idle or drain deadline and no new byte/count cap. The owner-authorized
 experiment requires independent exact-head review and fresh required CI,
 not merely a passing anonymous health probe.
+It is currently **blocked for adoption** by repeated Windows refusal-response
+loss; see the [retained closure discrepancy](../server/README.md#deployment-retirement-and-incomplete-header-regression).
+Passing single package runs do not supersede that failing regression.
 Drain failures retain the actual response, lock-probe elapsed time and complete
 typed after-state; diagnostic capture does not change the workload, lock
 assertions, busy timeout or required successful drain.
