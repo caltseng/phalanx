@@ -2,7 +2,7 @@
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 import json
 import math
 import os
@@ -154,7 +154,7 @@ def release(package, output):
                         raise AssertionError("Two real Go servers acquired authority")
                     (output / f"go-{retained}-{reference}.json").write_text(
                         json.dumps({"response": response, "durable": h.snapshot(database), "pid": process.pid}), encoding="utf-8")
-                    with sqlite3.connect(database, isolation_level=None) as blocker:
+                    with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
                         blocker.execute("BEGIN EXCLUSIVE")
                         with ThreadPoolExecutor(max_workers=1) as caller:
                             pending = caller.submit(h.mutation, url, body, "drain-" + reference)
