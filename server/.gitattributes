@@ -3,6 +3,8 @@
 *.mod text eol=lf
 *.sum text eol=lf
 *.json text eol=lf
+*.sql text eol=lf
+internal/testdb/schema.sql whitespace=-trailing-space
 *.html text eol=lf
 internal/httpapi/contract-docs/*.html whitespace=-trailing-space,-blank-at-eof
 *.md text eol=lf
