@@ -3,14 +3,11 @@ package httpapi
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +15,7 @@ import (
 	"github.com/caltseng/phalanx/server/internal/application"
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
+	"github.com/caltseng/phalanx/server/internal/testdb"
 )
 
 func fixtureApp(t *testing.T) *application.App {
@@ -27,34 +25,8 @@ func fixtureApp(t *testing.T) *application.App {
 
 func fixtureAppDatabase(t *testing.T) (*application.App, string) {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "conformance", "golden-fresh.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var golden struct {
-		Schema struct {
-			DDL [][]*string `json:"ddl"`
-		} `json:"schema"`
-	}
-	if err := json.Unmarshal(data, &golden); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(t.TempDir(), "fixture.sqlite3")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	for _, kind := range []string{"table", "index", "trigger"} {
-		for _, ddl := range golden.Schema.DDL {
-			if *ddl[0] == kind && ddl[3] != nil {
-				if _, err := db.Exec(*ddl[3]); err != nil {
-					t.Fatal(err)
-				}
-			}
-		}
-	}
-	if _, err := db.Exec("PRAGMA application_id=1346915416; PRAGMA user_version=26"); err != nil {
+	path, db := testdb.New(t)
+	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
 	store, err := sqlite.Open(path)

@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"testing"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/caltseng/phalanx/server/internal/application"
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
+	"github.com/caltseng/phalanx/server/internal/testdb"
 )
 
 func pendingReport(t *testing.T, app *application.App, path string, stage application.Stage, markdown string) (string, string) {
@@ -39,11 +39,7 @@ func pendingReport(t *testing.T, app *application.App, path string, stage applic
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testdb.Open(t, path)
 	tx, err := db.Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -71,12 +67,9 @@ func pendingReport(t *testing.T, app *application.App, path string, stage applic
 func TestFinalizationSavepointBackoffAndOwnerRecovery(t *testing.T) {
 	app, path := fixtureAppDatabase(t)
 	itemID, executionID := pendingReport(t, app, path, application.ReportDrafting, "# Reviewed Unicode \u96ea\n")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testdb.Open(t, path)
 	var current *sqlite.Execution
+	var err error
 	for failure := int64(1); failure <= 5; failure++ {
 		before := time.Now().Unix()
 		current, err = app.FinalizeAttempt(context.Background(), executionID)
@@ -167,11 +160,7 @@ func TestReportFinalizationResumesFromExistingIntent(t *testing.T) {
 func TestFinalizationJobDeleteFaultRollsBackReportAndClosure(t *testing.T) {
 	app, path := fixtureAppDatabase(t)
 	_, executionID := pendingReport(t, app, path, application.ReportStorage, "# Durable job \u96ea\n")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testdb.Open(t, path)
 	if _, err := db.Exec(`CREATE TRIGGER abort_job_delete BEFORE DELETE ON report_finalizations
 			BEGIN SELECT RAISE(ABORT,'injected finalization deletion failure'); END`); err != nil {
 		t.Fatal(err)
@@ -224,11 +213,7 @@ func TestReportFinalizationRefreshesDependenciesWithoutAdvancingTheirVersion(t *
 	if err := json.Unmarshal(raw, &item); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testdb.Open(t, path)
 	retryAt := time.Now().Add(time.Hour).UnixMilli()
 	if _, err := db.Exec("UPDATE executions SET retry_at=? WHERE id=?", retryAt, item.Execution.ID); err != nil {
 		t.Fatal(err)
