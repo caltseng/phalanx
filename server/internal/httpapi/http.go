@@ -279,6 +279,11 @@ func bodyRoute(kind string) bool {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.ProtoMajor == 1 && r.ProtoMinor == 0 {
+		// Parsing is complete; net/http serializes the reply from these fields.
+		r.Proto, r.ProtoMinor = "HTTP/1.1", 1
+		w.Header().Set("Connection", "close")
+	}
 	route, allowed := match(r.URL.Path, r.Method)
 	if route.kind == "" {
 		// Starlette's trailing-slash redirect is performed before dependencies.

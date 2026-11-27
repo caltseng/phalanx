@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -15,6 +16,17 @@ import (
 )
 
 func readState(data json.RawMessage) (State, error) {
+	var defaults struct {
+		Status          json.RawMessage `json:"status"`
+		PublicationMode json.RawMessage `json:"publication_mode"`
+	}
+	if err := json.Unmarshal(data, &defaults); err != nil {
+		return State{}, err
+	}
+	if bytes.Equal(bytes.TrimSpace(defaults.Status), []byte("null")) ||
+		bytes.Equal(bytes.TrimSpace(defaults.PublicationMode), []byte("null")) {
+		return State{}, errors.New("Invalid null stored execution default")
+	}
 	state := State{Status: Queued, PublicationMode: ReadyMode}
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, err

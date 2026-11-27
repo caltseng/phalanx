@@ -161,7 +161,16 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	if !exists {
 		mode = "ready"
 	}
-	state, err := readState([]byte(row.StateJSON))
+	stateData := row.StateJSON
+	if exists && mode == nil {
+		// The read projection preserves null; it must not authorize a mutation.
+		fields["publication_mode"] = "ready"
+		stateData, err = contract.Canonical(fields)
+		if err != nil {
+			return nil, err
+		}
+	}
+	state, err := readState([]byte(stateData))
 	if err != nil {
 		return nil, err
 	}

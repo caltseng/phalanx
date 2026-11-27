@@ -85,6 +85,50 @@ func writerStore(t *testing.T, total, building int64) (*App, *sql.DB) {
 	return New(store), db
 }
 
+func TestWriterRegistrationRefusesNullStoredDefaultsWithoutEffects(t *testing.T) {
+	for _, field := range []string{"publication_mode"} {
+		t.Run(field, func(t *testing.T) {
+			app, db := writerStore(t, 1, 1)
+			if _, err := db.Exec("UPDATE executions SET state_json=json_set(state_json,?,NULL) WHERE id='execution'", "$."+field); err != nil {
+				t.Fatal(err)
+			}
+			var before, after string
+			if err := db.QueryRow("SELECT state_json FROM executions WHERE id='execution'").Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			_, err := app.RegisterWriter(context.Background(), "up", "execution", contract.WriterRegistration{
+				ExpectedVersion: "1", CaptainID: "captain", Runtime: "synthetic-runtime",
+				Nonce: "synthetic-null-0001", TokenDigest: contract.Digest("null-token")})
+			if err == nil {
+				t.Fatal("null authoritative state permitted writer registration")
+			}
+			var version, writers, attempts, history int
+			if err := db.QueryRow(`SELECT version,state_json,(SELECT count(*) FROM writers),
+				(SELECT count(*) FROM attempts),(SELECT count(*) FROM transition_history)
+				FROM executions WHERE id='execution'`).Scan(&version, &after, &writers, &attempts, &history); err != nil {
+				t.Fatal(err)
+			}
+			if before != after || version != 1 || writers != 0 || attempts != 0 || history != 0 {
+				t.Fatal("refused registration changed state/grants/history", version, writers, attempts, history)
+			}
+			if _, err := db.Exec("UPDATE executions SET state_json=json_remove(state_json,?) WHERE id='execution'", "$."+field); err != nil {
+				t.Fatal(err)
+			}
+			registered, err := app.RegisterWriter(context.Background(), "up", "execution", contract.WriterRegistration{
+				ExpectedVersion: "1", CaptainID: "captain", Runtime: "synthetic-runtime",
+				Nonce: "synthetic-null-0001", TokenDigest: contract.Digest("null-token")})
+			if err != nil {
+				t.Fatal("omitted publication mode no longer permits defaulted registration", err)
+			}
+			row, _, _ := decodeBinding(t, registered)
+			state, err := readState(row.State)
+			if err != nil || state.PublicationMode != ReadyMode {
+				t.Fatal("omitted mode did not preserve the authoritative ready default", state, err)
+			}
+		})
+	}
+}
+
 func decodeBinding(t *testing.T, raw json.RawMessage) (sqlite.Execution, string, *string) {
 	t.Helper()
 	var result struct {

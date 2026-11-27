@@ -17,8 +17,11 @@ def cases():
         "operator-group": "/v1/operator/groups/synthetic-group",
         "operator-timeline": "/v1/operator/executions/" + h.SEED_EXECUTION + "/timeline",
     }
-    return [{"id": name + "/" + mode, "path": path, "mode": mode}
-            for name, path in routes.items() for mode in ("omitted", "ready", "draft", "null", "missing-target", "invalid-wait")]
+    reads = [{"id": name + "/" + mode, "path": path, "mode": mode}
+             for name, path in routes.items() for mode in ("omitted", "ready", "draft", "null", "missing-target", "invalid-wait")]
+    return reads + [{"id": "owner-cancel/" + field + "-null", "path": "/v1/items/" + h.SEED +
+                    "/executions/" + h.SEED_EXECUTION + "/cancel", "mode": "mutation-null", "null_field": field}
+                    for field in ("publication_mode",)]
 
 
 def characterize(binary, output):
@@ -37,6 +40,7 @@ def characterize(binary, output):
                 with closing(sqlite3.connect(database)) as db:
                     base, = db.execute("SELECT state_json FROM executions WHERE id=?", (h.SEED_EXECUTION,)).fetchone()
                     base = json.loads(base)
+                    version, = db.execute("SELECT version FROM executions WHERE id=?", (h.SEED_EXECUTION,)).fetchone()
                     db.execute("UPDATE work_items SET request_json=json_set(request_json,'$.label','synthetic-group') WHERE id=?", (h.SEED,))
                     db.commit()
                 command = [str(binary), "--fixture", str(database)] if label == "Go" else [
@@ -48,6 +52,8 @@ def characterize(binary, output):
                         mode = case["mode"]
                         if mode == "omitted":
                             state.pop("publication_mode")
+                        elif mode == "mutation-null":
+                            state[case["null_field"]] = None
                         elif mode == "missing-target":
                             state.pop("target")
                         elif mode == "invalid-wait":
@@ -59,11 +65,17 @@ def characterize(binary, output):
                             db.execute("UPDATE operator_change SET token='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")
                             db.commit()
                         before = h.snapshot(database)
-                        response = h.wire(url, "GET", case["path"], [("Authorization", "Bearer " + h.OWNER)], "")
+                        method = "POST" if mode == "mutation-null" else "GET"
+                        body = json.dumps({"expected_version": version, "reason": "Synthetic null-state refusal"}) if method == "POST" else ""
+                        response = h.wire(url, method, case["path"],
+                                          [("Authorization", "Bearer " + h.OWNER), ("Content-Type", "application/json")], body)
                         after = h.snapshot(database)
                         if before != after:
+                            (output / f"failure-{shape}-{label}.json").write_text(json.dumps({
+                                "case": case, "response": response, "before": before, "after": after
+                            }, ensure_ascii=True), encoding="utf-8")
                             raise AssertionError("Default-mode conformance changed durable state: " + case["id"])
-                        expected = 500 if mode in ("missing-target", "invalid-wait") or mode == "omitted" and label == "P0" else 200
+                        expected = 500 if mode in ("missing-target", "invalid-wait", "mutation-null") or mode == "omitted" and label == "P0" else 200
                         if response["status"] != expected:
                             raise AssertionError(f"{shape}/{label}/{case['id']}: expected{expected}, got{response['status']}")
                         observations.append({"case": case["id"], "response": response, "durable": after})
@@ -87,7 +99,7 @@ def characterize(binary, output):
                             raise AssertionError("Go did not match complete D0 default/mode/error response: " + first["case"])
     result = {"pins": h.PINS, "results": summary,
               "classification": "Executionv4 current-item and separately acceptedv9 list/group/timeline omitted-field read cases preserve D0/spec ready. Explicit modes/null and malformed refusal remain unchanged; no global500 normalization or durable rewrite.",
-              "Go_behavior": "Matches complete D0 wire/durable results on all24 named/default/explicit/null/malformed cases per schema shape."}
+              "Go_behavior": "Matches complete D0 wire/durable results on all25 named/default/explicit/null/malformed/mutation-refusal cases per schema shape."}
     (output / "characterization.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(json.dumps(result, indent=2))
 

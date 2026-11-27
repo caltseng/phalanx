@@ -902,9 +902,10 @@
         "operator-timeline/draft",
         "operator-timeline/null",
         "operator-timeline/missing-target",
-        "operator-timeline/invalid-wait"
+        "operator-timeline/invalid-wait",
+        "owner-cancel/publication_mode-null"
       ],
-      "request_count": 24,
+      "request_count": 25,
       "classification_versions": [
         4,
         9
@@ -1104,9 +1105,15 @@
         "invalid-header-name",
         "invalid-method",
         "http-1.0-without-host",
-        "invalid-chunk"
+        "invalid-chunk",
+        "http10-repositories-close",
+        "http10-health-with-host",
+        "http10-health-keepalive",
+        "http10-repositories-denied",
+        "http10-invalid-body",
+        "http10-head-method"
       ],
-      "request_count": 12
+      "request_count": 18
     },
     "rehearsal": {
       "reference_packages": [
@@ -1158,6 +1165,7 @@
     "server/internal/application/usage_test.go:TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects",
     "server/internal/application/usage_test.go:TestUsageSubtotalExcludesSharedSessionsAndPreservesOverflow",
     "server/internal/application/writers_test.go:TestCaptainListRetainsPerCaptainCleanupLimit",
+    "server/internal/application/writers_test.go:TestWriterRegistrationRefusesNullStoredDefaultsWithoutEffects",
     "server/internal/application/writers_test.go:TestWriterRegistrationAtomicallyClaimsAndFencesNonce",
     "server/internal/application/writers_test.go:TestRacingWriterAdmissionsCannotOversubscribeBuilding",
     "server/internal/application/writers_test.go:TestStoppedReplacementTransfersExactBuildingAllocation",
@@ -1191,7 +1199,7 @@
     "server/internal/sqlite/store_test.go:TestGateTimeoutAndContendedRecovery",
     "server/internal/sqlite/store_test.go:TestDefaultAdmissionBoundCleansBothWaiterKinds"
   ],
-  "go_test_count": 52,
+  "go_test_count": 53,
   "files": {
     "server/cmd/conformance-decisions/main.go": "a373d0e6f55f2448cd3eabc1a923f7170e75859e96dba3ba11fc0a4be2af247d",
     "server/cmd/conformance-json/main.go": "3dadc98f48f1f8f557dec930341f3041f6d6efc42efb429dac31b22ac9c013dc",
@@ -1212,9 +1220,9 @@
     "server/internal/application/flags_test.go": "de6f433f74e91c0e70e9c2b15126dcc3f1bd84250d75c8eaed8e7ad7736f5278",
     "server/internal/application/history.go": "7710b056372227ec7f661f4a8f4faa8c82c37e81bd9300a2d04694e2a6898e9f",
     "server/internal/application/inbox.go": "7e06fa66924a40887e28afa52e5ece956f073945f447d485d070a6b87b06afa3",
-    "server/internal/application/lifecycle.go": "88542a855b580ea62faeb0c41eda0941228df902580c2cbd57f3397b0ed35f47",
+    "server/internal/application/lifecycle.go": "470a8cc9eacf882167af423b413f6b55fecaff3e81d1c711f43f66ef454e2552",
     "server/internal/application/observation_flags.go": "9049bfb3a0478cad0e92c005ec4ac8afe9f0c707a61bf59e3cb1bba729228989",
-    "server/internal/application/operator.go": "d9652b5852be7e5d36e19777b92d37f9f785aaa184bf2e809d801f3d149d8155",
+    "server/internal/application/operator.go": "8d950687ae15f18b87311d0c9460426874e4a9c11d7ed03b89cbb1a44545fc0e",
     "server/internal/application/operator_repr.go": "0404690a91176f2a2baae5c841dbcc14b87a1bd197a5d2924f248ae654917bec",
     "server/internal/application/operator_test.go": "c00fa6fc754dcd5f804b1b449c7a061917e5f481969fcf3c9b83253b76a53200",
     "server/internal/application/pickup.go": "5d17df4eac377ed5a1b56d895d75a363e516c1a860a55e3d1726228b1266aa6b",
@@ -1231,7 +1239,7 @@
     "server/internal/application/usage.go": "f9081fce1c2d020100514b144893fe063cda480ed9ad13ff72bf0905e06af31c",
     "server/internal/application/usage_test.go": "bc5a7653fad9b0f2edf88f68d62b58c481fa9897714a2c361a487c594bb6795b",
     "server/internal/application/writers.go": "8f0d1a804589bd6b4872ee1d61097d1506bf13122c40089f599d25cc7f9d3f8b",
-    "server/internal/application/writers_test.go": "7f0bb6f57ea26da4a52bb5dc5947c05d59cbafcb6983af648bc934a6629d8998",
+    "server/internal/application/writers_test.go": "61145639e2ea8773d34952533e27daa3eb374fee837b2948ee114c6ed04b8bae",
     "server/internal/contract/archives.go": "eb0eaff8a94e036a0ca5746dcdcf2710a3eefc37950f30c091947c3d50457fb9",
     "server/internal/contract/captains.go": "4209147b4812ee77dffaf01da0d8d23c155e68e93616c8a46df20389a34370cb",
     "server/internal/contract/datetime.go": "9f26446703ccdfd62e7c270f469b677043368ec76bd112131223fda386eae8f2",
@@ -1262,7 +1270,7 @@
     "server/internal/httpapi/documentation.go": "5a50d3a16f566e01b74741c84d54f2f04846b04c6b9cd6828b2ff6d7b09c0aa5",
     "server/internal/httpapi/finalization_test.go": "f371462de52d32cecdba50fc2c20b60d0c6368520cd4d29f2d1225f3ccc6ea0c",
     "server/internal/httpapi/history_test.go": "d07ed673def8728cf7a37a1b25d54941c252183f3b953beaffeead79b3356276",
-    "server/internal/httpapi/http.go": "e2d9a490d68bfa0b6945fe1f5fb540fa0f27b73c39776f3599e06dac4c8d1fdf",
+    "server/internal/httpapi/http.go": "3bab2a421c81fbc7a12601bc5070f45d6d6e177a9268d9caf0d6e21e2e073b88",
     "server/internal/httpapi/http_test.go": "e54915fe9c4e3f8a75688b7218b8df4c35455a070c3c0e429c9bf8485adf5c4e",
     "server/internal/httpapi/refresh_test.go": "2d6bae85b5c0eec40b8adba668daa13823676afc257a427ca2459b31f7991742",
     "server/internal/httpapi/writers.go": "f353c07522e40a0aad190c4e6a5eab232092d0d0859d8e0d9610dca181da5519",
@@ -1295,12 +1303,12 @@
     "server/conformance/datetimes.py": "bc39e852c0fc8e2b3dc86f747a1c48b04dae767292a96549b45cf7cf227ec6a4",
     "server/conformance/decisions.py": "759a0e459d4c870ce2132b6ca55ed7feda09189d8254b9fd077629fa1d77c397",
     "server/conformance/flags.py": "91b89a7cf0ff3a9fba636c3afac3b4b00066ccefd6ce2762844f251ba5521b30",
-    "server/conformance/framework.py": "6786af35b8d25083290fff4d10d70426a5041fe4293fce499856a55782037c1c",
+    "server/conformance/framework.py": "50a357b37b0acd8e9a60551bc24ada9b70b4ebd32fa20b82db9327a923f69192",
     "server/conformance/harness.py": "977565fde171746bbb10fae66cd9d5040b8b9e6b9da52b1141adcbb4241534c4",
     "server/conformance/history.py": "42c51c6d1120e7906486095383690332e4fd6d1fc724701b3b4c1f04b3af0700",
     "server/conformance/inbox.py": "bd82a37d28efcafa1d12bce1e18513c9d2b1eb84ae29007d69c49c56aef25563",
     "server/conformance/numbers.py": "d17b9a8d0f8ed24dea7bf17a8f18fbac9d8781b99aa717e5e995ac06db425f4e",
-    "server/conformance/operator_defaults.py": "6cb7daedc429c7d06fbc589fc73f800a369383373d60b295f639406bec11050c",
+    "server/conformance/operator_defaults.py": "aab45902e3335b2847b5948feffaf8b524b93b192407963308d736661b03f6ff",
     "server/conformance/operator_views.py": "40eb808536d28d3a009a5448409f6295a2625d77dc7e15b51eb6416e8be44f9b",
     "server/conformance/oracle.py": "d5c79b9e2ebaff6e0ce14770c65cfafb49330816929c53f89719fdcc7f40656c",
     "server/conformance/reconciliation.py": "283bd0c44aca4aec6b150e3d020b6182de93165a72e7c7c53ebd0cd506625288",

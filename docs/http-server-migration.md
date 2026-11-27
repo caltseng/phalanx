@@ -136,6 +136,14 @@ review must cover these changes; full framework/domain/Python/required-CI/Unix-
 race/fault/restart/shutdown/current-data rollback and actual merge gates remain.
 This decision grants no deployment, schema, data, credential or trust changes.
 
+The subsequent reviewed candidate restores P0/D0 HTTP/1.1 responses and
+`Connection: close` for parsed HTTP/1.0 requests on every route, including the
+health case and keep-alive requests. Thus the separately permitted valid-transport
+deviation is no longer used; its original owner decision and raw evidence remain
+historical, not broadened to other endpoints. The additional authenticated and
+denied repositories/health cases compare strictly against P0/D0. This restoration
+does not add a request parser/listener adapter or alter body/auth/storage handling.
+
 ### 4.2 Routes and authority
 
 Appendix A is the generated exhaustive P0 request/parameter inventory (66 operations, 51 schemas). It supplements, not substitutes for, the domain rules below. Auth codes: O=owner bearer; R=trusted runner; C=owner or runner coordinator; W=current scoped writer; B=board-read token or explicitly authorized direct local board. A valid writer may read only its own item/execution routes where the route admits that role. Exact source dependencies determine role errors, not "all authenticated" middleware.

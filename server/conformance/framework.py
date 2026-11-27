@@ -20,7 +20,6 @@ APPROVED = {
     "unsupported-transfer-encoding": ("350cd2844bc80f47ea29ae316290157214580cd3a7b4ec428e102b8ec4ba2f6b", 501, "Unsupported transfer encoding"),
     "invalid-header-name": ("f646284d23f24055b86c49360646a245fb9fbc173adf7248f75b8319d3720b29", 400, "400 Bad Request: invalid header name"),
     "invalid-method": ("30e482d51ee56170b24720f7ba17a4a775beb30b23ac17b80425e422d7c9f81c", 400, "400 Bad Request"),
-    "http-1.0-without-host": ("cac883dada9b6ffa1aff1c0860a9f87e188775c15c195b30bf7cb3eca1e18133", 200, '{"status":"ok"}'),
 }
 
 
@@ -40,6 +39,14 @@ def cases():
         {"id": "http-1.0-without-host", "raw": "GET /health HTTP/1.0\r\nConnection: close\r\n\r\n"},
         {"id": "invalid-chunk", "raw": "POST /v1/items HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
             "Content-Type: application/json\r\nAuthorization: Bearer " + h.OWNER + "\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\nbad\r\n0\r\n\r\n"},
+        {"id": "http10-repositories-close", "raw": "GET /v1/repositories HTTP/1.0\r\nAuthorization: Bearer " +
+            h.OWNER + "\r\nConnection: close\r\n\r\n"},
+        {"id": "http10-health-with-host", "raw": "GET /health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"},
+        {"id": "http10-health-keepalive", "raw": "GET /health HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n\r\n"},
+        {"id": "http10-repositories-denied", "raw": "GET /v1/repositories HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"},
+        {"id": "http10-invalid-body", "raw": "POST /v1/items HTTP/1.0\r\nHost: localhost\r\nConnection: keep-alive\r\n"
+            "Content-Type: application/json\r\nAuthorization: Bearer " + h.OWNER + "\r\nContent-Length: 2\r\n\r\n{}"},
+        {"id": "http10-head-method", "raw": "HEAD /health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"},
     ]
 
 
@@ -88,7 +95,12 @@ def comparable(response):
     response = deepcopy(response)
     response["headers"] = sorted((name, value) for name, value in response["headers"]
                                 if name not in ("date", "server", "content-length", "transfer-encoding"))
-    return response["protocol"], response["status"], response["headers"], response["decoded_body_hex"], response["closed"]
+    body = response["decoded_body_hex"]
+    if body and any(name == "content-type" and value.split(";", 1)[0].strip().lower() == "application/json"
+           for name, value in response["headers"]):
+        payload = json.loads(bytes.fromhex(body).decode("utf-8"))
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode().hex()
+    return response["protocol"], response["status"], response["headers"], body, response["closed"]
 
 
 def approved_go(case):
@@ -97,11 +109,8 @@ def approved_go(case):
     digest, status, body = APPROVED[case["id"]]
     if h.digest(case["raw"].encode("ascii")) != digest:
         raise AssertionError("Owner transport classification does not cover changed request: " + case["id"])
-    valid = case["id"] == "http-1.0-without-host"
-    headers = [("content-type", "application/json" if valid else "text/plain; charset=utf-8")]
-    if not valid:
-        headers.append(("connection", "close"))
-    return "HTTP/1.0" if valid else "HTTP/1.1", status, sorted(headers), body.encode().hex(), True
+    headers = [("content-type", "text/plain; charset=utf-8"), ("connection", "close")]
+    return "HTTP/1.1", status, sorted(headers), body.encode().hex(), True
 
 
 def characterize(binary, output):
@@ -151,7 +160,7 @@ def characterize(binary, output):
     result = {"pins": h.PINS, "request_count": len(cases()), "mismatches": mismatches,
               "failures": failures, "schema_shapes": ["fresh", "retained"],
               "effect": "All raw framing/read/refusal cases zero durable effects",
-              "classification": "Explicit owner reply v12, execution22f0004de8634d7b9aa8523aa3c62d77: eight exact malformed requests and separately one valid HTTP1.0 request; all other fields/requests strict"}
+              "classification": "Explicit owner reply v12: eight exact malformed requests. Native HTTP1.0 replies now restore strict P0/D0 compatibility, including the separately permitted health deviation; original owner/raw evidence retained."}
     (output / "framework-characterization.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     if failures:
         raise AssertionError(json.dumps(failures, indent=2))

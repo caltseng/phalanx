@@ -182,7 +182,7 @@ differences are explicitly owner-approved named changes: duplicate Host, missing
 invalid HTTP version, conflicting Content-Length, invalid header name and
 invalid method have different 400 text bodies; invalid percent URL is pinned
 404 versus Go 400; unsupported transfer encoding is pinned 400 versus Go 501.
-The valid HTTP/1.0-without-Host case additionally returns pinned HTTP/1.1 with
+The original valid HTTP/1.0-without-Host characterization returned pinned HTTP/1.1 with
 `Connection: close` versus Go HTTP/1.0 without that header; both return the exact
 200 JSON payload and close. Protocol and Connection differences are retained,
 not silently excluded from comparison. The owner accepted these two separate
@@ -193,6 +193,19 @@ zero effects on both schema shapes. Every other comparison remains strict.
 No body/status rewriting, broad framework exemption or silent normalization
 is authorized. Independent final-head review and all remaining full-proof gates
 still apply.
+
+Independent review found valid HTTP/1.0 requests beyond the one approved request:
+repositories with an owner token, health with Host, health requesting keep-alive,
+and repositories without authorization. These are strict comparisons in
+`framework.py`, not extensions of v12. The native handler now restores pinned
+HTTP/1.1 replies and actual `Connection: close` for already-parsed HTTP/1.0
+requests, including health and keep-alive. It adds no parser/listener adapter or
+broader input acceptance. The original failing raw evidence and separately
+permitted health deviation are retained; the current implementation no longer
+uses that permitted deviation.
+Authoritative state decoding now refuses explicit-null publication mode before
+mutation; the named operator projections still return null without effects,
+and omitted mode retains its ready default.
 
 ## Native domain extension evidence (in development)
 
@@ -217,10 +230,10 @@ fresh/retained fixtures. They do not refreeze the Python oracle:
 | `scout.py` | 98 on each schema shape | Settings/models, single pass/page claim, failure/retry/expiry/successor fences, immutable page receipts, verified login/ID, approval/edit/decline handling, closed manual source identity and bounded multiple-repository cursor |
 | `flags.py` | 72 on each schema shape | Stored flag models/update/clear, liveness/launch/progress/session/archive warnings, 30/60/strict-90 boundaries, head/handoff/CI/deployment precedence, scoped current writer and zero read/refusal effects |
 | `operator_views.py` | 79 on each schema shape | Filters, exact cursors/ETags, summaries/groups/overview, timeline causes/questions and usage projection; only the named v4 current-item default discrepancy is classified |
-| `operator_defaults.py` | 24 on each schema shape | Explicit v4/v9 named read omissions, ready/draft/null preservation, malformed-state refusal and exact complete D0 responses with zero read effects |
+| `operator_defaults.py` | 25 on each schema shape | Explicit v4/v9 named read omissions, ready/draft/null preservation, malformed-state/mutation refusal and exact complete D0 responses with zero effects |
 | `scribe.py` | 90 on each schema shape and authority mode | Canonical unchanged assets/CSP, file/range/conditional/HEAD behavior, documentation URLs and direct local-board/owner/proxy/host/origin boundaries |
 | `route_models.py` | All 66 operations / 51 schemas on each shape | Complete pinned generated request-schema comparison and actual read/refusal wire/store inventory; not a substitute for each family’s positive/fault corpus |
-| `framework.py` | 12 raw HTTP cases on each shape | Exact owner-v12 request-SHA-bound expectations for eight malformed refusals and separately one HTTP/1.0 response; full raw fields/actual close/zero effects, all other comparisons strict |
+| `framework.py` | 18 raw HTTP cases on each shape | Eight exact owner-v12 malformed refusals; strict restored HTTP/1.0 protocol/header/close/body/HEAD behavior, full raw fields/zero effects and only existing JSON representation comparison |
 | `rehearsal.py` | Eight phases per reference/shape | Package-only P0/Go and D0/Go alternation on evolved data; same-writer/grants, caller-loss receipt reconciliation, report/scout/usage continuation and immutable receipts |
 | `decisions.py` | 11,298 | Native state/event/evidence matrix, including finalization/stop/merge precedence, draft head review and ready-output enrichment |
 | `numbers.py` | 4,612 | Exact Python canonical numeric bytes and receipt digests, integer/float distinctions, negative zero, exponent boundaries, binary64 extremes and nonfinite refusal |
