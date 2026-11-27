@@ -170,7 +170,7 @@ def differential(binary, output):
                             if json.loads(payload)["deployment"]["state"] != "disabled":
                                 raise AssertionError(f"{shape}/{label}: retirement did not disable deployment: {response}")
                             for table in before["tables"]:
-                                if table in ("reconcilers", "github_observations", "operator_change"):
+                                if table in ("reconciler_heartbeats", "github_observations", "operator_change"):
                                     continue
                                 if before["tables"][table] != after["tables"][table]:
                                     raise AssertionError("Retirement changed closed delivery: " + table)
