@@ -29,6 +29,22 @@ func captainRow(tx *sqlite.Tx, id string) (sqlite.Captain, error) {
 	return row, err
 }
 
+func captainScope(row sqlite.Captain) (map[string]any, error) {
+	value, _, err := contract.Decode([]byte(row.PickupJSON))
+	if err != nil {
+		return nil, err
+	}
+	body, ok := contract.ObjectValues(value)
+	if !ok {
+		return nil, errors.New("Stored Captain pickup is not an object")
+	}
+	scope, ok := contract.ObjectValues(body["repositories"])
+	if !ok {
+		return nil, errors.New("Stored Captain repositories are not an object")
+	}
+	return scope, nil
+}
+
 func captainGone(row sqlite.Captain) (time.Time, error) {
 	heartbeat, err := time.Parse(time.RFC3339Nano, row.HeartbeatAt)
 	if err != nil {

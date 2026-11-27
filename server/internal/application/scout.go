@@ -193,7 +193,7 @@ func checkScoutPass(tx *sqlite.Tx, passID, claimID, now string) (*sqlite.ScoutPa
 
 func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any, error) {
 	var result any
-	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
+	err := a.Store.Write(ctx, func(tx *sqlite.Tx) (err error) {
 		configuration, repositories, err := scoutSettings(tx)
 		if err != nil {
 			return err
@@ -207,36 +207,38 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any,
 		if err != nil {
 			return err
 		}
-		value, _, err := contract.Decode([]byte(captain.PickupJSON))
+		scope, err := captainScope(captain)
 		if err != nil {
 			return err
-		}
-		body, ok := contract.ObjectValues(value)
-		if !ok {
-			return errors.New("Stored Captain pickup is not an object")
-		}
-		scope, ok := contract.ObjectValues(body["repositories"])
-		if !ok {
-			return errors.New("Stored Captain scope is not an object")
 		}
 		covered := true
 		for _, id := range repositories {
 			_, exists := scope[id]
 			covered = covered && exists
 		}
-		view, err := scoutStatus(tx, now)
-		if err != nil {
-			return err
-		}
-		view["claim"] = nil
-		if captain.State != "active" || !now.Before(gone) || !covered {
-			view["blocked_reason"] = "Scout requires a live active Captain covering all configured repositories"
+		var claim any
+		blockedReason := ""
+		defer func() {
+			if err != nil {
+				return
+			}
+			var view map[string]any
+			view, err = scoutStatus(tx, now)
+			if err != nil {
+				return
+			}
+			view["claim"] = claim
+			if blockedReason != "" {
+				view["blocked_reason"] = blockedReason
+			}
 			result, err = responseValue(view)
-			return err
+		}()
+		if captain.State != "active" || !now.Before(gone) || !covered {
+			blockedReason = "Scout requires a live active Captain covering all configured repositories"
+			return nil
 		}
 		if !configuration.Enabled {
-			result, err = responseValue(view)
-			return err
+			return nil
 		}
 		row, err := tx.OpenScoutPass()
 		if err != nil {
@@ -253,8 +255,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any,
 					return err
 				}
 				if owner.State == "active" {
-					result, err = responseValue(view)
-					return err
+					return nil
 				}
 			}
 		}
@@ -264,8 +265,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any,
 				return errors.New("Enabled scout configuration has no due time")
 			}
 			if *configuration.DueAt > stamp {
-				result, err = responseValue(view)
-				return err
+				return nil
 			}
 			passID, err = a.ID()
 			if err != nil {
@@ -276,8 +276,7 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any,
 			}
 		} else {
 			if present(row.RetryAt) && *row.RetryAt > stamp {
-				result, err = responseValue(view)
-				return err
+				return nil
 			}
 			passID = row.ID
 			if present(row.ClaimID) && *row.LeaseUntil <= stamp {
@@ -305,22 +304,18 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any,
 		if err != nil {
 			return err
 		}
-		value, err = responseValue(row)
+		value, err := responseValue(row)
 		if err != nil {
 			return err
 		}
-		claim, ok := contract.ObjectValues(value)
+		claimBody, ok := contract.ObjectValues(value)
 		if !ok {
 			return errors.New("Scout pass is not an object")
 		}
-		claim["repository_id"], claim["remote"] = repositoryID, repository.Remote
-		view, err = scoutStatus(tx, a.Clock().UTC())
-		if err != nil {
-			return err
-		}
-		view["claim"] = claim
-		result, err = responseValue(view)
-		return err
+		claimBody["repository_id"], claimBody["remote"] = repositoryID, repository.Remote
+		claim = claimBody
+		now = a.Clock().UTC()
+		return nil
 	})
 	return result, err
 }
