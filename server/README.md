@@ -44,6 +44,11 @@ projecting a blocked binding. Captain/reinforcement/session-link and archive
 views are typed without changing their JSON contract. Archive status uses at
 most seven SQL queries regardless of writer or matching Captain count, retaining
 replacement-writer, pending-cleanup and unfinished-handoff blockers.
+Reconciler posts reuse their loaded execution through apply; typed observation
+payloads retain the existing stored bytes and digests. Usage writes and projections
+decode typed snapshots once, preserving acquisition gaps and exact counter totals;
+usage and scout claims share Captain repository-scope parsing. Each scout claim
+projects status once, after any claim mutation.
 
 ## Boundaries and pinned build
 
