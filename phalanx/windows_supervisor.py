@@ -14,6 +14,7 @@ import sys
 import uuid
 
 from .json_utils import unique_object
+from .deployment import selected_server_engine
 from .workspaces import any_file_lock
 
 
@@ -416,6 +417,7 @@ def _write_new(path, value):
 
 
 def supervise(config_path, config, env, *, task, record, engine, go_binary):
+    selected_server_engine(config, engine)
     native = _native()
     if not record.is_absolute() or record.exists():
         raise OwnershipError("Use a new absolute ownership record in an operator-private directory")

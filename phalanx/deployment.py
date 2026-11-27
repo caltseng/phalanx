@@ -135,10 +135,20 @@ def configuration(path):
     return config, env
 
 
+def selected_server_engine(config, engine):
+    engine = engine if engine is not None else config["server"].get("engine", "go")
+    if engine == "python":
+        raise ValueError("Python HTTP server has been removed. Use a verified Go server package "
+                         "with --engine go and --go-binary (or server.go_binary); "
+                         "see docs/python-server-deprecation.md. For rollback, use the retained "
+                         "known-good package, not this installation. No configuration or data was changed")
+    if engine != "go":
+        raise ValueError("Server engine must be go")
+    return engine
+
+
 def run_service(config, env, service, *, initialize_database=False, once=False,
                 engine=None, go_binary=None):
-    if engine is not None and engine not in ("python", "go"):
-        raise ValueError("Server engine must be python or go")
     if (engine is not None or go_binary is not None) and service != "server":
         raise ValueError("Engine selection applies only to the server")
     if service == "reconciler":
@@ -147,14 +157,7 @@ def run_service(config, env, service, *, initialize_database=False, once=False,
         if once:
             command.append("--once")
         return subprocess.call(command, env=env)
-    engine = engine if engine is not None else config["server"].get("engine", "go")
-    if engine == "python":
-        raise ValueError("Python HTTP server has been removed. Use a verified Go server package "
-                         "with --engine go and --go-binary (or server.go_binary); "
-                         "see docs/python-server-deprecation.md. For rollback, use the retained "
-                         "known-good package, not this installation. No configuration or data was changed")
-    if engine not in ("python", "go"):
-        raise ValueError("Server engine must be python or go")
+    engine = selected_server_engine(config, engine)
     if go_binary is not None and engine != "go":
         raise ValueError("--go-binary requires the Go engine")
     if engine == "go" and go_binary is None:
@@ -203,7 +206,8 @@ def add_deploy_command(commands):
                 action.add_argument("--receipt", type=Path, required=True, help="new private stop receipt")
             else:
                 action.add_argument("--engine", choices=("python", "go"),
-                                    help="overrides server.engine; otherwise uses the deploy run selection")
+                                    help="overrides server.engine; otherwise uses the deploy run selection; "
+                                         "python is removed and fails before containment")
                 action.add_argument("--go-binary", type=Path)
         elif name == "run":
             action.add_argument("service", choices=("server", "reconciler"))
