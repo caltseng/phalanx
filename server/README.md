@@ -54,7 +54,13 @@ projects status once, after any claim mutation.
 
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
 owns immutable intake receipts and transaction orchestration; `internal/sqlite`
-owns SQL, per-transaction connections, PRAGMAs, admission, and commit outcomes.
+owns SQL, store-lifetime read-only/read-write connection pools, PRAGMAs, admission,
+and commit outcomes. Each transaction exclusively leases a connection. Pools retain
+at most eight idle readers and one idle writer, without a second active-connection
+admission limit; health remains un-gated. Driver connection initialization applies
+FK/EXTRA and the existing busy timeout to every new physical connection. Failed or
+interrupted transactions roll back before reuse; failed cleanup discards the connection.
+Shutdown drains HTTP/background work, closes both pools, then releases the instance lock.
 Application responses remain JSON values through view composition and finalization;
 HTTP serializes them once. Stored JSON is decoded at the storage boundary, while
 receipt request digests and persisted snapshots retain their canonical encoding.

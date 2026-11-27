@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,6 +29,11 @@ func fixture(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return store
 }
 
@@ -40,6 +46,9 @@ func TestIdentityMissingAndJournalRefusal(t *testing.T) {
 		t.Fatal("missing database was created")
 	}
 	store := fixture(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, sqlText := range []string{"PRAGMA user_version=25", "PRAGMA application_id=0", "PRAGMA journal_mode=WAL"} {
 		db := testdb.Open(t, store.path)
 		if _, err := db.Exec(sqlText); err != nil {
@@ -112,6 +121,148 @@ func TestEveryConnectionPragmasForeignKeysAndRollback(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPoolsReuseConnectionsWithoutCrossingReadWriteModes(t *testing.T) {
+	store := fixture(t)
+	for _, mode := range []string{"ro", "rw"} {
+		var previous any
+		for i := 0; i < 3; i++ {
+			conn, close, err := store.connection(context.Background(), mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = conn.Raw(func(raw any) error {
+				if previous != nil && previous != raw {
+					t.Error("physical connection was not reused", mode)
+				}
+				previous = raw
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = conn.ExecContext(context.Background(), "INSERT INTO parent DEFAULT VALUES")
+			if (err == nil) != (mode == "rw") {
+				t.Fatal("connection mode changed", mode, err)
+			}
+			if err := close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestConcurrentReadPoolInitializesAndBoundsIdleConnections(t *testing.T) {
+	store := fixture(t)
+	var releases []func() error
+	defer func() {
+		for _, release := range releases {
+			if err := release(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	for i := 0; i < 12; i++ {
+		conn, close, err := store.connection(context.Background(), "ro")
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, close)
+		for name, expected := range map[string]int{"foreign_keys": 1, "synchronous": 3, "busy_timeout": BusyTimeoutMS} {
+			var actual int
+			if err := conn.QueryRowContext(context.Background(), "PRAGMA "+name).Scan(&actual); err != nil || actual != expected {
+				t.Fatalf("new connection %d: %s=%d err=%v", i, name, actual, err)
+			}
+		}
+	}
+	for _, release := range releases {
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	releases = nil
+	if stats := store.read.Stats(); stats.InUse != 0 || stats.Idle != 8 || stats.MaxIdleClosed != 4 {
+		t.Fatal("read burst retained unbounded idle connections", stats)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if stats := store.read.Stats(); stats.OpenConnections != 0 {
+		t.Fatal("shutdown retained pooled connections", stats)
+	}
+	if err := os.Rename(store.path, store.path+".closed"); err != nil {
+		t.Fatal("closed store retained file handles", err)
+	}
+}
+
+func TestPooledTransactionsCleanUpFailuresAndPanics(t *testing.T) {
+	for _, write := range []bool{false, true} {
+		for _, failure := range []string{"error", "cancel", "panic", "rollback"} {
+			t.Run(fmt.Sprintf("write=%t/%s", write, failure), func(t *testing.T) {
+				store := fixture(t)
+				run := store.Read
+				pool := store.read
+				if write {
+					run, pool = store.Write, store.write
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				sentinel := errors.New("callback failed")
+				var result error
+				var panicked any
+				func() {
+					defer func() { panicked = recover() }()
+					result = run(ctx, func(tx *Tx) error {
+						if write {
+							if _, err := tx.conn.ExecContext(ctx, "INSERT INTO parent VALUES (1)"); err != nil {
+								return err
+							}
+						}
+						switch failure {
+						case "cancel":
+							cancel()
+							return ctx.Err()
+						case "panic":
+							panic(sentinel)
+						case "rollback":
+							// Simulate cleanup failing after the transaction ended.
+							if _, err := tx.conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+								return err
+							}
+						}
+						return sentinel
+					})
+				}()
+				if failure == "panic" {
+					if panicked != sentinel {
+						t.Fatal("panic was not preserved", panicked)
+					}
+				} else if failure == "cancel" {
+					if !errors.Is(result, context.Canceled) {
+						t.Fatal(result)
+					}
+				} else if failure == "error" && result != sentinel {
+					t.Fatal("callback error identity changed", result)
+				} else if !errors.Is(result, sentinel) {
+					t.Fatal("callback error was lost", result)
+				}
+				if stats := pool.Stats(); failure == "rollback" && stats.OpenConnections != 0 {
+					t.Fatal("failed rollback returned a connection to the pool", stats)
+				}
+				if err := run(context.Background(), func(tx *Tx) error {
+					var count int
+					err := tx.conn.QueryRowContext(tx.ctx, "SELECT count(*) FROM parent").Scan(&count)
+					if count != 0 {
+						t.Fatal("failed transaction leaked data", count)
+					}
+					return err
+				}); err != nil {
+					t.Fatal("pool did not recover", err)
+				}
+			})
+		}
 	}
 }
 
@@ -223,6 +374,11 @@ func TestDriverOnlineBackupPreservesIdentityTypedRowsAndDDL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := copy.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := copy.Read(context.Background(), func(tx *Tx) error {
 		var blob []byte
 		var number int64
@@ -253,6 +409,9 @@ func TestDriverOnlineBackupPreservesIdentityTypedRowsAndDDL(t *testing.T) {
 
 func TestExistingUnicodeURIPathKeepsTheSameDatabase(t *testing.T) {
 	store := fixture(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	directory := filepath.Join(t.TempDir(), "雪 #%&")
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
@@ -265,6 +424,11 @@ func TestExistingUnicodeURIPathKeepsTheSameDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := moved.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := moved.Write(context.Background(), func(tx *Tx) error {
 		_, err := tx.conn.ExecContext(tx.ctx, "INSERT INTO parent VALUES (7)")
 		return err

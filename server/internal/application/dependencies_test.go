@@ -23,6 +23,11 @@ func dependencyStore(t *testing.T) (*sqlite.Store, *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	return store, db
 }
 

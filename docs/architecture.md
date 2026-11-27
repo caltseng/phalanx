@@ -105,10 +105,14 @@ queue, offline transitions or admission bypass.
 
 ### SQLite contention and request threads
 
-Go's `internal/sqlite` owns transaction connections, DELETE/EXTRA/FK, alternating
-writer/read-batch admission, rollback and unknown-commit errors. `internal/application`
+Go's `internal/sqlite` owns separate store-lifetime read-only/read-write pools
+(eight/one idle connections, no additional active-connection limit), exclusive
+transaction leases, DELETE/EXTRA/FK, alternating writer/read-batch admission,
+rollback and unknown-commit errors. Failed cleanup discards the connection rather
+than returning an uncertain transaction to the pool. `internal/application`
 owns atomic workflows and durable finalization/refresh jobs. Disconnect does not cancel
-accepted work; shutdown drains HTTP/background work under the shared OS lock.
+accepted work; shutdown drains HTTP/background work and closes both pools before
+releasing the shared OS lock.
 
 Both engines retain two-second SQLite busy and four-second admission bounds, not
 request/header/drain deadlines. Interrupted waiters remove their counts. Contention

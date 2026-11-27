@@ -142,6 +142,11 @@ func TestReportFinalizationResumesFromExistingIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	restarted := application.New(store)
 	if err := restarted.ProcessFinalizations(context.Background()); err != nil {
 		t.Fatal(err)

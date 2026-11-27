@@ -29,7 +29,7 @@ func main() {
 	}
 }
 
-func run() error {
+func run() (result error) {
 	database := flag.String("fixture", "", "existing disposable fixture database")
 	idStart := flag.Uint64("id-start", 0, "deterministic fixture ID starting ordinal")
 	localBoard := flag.Bool("local-board", false, "enable direct loopback-only disposable board authority")
@@ -55,6 +55,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer func() { result = errors.Join(result, store.Close()) }()
 	app := application.New(store)
 	// Both implementations get the same deterministic test clock and IDs.
 	app.Clock = func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC) }

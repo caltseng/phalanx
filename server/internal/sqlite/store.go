@@ -4,6 +4,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"net/url"
@@ -58,8 +59,10 @@ func BusyReason(err error) string {
 }
 
 type Store struct {
-	path string
-	gate *gate
+	path  string
+	gate  *gate
+	read  *sql.DB
+	write *sql.DB
 	// Commit is a fault seam for disposable tests, never a transport option.
 	commit func(context.Context, *sql.Conn) error
 }
@@ -86,6 +89,14 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("Phalanx database must be an existing regular file")
 	}
 	store := &Store{path: resolved, gate: newGate()}
+	store.read, err = pool(resolved, "ro", 8)
+	if err != nil {
+		return nil, err
+	}
+	store.write, err = pool(resolved, "rw", 1)
+	if err != nil {
+		return nil, errors.Join(err, store.read.Close())
+	}
 	err = store.Read(context.Background(), func(tx *Tx) error {
 		var appID, version int
 		var journal string
@@ -107,42 +118,63 @@ func Open(path string) (*Store, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, store.Close())
 	}
 	return store, nil
 }
 
-func (s *Store) connection(ctx context.Context, mode string) (*sql.Conn, func(), error) {
-	path := filepath.ToSlash(s.path)
+func pool(path, mode string, idle int) (*sql.DB, error) {
+	path = filepath.ToSlash(path)
 	if len(path) > 1 && path[1] == ':' {
 		path = "/" + path
 	}
-	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=" + mode}).String()
+	query := url.Values{"mode": {mode}, "_pragma": {
+		fmt.Sprintf("busy_timeout(%d)", BusyTimeoutMS), "foreign_keys(ON)", "synchronous(EXTRA)",
+	}}
+	uri := (&url.URL{Scheme: "file", Path: path, RawQuery: query.Encode()}).String()
 	db, err := sql.Open("sqlite", uri)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	db.SetMaxIdleConns(0)
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		db.Close()
-		return nil, nil, err
-	}
-	close := func() { conn.Close(); db.Close() }
-	for _, pragma := range []string{
-		"PRAGMA busy_timeout = 2000",
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA synchronous = EXTRA",
-	} {
-		if _, err := conn.ExecContext(ctx, pragma); err != nil {
-			close()
-			return nil, nil, err
-		}
-	}
-	return conn, close, nil
+	// Bound retained handles, not active reads: another admission queue here
+	// would change cancellation/busy behavior and could stall the health probe.
+	db.SetMaxIdleConns(idle)
+	return db, nil
 }
 
-func (s *Store) Write(ctx context.Context, perform func(*Tx) error) error {
+func (s *Store) Close() error {
+	return errors.Join(s.read.Close(), s.write.Close())
+}
+
+func (s *Store) connection(ctx context.Context, mode string) (*sql.Conn, func() error, error) {
+	db := s.read
+	if mode == "rw" {
+		db = s.write
+	}
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return conn, func() error {
+		err := conn.Close()
+		if errors.Is(err, sql.ErrConnDone) {
+			return nil
+		}
+		return err
+	}, nil
+}
+
+func rollback(conn *sql.Conn) error {
+	_, err := conn.ExecContext(context.Background(), "ROLLBACK")
+	if err != nil {
+		// Never return an uncertain transaction to the idle pool.
+		conn.Raw(func(any) error { return driver.ErrBadConn })
+		return fmt.Errorf("SQLite rollback failed; discarded connection: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) Write(ctx context.Context, perform func(*Tx) error) (result error) {
 	release, err := s.gate.write(ctx)
 	if err != nil {
 		return err
@@ -152,13 +184,22 @@ func (s *Store) Write(ctx context.Context, perform func(*Tx) error) error {
 	if err != nil {
 		return err
 	}
-	defer close()
+	defer func() {
+		if err := close(); err != nil {
+			result = errors.Join(result, err)
+		}
+	}()
 	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
-	// Rollback uses its own context: an interrupted operation still cleans up
-	// before admission is released. Closing this short-lived connection is final.
-	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	committed := false
+	defer func() {
+		if !committed {
+			if err := rollback(conn); err != nil {
+				result = errors.Join(result, err)
+			}
+		}
+	}()
 	if err := perform(&Tx{conn: conn, ctx: ctx}); err != nil {
 		return err
 	}
@@ -176,10 +217,11 @@ func (s *Store) Write(ctx context.Context, perform func(*Tx) error) error {
 		}
 		return &UnknownCommit{Cause: err}
 	}
+	committed = true
 	return nil
 }
 
-func (s *Store) Read(ctx context.Context, perform func(*Tx) error) error {
+func (s *Store) Read(ctx context.Context, perform func(*Tx) error) (result error) {
 	release, err := s.gate.readStart(ctx)
 	if err != nil {
 		return err
@@ -189,33 +231,51 @@ func (s *Store) Read(ctx context.Context, perform func(*Tx) error) error {
 		release()
 		return err
 	}
-	defer close()
-	if _, err = conn.ExecContext(ctx, "BEGIN"); err == nil {
-		var unused int
-		err = conn.QueryRowContext(ctx, "SELECT 1 FROM sqlite_schema LIMIT 1").Scan(&unused)
-		if err == sql.ErrNoRows {
-			err = nil
+	defer func() {
+		if err := close(); err != nil {
+			result = errors.Join(result, err)
 		}
+	}()
+	if _, err = conn.ExecContext(ctx, "BEGIN"); err != nil {
+		release()
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			if err := rollback(conn); err != nil {
+				result = errors.Join(result, err)
+			}
+		}
+	}()
+	var unused int
+	err = conn.QueryRowContext(ctx, "SELECT 1 FROM sqlite_schema LIMIT 1").Scan(&unused)
+	if err == sql.ErrNoRows {
+		err = nil
 	}
 	release()
 	if err != nil {
 		return err
 	}
-	defer conn.ExecContext(context.Background(), "ROLLBACK")
 	if err := perform(&Tx{conn: conn, ctx: ctx}); err != nil {
 		return err
 	}
 	_, err = conn.ExecContext(ctx, "COMMIT")
+	committed = err == nil
 	return err
 }
 
 // Health deliberately mirrors Python's un-gated read-only PRAGMA probe.
-func (s *Store) Health(ctx context.Context) error {
+func (s *Store) Health(ctx context.Context) (result error) {
 	conn, close, err := s.connection(ctx, "ro")
 	if err != nil {
 		return err
 	}
-	defer close()
+	defer func() {
+		if err := close(); err != nil {
+			result = errors.Join(result, err)
+		}
+	}()
 	var version int
 	return conn.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version)
 }
