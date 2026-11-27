@@ -71,6 +71,9 @@ Native `net/http` still parses unchanged request bytes; this adds no request,
 body, idle or drain deadline and no new byte/count cap. The owner-authorized
 experiment requires independent exact-head review and fresh required CI,
 not merely a passing anonymous health probe.
+Drain failures retain the actual response, lock-probe elapsed time and complete
+typed after-state; diagnostic capture does not change the workload, lock
+assertions, busy timeout or required successful drain.
 
 ## Compatibility evidence and limits
 

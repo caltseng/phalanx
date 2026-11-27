@@ -244,6 +244,7 @@ def transport_checks(url, database):
 
 
 def drain_check(url, process, database, sources, python=False):
+    started = time.monotonic()
     with closing(sqlite3.connect(database, isolation_level=None)) as blocker:
         blocker.execute("BEGIN EXCLUSIVE")
         with ThreadPoolExecutor(max_workers=1) as caller:
@@ -253,15 +254,21 @@ def drain_check(url, process, database, sources, python=False):
                 process.stdin.close()
             else:
                 process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+            probe_started = time.monotonic()
             probe = h.invoke("lock", sources["P0"], database, capture_output=True, text=True)
+            probe_seconds = time.monotonic() - probe_started
             if process.poll() is not None or probe.stdout.strip() != "excluded":
                 raise AssertionError("Shutdown released sole ownership before its active mutation drained")
             blocker.execute("ROLLBACK")
             response = pending.result(timeout=10)
             if response["status"] != 201:
-                raise AssertionError("Shutdown cancelled an accepted/dispatched operation")
+                raise AssertionError("Shutdown cancelled an accepted/dispatched operation: " + json.dumps({
+                    "response": response, "lock_probe_seconds": probe_seconds,
+                    "total_seconds": time.monotonic() - started,
+                }))
             process.wait(timeout=15)
-    return {"response": response, "durable": h.snapshot(database), "clean_exit": process.returncode == 0}
+    return {"response": response, "durable": h.snapshot(database), "clean_exit": process.returncode == 0,
+            "lock_probe_seconds": probe_seconds, "total_seconds": time.monotonic() - started}
 
 
 def measure(url, run):
@@ -411,7 +418,12 @@ def release(package, output):
                         result["durable_sha256"] = h.digest(data.encode())
                         (output / f"load-{label}-{retained}-{index}-durable.json").write_text(data, encoding="utf-8")
                         runs.append(result)
-                    drain_proof = drain_check(url, running[1], database, sources, python=label != "Go") if not retained else None
+                    try:
+                        drain_proof = drain_check(url, running[1], database, sources, python=label != "Go") if not retained else None
+                    except AssertionError:
+                        (output / f"drain-failure-{label}-{retained}-durable.json").write_text(
+                            json.dumps(h.snapshot(database), sort_keys=True), encoding="utf-8")
+                        raise
                 loads.append({"implementation": label, "retained": retained,
                               "startup_seconds": startup_seconds, "transport": transport_proof,
                               "drain": drain_proof, "baseline_items": len(baseline["tables"]["work_items"]["rows"]), "runs": runs})
