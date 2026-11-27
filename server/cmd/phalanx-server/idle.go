@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net"
@@ -18,6 +19,7 @@ type idleConnection struct {
 	received bool
 	deadline time.Time
 	headers  *headReads
+	lifetime context.Context
 }
 
 func (c *idleConnection) Read(p []byte) (int, error) {
@@ -80,14 +82,17 @@ func (c *idleConnection) state(state http.ConnState) error {
 	return nil
 }
 
-type idleListener struct{ net.Listener }
+type idleListener struct {
+	net.Listener
+	lifetime context.Context
+}
 
 func (l idleListener) Accept() (net.Conn, error) {
 	connection, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	return &idleConnection{Conn: connection, headers: &headReads{}}, nil
+	return &idleConnection{Conn: connection, headers: &headReads{}, lifetime: l.lifetime}, nil
 }
 
 func idleState(connection net.Conn, state http.ConnState) {

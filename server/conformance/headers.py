@@ -1,16 +1,19 @@
 """Production-launcher incomplete-header boundaries, raw wire and typed stores."""
 
 import argparse
-from contextlib import closing
+from contextlib import ExitStack, closing
 import http.client
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import socket
 import sqlite3
 import time
+from threading import Event, Thread
 from urllib.parse import urlsplit
 
 import harness as h
@@ -228,6 +231,98 @@ def exchange(url, case):
             "status": int(raw.split(b" ", 2)[1]) if raw else None}
 
 
+def response_preservation(url, database):
+    selected = [case for case in cases() if case[0] in ("fixed-body-complete", "chunked-body-complete")]
+    before, records, passed = h.snapshot(database), [], True
+    for index in range(100):
+        for case in selected:
+            record = exchange(url, case)
+            after = h.snapshot(database)
+            record.update(index=index, before=before, after=after)
+            records.append(record)
+            if after != before or record["statuses"] != [200, 400] or not record["closed"]:
+                passed = False
+    return records, passed
+
+
+def refusal_ownership(url, process, database, sources, python):
+    target = urlsplit(url)
+    prefix = f"GET /health HTTP/1.1\r\nHost: {target.netloc}\r\nX-Refused: ".encode() + b"x" * 17000
+    noise_body = b'{"repository_id":"fixture","goal":"Must not be dispatched"}'
+    noise = ((f"POST /v1/items HTTP/1.1\r\nHost: {target.netloc}\r\n"
+              f"Authorization: Bearer {h.OWNER}\r\nContent-Type: application/json\r\n"
+              f"Idempotency-Key: refused-noise\r\nContent-Length: {len(noise_body)}\r\n\r\n").encode()
+             + noise_body)
+    baseline, peers = h.snapshot(database), []
+    stop, sent, errors = Event(), [], []
+    with ExitStack() as stack:
+        for kind in ("quiet", "sending"):
+            client = stack.enter_context(closing(socket.create_connection((target.hostname, target.port), timeout=10)))
+            client.sendall(prefix)
+            raw, closed, error = paused_response(client, timeout=10)
+            after = h.snapshot(database)
+            peers.append({"kind": kind, "request_hex": prefix.hex(), "raw_hex": raw.hex(),
+                          "closed": closed, "close_error": error, "before": baseline, "after": after})
+            if after != baseline or not closed or not raw.startswith(b"HTTP/1.1 400 "):
+                raise AssertionError("Refusal did not finish its wire reply before peer EOF")
+            if kind == "sending":
+                def send_noise():
+                    while not stop.is_set():
+                        try:
+                            client.sendall(noise)
+                        except OSError as error:
+                            errors.append(repr(error))
+                            return
+                        sent.append(len(noise))
+                        stop.wait(.01)
+                sender = Thread(target=send_noise)
+                sender.start()
+        try:
+            with closing(sqlite3.connect(database, isolation_level=None)) as probe:
+                probe.execute("BEGIN EXCLUSIVE")
+                probe.execute("ROLLBACK")
+            no_transaction = h.snapshot(database)
+            if no_transaction != baseline:
+                raise AssertionError("Refused peers mutated the store or retained a transaction")
+            control = h.wire(url, "GET", "/v1/dispatch/settings", [("Authorization", "Bearer " + h.OWNER)], "")
+            accepted = h.mutation(url, {"repository_id": "fixture", "goal": "Ordinary work while refused peers remain"},
+                                  "refusal-runtime")
+            if control["status"] != 200 or accepted["status"] != 201:
+                raise AssertionError("Refused peers retained store admission or accepted-operation ownership")
+            after = h.snapshot(database)
+            with closing(sqlite3.connect(database)) as probe:
+                refused_count, = probe.execute(
+                    "SELECT count(*) FROM request_receipts WHERE idempotency_key='refused-noise'").fetchone()
+                accepted_count, = probe.execute(
+                    "SELECT count(*) FROM request_receipts WHERE scope='intake' AND idempotency_key='refusal-runtime'").fetchone()
+            if refused_count != 0 or accepted_count != 1:
+                raise AssertionError("Refused bytes were dispatched or ordinary work lost its receipt")
+        finally:
+            stop.set()
+            sender.join(timeout=10)
+            if sender.is_alive():
+                raise AssertionError("Owned refused-peer sender did not stop")
+        started = time.monotonic()
+        if python:
+            process.stdin.close()
+        else:
+            process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+        process.wait(timeout=15)
+        if process.returncode != 0 or h.snapshot(database) != after:
+            raise AssertionError("Quiet/sending refusal drain changed shutdown or durable effects")
+        lock = h.invoke("lock", sources["P0"], database, capture_output=True, text=True)
+        if lock.stdout.strip() != "acquired":
+            raise AssertionError("Refused peers retained server ownership after shutdown")
+        return {"peers": peers, "noise_hex": noise.hex(), "sent_bytes": sum(sent), "send_errors": errors,
+                "before_control": no_transaction, "control": control, "accepted": accepted,
+                "after_control": after, "after_shutdown": h.snapshot(database),
+                "shutdown_seconds": time.monotonic() - started, "lock_probe": lock.stdout,
+                "Go_ordinary_runtime_debt": None if python else {
+                    "per_EOF_open_refused_peer": "one raw socket and native connection goroutine until peer EOF or service cancellation",
+                    "store_transaction": False, "store_admission": False, "accepted_operation": False,
+                    "request_buffers_released": True, "service_shutdown_interrupts": True}}
+
+
 def differential(binary, output, record_only=False):
     h.verify_manifest()
     output.mkdir(parents=True, exist_ok=True)
@@ -243,7 +338,7 @@ def differential(binary, output, record_only=False):
                 database = h.fresh(directory, sources, retained)
                 actual, framing = [], []
                 with release.production(binary, database, directory,
-                                        python_source=None if label == "Go" else sources[label]) as (url, _):
+                                        python_source=None if label == "Go" else sources[label]) as (url, process):
                     for case in cases():
                         before = h.snapshot(database)
                         observation = exchange(url, case)
@@ -277,6 +372,12 @@ def differential(binary, output, record_only=False):
                         failures.append(f"{shape}/{label}: valid receipt neighbor was not the sole accepted intake")
                     (output / f"neighbors-{shape}-{label}.json").write_text(
                         json.dumps({"before": before, "response": receipt_neighbor, "after": after}), encoding="utf-8")
+                    preservation, preserved = response_preservation(url, database)
+                    (output / f"preservation-{shape}-{label}.json").write_text(json.dumps(preservation), encoding="utf-8")
+                    if not preserved:
+                        failures.append(f"{shape}/{label}: repeated coalesced refusal lost response or durable integrity")
+                    ownership = refusal_ownership(url, process, database, sources, python=label != "Go")
+                    (output / f"refusal-ownership-{shape}-{label}.json").write_text(json.dumps(ownership), encoding="utf-8")
                 (output / f"headers-{shape}-{label}.json").write_text(json.dumps(actual), encoding="utf-8")
                 (output / f"framework-production-{shape}-{label}.json").write_text(json.dumps(framing), encoding="utf-8")
                 if expected is None:

@@ -78,9 +78,12 @@ Native `net/http` still parses unchanged request bytes; this adds no request,
 body, idle or drain deadline and no new byte/count cap. The owner-authorized
 experiment requires independent exact-head review and fresh required CI,
 not merely a passing anonymous health probe.
-It is currently **blocked for adoption** by repeated Windows refusal-response
-loss; see the [retained closure discrepancy](../server/README.md#deployment-retirement-and-incomplete-header-regression).
-Passing single package runs do not supersede that failing regression.
+Earlier Windows refusal-response loss and the unsuccessful shutdown experiment
+remain in the [closure evidence](../server/README.md#deployment-retirement-and-incomplete-header-regression).
+The separately authorized v11 FIN/peer-drain strategy must pass that same
+repeated manifest. Its per-refused-peer socket/goroutine/buffer lifetime, lack
+of database/admission/accepted-operation ownership and service-cancel cleanup
+require explicit final review, not an implicit waiver from a wire or package PASS.
 Drain failures retain the actual response, lock-probe elapsed time and complete
 typed after-state; diagnostic capture does not change the workload, lock
 assertions, busy timeout or required successful drain.

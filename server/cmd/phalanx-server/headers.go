@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const incompleteHeadLimit = 16384
@@ -170,11 +172,14 @@ func (g *headEvents) idle() bool {
 }
 
 type headReads struct {
-	mu      sync.Mutex
-	events  headEvents
-	pending []byte
-	err     error
-	refused bool
+	mu         sync.Mutex
+	events     headEvents
+	pending    []byte
+	err        error
+	refused    bool
+	halfClosed bool
+	closeOnce  sync.Once
+	closeError error
 }
 
 func receiveEventSize() int {
@@ -192,7 +197,51 @@ func (c *idleConnection) refuseHeadLocked() {
 	if _, err := io.WriteString(c.Conn, incompleteHeadResponse); err != nil {
 		slog.Error("Cannot send incomplete-header refusal", "error", err)
 	}
+	if writer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		if err := writer.CloseWrite(); err != nil {
+			slog.Error("Cannot half-close refused transport", "error", err)
+		} else {
+			c.headers.halfClosed = true
+		}
+	} else {
+		slog.Error("Refused transport does not support a write-side close")
+	}
 	c.headers.refused, c.headers.pending, c.headers.err = true, nil, io.EOF
+	c.headers.events = headEvents{}
+}
+
+func (c *idleConnection) Close() error {
+	if c.headers == nil {
+		return c.Conn.Close()
+	}
+	g := c.headers
+	g.mu.Lock()
+	drain := g.refused && g.halfClosed && c.lifetime != nil
+	g.mu.Unlock()
+	if !drain {
+		return c.Conn.Close()
+	}
+	g.closeOnce.Do(func() {
+		// FIN delivers the refusal immediately. Read remaining peer bytes rather
+		// than discarding queued replies with a reset. Service shutdown, not a
+		// new timer, interrupts a peer that keeps its write side open.
+		stop := context.AfterFunc(c.lifetime, func() {
+			if err := c.Conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				slog.Error("Cannot interrupt refused transport drain", "error", err)
+			}
+		})
+		defer stop()
+		if err := c.Conn.SetReadDeadline(time.Time{}); err != nil && c.lifetime.Err() == nil {
+			slog.Error("Cannot clear refused transport read deadline", "error", err)
+		} else if _, err := io.Copy(io.Discard, c.Conn); err != nil && c.lifetime.Err() == nil {
+			slog.Warn("Refused transport drain failed", "error", err)
+		}
+		g.closeError = c.Conn.Close()
+		if errors.Is(g.closeError, net.ErrClosed) && c.lifetime.Err() != nil {
+			g.closeError = nil
+		}
+	})
+	return g.closeError
 }
 
 func (c *idleConnection) readHead(p []byte) (int, error) {

@@ -148,6 +148,7 @@ func serve(ctx context.Context, config configuration) (result error) {
 		// h11 bounds incomplete events, not the number of fields in a complete one.
 		MaxHeaderValueCount: int(^uint(0) >> 1),
 	}
+	transportContext, stopTransports := context.WithCancel(ctx)
 	jobsContext, stopJobs := context.WithCancel(context.Background())
 	jobsDone := make(chan struct{})
 	go func() {
@@ -155,12 +156,13 @@ func serve(ctx context.Context, config configuration) (result error) {
 		app.RunBackground(jobsContext, slog.Default())
 	}()
 	defer func() {
+		stopTransports()
 		result = errors.Join(result, server.Shutdown(context.Background()))
 		stopJobs()
 		<-jobsDone
 	}()
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(idleListener{listener}) }()
+	go func() { done <- server.Serve(idleListener{Listener: listener, lifetime: transportContext}) }()
 	slog.Info("Phalanx Go server listening", "revision", revision, "address", listener.Addr().String())
 	select {
 	case err := <-done:

@@ -296,15 +296,38 @@ Original first-byte idle, buffered-prefix, body, disconnect, lock and drain
 checks remain required alongside exact-head independent review and fresh CI.
 An authorized experiment or source merge is not deployment readiness.
 
-**The observer prototype remains blocked on refused-connection delivery.**
 Repeated real Windows entrypoint requests with coalesced body/next-head input
-exposed TCP resets that can discard the 400 or the entire response, while both
-pinned Python implementations delivered complete replies. A direct Windows
-`SHUT_RDWR`-before-close experiment did not eliminate that loss and was removed.
-Keep the raw responses, reset errors, complete typed stores and exact repetition
-manifest. Do not treat a single passing matrix or package run as resolving the
-reproducible closure discrepancy, add an arbitrary close delay/drain deadline,
-or broaden the transport experiment without an explicit decision.
+exposed TCP resets that discarded the 400 or the entire response. A direct
+Windows `SHUT_RDWR`-before-close experiment did not eliminate that loss and was
+removed. Those failing raw responses, reset errors, typed stores and matched
+repetition manifests remain evidence; a passing single matrix or package run
+does not supersede them.
+
+The owner separately authorized receive/closure investigation in execution
+`db1cd4356eaa4e6992ed10fd25c8f9ef`, reply v11. The current strategy sends the
+refusal and a write-side FIN immediately, then drains only the already-refused
+raw connection until peer EOF. Native `net/http` continues to own and track
+that connection goroutine. The server lifetime interrupts the drain before
+HTTP shutdown finishes and before the shared OS lock is released; there is no
+new timer, cap, request parsing or dispatch of drained bytes. Refused request
+buffers are released.
+
+**Ordinary-runtime resource difference, not hidden by wire passes:** an EOF-open
+refused peer retains one raw socket, its native connection goroutine and a
+small drain buffer until peer EOF or service cancellation. It retains no
+database transaction, store admission, writer binding or accepted operation.
+The corpus verifies ordinary authenticated work and its receipt while quiet
+and sending refused peers remain, zero receipts from authenticated-looking
+drained noise, and clean shutdown/lock release without first closing those
+peers. This lifetime/resource difference requires explicit independent review
+disposition; investigation permission is not an adoption waiver.
+
+`headers.py` also repeats the original fixed/chunked-body response-preservation
+cases 100 times each per implementation and schema shape. Every response,
+close/reset error and full typed store remains recorded. The prior unexplained
+post-load drain failure is independently UNKNOWN; successful later runs do not
+relabel its cause. Exact-final-head independent approval, original strict
+stream/body/disconnect/drain/receipt checks and fresh CI remain required.
 
 ## Native domain extension evidence (in development)
 

@@ -158,6 +158,18 @@ independent exact-final-head review and fresh required CI. The
 [production regression](../server/README.md#deployment-retirement-and-incomplete-header-regression)
 retains the original failing evidence and measured complete/incomplete boundary.
 
+The same execution's owner reply **v11** separately authorizes bounded owned
+receive/closure integration, including refusal-drain or ACK-handling strategies,
+without arbitrary avoidance delays, new timeouts/caps, parser replacement or
+malformed-input waivers. A write FIN followed by raw peer drain must preserve
+the exact wire/idle/body/shutdown/receipt contract. Any socket/goroutine/buffer
+retained before peer EOF must be identified and independently assessed, including
+proof that it holds no database transaction, store admission or accepted work
+and is interrupted by service shutdown. Earlier failed experiments and the
+unexplained historical drain failure remain evidence; they cannot be reclassified
+by later PASS results. Qualified exact-final-head approval and fresh required CI
+still gate adoption and the normal guarded merge.
+
 ### 4.2 Routes and authority
 
 Appendix A is the generated exhaustive P0 request/parameter inventory (66 operations, 51 schemas). It supplements, not substitutes for, the domain rules below. Auth codes: O=owner bearer; R=trusted runner; C=owner or runner coordinator; W=current scoped writer; B=board-read token or explicitly authorized direct local board. A valid writer may read only its own item/execution routes where the route admits that role. Exact source dependencies determine role errors, not "all authenticated" middleware.
