@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -78,7 +79,16 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return json.Number(strconv.FormatUint(value.Uint(), 10)), nil
 	case reflect.Float32, reflect.Float64:
-		return projectJSONValue(json.Number(strconv.FormatFloat(value.Float(), 'g', -1, value.Type().Bits())), ordered)
+		number, bits := value.Float(), value.Type().Bits()
+		absolute := math.Abs(number)
+		format := byte('f')
+		// Match encoding/json before canonicalization: choosing exponent notation
+		// too early changes integral native floats into Python float tokens.
+		if absolute != 0 && (bits == 64 && (absolute < 1e-6 || absolute >= 1e21) ||
+			bits == 32 && (float32(absolute) < 1e-6 || float32(absolute) >= 1e21)) {
+			format = 'e'
+		}
+		return projectJSONValue(json.Number(strconv.FormatFloat(number, format, -1, bits)), ordered)
 	case reflect.Slice:
 		if value.IsNil() {
 			return nil, nil

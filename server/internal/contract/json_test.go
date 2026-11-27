@@ -3,7 +3,9 @@ package contract
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -109,6 +111,33 @@ func TestOrderedJSONValuePreservesStructOrder(t *testing.T) {
 	current, err := PythonJSON(projected)
 	if err != nil || current != old {
 		t.Fatal("repr/storage field order changed", current, old, err)
+	}
+}
+
+func TestJSONValueNativeFloatBoundaries(t *testing.T) {
+	for _, value := range []any{
+		float64(1e6), float32(1e6), float64(-1e6), float32(-1e6),
+		float64(1e-6), float32(1e-6), float64(1e21), float32(1e21),
+		math.Nextafter(1e-6, 0), math.Nextafter(1e-6, 1),
+		math.Nextafter(1e21, 0), math.Nextafter(1e21, math.Inf(1)),
+		math.Nextafter32(1e-6, 0), math.Nextafter32(1e-6, 1),
+		math.Nextafter32(1e21, 0), math.Nextafter32(1e21, float32(math.Inf(1))),
+		math.Copysign(0, -1), float32(math.Copysign(0, -1)),
+	} {
+		t.Run(fmt.Sprintf("%T/%g", value, value), func(t *testing.T) {
+			previous, err := Canonical(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			projected, err := JSONValue(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire, err := json.Marshal(projected)
+			if err != nil || string(wire) != previous {
+				t.Fatalf("native float wire changed: old %s new %s (%v)", previous, wire, err)
+			}
+		})
 	}
 }
 
