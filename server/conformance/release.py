@@ -156,15 +156,39 @@ def transport_checks(url, database):
         first = role_request(url)
         client.sendall(first)
         first_response = role_response(client)
-        time.sleep(2)
-        second = role_request(url, close=True)
-        client.sendall(second[:-2])
-        time.sleep(5.25)
-        client.sendall(second[-2:])
-        records["keepalive_fragment"] = {
-            "prefix_before_idle_seconds": 2, "fragment_delay_seconds": 5.25,
-            "first_request": first.decode(), "first_response": first_response,
-            "second_request": second.decode(), "second_response": role_response(client)}
+        fragments = []
+        for count in (1, 2, 3, 4):
+            time.sleep(2)
+            second = role_request(url, close=count == 4)
+            client.sendall(second[:count])
+            time.sleep(5.25)
+            client.sendall(second[count:])
+            fragments.append({"prefix_bytes": count, "prefix_before_idle_seconds": 2,
+                              "fragment_delay_seconds": 5.25, "request": second.decode(),
+                              "response": role_response(client)})
+        records["keepalive_fragments"] = {"first_request": first.decode(), "first_response": first_response,
+                                         "repeated_transitions": fragments}
+    coalesced = []
+    for count in (1, 4):
+        with socket.create_connection((target.hostname, target.port), timeout=10) as client:
+            first, second = role_request(url), role_request(url, close=True)
+            client.sendall(first + second[:count])
+            first_response = role_response(client)
+            time.sleep(5.25)
+            try:
+                client.sendall(second[count:])
+                response = role_response(client)
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError) as error:
+                response = {"closed": True, "error": str(error)}
+            except AssertionError as error:
+                if str(error) != "Role response closed before headers: ":
+                    raise
+                response = {"closed": True, "error": str(error)}
+            else:
+                raise AssertionError("Buffered prefix removed the pinned idle expiry: " + response)
+            coalesced.append({"prefix_bytes": count, "delay_seconds": 5.25, "first_request": first.decode(),
+                              "first_response": first_response, "second_request": second.decode(), "result": response})
+    records["coalesced_prefix_expiry"] = coalesced
     with socket.create_connection((target.hostname, target.port), timeout=8) as client:
         request = role_request(url)
         client.sendall(request)

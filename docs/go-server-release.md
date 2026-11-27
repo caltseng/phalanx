@@ -49,9 +49,14 @@ current-data receipt/job reconciliation, not a success-shaped response.
 The existing five-second idle keep-alive timeout is retained without imposing
 a new five-second request-header deadline; the real-entrypoint proof delays an
 authenticated request header beyond five seconds on P0, D0 and Go.
-It also fragments a keep-alive header after a prefix before idle expiry,
+It also repeatedly fragments keep-alive headers after one/two/three/four-byte
+prefixes before idle expiry, distinguishes previously coalesced prefixes,
 separately checks genuine idle closure, delayed bodies, incomplete/complete
 caller disconnects and active-write drain under the same shared OS lock.
+The narrow connection-deadline shim observes native connection states and new
+network input only: it does not parse, buffer, rewrite or broaden requests.
+This preserves Python's first-byte idle cancellation despite Go's four-byte
+idle peek, including retained expiry for already buffered partial prefixes.
 Windows corrects only the service's own inherited Idle/BelowNormal priority to
 Normal, preserving higher priorities.
 

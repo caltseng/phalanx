@@ -135,6 +135,7 @@ func serve(ctx context.Context, config configuration) (result error) {
 		Handler: &httpapi.Handler{App: app, Owner: config.owner, Runner: config.runner,
 			Logger: slog.Default(), Home: config.home, LocalBoard: config.localBoard, AssetsDirectory: config.assets},
 		IdleTimeout: 5 * time.Second,
+		ConnState:   idleState,
 	}
 	jobsContext, stopJobs := context.WithCancel(context.Background())
 	jobsDone := make(chan struct{})
@@ -148,7 +149,7 @@ func serve(ctx context.Context, config configuration) (result error) {
 		<-jobsDone
 	}()
 	done := make(chan error, 1)
-	go func() { done <- server.Serve(listener) }()
+	go func() { done <- server.Serve(idleListener{listener}) }()
 	slog.Info("Phalanx Go server listening", "revision", revision, "address", listener.Addr().String())
 	select {
 	case err := <-done:

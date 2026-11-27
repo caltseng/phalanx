@@ -1153,6 +1153,8 @@
     "retained"
   ],
   "go_tests": [
+    "server/cmd/phalanx-server/idle_test.go:TestFirstIdleByteCancelsDeadlineAcrossRepeatedRequests",
+    "server/cmd/phalanx-server/idle_test.go:TestNoNewInputRetainsIdleDeadlineAndPastAbort",
     "server/cmd/phalanx-server/main_test.go:TestConfigurationPreservesExplicitSettingsAndRefusesUnsafeStartup",
     "server/internal/application/decisions_test.go:TestMergeWinsOverOutstandingStop",
     "server/internal/application/decisions_test.go:TestFinalizationAndDraftRevisionFence",
@@ -1208,13 +1210,15 @@
     "server/internal/sqlite/store_test.go:TestGateTimeoutAndContendedRecovery",
     "server/internal/sqlite/store_test.go:TestDefaultAdmissionBoundCleansBothWaiterKinds"
   ],
-  "go_test_count": 54,
+  "go_test_count": 56,
   "files": {
     "server/cmd/conformance-decisions/main.go": "a373d0e6f55f2448cd3eabc1a923f7170e75859e96dba3ba11fc0a4be2af247d",
     "server/cmd/conformance-json/main.go": "3dadc98f48f1f8f557dec930341f3041f6d6efc42efb429dac31b22ac9c013dc",
     "server/cmd/conformance-models/main.go": "d58b5c445f6d8ed9fceb785edd49216e0314aa4799cfe2dd835073eff6705072",
     "server/cmd/conformance-server/main.go": "2f200541e7c03719ccddd24ac434bf7395bcffdd7591c02cbaad0c249c496897",
-    "server/cmd/phalanx-server/main.go": "5ffad54569a4e5550b80c69931d0d4739614840d8448fe7ef9a971e9e48f85f3",
+    "server/cmd/phalanx-server/idle.go": "bba491b45d4324705c6f2f3c956174ec194f163646698416a11d08a7c26627df",
+    "server/cmd/phalanx-server/idle_test.go": "c718c9a195a5d3666669eac213cc53d2b8688cc836885cfae0f7c3f6a93a4d41",
+    "server/cmd/phalanx-server/main.go": "87ba04f92d593c42b4d19936f0c19a73d44f19040792b7990e4aef2ce562c201",
     "server/cmd/phalanx-server/main_test.go": "a5124d9cd5ae983793eebbf98bdba2652623ce84273c557a316b5b126a15b7e2",
     "server/cmd/phalanx-server/priority_unix.go": "6035da6e24161ee607e1bb2e787f1637bb4962d24a90e4bd5e3a8706e393e849",
     "server/cmd/phalanx-server/priority_windows.go": "b9dcd1252899bac41037a3c5127a807a29ccdedfc1681b80cb64958bffd7305b",
@@ -1327,7 +1331,7 @@
     "server/conformance/oracle.py": "d5c79b9e2ebaff6e0ce14770c65cfafb49330816929c53f89719fdcc7f40656c",
     "server/conformance/reconciliation.py": "283bd0c44aca4aec6b150e3d020b6182de93165a72e7c7c53ebd0cd506625288",
     "server/conformance/rehearsal.py": "6f24d3b8890774973c4a465ead9449882b5cb1c0c3e5bedd283234d74700a15c",
-    "server/conformance/release.py": "2f7f561d3318f65e070943ff2860fddc60e55f93782bdafecd1dffb4fe6c732d",
+    "server/conformance/release.py": "b3fcd65e3840f49f08aee07e7209cb92123522a29583d7775c70ce455cb08ef5",
     "server/conformance/results.py": "f46549899452d1953edc31ea34aa74b3c7a575940aca91e97299dc825fc9c4c7",
     "server/conformance/route_models.py": "2006fd15ff3f60bd05da9e130168a87d69a45cdbc983a68892d0ca0eb2d98258",
     "server/conformance/scout.py": "f2651b409dab68f84a6d661f13cadaf9a94b0173042ced04da4ac9b200302e3d",
