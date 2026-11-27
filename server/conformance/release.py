@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from urllib.parse import urlsplit
 
 import harness as h
 
@@ -34,19 +35,29 @@ def parameters(binary, database):
 
 
 @contextmanager
-def production(binary, database, directory):
+def production(binary, database, directory, python_source=None):
     command, url = parameters(binary, database)
+    if python_source is not None:
+        command = [sys.executable, "-P", "-c",
+                   "import json,os,signal,sys; from threading import Thread; "
+                   "sys.path.insert(0,sys.argv.pop(1)); "
+                   "from phalanx.deployment import run_service; from phalanx.server_admin import serve; "
+                   "Thread(target=lambda:(sys.stdin.buffer.read(),signal.raise_signal(signal.SIGINT)),daemon=True).start(); "
+                   "sys.exit(run_service(json.loads(sys.argv[1]),dict(os.environ),'server',serve=serve))",
+                   str(python_source), json.dumps({"server": {"host": "127.0.0.1", "port": urlsplit(url).port}})]
     with (directory / "server.log").open("ab") as log:
         log_offset = log.tell()
         process = subprocess.Popen(command, env=environment(database), cwd=directory,
-                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                   stdin=subprocess.PIPE if python_source is not None else subprocess.DEVNULL,
+                                   stdout=log, stderr=log,
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
         try:
             deadline = time.monotonic() + 15
             while True:
                 if process.poll() is not None:
                     raise AssertionError("Packaged server exited before authenticated readiness")
-                own_listener = ("address=" + url.removeprefix("http://")).encode()
+                own_listener = ("address=" + url.removeprefix("http://") if python_source is None
+                                else "Uvicorn running on " + url).encode()
                 if own_listener not in (directory / "server.log").read_bytes()[log_offset:]:
                     if time.monotonic() >= deadline:
                         raise AssertionError("Owned server did not confirm its listener before client probes")
@@ -64,7 +75,10 @@ def production(binary, database, directory):
             yield url, process
         finally:
             if process.poll() is None:
-                process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+                if python_source is not None:
+                    process.stdin.close()
+                else:
+                    process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
                 try:
                     process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
@@ -210,15 +224,12 @@ def release(package, output):
                 directory = root / f"load-{retained}-{label}"
                 database = h.fresh(directory, sources, retained)
                 baseline = h.snapshot(database)
-                if label == "Go":
-                    manager = production(binary, database, directory)
-                else:
-                    manager = h.server([sys.executable, "-P", str(h.HERE / "oracle.py"), "serve",
-                                        str(sources[label]), str(database)], directory)
+                manager = production(binary, database, directory,
+                                     python_source=sources[label] if label != "Go" else None)
                 start = time.perf_counter()
                 with manager as running:
                     startup_seconds = time.perf_counter() - start
-                    url = running[0] if label == "Go" else running
+                    url = running[0]
                     for _ in range(12):
                         response = h.wire(url, "GET", "/v1/dispatch/settings", [("Authorization", "Bearer " + h.OWNER)], "")
                         if response["status"] != 200:
@@ -247,6 +258,7 @@ def release(package, output):
                      "controller": "sequential P0/D0/Go workloads; other host activity unmeasured"},
             "manifest": requests(), "manifest_sha256": h.digest(json.dumps(requests(), sort_keys=True).encode()),
             "concurrency": 8, "warmup_reads": 12, "runs_per_implementation_shape": 3,
+            "metadata_policy": "Real UUIDs and wall clock for all production entrypoints; no fixture clock/ID injection",
             "performance_classification": "observations only; proposed goals not approved or claimed",
             "resource_metrics": "CPU/RSS/GC/goroutine/connection/30-minute-soak unmeasured; not passed gates",
             "results": loads,

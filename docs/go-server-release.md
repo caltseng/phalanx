@@ -99,7 +99,9 @@ source/build/package identity; never label a fixture adapter run a real package 
 
 Runtime/load evidence uses the exact 120-request manifest (30 successful intake
 writes, 90 authenticated item/settings reads), concurrency8, 12 warmup reads,
-three measured runs per P0/D0/Go on each schema shape. It records every latency
+three measured runs per P0/D0/Go on each schema shape, using each real production
+entrypoint's ordinary UUIDs and wall clock (no fixture identity/clock injection).
+It records every latency
 and status, p50/p95/p99/max, throughput, host and package digest, and full typed
 snapshots verifying exactly 30 new items/receipts per run with unchanged schema.
 It is representative
