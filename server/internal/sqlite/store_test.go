@@ -266,6 +266,49 @@ func TestPooledTransactionsCleanUpFailuresAndPanics(t *testing.T) {
 	}
 }
 
+func TestFailedBeginDiscardsConnection(t *testing.T) {
+	for _, mode := range []string{"ro", "rw"} {
+		t.Run(mode, func(t *testing.T) {
+			store := fixture(t)
+			conn, close, err := store.connection(context.Background(), mode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer close()
+			// Model an unacknowledged BEGIN with an already-active transaction.
+			// Cancellation must not put that transaction back in the pool.
+			statement := "BEGIN"
+			if mode == "rw" {
+				statement = "BEGIN IMMEDIATE"
+			}
+			if _, err := conn.ExecContext(context.Background(), statement); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			if err := begin(ctx, conn, statement); !errors.Is(err, context.Canceled) {
+				t.Fatal("cancellation was not preserved", err)
+			}
+			if err := close(); err != nil {
+				t.Fatal(err)
+			}
+			pool := store.read
+			if mode == "rw" {
+				pool = store.write
+			}
+			if stats := pool.Stats(); stats.OpenConnections != 0 {
+				t.Fatal("failed BEGIN retained an uncertain transaction", stats)
+			}
+			if err := store.Write(context.Background(), func(tx *Tx) error {
+				_, err := tx.conn.ExecContext(tx.ctx, "INSERT INTO parent VALUES (1)")
+				return err
+			}); err != nil {
+				t.Fatal("failed BEGIN retained a lock or poisoned the pool", err)
+			}
+		})
+	}
+}
+
 func TestBusyBeginBoundAndCommitRollback(t *testing.T) {
 	store := fixture(t)
 	blocker, close, err := store.connection(context.Background(), "rw")

@@ -174,6 +174,16 @@ func rollback(conn *sql.Conn) error {
 	return nil
 }
 
+func begin(ctx context.Context, conn *sql.Conn, statement string) error {
+	_, err := conn.ExecContext(ctx, statement)
+	if err != nil {
+		// Cancellation may race with BEGIN succeeding in SQLite. A failed
+		// acknowledgement cannot establish that this connection is idle.
+		conn.Raw(func(any) error { return driver.ErrBadConn })
+	}
+	return err
+}
+
 func (s *Store) Write(ctx context.Context, perform func(*Tx) error) (result error) {
 	release, err := s.gate.write(ctx)
 	if err != nil {
@@ -189,7 +199,7 @@ func (s *Store) Write(ctx context.Context, perform func(*Tx) error) (result erro
 			result = errors.Join(result, err)
 		}
 	}()
-	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+	if err = begin(ctx, conn, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
 	committed := false
@@ -236,7 +246,7 @@ func (s *Store) Read(ctx context.Context, perform func(*Tx) error) (result error
 			result = errors.Join(result, err)
 		}
 	}()
-	if _, err = conn.ExecContext(ctx, "BEGIN"); err != nil {
+	if err = begin(ctx, conn, "BEGIN"); err != nil {
 		release()
 		return err
 	}

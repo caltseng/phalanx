@@ -1323,6 +1323,7 @@
     "server/internal/sqlite/store_test.go:TestPoolsReuseConnectionsWithoutCrossingReadWriteModes",
     "server/internal/sqlite/store_test.go:TestConcurrentReadPoolInitializesAndBoundsIdleConnections",
     "server/internal/sqlite/store_test.go:TestPooledTransactionsCleanUpFailuresAndPanics",
+    "server/internal/sqlite/store_test.go:TestFailedBeginDiscardsConnection",
     "server/internal/sqlite/store_test.go:TestBusyBeginBoundAndCommitRollback",
     "server/internal/sqlite/store_test.go:TestUnknownCommitReconcilesReceiptWithoutReplay",
     "server/internal/sqlite/store_test.go:TestDriverOnlineBackupPreservesIdentityTypedRowsAndDDL",
@@ -1334,7 +1335,7 @@
     "server/internal/testdb/db_test.go:TestGoldenSchema",
     "server/internal/testdb/db_test.go:TestNewIsEmptyAndIsolated"
   ],
-  "go_test_count": 93,
+  "go_test_count": 94,
   "files": {
     "server/cmd/conformance-decisions/main.go": "a373d0e6f55f2448cd3eabc1a923f7170e75859e96dba3ba11fc0a4be2af247d",
     "server/cmd/conformance-json/main.go": "3dadc98f48f1f8f557dec930341f3041f6d6efc42efb429dac31b22ac9c013dc",
@@ -1458,8 +1459,8 @@
     "server/internal/sqlite/results.go": "a7744906e5cda8669cc5b4250c7f4e4d72a24a9de328a842806cc0f3c9cb6859",
     "server/internal/sqlite/scout.go": "7246c38d8992dc40e0bd09429a22868d6375a4c211d0158d7f873ea4cd2297d4",
     "server/internal/sqlite/steering.go": "1d36779e26852fa4070405609df82730bf4e3aa8c4a6669fab5051b44f68878a",
-    "server/internal/sqlite/store.go": "1cf5efc70fb6270c83208a9e50641733e195310044e8cf7bd2bcc8c1b3f3d2a7",
-    "server/internal/sqlite/store_test.go": "1e6e4a5ee62ffef6a94742bc03b3872db6d9a7be4c51749f0c56c031e63c755c",
+    "server/internal/sqlite/store.go": "dd0c0e2099598f191d1ac5e57077861a0e203c094568031328b757898aa7a89b",
+    "server/internal/sqlite/store_test.go": "048b2189d4f7d226d5b357332c81f2fb6b721cf889627e4e98a15a1e4766ea6e",
     "server/internal/sqlite/usage.go": "63eb362865be11eac5c5a15644fb2b3d419358b8a7c31ea3598f683332baf3a1",
     "server/internal/sqlite/writers.go": "49f4f6b808af32f6a95c6d6a611440b4527c06fa82a4a23b3b8088a54044e964",
     "server/internal/testdb/db.go": "6843129598400f7a0100396a7c1c94599833c60e13b16ae82d20ed8ea8124819",
