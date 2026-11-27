@@ -76,7 +76,7 @@ func refreshDependents(tx *sqlite.Tx, upstreamID, cursor string, now time.Time) 
 	if err != nil {
 		return err
 	}
-	return tx.ScheduleDependencyRefresh(upstreamID, next, time.Now().UnixNano())
+	return tx.ScheduleDependencyRefresh(upstreamID, next, now.UnixNano())
 }
 
 func auditBatch(tx *sqlite.Tx, nowMS int64) error {
@@ -100,7 +100,7 @@ func (a *App) StartReconciliation(ctx context.Context) error {
 		if err := tx.StartDependencyAudit(); err != nil {
 			return err
 		}
-		return auditBatch(tx, time.Now().UnixMilli())
+		return auditBatch(tx, a.Clock().UnixMilli())
 	})
 }
 
@@ -120,14 +120,14 @@ func (a *App) ProcessRefresh(ctx context.Context) (bool, error) {
 			if err != nil || upstreamID == "" {
 				return err
 			}
-			return refreshDependents(tx, upstreamID, cursor, time.Now())
+			return refreshDependents(tx, upstreamID, cursor, a.Clock())
 		})
 		if err != nil {
 			return false, err
 		}
 	}
 	if audit {
-		err = a.Store.Write(ctx, func(tx *sqlite.Tx) error { return auditBatch(tx, time.Now().UnixMilli()) })
+		err = a.Store.Write(ctx, func(tx *sqlite.Tx) error { return auditBatch(tx, a.Clock().UnixMilli()) })
 		if err != nil {
 			return false, err
 		}

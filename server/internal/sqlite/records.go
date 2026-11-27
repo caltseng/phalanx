@@ -188,6 +188,6 @@ func (tx *Tx) Writer(tokenDigest string) (Writer, error) {
 	err := tx.conn.QueryRowContext(tx.ctx, `SELECT writer.id, writer.item_id, writer.execution_id
 		FROM writers AS writer JOIN executions AS execution ON execution.id=writer.execution_id
 		WHERE writer.token_digest=? AND writer.ended_at IS NULL
-		AND execution.status NOT IN ('completed', 'failed', 'cancelled')`, tokenDigest).Scan(&writer.ID, &writer.ItemID, &writer.ExecutionID)
+		AND execution.status NOT IN `+terminalStatusesSQL, tokenDigest).Scan(&writer.ID, &writer.ItemID, &writer.ExecutionID)
 	return writer, err
 }

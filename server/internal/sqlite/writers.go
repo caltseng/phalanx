@@ -194,7 +194,7 @@ func (tx *Tx) DispatchSettings() (DispatchSettings, error) {
 	}
 	err = tx.conn.QueryRowContext(tx.ctx, `SELECT count(*),coalesce(sum(w.building),0) FROM writers w
 		WHERE w.ended_at IS NULL AND EXISTS (SELECT 1 FROM executions e WHERE e.id=w.execution_id
-		AND e.status NOT IN ('completed','failed','cancelled'))`).Scan(&result.ActiveWriters, &result.BuildingWriters)
+		AND e.status NOT IN `+terminalStatusesSQL+`)`).Scan(&result.ActiveWriters, &result.BuildingWriters)
 	result.DeliveringWriters = result.ActiveWriters - result.BuildingWriters
 	return result, err
 }
@@ -218,7 +218,7 @@ func (tx *Tx) FirstRework(nowMS int64) (*string, error) {
 func (tx *Tx) ActiveWriters() ([]WriterRecord, error) {
 	rows, err := tx.conn.QueryContext(tx.ctx, `SELECT w.id,w.item_id,w.session_id,w.building FROM writers w
 		WHERE w.ended_at IS NULL AND EXISTS (SELECT 1 FROM executions e WHERE e.id=w.execution_id
-		AND e.status NOT IN ('completed','failed','cancelled')) ORDER BY w.created_at,w.id`)
+		AND e.status NOT IN `+terminalStatusesSQL+`) ORDER BY w.created_at,w.id`)
 	if err != nil {
 		return nil, err
 	}

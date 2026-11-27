@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"time"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
@@ -171,7 +170,7 @@ func (a *App) Steer(ctx context.Context, itemID, executionID string, request con
 			if err := tx.RecordHistory(executionID, row.Version+1, nil, "steer", details, stateJSON, now); err != nil {
 				return nil, err
 			}
-			if err := refreshWait(tx, itemID, executionID, time.Now().UnixMilli()); err != nil {
+			if err := refreshWait(tx, itemID, executionID, a.Clock().UnixMilli()); err != nil {
 				return nil, err
 			}
 			return inspect(tx, itemID)
