@@ -439,11 +439,11 @@ def supervise(config_path, config, env, *, task, record, engine, go_binary):
         # EnginePID is only an association check, never a termination target or ownership grant.
         if proof["engine_pid"] not in (current.pid, current.expected["parent"]):
             raise OwnershipError("Task engine/action lineage is not proven")
-        engine = current
+        task_engine = current
         if proof["engine_pid"] != current.pid:
-            engine = Original.capture(native, proof["engine_pid"], _query)
-            stack.callback(engine.close)
-            if engine.created > current.created:
+            task_engine = Original.capture(native, proof["engine_pid"], _query)
+            stack.callback(task_engine.close)
+            if task_engine.created > current.created:
                 raise OwnershipError("Task engine PID was reused after action creation")
         if task_control("inspect", task=task)["task"] != proof:
             raise OwnershipError("Task changed before contained launch")
@@ -465,7 +465,7 @@ def supervise(config_path, config, env, *, task, record, engine, go_binary):
         root_pid = job.launch(command, env, Path.cwd())
         _write_new(record, {"format": 1, "task_path": task, "task": proof,
                             "supervisor": supervisor.expected, "lineage": lineage,
-                            "engine": {"identity": engine.expected, "handle": engine.handle},
+                            "engine": {"identity": task_engine.expected, "handle": task_engine.handle},
                             "job_handle": job.handle, "containment_id": job.identity,
                             "root_handle": job.root, "root": job.root_identity,
                             "root_pid": root_pid,

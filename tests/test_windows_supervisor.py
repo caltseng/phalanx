@@ -99,6 +99,35 @@ class IdentityTest(unittest.TestCase):
             self.assertFalse(result["stopped"])
             self.assertEqual(result["request_outcomes"], "transport-unknown")
 
+    def test_supervise_keeps_server_engine_separate_from_task_engine_identity(self):
+        for selected in ("python", "go"):
+            with self.subTest(engine=selected), TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                database = root / "synthetic.sqlite3"
+                database.touch()
+                database.with_name(database.name + ".service.lock").touch()
+                identity = dict(self.row, pid=os.getpid())
+                original = w.Original(self.native, os.getpid(), 900, self.row["created"], identity)
+                proof = {"engine_pid": os.getpid(), "action_executable_hash": identity["executable_hash"],
+                         "action_arguments_hash": identity["arguments_hash"]}
+                job = Mock(handle=901, root=902, identity="owned-fixture", root_identity=self.row)
+                job.launch.return_value = 42
+                job.wait_empty.return_value = 17
+
+                def control(operation, **arguments):
+                    return {"task": proof} if operation == "inspect" else {"listeners": []}
+
+                with patch.object(w, "_native", return_value=self.native), \
+                        patch.object(w.Original, "capture", return_value=original), \
+                        patch.object(w, "Job", return_value=job), \
+                        patch.object(w, "task_control", side_effect=control):
+                    code = w.supervise(root / "deployment.json", {"server": {"port": 12345}},
+                                       {"PHALANX_DB": str(database)}, task="\\synthetic",
+                                       record=root / "record.json", engine=selected, go_binary=None)
+                command = job.launch.call_args.args[0]
+                self.assertEqual(command[command.index("--engine") + 1], selected)
+                self.assertEqual(code, 17)
+
 
 @unittest.skipUnless(os.name == "nt", "Win32 native-handle fixtures run in Windows CI")
 class WindowsJobTest(unittest.TestCase):
