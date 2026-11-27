@@ -1,10 +1,47 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows"
 )
+
+func resolveHome(path string) (string, error) {
+	path = filepath.Clean(path)
+	var suffix []string
+	seen := make(map[string]bool)
+	for {
+		resolved, err := resolveExistingHome(path)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved, nil
+		}
+		// Python's non-strict Windows resolution also follows dangling
+		// reparse points before preserving the missing suffix.
+		if target, err := os.Readlink(path); err == nil && !seen[path] {
+			seen[path] = true
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			path = target
+			continue
+		}
+		root := filepath.Clean(path) == filepath.VolumeName(path)+`\`
+		parent, tail := filepath.Split(strings.TrimRight(path, `\/`))
+		if root || tail == "" || parent == path {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				path = filepath.Join(path, suffix[i])
+			}
+			return filepath.Clean(path), nil
+		}
+		suffix = append(suffix, tail)
+		path = parent
+	}
+}
 
 func resolveExistingHome(path string) (string, error) {
 	name, err := windows.UTF16PtrFromString(path)

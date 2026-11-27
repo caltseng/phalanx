@@ -63,5 +63,13 @@ func TestConfiguredHomeCanonicalizesOnlyAbsoluteExpandedPaths(t *testing.T) {
 		if err != nil || home == nil || *home != filepath.Join(root, "child") {
 			t.Fatalf("resolution did not resume after missing parent: %v, %v", home, err)
 		}
+		dangling := filepath.Join(root, "dangling")
+		if err := os.Symlink(filepath.Join(root, "child", "missing"), dangling); err != nil {
+			t.Fatal(err)
+		}
+		home, err = configuredHome(dangling+"/..", lookup)
+		if err != nil || home == nil || *home != filepath.Join(root, "child") {
+			t.Fatalf("dangling link parent lost its target: %v, %v", home, err)
+		}
 	}
 }

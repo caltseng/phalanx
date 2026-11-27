@@ -98,16 +98,23 @@ def run(binary, output):
         if os.name == "nt":
             import _winapi
             _winapi.CreateJunction(str(home / "child"), str(root / "link"))
+            (home / "gone").mkdir()
+            _winapi.CreateJunction(str(home / "gone"), str(root / "dangling"))
+            (home / "gone").rmdir()
         else:
             (root / "link").symlink_to(home / "child", target_is_directory=True)
+            (root / "dangling").symlink_to(home / "absent", target_is_directory=True)
         homes = {"unset": None, "relative": "relative-muster",
                  "absolute-dots": str(home) + os.sep + "child" + os.sep + "..",
                  "missing-tail": str(home / "absent") + os.sep + ".." + os.sep + "next",
                  "tilde": "~" + os.sep + "muster",
                  "resolved-link": str(root / "link") + os.sep + "missing",
-                 "missing-before-link": str(root / "absent") + os.sep + ".." + os.sep + "link"}
+                 "resolved-link-missing-tail": str(root / "link") + os.sep + "absent" + os.sep + "tail",
+                 "missing-before-link": str(root / "absent") + os.sep + ".." + os.sep + "link",
+                 "dangling-link": str(root / "dangling") + os.sep + "tail"}
         if os.name != "nt":
             homes["symlink-parent"] = str(root / "link") + "/.."
+            homes["dangling-parent"] = str(root / "dangling") + "/.."
         configurations = [(name, value, None, True) for name, value in homes.items()]
         configurations += [("trust-" + name, None, value, trusted) for name, value, trusted in (
             ("empty", "", False), ("other", "192.0.2.1", False),
