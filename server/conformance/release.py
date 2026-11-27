@@ -349,7 +349,10 @@ def measure(url, run):
         elapsed = time.perf_counter() - start
         expected = 201 if case["body"] is not None else 200
         if response["status"] != expected:
-            raise AssertionError(f"Load request {case['id']} failed: {response['status']}")
+            raise AssertionError("Load request failed: " + json.dumps({
+                "request": case, "response": response, "expected_status": expected,
+                "elapsed_seconds": elapsed,
+            }))
         return {"id": case["id"], "seconds": elapsed, "status": response["status"]}
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -482,7 +485,12 @@ def release(package, output):
                             raise AssertionError("Warmup failed")
                     runs = []
                     for index in range(3):
-                        result = measure(url, index)
+                        try:
+                            result = measure(url, index)
+                        except AssertionError:
+                            (output / f"load-failure-{label}-{retained}-{index}-durable.json").write_text(
+                                json.dumps(h.snapshot(database), sort_keys=True), encoding="utf-8")
+                            raise
                         durable = h.snapshot(database)
                         for table in ("work_items", "request_receipts"):
                             if len(durable["tables"][table]["rows"]) != len(baseline["tables"][table]["rows"]) + 30 * (index + 1):
