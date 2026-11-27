@@ -46,6 +46,13 @@ def comparable_responses(raw):
     return result
 
 
+def parsed_responses(raw):
+    try:
+        return {"responses": comparable_responses(raw), "response_error": None}
+    except (http.client.HTTPException, ValueError) as error:
+        return {"responses": None, "response_error": repr(error)}
+
+
 def cases():
     result = []
     for size in (16383, 16384, 16385, 17000, 33000, 64000):
@@ -132,7 +139,7 @@ def post_prefixes(url, database):
                 after = h.snapshot(database)
                 stages.append({"request_hex": request.hex(), "suffix_hex": suffix.hex(),
                                "early_raw_hex": early.hex(), "raw_hex": raw.hex(),
-                               "responses": comparable_responses(raw), "closed": closed,
+                               **parsed_responses(raw), "closed": closed,
                                "close_error": close_error,
                                "before": before, "after": after, "durable_unchanged": before == after})
                 if closed:
@@ -226,12 +233,12 @@ def exchange(url, case):
             "closed": closed, "raw_response": raw.decode("latin1"),
             "close_error": close_error,
             "refusals_hex": [part.hex() for part in refusals],
-            "responses": comparable_responses(raw),
+            **parsed_responses(raw),
             "statuses": [int(status) for status in re.findall(rb"HTTP/1\.[01] (\d{3}) ", raw)],
             "status": int(raw.split(b" ", 2)[1]) if raw else None}
 
 
-def response_preservation(url, database):
+def response_preservation(url, database, reference):
     selected = [case for case in cases() if case[0] in ("fixed-body-complete", "chunked-body-complete")]
     before, records, passed = h.snapshot(database), [], True
     for index in range(100):
@@ -240,7 +247,9 @@ def response_preservation(url, database):
             after = h.snapshot(database)
             record.update(index=index, before=before, after=after)
             records.append(record)
-            if after != before or record["statuses"] != [200, 400] or not record["closed"]:
+            if (after != before or record["statuses"] != [200, 400] or not record["closed"] or
+                    record["response_error"] is not None or
+                    record["responses"] != reference[case[0]]):
                 passed = False
     return records, passed
 
@@ -318,7 +327,8 @@ def refusal_ownership(url, process, database, sources, python):
                 "after_control": after, "after_shutdown": h.snapshot(database),
                 "shutdown_seconds": time.monotonic() - started, "lock_probe": lock.stdout,
                 "Go_ordinary_runtime_debt": None if python else {
-                    "per_EOF_open_refused_peer": "one raw socket and native connection goroutine until peer EOF or service cancellation",
+                    "close_work": "only a finite snapshot of bytes already queued by the kernel; no wait for future input or peer EOF",
+                    "prompt_disposal_evidence": "native HTTP tracking and raw-socket closure tests complete before peer EOF or lifetime cancellation",
                     "store_transaction": False, "store_admission": False, "accepted_operation": False,
                     "request_buffers_released": True, "service_shutdown_interrupts": True}}
 
@@ -345,6 +355,8 @@ def differential(binary, output, record_only=False):
                         after = h.snapshot(database)
                         observation.update(before=before, after=after, durable_unchanged=before == after)
                         actual.append(observation)
+                        if observation["response_error"] is not None:
+                            failures.append(f"{shape}/{label}/{case[0]}: malformed response retained")
                         (output / f"headers-{shape}-{label}.json").write_text(json.dumps(actual), encoding="utf-8")
                     for case in framework.cases():
                         before = h.snapshot(database)
@@ -355,6 +367,8 @@ def differential(binary, output, record_only=False):
                             failures.append(f"{shape}/{label}/{case['id']}: native framing changed durable state")
                     prefixes = post_prefixes(url, database)
                     (output / f"post-prefixes-{shape}-{label}.json").write_text(json.dumps(prefixes), encoding="utf-8")
+                    if any(stage["response_error"] is not None for record in prefixes for stage in record["stages"]):
+                        failures.append(f"{shape}/{label}: malformed prefix response retained")
                     neighbor = h.wire(url, "GET", "/health", [], "")
                     if neighbor["status"] != 200 or neighbor["json"] != {"status": "ok"}:
                         raise AssertionError("Refusal affected a valid neighboring connection")
@@ -372,7 +386,8 @@ def differential(binary, output, record_only=False):
                         failures.append(f"{shape}/{label}: valid receipt neighbor was not the sole accepted intake")
                     (output / f"neighbors-{shape}-{label}.json").write_text(
                         json.dumps({"before": before, "response": receipt_neighbor, "after": after}), encoding="utf-8")
-                    preservation, preserved = response_preservation(url, database)
+                    preservation, preserved = response_preservation(
+                        url, database, {record["id"]: record["responses"] for record in actual})
                     (output / f"preservation-{shape}-{label}.json").write_text(json.dumps(preservation), encoding="utf-8")
                     if not preserved:
                         failures.append(f"{shape}/{label}: repeated coalesced refusal lost response or durable integrity")

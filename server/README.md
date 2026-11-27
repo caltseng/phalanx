@@ -325,23 +325,28 @@ repetition manifests remain evidence; a passing single matrix or package run
 does not supersede them.
 
 The owner separately authorized receive/closure investigation in execution
-`db1cd4356eaa4e6992ed10fd25c8f9ef`, reply v11. The current strategy sends the
-refusal and a write-side FIN immediately, then drains only the already-refused
-raw connection until peer EOF. Native `net/http` continues to own and track
-that connection goroutine. The server lifetime interrupts the drain before
-HTTP shutdown finishes and before the shared OS lock is released; there is no
-new timer, cap, request parsing or dispatch of drained bytes. Refused request
-buffers are released.
+`db1cd4356eaa4e6992ed10fd25c8f9ef`, reply v11. A write FIN followed by a drain
+until peer EOF passed wire tests, but independent review rejected its indefinite
+per-peer socket/goroutine/buffer lifetime. That experiment and its evidence
+remain historical, not adoption approval.
 
-**Ordinary-runtime resource difference, not hidden by wire passes:** an EOF-open
-refused peer retains one raw socket, its native connection goroutine and a
-small drain buffer until peer EOF or service cancellation. It retains no
-database transaction, store admission, writer binding or accepted operation.
-The corpus verifies ordinary authenticated work and its receipt while quiet
-and sending refused peers remain, zero receipts from authenticated-looking
-drained noise, and clean shutdown/lock release without first closing those
-peers. This lifetime/resource difference requires explicit independent review
-disposition; investigation permission is not an adoption waiver.
+The current strategy sends the refusal and a write-side FIN, snapshots the
+finite bytes already queued by the native socket, reads only that snapshot,
+then fully closes. It never waits for future data, peer EOF or service
+cancellation. Windows uses Winsock `FIONREAD`; Linux and macOS use their native
+queued-byte ioctl. There is no new timer, request cap, request parsing or
+dispatch of drained bytes. Temporary raw close work remains inside the native
+connection goroutine/tracking lifetime; service cancellation can interrupt it.
+Refused request buffers are released.
+
+The native TCP/HTTP tests verify prompt raw-descriptor and connection-tracking
+disposal before peer EOF, including batches of EOF-open peers and concurrent
+closes with quiet or sending peers. The production corpus verifies no retained
+database transaction/admission/accepted-operation ownership, ordinary
+authenticated work and its receipt, zero receipts from authenticated-looking
+refused noise, and clean shutdown/lock release without first closing peers.
+Independent final-head review must assess both resource disposal and wire
+preservation; investigation permission is not an adoption waiver.
 
 `headers.py` also repeats the original fixed/chunked-body response-preservation
 cases 100 times each per implementation and schema shape. Every response,

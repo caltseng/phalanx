@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -222,9 +223,8 @@ func (c *idleConnection) Close() error {
 		return c.Conn.Close()
 	}
 	g.closeOnce.Do(func() {
-		// FIN delivers the refusal immediately. Read remaining peer bytes rather
-		// than discarding queued replies with a reset. Service shutdown, not a
-		// new timer, interrupts a peer that keeps its write side open.
+		// Drain only the finite bytes already queued by the kernel, not future
+		// input or peer EOF. This adds no timer, byte cap or open-peer lifetime.
 		stop := context.AfterFunc(c.lifetime, func() {
 			if err := c.Conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 				slog.Error("Cannot interrupt refused transport drain", "error", err)
@@ -232,16 +232,41 @@ func (c *idleConnection) Close() error {
 		})
 		defer stop()
 		if err := c.Conn.SetReadDeadline(time.Time{}); err != nil && c.lifetime.Err() == nil {
+			g.closeError = err
 			slog.Error("Cannot clear refused transport read deadline", "error", err)
-		} else if _, err := io.Copy(io.Discard, c.Conn); err != nil && c.lifetime.Err() == nil {
-			slog.Warn("Refused transport drain failed", "error", err)
+		} else if available, err := c.queuedRefusedBytes(); err != nil {
+			if !errors.Is(err, net.ErrClosed) || c.lifetime.Err() == nil {
+				g.closeError = err
+				slog.Error("Cannot inspect refused transport queued bytes", "error", err)
+			}
+		} else if available < 0 {
+			g.closeError = errors.New("Refused transport reported negative queued bytes")
+			slog.Error("Refused transport reported negative queued bytes")
+		} else if _, err := io.CopyN(io.Discard, c.Conn, available); err != nil && c.lifetime.Err() == nil {
+			g.closeError = err
+			slog.Warn("Refused transport queued-byte drain failed", "error", err)
 		}
-		g.closeError = c.Conn.Close()
-		if errors.Is(g.closeError, net.ErrClosed) && c.lifetime.Err() != nil {
-			g.closeError = nil
+		err := c.Conn.Close()
+		if !errors.Is(err, net.ErrClosed) || c.lifetime.Err() == nil {
+			g.closeError = errors.Join(g.closeError, err)
 		}
 	})
 	return g.closeError
+}
+
+func (c *idleConnection) queuedRefusedBytes() (int64, error) {
+	native, ok := c.Conn.(syscall.Conn)
+	if !ok {
+		return 0, errors.New("Refused transport has no native socket")
+	}
+	raw, err := native.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	var available int64
+	var probeError error
+	err = raw.Control(func(fd uintptr) { available, probeError = queuedBytes(fd) })
+	return available, errors.Join(err, probeError)
 }
 
 func (c *idleConnection) readHead(p []byte) (int, error) {

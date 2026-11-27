@@ -185,7 +185,7 @@ def vector_manifest():
                             "receipt_neighbor": "header-refusal-neighbor",
                             "response_preservation": {"case_ids": ["fixed-body-complete", "chunked-body-complete"],
                                                       "repeats_per_case": 100},
-                            "refusal_ownership": ["quiet", "sending", "exclusive-store-probe",
+                            "refusal_ownership": ["quiet", "sending", "prompt-native-disposal", "exclusive-store-probe",
                                                   "ordinary-receipt", "shutdown-lock-release"]},
                 "rehearsal": {"reference_packages": ["P0", "D0"], "schema_shapes": ["fresh", "retained"],
                               "package_only_stages": 8},
