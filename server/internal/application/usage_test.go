@@ -74,9 +74,20 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 	if version != row.Version || ended != nil {
 		t.Fatal("usage affected execution or current attempt", version, ended, string(responseJSON(t, before)))
 	}
+	var storedBefore string
+	if err := db.QueryRow("SELECT snapshot_json FROM writer_usage WHERE writer_id=?", writerID).Scan(&storedBefore); err != nil {
+		t.Fatal(err)
+	}
 	snapshot.Sequence, snapshot.Status, snapshot.Reason, snapshot.Tokens = "2", "unavailable", "Synthetic acquisition gap", contract.Tokens{}
 	if _, err := app.OwnUsage(ctx, writerID, snapshot); err != nil {
 		t.Fatal(err)
+	}
+	var storedAfter string
+	if err := db.QueryRow("SELECT snapshot_json FROM writer_usage WHERE writer_id=?", writerID).Scan(&storedAfter); err != nil {
+		t.Fatal(err)
+	}
+	if storedAfter != storedBefore {
+		t.Fatal("acquisition gap rewrote retained snapshot bytes")
 	}
 	var projection map[string]any
 	if err := app.Store.Read(ctx, func(tx *sqlite.Tx) error {
@@ -86,6 +97,7 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 	}); err != nil {
 		t.Fatal(err)
 	}
+
 	execution := projection["execution"].(map[string]any)
 	tokens := execution["tokens"].(map[string]any)
 	if execution["status"] != "partial" || tokens["input"] != json.Number("10") ||
@@ -96,6 +108,31 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 	if sessions[0].Status != "partial" || sessions[0].Reason != "Synthetic acquisition gap" ||
 		sessions[0].AcquisitionError == nil {
 		t.Fatal(projection)
+	}
+}
+
+func TestUsageSeriesComparesSerializedTimesAndNullableModel(t *testing.T) {
+	stamp := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
+	snapshot := contract.UsageSnapshot{WindowStart: contract.AwareTime{Time: stamp}}
+	raw, err := contract.PythonJSON(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := usageJSON(&raw)
+	if err != nil || restored == nil {
+		t.Fatal(restored, err)
+	}
+	if !sameUsageSeries(snapshot, *restored) {
+		t.Fatal("storage normalization changed the usage series")
+	}
+	restored.Model = pointer("different-model")
+	if sameUsageSeries(snapshot, *restored) {
+		t.Fatal("missing model matched a supplied model")
+	}
+	restored.Model = nil
+	restored.WindowStart.Time = restored.WindowStart.In(time.FixedZone("other", 60*60))
+	if sameUsageSeries(snapshot, *restored) {
+		t.Fatal("a changed serialized window timezone matched the original series")
 	}
 }
 
@@ -126,5 +163,16 @@ func TestUsageSubtotalExcludesSharedSessionsAndPreservesOverflow(t *testing.T) {
 	if tokens["input"] != "18014398509481982" || tokens["output"] != nil || subtotal["covered_sessions"] != 2 ||
 		subtotal["bound_sessions"] != 3 || subtotal["status"] != "partial" || shared.Included {
 		t.Fatal("subtotal billed shared context, lost precision, or invented coverage", subtotal, shared)
+	}
+	many := make([]usageSession, 4096)
+	for index := range many {
+		many[index] = exclusive
+	}
+	subtotal, err = usageSubtotal(many)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if subtotal["tokens"].(map[string]any)["input"] != "36893488147419099136" {
+		t.Fatal("subtotal overflowed native integer range", subtotal)
 	}
 }

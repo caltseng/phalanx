@@ -18,11 +18,16 @@ func requireItem(tx *sqlite.Tx, itemID string) error {
 }
 
 func requireExecution(tx *sqlite.Tx, itemID, executionID string) error {
-	_, err := tx.Execution(itemID, executionID)
-	if err == sql.ErrNoRows {
-		return &Missing{"Execution not found"}
-	}
+	_, err := executionRow(tx, itemID, executionID)
 	return err
+}
+
+func executionRow(tx *sqlite.Tx, itemID, executionID string) (sqlite.Execution, error) {
+	row, err := tx.Execution(itemID, executionID)
+	if err == sql.ErrNoRows {
+		return row, &Missing{"Execution not found"}
+	}
+	return row, err
 }
 
 func (a *App) History(ctx context.Context, itemID string) (any, error) {

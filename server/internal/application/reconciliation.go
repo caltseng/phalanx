@@ -14,6 +14,31 @@ import (
 
 func itemBranch(itemID string) string { return "phalanx/" + contract.Digest(itemID) }
 
+type observedPullPayload struct {
+	*contract.ObservedPull
+	URL string `json:"url"`
+}
+
+type observationPayload struct {
+	PR             *observedPullPayload `json:"pr"`
+	Checks         *string              `json:"checks"`
+	CheckReasons   []string             `json:"check_reasons"`
+	Feedback       []string             `json:"feedback"`
+	MergedBranch   bool                 `json:"merged_branch"`
+	TargetBase     *string              `json:"target_base"`
+	Deployment     *contract.Deployment `json:"deployment"`
+	DuplicateCount *json.Number         `json:"duplicate_count"`
+}
+
+func observationStorage(request contract.Observation, url string, targetBase *string) observationPayload {
+	payload := observationPayload{Checks: request.Checks, CheckReasons: request.CheckReasons, Feedback: request.Feedback,
+		MergedBranch: request.MergedBranch, TargetBase: targetBase, Deployment: request.Deployment, DuplicateCount: request.DuplicateCount}
+	if request.PR != nil {
+		payload.PR = &observedPullPayload{ObservedPull: request.PR, URL: url}
+	}
+	return payload
+}
+
 func (a *App) RecordObservation(ctx context.Context, itemID, executionID string, request contract.Observation) (any, error) {
 	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
@@ -25,10 +50,7 @@ func (a *App) RecordObservation(ctx context.Context, itemID, executionID string,
 }
 
 func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, request contract.Observation) (any, error) {
-	if err := requireExecution(tx, itemID, executionID); err != nil {
-		return nil, err
-	}
-	row, err := tx.Execution(itemID, executionID)
+	row, err := executionRow(tx, itemID, executionID)
 	if err != nil {
 		return nil, err
 	}
@@ -58,8 +80,14 @@ func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, reque
 	url, head := "", ""
 	targetBase := request.TargetBase
 	if request.PR != nil {
-		item, body, err := requestObject(tx, itemID)
+		item, err := tx.Item(itemID)
 		if err != nil {
+			return nil, err
+		}
+		var body struct {
+			TargetBranch *string `json:"target_branch"`
+		}
+		if err := json.Unmarshal([]byte(item.Request), &body); err != nil {
 			return nil, err
 		}
 		repository, err := tx.Repository(item.RepositoryID)
@@ -84,35 +112,14 @@ func (a *App) recordObservation(tx *sqlite.Tx, itemID, executionID string, reque
 			url = *state.PrimaryPR
 		}
 		head = request.PR.HeadSHA
-		if value, exists := body["target_branch"]; exists && value != nil && value != "" {
-			text, ok := value.(string)
-			if !ok {
-				return nil, errors.New("Stored target branch is not text")
-			}
-			targetBase = &text
+		if present(body.TargetBranch) {
+			targetBase = body.TargetBranch
 		}
 		if request.Deployment != nil && request.PR.BaseRef != *targetBase {
 			return nil, &Conflict{"Deployment must describe a merge into the item's target branch"}
 		}
 	}
-	value, err := responseValue(request)
-	if err != nil {
-		return nil, err
-	}
-	payload, ok := contract.ObjectValues(value)
-	if !ok {
-		return nil, errors.New("Observation is not an object")
-	}
-	delete(payload, "observed_at")
-	payload["target_base"] = targetBase
-	if request.PR != nil {
-		pull, ok := contract.ObjectValues(payload["pr"])
-		if !ok {
-			return nil, errors.New("Observed PR is not an object")
-		}
-		pull["url"] = url
-	}
-	text, err := contract.Canonical(payload)
+	text, err := contract.Canonical(observationStorage(request, url, targetBase))
 	if err != nil {
 		return nil, err
 	}
@@ -236,10 +243,7 @@ func (a *App) advanceObservation(tx *sqlite.Tx, itemID string, row sqlite.Execut
 func (a *App) RecordLocalChecks(ctx context.Context, itemID, executionID string, request contract.LocalChecks) (any, error) {
 	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
-		if err := requireExecution(tx, itemID, executionID); err != nil {
-			return err
-		}
-		row, err := tx.Execution(itemID, executionID)
+		row, err := executionRow(tx, itemID, executionID)
 		if err != nil {
 			return err
 		}
@@ -274,7 +278,8 @@ func (a *App) RecordLocalChecks(ctx context.Context, itemID, executionID string,
 func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request *contract.ReconcilerHeartbeat) (any, error) {
 	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
-		now := timestamp(a.Clock())
+		observedAt := a.Clock().UTC()
+		now := timestamp(observedAt)
 		if err := tx.ReconcilerHeartbeat(runnerID, now); err != nil {
 			return err
 		}
@@ -286,30 +291,21 @@ func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request 
 					return err
 				}
 				for _, row := range rows {
-					value, _, err := contract.Decode([]byte(row.Payload))
-					if err != nil {
+					var body observationPayload
+					if err := json.Unmarshal([]byte(row.Payload), &body); err != nil {
 						return err
 					}
-					body, ok := contract.ObjectValues(value)
-					if !ok {
-						return errors.New("Stored observation is not an object")
-					}
-					pr, ok := contract.ObjectValues(body["pr"])
-					if !ok {
+					if body.PR == nil || body.PR.ObservedPull == nil {
 						return errors.New("Stored deployment observation has no PR")
 					}
-					deployment, ok := contract.ObjectValues(body["deployment"])
-					if !ok {
+					if body.Deployment == nil {
 						return errors.New("Stored deployment is not an object")
 					}
-					delete(pr, "url")
-					// Revalidate the edited values, not the decoded object's original key order.
-					body["pr"] = pr
-					deployment["state"], body["observed_at"] = "disabled", now
-					observation, issues := contract.ValidateObservation(body, contract.ObjectKeys(body))
-					if len(issues) != 0 {
-						return fmt.Errorf("Stored deployment observation is invalid: %v", issues)
-					}
+					body.Deployment.State = "disabled"
+					observation := contract.Observation{ObservedAt: contract.AwareTime{Time: observedAt.Truncate(time.Microsecond)},
+						PR: body.PR.ObservedPull, Checks: body.Checks, CheckReasons: body.CheckReasons, Feedback: body.Feedback,
+						MergedBranch: body.MergedBranch, TargetBase: body.TargetBase, Deployment: body.Deployment,
+						DuplicateCount: body.DuplicateCount}
 					if _, err := a.recordObservation(tx, row.ItemID, row.ExecutionID, observation); err != nil {
 						return err
 					}
