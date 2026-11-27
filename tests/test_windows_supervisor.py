@@ -79,6 +79,46 @@ class IdentityTest(unittest.TestCase):
         with self.assertRaisesRegex(w.OwnershipError, "close failed"):
             w.Original.capture(self.native, 42, lambda pids: [])
 
+    def test_suspended_root_handles_close_even_when_termination_or_wait_fails(self):
+        for termination_failed in (False, True):
+            with self.subTest(termination_failed=termination_failed):
+                native = Mock()
+
+                def check(result, operation):
+                    if not result:
+                        raise w.OwnershipError(operation)
+                    return result
+
+                def create(*arguments):
+                    process = arguments[-1]._obj
+                    process.process, process.thread, process.pid = 400, 401, 42
+                    return True
+
+                native.check.side_effect = check
+                native.api.CreateProcessW.side_effect = create
+                native.api.AssignProcessToJobObject.return_value = False
+                native.api.TerminateProcess.return_value = not termination_failed
+                native.wait.side_effect = w.OwnershipError("cleanup wait failed")
+                job = w.Job.__new__(w.Job)
+                job.native, job.handle, job.root = native, 123, None
+                with self.assertRaises(w.OwnershipError):
+                    job.launch([sys.executable, "-c", "pass"], {}, Path.cwd())
+                self.assertEqual(native.close.call_args_list,
+                                 [unittest.mock.call(400), unittest.mock.call(401)])
+
+    def test_job_handle_cleanup_runs_even_if_completion_wait_is_interrupted(self):
+        native = Mock()
+        job = w.Job.__new__(w.Job)
+        job.native, job.handle, job.root, job.port = native, 123, 400, 456
+        job.wait_empty = Mock(side_effect=KeyboardInterrupt)
+        with self.assertRaises(KeyboardInterrupt):
+            job.close()
+        self.assertEqual(native.close.call_args_list,
+                         [unittest.mock.call(123), unittest.mock.call(400), unittest.mock.call(456)])
+        self.assertIsNone(job.handle)
+        self.assertIsNone(job.root)
+        self.assertIsNone(job.port)
+
     def test_untrusted_diagnostic_fields_cannot_echo_command_or_credentials(self):
         unsafe = dict(self.row, executable_hash="raw-private-executable",
                       arguments_hash="raw-private-token")

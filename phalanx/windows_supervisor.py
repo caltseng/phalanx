@@ -345,9 +345,11 @@ class Job:
             return process.pid
         except BaseException:
             # This exact native handle is our still-suspended child, never a PID lookup.
-            self.native.check(self.native.api.TerminateProcess(process.process, 1), "Clean up suspended root")
-            self.native.wait(process.process)
-            self.native.close(process.process)
+            try:
+                self.native.check(self.native.api.TerminateProcess(process.process, 1), "Clean up suspended root")
+                self.native.wait(process.process)
+            finally:
+                self.native.close(process.process)
             raise
         finally:
             self.native.close(process.thread)
@@ -365,21 +367,23 @@ class Job:
 
     def close(self):
         errors = []
-        if self.handle is not None:
-            try:
-                self.native.check(self.native.api.TerminateJobObject(self.handle, 1),
-                                  "Clean up original owned Job")
-                self.wait_empty()
-            except OwnershipError as error:
-                errors.append(str(error))
-        for name in ("handle", "root", "port"):
-            handle = getattr(self, name, None)
-            if handle is not None:
+        try:
+            if self.handle is not None:
                 try:
-                    self.native.close(handle)
+                    self.native.check(self.native.api.TerminateJobObject(self.handle, 1),
+                                      "Clean up original owned Job")
+                    self.wait_empty()
                 except OwnershipError as error:
                     errors.append(str(error))
-                setattr(self, name, None)
+        finally:
+            for name in ("handle", "root", "port"):
+                handle = getattr(self, name, None)
+                if handle is not None:
+                    try:
+                        self.native.close(handle)
+                    except OwnershipError as error:
+                        errors.append(str(error))
+                    setattr(self, name, None)
         if errors:
             raise OwnershipError("; ".join(errors))
 
