@@ -2,3 +2,5 @@
 /tests/*.py text eol=lf
 /pyproject.toml text eol=lf
 /requirements.lock text eol=lf
+/server/conformance/requirements.lock text eol=lf
+/.gitattributes text eol=lf

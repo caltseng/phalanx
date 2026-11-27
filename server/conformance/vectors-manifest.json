@@ -1607,9 +1607,9 @@
     "tests/test_workspaces.py": "361de7ee90dcd0f3fc510b7ab9787896aa444609396ec4099c9e3ebde1285b9a",
     "tests/test_writers.py": "238734156f06cc1084dbe77a9951af17670119dde5838e11e54d0400dbd3ff78",
     "tests/timing.py": "6a562b98075aa9bb1aff10ed31f43f2109e1f4b6329fcb34c3268f13d52aa9a9",
-    ".gitattributes": "a5734580d4cec2e011a6c7a3f6f863e8dc0a84901b914b362ac287a91495e568",
+    ".gitattributes": "f9e7b479fd8b740a0a6b0b23151d2fe9a52ac11ee39eebfb769d46d4561ef4df",
     "pyproject.toml": "4bd2bf2ec8141e17645abf5c8b62a92de4ea5d04ae9f185f78548ec46b46b9db",
     "requirements.lock": "d2c7dda3ad05f44ddde0da14be3324e50057f180d7dfcd18b340df3f9d29858f",
-    "server/conformance/requirements.lock": "12ba1c9b817b217e9dec8e66d20c048396dd7016ad715303792685189ad31631"
+    "server/conformance/requirements.lock": "8bffc4e81b18ad27d562efe2f1db157fea0c732fe2de1ac0f2b58c9064e9cde2"
   }
 }
