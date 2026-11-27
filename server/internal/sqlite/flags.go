@@ -70,7 +70,7 @@ func (tx *Tx) FlagWriters(executionID string) ([]FlagWriter, error) {
 	query := `SELECT w.id,w.execution_id,w.item_id,w.captain_id,w.runtime,w.nonce,w.state,w.session_id,w.created_at,
 		w.confirmed_at,w.state_reported_at,w.last_progress_at,w.progress_note,w.building,w.building_requested_at,p.last_advanced_at
 		FROM writers w JOIN executions e ON e.id=w.execution_id JOIN operator_progress p ON p.execution_id=w.execution_id
-		WHERE w.ended_at IS NULL AND e.status NOT IN ('completed','failed','cancelled')`
+		WHERE w.ended_at IS NULL AND e.status NOT IN ` + terminalStatusesSQL
 	parameters := []any{}
 	if executionID != "" {
 		query += " AND e.id=?"
@@ -149,7 +149,7 @@ func (tx *Tx) ActiveCaptainHolds(cutoff string) ([]CaptainHold, error) {
 func (tx *Tx) OldestOpenWork() (*string, error) {
 	var stamp *string
 	err := tx.conn.QueryRowContext(tx.ctx,
-		"SELECT min(created_at) FROM executions WHERE status NOT IN ('completed','failed','cancelled')").Scan(&stamp)
+		"SELECT min(created_at) FROM executions WHERE status NOT IN "+terminalStatusesSQL).Scan(&stamp)
 	return stamp, err
 }
 
@@ -224,7 +224,7 @@ func (tx *Tx) ActiveOverdue(cutoff, executionID string, limit int) ([]ActiveWork
 		FROM executions e LEFT JOIN writers w ON w.execution_id=e.id AND w.ended_at IS NULL
 		LEFT JOIN captain_actions a ON a.rowid=(SELECT latest.rowid FROM captain_actions latest
 			WHERE latest.execution_id=e.id ORDER BY latest.created_at DESC,latest.rowid DESC LIMIT 1)
-		WHERE e.status NOT IN ('completed','failed','cancelled') AND started_at<?`
+		WHERE e.status NOT IN ` + terminalStatusesSQL + ` AND started_at<?`
 	parameters := []any{cutoff}
 	if executionID != "" {
 		query += " AND e.id=?"
@@ -260,7 +260,7 @@ func (tx *Tx) ObservationProjections(executionID string) ([]ObservationProjectio
 		SELECT o.*,e.item_id,e.state_json,e.handoff_head,e.updated_at AS closed_at,
 		row_number() OVER (PARTITION BY o.execution_id ORDER BY o.last_observed_at DESC,o.observed_at DESC) AS rank
 		FROM github_observations o JOIN executions e ON e.id=o.execution_id
-		WHERE (e.status NOT IN ('completed','failed','cancelled') OR (e.status='completed'
+		WHERE (e.status NOT IN ` + terminalStatusesSQL + ` OR (e.status='completed'
 			AND json_extract(e.state_json,'$.final_output.merge_commit') IS NOT NULL
 			AND json_type(o.observation_json,'$.deployment')='object'))`
 	parameters := []any{}

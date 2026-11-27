@@ -536,7 +536,7 @@ func scopedFlagContext(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 	if err != nil {
 		return current, err
 	}
-	current.admissionContext, err = admissionSnapshot(tx, nil)
+	current.admissionContext, err = admissionSnapshot(tx, nil, now)
 	return current, err
 }
 
@@ -632,7 +632,7 @@ func (a *App) CurrentWriter(ctx context.Context, writerID string) (any, error) {
 		if err != nil {
 			return err
 		}
-		view, err := bindingWithContext(tx, writer, &current.admissionContext)
+		view, err := a.bindingWithContext(tx, writer, &current.admissionContext)
 		if err != nil {
 			return err
 		}

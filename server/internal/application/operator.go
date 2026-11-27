@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/big"
 	"regexp"
 	"sort"
 	"strconv"
@@ -718,44 +717,6 @@ func (a *App) OperatorOverview(ctx context.Context, condition ConditionalRead) (
 	return response, err
 }
 
-func knownOperatorSum(rows []sqlite.OperatorRow, additions bool) (any, error) {
-	total := new(big.Int)
-	floating, floatTotal, known := false, float64(0), false
-	for _, row := range rows {
-		value := row.PRAdditions
-		if !additions {
-			value = row.PRDeletions
-		}
-		if value == nil {
-			continue
-		}
-		known = true
-		switch value := value.(type) {
-		case int64:
-			if floating {
-				floatTotal += float64(value)
-			} else {
-				total.Add(total, big.NewInt(value))
-			}
-		case float64:
-			if !floating {
-				floatTotal, _ = new(big.Float).SetInt(total).Float64()
-				floating = true
-			}
-			floatTotal += value
-		default:
-			return nil, errors.New("Stored PR size is not numeric")
-		}
-	}
-	if !known {
-		return nil, nil
-	}
-	if floating {
-		return floatTotal, nil
-	}
-	return json.Number(total.String()), nil
-}
-
 func (a *App) OperatorGroup(ctx context.Context, label string, request contract.OperatorQuery, condition ConditionalRead) (OperatorResponse, error) {
 	var response OperatorResponse
 	scope := "group:" + label
@@ -796,6 +757,7 @@ func (a *App) OperatorGroup(ctx context.Context, label string, request contract.
 		closed, open, unknown := outcomeCounts(), int64(0), int64(0)
 		var first, lastClosed, oldestOpen *string
 		items := []OperatorSummary{}
+		var sizes [2][]json.Number
 		for _, row := range rows {
 			item, err := operatorSummary(row, now, current)
 			if err != nil {
@@ -824,17 +786,21 @@ func (a *App) OperatorGroup(ctx context.Context, label string, request contract.
 			if row.PRURL != nil && (row.PRAdditions == nil || row.PRDeletions == nil) {
 				unknown++
 			}
+			for field, value := range []*sqlite.Number{row.PRAdditions, row.PRDeletions} {
+				if value != nil {
+					sizes[field] = append(sizes[field], json.Number(*value))
+				}
+			}
 		}
-		additions, err := knownOperatorSum(rows, true)
-		if err != nil {
-			return err
-		}
-		deletions, err := knownOperatorSum(rows, false)
-		if err != nil {
-			return err
+		var totals [2]any
+		for field, numbers := range sizes {
+			totals[field], err = contract.SumNumbers(numbers)
+			if err != nil {
+				return err
+			}
 		}
 		response.Body, err = responseValue(map[string]any{"label": label, "items": items, "next_cursor": cursor,
-			"rollup": map[string]any{"scope": "page", "items": len(rows), "open": open, "additions": additions, "deletions": deletions,
+			"rollup": map[string]any{"scope": "page", "items": len(rows), "open": open, "additions": totals[0], "deletions": totals[1],
 				"size_unknown_count": unknown, "first_created_at": first, "last_closed_at": lastClosed,
 				"oldest_open_since": oldestOpen, "outcomes": closed}})
 		return err

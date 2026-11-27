@@ -1,6 +1,10 @@
 package application
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/caltseng/phalanx/server/internal/sqlite"
+)
 
 type OperatorSummary struct {
 	ID                       string            `json:"id"`
@@ -34,7 +38,7 @@ type OperatorSummary struct {
 	WaitAgeSeconds           *int64            `json:"wait_age_seconds"`
 	PrimaryPRURL             *string           `json:"primary_pr_url"`
 	PR                       *operatorPR       `json:"pr"`
-	DuplicateCount           any               `json:"duplicate_count"`
+	DuplicateCount           *sqlite.Number    `json:"duplicate_count"`
 	ClosedAt                 *string           `json:"closed_at"`
 	Outcome                  *string           `json:"outcome"`
 	Output                   *operatorOutput   `json:"output"`
@@ -51,14 +55,14 @@ type OperatorBrief struct {
 }
 
 type operatorPR struct {
-	URL       *string `json:"url"`
-	Number    any     `json:"number"`
-	State     *string `json:"state"`
-	Draft     *bool   `json:"draft"`
-	HeadSHA   *string `json:"head_sha"`
-	HeadCI    *string `json:"head_ci"`
-	Additions any     `json:"additions"`
-	Deletions any     `json:"deletions"`
+	URL       *string        `json:"url"`
+	Number    *sqlite.Number `json:"number"`
+	State     *string        `json:"state"`
+	Draft     *bool          `json:"draft"`
+	HeadSHA   *string        `json:"head_sha"`
+	HeadCI    *string        `json:"head_ci"`
+	Additions *sqlite.Number `json:"additions"`
+	Deletions *sqlite.Number `json:"deletions"`
 }
 
 type operatorOutput struct {

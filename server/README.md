@@ -53,8 +53,9 @@ projects status once, after any claim mutation.
 ## Boundaries and pinned build
 
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
-owns immutable intake receipts and transaction orchestration; `internal/sqlite`
-owns SQL, store-lifetime read-only/read-write connection pools, PRAGMAs, admission,
+owns immutable receipts, orchestration and the injected `Clock`, also used by validation.
+`internal/sqlite` owns typed metrics with exact sums and
+SQL, store-lifetime read-only/read-write connection pools, PRAGMAs, admission,
 and commit outcomes. Each transaction exclusively leases a connection. Pools retain
 at most eight idle readers and one idle writer, without a second active-connection
 admission limit; health remains un-gated. Driver connection initialization applies

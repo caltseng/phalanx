@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"time"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
@@ -354,7 +353,7 @@ func (a *App) FinalizeAttempt(ctx context.Context, executionID string) (*sqlite.
 		result = &row
 		// Python's existing job due times use wall time, independently of
 		// lifecycle timestamp/ID injection in disposable adapters.
-		now := time.Now().Unix()
+		now := a.Clock().Unix()
 		job, err := tx.DueFinalization(executionID, now)
 		if err == sql.ErrNoRows {
 			return nil
@@ -418,7 +417,7 @@ func (a *App) ProcessFinalizations(ctx context.Context) error {
 	var due []string
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		var err error
-		due, err = tx.DueFinalizations(time.Now().Unix(), 32)
+		due, err = tx.DueFinalizations(a.Clock().Unix(), 32)
 		return err
 	})
 	if err != nil {

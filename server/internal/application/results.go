@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
@@ -81,6 +80,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 	if err != nil {
 		return sqlite.Execution{}, err
 	}
+	outcome := Outcome(request.Outcome)
 	if request.AttemptID == nil {
 		writer, err := boundWriter(tx, itemID, executionID, writerID)
 		if err != nil {
@@ -92,14 +92,14 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 		}
 		if writer.EndedAt != nil || writer.AttemptID != nil || active != nil || state.Stage != Delivery ||
 			request.Stage != string(state.Stage) || state.Status != WaitingForExternal ||
-			request.Outcome != "needs_input" || request.Question == nil {
+			outcome != NeedsInput || request.Question == nil {
 			return sqlite.Execution{}, &Conflict{"An attempt-free question requires this writer's delivery external wait"}
 		}
 	} else if err := checkAttempt(tx, writerID, executionID, state, *request.AttemptID, request.Stage); err != nil {
 		return sqlite.Execution{}, err
 	}
 	reviewed := request.Candidate
-	if request.Outcome == "succeeded" {
+	if outcome == Succeeded {
 		reviewed = request.ReviewedCandidate
 	}
 	if request.ReviewNotes != nil && (state.Stage != SelfReview || state.Candidate == nil || !sameText(state.Candidate, reviewed)) {
@@ -141,7 +141,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 	if request.AttemptID == nil {
 		details["writer_id"] = writerID
 	}
-	publishing := state.Stage == Publication && request.Outcome == "succeeded"
+	publishing := state.Stage == Publication && outcome == Succeeded
 	if (request.PRURL != nil) != publishing {
 		return sqlite.Execution{}, &Conflict{"A successful publication result reports the PR URL, and only it does"}
 	}
@@ -174,7 +174,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 		return sqlite.Execution{}, &Conflict{"A retry delay requires a technical failure reason"}
 	}
 	if request.FailureReason != nil {
-		if request.Outcome != "failed" || wait != nil {
+		if outcome != FailureOutcome || wait != nil {
 			return sqlite.Execution{}, &Conflict{"A technical failure reason requires a failed result without an explicit wait"}
 		}
 		if row.RetryCount >= 4 {
@@ -187,7 +187,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 				return sqlite.Execution{}, err
 			}
 		} else {
-			now := time.Now().UnixMilli()
+			now := a.Clock().UnixMilli()
 			at := now + (5<<row.RetryCount)*1000
 			if request.RetryAfterSeconds != nil {
 				delay, err := request.RetryAfterSeconds.Int64()
@@ -201,12 +201,12 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 		}
 	}
 	if request.ReportReviewNotes != nil && (state.Stage != ReportReview ||
-		(request.Outcome != "succeeded" && request.Outcome != "changes_required")) {
+		(outcome != Succeeded && outcome != ChangesRequired)) {
 		return sqlite.Execution{}, &Conflict{"Review notes require a successful review or changes-required result"}
 	}
 	draft := request.ReportRevision
 	if request.ReportMarkdown != nil {
-		if state.Stage != ReportDrafting || request.Outcome != "succeeded" {
+		if state.Stage != ReportDrafting || outcome != Succeeded {
 			return sqlite.Execution{}, &Conflict{"Markdown is accepted on a successful report drafting result"}
 		}
 		if draft != nil {
@@ -218,10 +218,10 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 			return sqlite.Execution{}, err
 		}
 		details["report_revision"] = revision
-	} else if state.Stage == ReportDrafting && request.Outcome == "succeeded" {
+	} else if state.Stage == ReportDrafting && outcome == Succeeded {
 		return sqlite.Execution{}, &Conflict{"Successful drafting requires the draft Markdown"}
 	}
-	if state.Stage == ReportStorage && request.Outcome == "succeeded" {
+	if state.Stage == ReportStorage && outcome == Succeeded {
 		if draft == nil || !sameText(draft, state.ReportDraft) {
 			return sqlite.Execution{}, &Conflict{"Storage requires the current reviewed draft revision"}
 		}
@@ -234,11 +234,11 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 		}
 	}
 	var findings *string
-	if request.Outcome == "changes_required" {
+	if outcome == ChangesRequired {
 		findings = request.ReviewNotes
 	}
 	return a.apply(tx, itemID, row, state, Result, details, DecisionOptions{
-		Outcome: Outcome(request.Outcome), Wait: wait, RetryAllowed: retryAt != nil,
+		Outcome: outcome, Wait: wait, RetryAllowed: retryAt != nil,
 		Evidence: Evidence{Candidate: request.Candidate, ReviewedCandidate: request.ReviewedCandidate,
 			ReportDraft: draft, ReviewedReport: draft, ReportReviewNotes: request.ReportReviewNotes,
 			Findings: findings, PublishedPR: published},
@@ -268,7 +268,7 @@ func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *str
 					return nil, err
 				}
 			}
-			if previous == "self_review" && state.Stage == Publication {
+			if Stage(previous) == SelfReview && state.Stage == Publication {
 				if err := tx.RelinquishBuilding(writerID); err != nil {
 					return nil, err
 				}
@@ -290,7 +290,7 @@ func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *str
 	if err != nil {
 		return nil, err
 	}
-	return bindingWithContext(tx, writer, snapshot)
+	return a.bindingWithContext(tx, writer, snapshot)
 }
 
 func (a *App) WriterResult(ctx context.Context, itemID, executionID, writerID string, request contract.WriterResult, key *string) (any, error) {

@@ -32,6 +32,7 @@ func main() {
 func run() (result error) {
 	database := flag.String("fixture", "", "existing disposable fixture database")
 	idStart := flag.Uint64("id-start", 0, "deterministic fixture ID starting ordinal")
+	clockOffset := flag.Duration("clock-offset", 0, "elapsed time since the deterministic fixture clock")
 	localBoard := flag.Bool("local-board", false, "enable direct loopback-only disposable board authority")
 	fixtureAssets := flag.Bool("fixture-assets", false, "serve pinned assets copied into this disposable fixture")
 	flag.Parse()
@@ -58,7 +59,7 @@ func run() (result error) {
 	defer func() { result = errors.Join(result, store.Close()) }()
 	app := application.New(store)
 	// Both implementations get the same deterministic test clock and IDs.
-	app.Clock = func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC) }
+	app.Clock = func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC).Add(*clockOffset) }
 	var counter atomic.Uint64
 	counter.Store(*idStart)
 	app.ID = func() (string, error) { return fmt.Sprintf("%032x", counter.Add(1)), nil }
