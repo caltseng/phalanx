@@ -1327,7 +1327,7 @@
     "server/conformance/oracle.py": "d5c79b9e2ebaff6e0ce14770c65cfafb49330816929c53f89719fdcc7f40656c",
     "server/conformance/reconciliation.py": "283bd0c44aca4aec6b150e3d020b6182de93165a72e7c7c53ebd0cd506625288",
     "server/conformance/rehearsal.py": "6f24d3b8890774973c4a465ead9449882b5cb1c0c3e5bedd283234d74700a15c",
-    "server/conformance/release.py": "722e40757b4a17251502ebe0aa0d5fd6139b05cd455c4e32c4e1e609f1dc8683",
+    "server/conformance/release.py": "c1aa68dce4954c8def93e69e759c10c6258ed0e6e5de50e5530b814a7a0f6f1e",
     "server/conformance/results.py": "f46549899452d1953edc31ea34aa74b3c7a575940aca91e97299dc825fc9c4c7",
     "server/conformance/route_models.py": "2006fd15ff3f60bd05da9e130168a87d69a45cdbc983a68892d0ca0eb2d98258",
     "server/conformance/scout.py": "f2651b409dab68f84a6d661f13cadaf9a94b0173042ced04da4ac9b200302e3d",

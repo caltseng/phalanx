@@ -91,7 +91,8 @@ proof feed the required `Tests` CI gate.
 extracted bytes and starts the actual versioned binary against fresh and retained
 synthetic stores. P0/D0 unchanged clients create/retry/read work; both previous
 packages replay NEW Go-accepted writes on the same evolved file and accept new
-writes after rollback. Online backup uses unchanged Python server-host admin.
+writes after rollback. Online backup invokes unchanged P0/D0 server-host admin
+from the explicitly exported public source, never an incidental installed package.
 Python-held and Go-held locks reject the other engine; missing DB refuses startup.
 No old snapshot is restored. Preserve the actual output artifacts and their
 source/build/package identity; never label a fixture adapter run a real package run.
@@ -99,7 +100,9 @@ source/build/package identity; never label a fixture adapter run a real package 
 Runtime/load evidence uses the exact 120-request manifest (30 successful intake
 writes, 90 authenticated item/settings reads), concurrency8, 12 warmup reads,
 three measured runs per P0/D0/Go on each schema shape. It records every latency
-and status, p50/p95/max, throughput, host and package digest. It is representative
+and status, p50/p95/p99/max, throughput, host and package digest, and full typed
+snapshots verifying exactly 30 new items/receipts per run with unchanged schema.
+It is representative
 synthetic control traffic, **not** the proposed 10,000-item/32-client workload,
 30-minute resource soak, real production load or an approved SLO. Shared-host
 uncontrolled interference remains visible. Proposed timing/resource/percentage

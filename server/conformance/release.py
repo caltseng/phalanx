@@ -37,6 +37,7 @@ def parameters(binary, database):
 def production(binary, database, directory):
     command, url = parameters(binary, database)
     with (directory / "server.log").open("ab") as log:
+        log_offset = log.tell()
         process = subprocess.Popen(command, env=environment(database), cwd=directory,
                                    stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
@@ -45,6 +46,12 @@ def production(binary, database, directory):
             while True:
                 if process.poll() is not None:
                     raise AssertionError("Packaged server exited before authenticated readiness")
+                own_listener = ("address=" + url.removeprefix("http://")).encode()
+                if own_listener not in (directory / "server.log").read_bytes()[log_offset:]:
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("Owned server did not confirm its listener before client probes")
+                    time.sleep(.05)
+                    continue
                 try:
                     response = h.wire(url, "GET", "/v1/owner/status", [("Authorization", "Bearer " + h.OWNER)], "")
                     if response["status"] == 200 and response["json"] == {"role": "owner"}:
@@ -144,7 +151,10 @@ def release(package, output):
                         raise AssertionError("Real release did not accept new writes")
                     receipts["real-release-" + reference] = response
                     backup = directory / ("backup-" + reference + ".sqlite3")
-                    subprocess.run([sys.executable, "-P", "-m", "phalanx", "server", "backup", str(backup)],
+                    subprocess.run([sys.executable, "-P", "-c",
+                                    "import sys; sys.path.insert(0,sys.argv.pop(1)); "
+                                    "from phalanx.__main__ import main; main()",
+                                    str(sources[reference]), "server", "backup", str(backup)],
                                    cwd=h.ROOT, env=environment(database), check=True, timeout=15)
                     if h.snapshot(backup) != h.snapshot(database):
                         raise AssertionError("Existing server admin backup lost typed rows/schema")
@@ -199,6 +209,7 @@ def release(package, output):
             for label in ("P0", "D0", "Go"):
                 directory = root / f"load-{retained}-{label}"
                 database = h.fresh(directory, sources, retained)
+                baseline = h.snapshot(database)
                 if label == "Go":
                     manager = production(binary, database, directory)
                 else:
@@ -212,7 +223,19 @@ def release(package, output):
                         response = h.wire(url, "GET", "/v1/dispatch/settings", [("Authorization", "Bearer " + h.OWNER)], "")
                         if response["status"] != 200:
                             raise AssertionError("Warmup failed")
-                    runs = [measure(url, index) for index in range(3)]
+                    runs = []
+                    for index in range(3):
+                        result = measure(url, index)
+                        durable = h.snapshot(database)
+                        for table in ("work_items", "request_receipts"):
+                            if len(durable["tables"][table]["rows"]) != len(baseline["tables"][table]["rows"]) + 30 * (index + 1):
+                                raise AssertionError("Matched load lost or duplicated accepted durable effects")
+                        if durable["ddl"] != baseline["ddl"]:
+                            raise AssertionError("Matched load changed schema")
+                        data = json.dumps(durable, sort_keys=True)
+                        result["durable_sha256"] = h.digest(data.encode())
+                        (output / f"load-{label}-{retained}-{index}-durable.json").write_text(data, encoding="utf-8")
+                        runs.append(result)
                 loads.append({"implementation": label, "retained": retained,
                               "startup_seconds": startup_seconds, "runs": runs})
                 print(f"{label}/{retained}: three matched load runs PASS", flush=True)
@@ -221,7 +244,7 @@ def release(package, output):
             "package_bytes": package.stat().st_size, "binary_bytes": binary.stat().st_size,
             "host": {"platform": platform.platform(), "cpu_count": os.cpu_count(), "python": platform.python_version(),
                      "shared_host": True, "other_users_load": "uncontrolled/not measured",
-                     "controller_background_checks": "operator must record; no isolation or SLO claim"},
+                     "controller": "sequential P0/D0/Go workloads; other host activity unmeasured"},
             "manifest": requests(), "manifest_sha256": h.digest(json.dumps(requests(), sort_keys=True).encode()),
             "concurrency": 8, "warmup_reads": 12, "runs_per_implementation_shape": 3,
             "performance_classification": "observations only; proposed goals not approved or claimed",
