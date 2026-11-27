@@ -19,6 +19,9 @@ from urllib.parse import urlsplit
 
 import harness as h
 
+sys.path.insert(0, str(h.ROOT))
+from phalanx.local_checks import kill_tree
+
 
 def environment(database):
     return {**{key: value for key, value in os.environ.items() if not key.startswith("PHALANX_")},
@@ -60,6 +63,7 @@ def production(binary, database, directory, python_source=None, *, default_engin
         process = subprocess.Popen(command, env=environment(database), cwd=directory,
                                    stdin=subprocess.PIPE if python_source is not None else subprocess.DEVNULL,
                                    stdout=log, stderr=log,
+                                   start_new_session=os.name != "nt",
                                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
         try:
             deadline = time.monotonic() + 15
@@ -87,13 +91,14 @@ def production(binary, database, directory, python_source=None, *, default_engin
             if process.poll() is None:
                 if python_source is not None:
                     process.stdin.close()
+                elif default_engine and os.name != "nt":
+                    os.killpg(process.pid, signal.SIGTERM)
                 else:
                     process.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
                 try:
                     process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=10)
+                    kill_tree(process)
                     raise AssertionError("Owned synthetic server did not gracefully drain; forced cleanup is not PASS")
             if process.returncode != 0:
                 raise AssertionError(f"Packaged server exit was not clean: {process.returncode}")
