@@ -5,6 +5,7 @@ from contextlib import ExitStack, closing
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -248,7 +249,7 @@ def task_rehearsal(args):
         assert w.task_control("inspect", task=unrelated_name)["task"] == unrelated
         assert not healthy(), "Original API still serving"
         assert receipt_rows(database) == receipts, "Stopping changed durable receipts"
-        record.rename(args.output / "first-ownership.json")
+        shutil.move(record, args.output / "first-ownership.json")
         second = start()
         assert first["containment_id"] != second["containment_id"], "Restart reused containment"
         replay = h.wire(url, "POST", "/v1/items", accepted_headers, accepted_body)
@@ -264,7 +265,7 @@ def task_rehearsal(args):
         assert receipt_rows(database) == receipts
         with any_file_lock([lock_path]) as acquired:
             assert acquired is not None, "Shared lock was not released"
-        record.rename(args.output / "second-ownership.json")
+        shutil.move(record, args.output / "second-ownership.json")
         with closing(sqlite3.connect(database)) as store:
             assert store.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         (args.output / "proof.json").write_text(json.dumps({
