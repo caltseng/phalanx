@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -12,6 +11,7 @@ import (
 	"github.com/caltseng/phalanx/server/internal/application"
 	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
+	"github.com/caltseng/phalanx/server/internal/testdb"
 )
 
 func TestBoundedDependencyRefreshAndRestartAuditCursor(t *testing.T) {
@@ -48,11 +48,7 @@ func TestBoundedDependencyRefreshAndRestartAuditCursor(t *testing.T) {
 		contract.Cancellation{ExpectedVersion: "1", Reason: "Stop prerequisite"}, application.Cancel, nil); err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
+	db := testdb.Open(t, path)
 	var cursor string
 	if err := db.QueryRow("SELECT cursor FROM dependency_refresh_jobs WHERE upstream_id=?", upstream).Scan(&cursor); err != nil ||
 		cursor != items[31] {

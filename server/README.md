@@ -66,6 +66,16 @@ go vet ./...
 go test ./...
 ```
 
+Go database tests share `internal/testdb`: `New` creates an empty, disposable
+database from its embedded Go-owned `schema.sql`, and `Open` manages connections
+used to inspect or reopen that fixture. Package-specific helpers only seed their
+domain data. The helper's schema test pins the compact JSON DDL SHA-256
+`c8dd5872e18dad37d74f800028922a439814365bcc2fee6d4f3f8fa5c5f4e288`
+from the current golden schema, including implicit indexes, trigger text and NULL
+SQL values, plus application ID, schema version and journal mode. Go tests do not
+read the conformance corpus or require Python. This helper is test-only; the
+production server still refuses to initialize a database.
+
 CI builds/tests on Windows, Linux and macOS and race-checks Linux/macOS with their
 prepared C compilers. The supplied local Windows environment has CGO disabled
 and no C compiler: a local `go test -race` is an explicit gap, not a passing check.
