@@ -1,7 +1,6 @@
 package application
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -16,57 +15,72 @@ import (
 )
 
 func readState(data json.RawMessage) (State, error) {
-	var defaults struct {
-		Status          json.RawMessage `json:"status"`
-		PublicationMode json.RawMessage `json:"publication_mode"`
-	}
-	if err := json.Unmarshal(data, &defaults); err != nil {
-		return State{}, err
-	}
-	if bytes.Equal(bytes.TrimSpace(defaults.Status), []byte("null")) ||
-		bytes.Equal(bytes.TrimSpace(defaults.PublicationMode), []byte("null")) {
-		return State{}, errors.New("Invalid null stored execution default")
-	}
+	state, _, err := decodeStoredState(data, false)
+	return state, err
+}
+
+func decodeStoredState(data json.RawMessage, allowNullMode bool) (State, *PublicationMode, error) {
 	state := State{Status: Queued, PublicationMode: ReadyMode}
-	if err := json.Unmarshal(data, &state); err != nil {
-		return State{}, err
+	defaults := struct {
+		*State
+		Status          *Status          `json:"status"`
+		PublicationMode *PublicationMode `json:"publication_mode"`
+	}{&state, &state.Status, &state.PublicationMode}
+	if err := json.Unmarshal(data, &defaults); err != nil {
+		return State{}, nil, err
 	}
+	if defaults.Status == nil || defaults.PublicationMode == nil && !allowNullMode {
+		return State{}, nil, errors.New("Invalid null stored execution default")
+	}
+	state.Status = *defaults.Status
+	mode := ReadyMode
+	if defaults.PublicationMode != nil {
+		mode = *defaults.PublicationMode
+	}
+	state.PublicationMode = mode
+	if err := validateStoredState(state); err != nil {
+		return State{}, nil, err
+	}
+	return state, defaults.PublicationMode, nil
+}
+
+func validateStoredState(state State) error {
 	if state.Wait != nil {
 		if _, err := newWait(state.Wait.Reason, state.Wait.Trigger); err != nil {
-			return State{}, err
+			return err
 		}
 	}
 	switch state.Target {
 	case ReportTarget, ReadyTarget, MergedTarget:
 	default:
-		return State{}, errors.New("Invalid stored execution target")
+		return errors.New("Invalid stored execution target")
 	}
 	switch state.Stage {
 	case Development, SelfReview, ReportDrafting, ReportReview, ReportStorage, Publication, Delivery:
 	default:
-		return State{}, errors.New("Invalid stored execution stage")
+		return errors.New("Invalid stored execution stage")
 	}
 	switch state.Status {
 	case Queued, Running, WaitingForInput, WaitingForExternal, Completed, Failed, Cancelled:
 	default:
-		return State{}, errors.New("Invalid stored execution status")
+		return errors.New("Invalid stored execution status")
 	}
 	if state.PublicationMode != ReadyMode && state.PublicationMode != DraftMode {
-		return State{}, errors.New("Invalid stored publication mode")
+		return errors.New("Invalid stored publication mode")
 	}
 	for _, status := range []*Status{state.Stopping, state.PendingOutput} {
 		if status != nil {
 			switch *status {
 			case Queued, Running, WaitingForInput, WaitingForExternal, Completed, Failed, Cancelled:
 			default:
-				return State{}, errors.New("Invalid stored execution intent")
+				return errors.New("Invalid stored execution intent")
 			}
 		}
 	}
 	if Terminal(state.Status) != (state.FinalOutput != nil) {
-		return State{}, errors.New("Exactly one final output is required on terminal executions")
+		return errors.New("Exactly one final output is required on terminal executions")
 	}
-	return state, nil
+	return nil
 }
 
 func checkCurrent(tx *sqlite.Tx, itemID, executionID string, version json.Number) (sqlite.Execution, State, error) {

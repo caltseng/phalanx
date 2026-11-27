@@ -257,6 +257,9 @@ uses that permitted deviation.
 Authoritative state decoding now refuses explicit-null publication mode before
 mutation; the named operator projections still return null without effects,
 and omitted mode retains its ready default.
+Operator summaries decode each stored execution state once, reusing that typed
+state for pickup decisions. Typed summary, PR, writer and output rows replace
+per-row maps; stored deployment JSON is decoded only at the response boundary.
 
 ### Deployment retirement and incomplete-header regression
 
