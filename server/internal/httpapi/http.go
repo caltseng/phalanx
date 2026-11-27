@@ -29,255 +29,6 @@ type Handler struct {
 	dispatch        func() // test-only barrier at mutation dispatch, never wire/config input
 }
 
-type route struct {
-	kind            string
-	itemID          string
-	executionID     string
-	captainID       string
-	runnerID        string
-	writerID        string
-	passID          string
-	repositoryID    string
-	number          string
-	label           string
-	boardIdentifier bool
-	revision        string
-	method          string
-}
-
-func match(path, method string) (route, string) {
-	switch path {
-	case "/health":
-		return route{kind: "health", method: "GET"}, "GET"
-	case "/v1/owner/status":
-		return route{kind: "owner", method: "GET"}, "GET"
-	case "/v1/runner/status":
-		return route{kind: "runner", method: "GET"}, "GET"
-	case "/v1/owner/inbox":
-		return route{kind: "inbox", method: "GET"}, "GET"
-	case "/v1/writer/attempt":
-		return route{kind: "writer-attempt", method: "POST"}, "POST"
-	case "/v1/writer":
-		return route{kind: "writer-current", method: "GET"}, "GET"
-	case "/v1/writer/progress":
-		return route{kind: "writer-progress", method: "POST"}, "POST"
-	case "/v1/writer/capacity":
-		return route{kind: "writer-capacity", method: "POST"}, "POST"
-	case "/v1/writer/usage":
-		return route{kind: "writer-usage", method: "POST"}, "POST"
-	case "/v1/issue-scout":
-		return route{kind: "scout-status", method: "GET"}, "GET"
-	case "/v1/issue-scout/settings":
-		return route{kind: "scout-settings", method: "PUT"}, "PUT"
-	case "/v1/issue-scout/claim":
-		return route{kind: "scout-claim", method: "POST"}, "POST"
-	case "/v1/flags":
-		if method == "GET" {
-			return route{kind: "flags", method: "GET"}, "PUT"
-		}
-		return route{kind: "flag-write", method: "PUT"}, "PUT"
-	case "/v1/flags/clear":
-		return route{kind: "flag-clear", method: "POST"}, "POST"
-	case "/v1/operator/executions":
-		return route{kind: "operator-list", method: "GET"}, "GET"
-	case "/v1/operator/overview":
-		return route{kind: "operator-overview", method: "GET"}, "GET"
-	case "/v1/muster/status":
-		return route{kind: "muster-status", method: "GET"}, "GET"
-	case "/operator/api/repositories":
-		return route{kind: "board-repositories", method: "GET"}, "GET"
-	case "/operator/api/items":
-		return route{kind: "board-intake", method: "POST"}, "POST"
-	case "/operator/api/dispatch/settings":
-		if method == "PUT" {
-			return route{kind: "board-set-dispatch", method: "PUT"}, "GET"
-		}
-		return route{kind: "board-dispatch", method: "GET"}, "GET"
-	case "/operator/", "/operator/queue", "/operator/history":
-		return route{kind: "operator-shell", method: "GET"}, "GET"
-	case "/openapi.json", "/docs", "/docs/oauth2-redirect", "/redoc":
-		if method == "HEAD" {
-			return route{kind: "documentation", method: "HEAD"}, "GET, HEAD"
-		}
-		return route{kind: "documentation", method: "GET"}, "GET, HEAD"
-	case "/v1/dispatch/settings":
-		if method == "PUT" {
-			return route{kind: "set-dispatch", method: "PUT"}, "GET"
-		}
-		return route{kind: "dispatch", method: "GET"}, "GET"
-	case "/v1/captains":
-		if method == "POST" {
-			return route{kind: "captain-register", method: "POST"}, "POST"
-		}
-		return route{kind: "captains", method: "GET"}, "POST"
-	case "/v1/captains/current":
-		return route{kind: "captain-current", method: "GET"}, "GET"
-	case "/v1/session-archives":
-		if method == "PUT" {
-			return route{kind: "archive-write", method: "PUT"}, "GET"
-		}
-		return route{kind: "archive-read", method: "GET"}, "GET"
-	case "/v1/repositories":
-		if method == "POST" {
-			return route{kind: "register", method: "POST"}, "POST"
-		}
-		return route{kind: "repositories", method: "GET"}, "POST"
-	case "/v1/items":
-		return route{kind: "intake", method: "POST"}, "POST"
-	}
-	if strings.HasPrefix(path, "/operator/assets/") {
-		return route{kind: "operator-asset", method: method}, ""
-	}
-	if strings.HasPrefix(path, "/operator/items/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/operator/items/"), "/")
-		if len(parts) == 1 && parts[0] != "" {
-			return route{kind: "operator-shell", itemID: parts[0], boardIdentifier: true, method: "GET"}, "GET"
-		}
-	}
-	if strings.HasPrefix(path, "/operator/executions/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/operator/executions/"), "/")
-		if len(parts) == 1 && parts[0] != "" {
-			return route{kind: "operator-shell", executionID: parts[0], boardIdentifier: true, method: "GET"}, "GET"
-		}
-	}
-	if strings.HasPrefix(path, "/operator/api/issue-scout/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/operator/api/issue-scout/"), "/")
-		if len(parts) == 3 && parts[0] != "" && parts[1] != "" && parts[2] == "decision" {
-			return route{kind: "board-scout-decision", repositoryID: parts[0], number: parts[1], method: "POST"}, "POST"
-		}
-	}
-	if strings.HasPrefix(path, "/v1/operator/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/v1/operator/"), "/")
-		if len(parts) == 2 && parts[0] == "items" && parts[1] != "" {
-			return route{kind: "operator-item", itemID: parts[1], method: "GET"}, "GET"
-		}
-		if len(parts) == 2 && parts[0] == "groups" && parts[1] != "" {
-			return route{kind: "operator-group", label: parts[1], method: "GET"}, "GET"
-		}
-		if len(parts) == 3 && parts[0] == "executions" && parts[1] != "" && parts[2] == "timeline" {
-			return route{kind: "operator-timeline", executionID: parts[1], method: "GET"}, "GET"
-		}
-	}
-	if strings.HasPrefix(path, "/v1/issue-scout/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/v1/issue-scout/"), "/")
-		if len(parts) == 3 && parts[0] == "passes" && parts[1] != "" &&
-			(parts[2] == "page" || parts[2] == "failure") {
-			return route{kind: "scout-" + parts[2], passID: parts[1], method: "POST"}, "POST"
-		}
-		if len(parts) == 4 && parts[0] == "issues" && parts[1] != "" && parts[2] != "" && parts[3] == "decision" {
-			return route{kind: "scout-decision", repositoryID: parts[1], number: parts[2], method: "POST"}, "POST"
-		}
-	}
-	if strings.HasPrefix(path, "/v1/items/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/v1/items/"), "/")
-		if parts[0] == "" {
-			return route{}, ""
-		}
-		target := route{itemID: parts[0], method: "GET"}
-		switch {
-		case len(parts) == 1:
-			target.kind = "inspect"
-		case len(parts) == 2 && parts[1] == "title":
-			target.kind = "title"
-			if method == "PUT" {
-				target.kind, target.method = "set-title", "PUT"
-			}
-			return target, "GET"
-		case len(parts) == 2 && parts[1] == "executions":
-			target.kind = "history"
-		case len(parts) == 2 && parts[1] == "captain-actions":
-			target.kind, target.method = "captain-action", "POST"
-			return target, "POST"
-		case len(parts) == 3 && parts[1] == "executions" && parts[2] != "":
-			target.kind, target.executionID, target.method = "steer", parts[2], "PATCH"
-			return target, "PATCH"
-		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" && parts[3] == "timeline":
-			target.kind, target.executionID = "timeline", parts[2]
-		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" && parts[3] == "report":
-			target.kind, target.executionID = "report", parts[2]
-		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" &&
-			(parts[3] == "github-observation" || parts[3] == "local-checks"):
-			target.kind, target.executionID, target.method = parts[3], parts[2], "POST"
-			return target, "POST"
-		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" &&
-			(parts[3] == "cancel" || parts[3] == "close-failure" || parts[3] == "retry-finalization"):
-			target.kind, target.executionID, target.method = parts[3], parts[2], "POST"
-			return target, "POST"
-		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" && parts[3] == "writer":
-			target.kind, target.executionID, target.method = "writer-register", parts[2], "POST"
-			if method == "PATCH" {
-				target.kind, target.method = "writer-update", "PATCH"
-			}
-			return target, "POST"
-		case len(parts) == 4 && parts[1] == "executions" && parts[2] != "" &&
-			(parts[3] == "result" || parts[3] == "stop-confirmed" || parts[3] == "reply" || parts[3] == "rerun"):
-			target.kind, target.executionID, target.method = parts[3], parts[2], "POST"
-			if parts[3] == "result" {
-				target.kind = "writer-result"
-			} else if parts[3] == "stop-confirmed" {
-				target.kind = "writer-stop"
-			}
-			return target, "POST"
-		case len(parts) == 5 && parts[1] == "executions" && parts[2] != "" && parts[3] == "writer" && parts[4] == "withdraw":
-			target.kind, target.executionID, target.method = "writer-withdraw", parts[2], "POST"
-			return target, "POST"
-		case len(parts) == 5 && parts[1] == "executions" && parts[2] != "" && parts[3] == "drafts" && parts[4] != "":
-			target.kind, target.executionID, target.revision = "draft", parts[2], parts[4]
-		case len(parts) == 6 && parts[1] == "executions" && parts[2] != "" && parts[3] == "writers" &&
-			parts[4] != "" && parts[5] == "usage":
-			target.kind, target.executionID, target.writerID, target.method = "captain-usage", parts[2], parts[4], "POST"
-			return target, "POST"
-		default:
-			return route{}, ""
-		}
-		return target, "GET"
-	}
-	if strings.HasPrefix(path, "/v1/reconcilers/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/v1/reconcilers/"), "/")
-		if parts[0] != "" {
-			target := route{runnerID: parts[0], kind: "reconciler-retire", method: "DELETE"}
-			if len(parts) == 1 {
-				return target, "DELETE"
-			}
-			if len(parts) == 2 && parts[1] == "heartbeat" {
-				target.kind, target.method = "reconciler-heartbeat", "POST"
-				return target, "POST"
-			}
-		}
-	}
-	if strings.HasPrefix(path, "/v1/captains/") {
-		parts := strings.Split(strings.TrimPrefix(path, "/v1/captains/"), "/")
-		if parts[0] != "" {
-			target := route{captainID: parts[0], kind: "captain", method: "GET"}
-			if len(parts) == 1 {
-				if method == "PUT" {
-					target.kind, target.method = "captain-heartbeat", "PUT"
-				}
-				return target, "PUT"
-			}
-			if len(parts) == 2 && parts[1] == "reinforcement" {
-				target.kind, target.method = "captain-reinforce", "PUT"
-				return target, "PUT"
-			}
-		}
-	}
-	return route{}, ""
-}
-
-func bodyRoute(kind string) bool {
-	switch kind {
-	case "intake", "register", "set-title", "cancel", "close-failure", "retry-finalization",
-		"writer-register", "writer-update", "writer-withdraw", "writer-progress", "writer-capacity", "set-dispatch",
-		"writer-result", "writer-stop", "reply", "steer", "rerun", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action", "archive-write",
-		"github-observation", "local-checks", "reconciler-heartbeat", "writer-usage", "captain-usage",
-		"scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision", "flag-write", "flag-clear",
-		"board-intake", "board-set-dispatch", "board-scout-decision":
-		return true
-	default:
-		return false
-	}
-}
-
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.ProtoMajor == 1 && r.ProtoMinor == 0 {
 		// Parsing is complete; net/http serializes the reply from these fields.
@@ -285,70 +36,56 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "close")
 	}
 	route, allowed := match(r.URL.Path, r.Method)
-	if route.kind == "" {
-		// Starlette's trailing-slash redirect is performed before dependencies.
-		path := strings.TrimRight(r.URL.Path, "/")
-		if path == r.URL.Path {
-			path += "/"
-		}
-		if path != r.URL.Path {
-			other, _ := match(path, r.Method)
-			if other.kind != "" {
-				target := *r.URL
-				target.Path = path
-				target.RawPath = ""
-				target.Scheme = scheme(r)
-				target.Host = headerText(r.Host)
-				w.Header().Set("Location", target.String())
-				w.WriteHeader(http.StatusTemporaryRedirect)
-				return
-			}
-		}
-		writeJSON(w, http.StatusNotFound, map[string]any{"detail": "Not Found"})
+	if route.routeSpec == nil {
+		h.notFound(w, r)
 		return
 	}
-	if r.Method != route.method {
+	if route.method != "*" && r.Method != route.method {
 		w.Header().Set("Allow", allowed)
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"detail": "Method Not Allowed"})
 		return
 	}
-	if route.kind == "documentation" {
-		h.serveDocumentation(w, r)
-		return
-	}
-	if route.kind == "operator-shell" || route.kind == "operator-asset" {
-		var issues []contract.Issue
-		if route.boardIdentifier {
-			if route.itemID != "" {
-				issues = contract.ValidateBoardIdentifier(route.itemID, "item_id")
-			} else {
-				issues = contract.ValidateBoardIdentifier(route.executionID, "execution_id")
-			}
-		}
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
+	// Dispatched Python work survives caller disconnect, including admission.
+	q := &requestState{ctx: context.WithoutCancel(r.Context()), route: route}
+	if route.policy != public {
+		if !h.readBody(w, r, q) || !h.authorize(w, r, q) {
 			return
 		}
-		h.serveAsset(w, r, route.kind == "operator-shell")
-		return
-	}
-	// Python dispatched sync work continues even when the socket disconnects,
-	// including waiting for admission. Explicit interruption is a store API
-	// context, not an HTTP caller's cancel signal.
-	ctx := context.WithoutCancel(r.Context())
-	if route.kind == "health" {
-		if err := h.App.Store.Health(ctx); err != nil {
-			writeJSON(w, 503, map[string]any{"detail": "SQLite store unavailable"})
-		} else {
-			writeJSON(w, 200, map[string]any{"status": "ok"})
+		if q.unpaired {
+			h.failure(w, errors.New("unpaired surrogate in request validation input"))
+			return
 		}
-		return
+		q.validatePath()
+		if !route.body && len(q.pathIssues) > 0 && route.operation != opOperatorGroup && route.operation != opOperatorTimeline {
+			writeJSON(w, 422, map[string]any{"detail": q.pathIssues})
+			return
+		}
 	}
-	var input any
-	var keys []string
-	bodyPresent := false
-	unpaired := false
-	if bodyRoute(route.kind) {
+	route.serve(h, w, r, q)
+}
+
+func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
+	// Starlette's trailing-slash redirect precedes dependencies.
+	path := strings.TrimRight(r.URL.Path, "/")
+	if path == r.URL.Path {
+		path += "/"
+	}
+	if path != r.URL.Path {
+		other, _ := match(path, r.Method)
+		if other.routeSpec != nil {
+			target := *r.URL
+			target.Path, target.RawPath = path, ""
+			target.Scheme, target.Host = scheme(r), headerText(r.Host)
+			w.Header().Set("Location", target.String())
+			w.WriteHeader(http.StatusTemporaryRedirect)
+			return
+		}
+	}
+	writeJSON(w, http.StatusNotFound, map[string]any{"detail": "Not Found"})
+}
+
+func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, q *requestState) bool {
+	if q.route.body {
 		data, err := io.ReadAll(r.Body)
 		if err != nil {
 			if h.Logger != nil {
@@ -357,110 +94,42 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(400)
 			w.Write([]byte("Invalid HTTP request received."))
-			return
+			return false
 		}
 		if len(data) > 0 {
-			bodyPresent = true
+			q.bodyPresent = true
 			contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
 			if contentType == "" || contentType == "application/json" ||
 				(strings.HasPrefix(contentType, "application/") && strings.HasSuffix(contentType, "+json")) {
-				input, keys, err = contract.Decode(data)
+				q.input, q.keys, err = contract.Decode(data)
 				if err != nil {
 					var malformed *contract.BodyError
 					if errors.As(err, &malformed) {
 						writeJSON(w, 400, map[string]any{"detail": malformed.Error()})
-						return
+						return false
 					}
 					var syntax *contract.JSONError
 					if !errors.As(err, &syntax) {
 						h.failure(w, err)
-						return
+						return false
 					}
 					writeJSON(w, 422, map[string]any{"detail": []contract.Issue{
 						{Type: "json_invalid", Loc: []any{"body", syntax.Offset}, Msg: "JSON decode error", Input: map[string]any{}, Ctx: map[string]any{"error": syntax.Message}},
 					}})
-					return
+					return false
 				}
-				unpaired = contract.HasUnpaired(input)
+				q.unpaired = contract.HasUnpaired(q.input)
 			} else {
 				// FastAPI exposes non-JSON body bytes as validation input.
-				input = string(data)
+				q.input = string(data)
 			}
 		}
 	}
-	var role, writerID string
-	var err error
-	if (boardRead(route.kind) || boardAction(route.kind)) && h.localBoardAuthority(r) {
-		role = "local"
-	} else {
-		role, writerID, err = h.authenticate(ctx, r, route.itemID, route.executionID)
-	}
-	if err != nil {
-		h.failure(w, err)
-		return
-	}
-	if role == "" {
-		w.Header().Set("WWW-Authenticate", "Bearer")
-		writeJSON(w, 401, map[string]any{"detail": "Valid bearer token required"})
-		return
-	}
-	if role == "out_of_scope" {
-		writeJSON(w, 403, map[string]any{"detail": "This writer token is scoped to another item"})
-		return
-	}
-	if boardAction(route.kind) {
-		if role == "local" && !localBoardOrigin(r) {
-			writeJSON(w, 403, map[string]any{"detail": "Local dashboard actions require a same-origin request"})
-			return
-		}
-		if role != "local" && role != "owner" {
-			writeJSON(w, 403, map[string]any{"detail": "Owner token required"})
-			return
-		}
-	}
-	if (route.kind == "writer-register" || route.kind == "writer-update" || route.kind == "writer-withdraw" ||
-		route.kind == "captain-register" || route.kind == "captain-heartbeat" || route.kind == "captain-reinforce" || route.kind == "captain-action" ||
-		route.kind == "archive-read" || route.kind == "archive-write" || route.kind == "reconciler-retire" || route.kind == "captain-usage" ||
-		route.kind == "scout-claim" || route.kind == "scout-page" || route.kind == "scout-failure" ||
-		route.kind == "flag-write" || route.kind == "flag-clear" || route.kind == "muster-status") &&
-		role != "owner" && role != "runner" {
-		writeJSON(w, 403, map[string]any{"detail": "Owner or runner token required"})
-		return
-	}
-	if (route.kind == "writer-attempt" || route.kind == "writer-progress" || route.kind == "writer-capacity" ||
-		route.kind == "writer-result" || route.kind == "writer-stop" || route.kind == "writer-usage" || route.kind == "writer-current") &&
-		role != "writer" {
-		writeJSON(w, 403, map[string]any{"detail": "Writer token required"})
-		return
-	}
-	required := ""
-	if route.kind == "owner" || route.kind == "intake" || route.kind == "register" ||
-		route.kind == "title" || route.kind == "set-title" || route.kind == "cancel" ||
-		route.kind == "close-failure" || route.kind == "retry-finalization" || route.kind == "inbox" ||
-		route.kind == "set-dispatch" || route.kind == "reply" || route.kind == "steer" || route.kind == "rerun" ||
-		route.kind == "scout-settings" || route.kind == "scout-decision" {
-		required = "owner"
-	} else if route.kind == "runner" || route.kind == "github-observation" || route.kind == "local-checks" || route.kind == "reconciler-heartbeat" {
-		required = "runner"
-	}
-	if required != "" && role != required {
-		message := "Owner token required"
-		if required == "runner" {
-			message = "Runner token required"
-		}
-		writeJSON(w, 403, map[string]any{"detail": message})
-		return
-	}
-	if (route.kind == "intake" || route.kind == "set-title" || route.kind == "set-dispatch" ||
-		route.kind == "scout-settings" || route.kind == "scout-decision" || route.kind == "board-intake" ||
-		route.kind == "board-set-dispatch" || route.kind == "board-scout-decision") && !sameOrigin(r) {
-		writeJSON(w, 403, map[string]any{"detail": "Browser writes require a same-origin request"})
-		return
-	}
-	if unpaired {
-		h.failure(w, errors.New("unpaired surrogate in request validation input"))
-		return
-	}
+	return true
+}
+
+func (q *requestState) validatePath() {
+	route := q.route
 	var pathIssues []contract.Issue
 	if route.itemID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.itemID, "item_id")...)
@@ -480,7 +149,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.passID != "" {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.passID, "pass_id")...)
 	}
-	if route.repositoryID != "" && route.kind != "board-scout-decision" {
+	if route.repositoryID != "" && route.policy != boardOwner {
 		pathIssues = append(pathIssues, contract.ValidateIdentifier(route.repositoryID, "repository_id")...)
 	}
 	if route.label != "" {
@@ -495,432 +164,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if route.revision != "" {
 		pathIssues = append(pathIssues, contract.ValidateRevision(route.revision)...)
 	}
-	if !bodyRoute(route.kind) && len(pathIssues) > 0 && route.kind != "operator-group" && route.kind != "operator-timeline" {
-		writeJSON(w, 422, map[string]any{"detail": pathIssues})
-		return
-	}
-	var result any
-	var status = 200
-	switch route.kind {
-	case "board-repositories":
-		route.kind = "repositories"
-	case "board-intake":
-		route.kind = "intake"
-	case "board-dispatch":
-		route.kind = "dispatch"
-	case "board-set-dispatch":
-		route.kind = "set-dispatch"
-	case "board-scout-decision":
-		route.kind = "scout-decision"
-	}
-	switch route.kind {
-	case "operator-list", "operator-overview", "operator-item", "operator-group", "operator-timeline":
-		var request contract.OperatorQuery
-		var issues []contract.Issue
-		if route.kind == "operator-list" {
-			request, issues = contract.ValidateOperatorQuery(r.URL.Query())
-		} else if route.kind == "operator-group" || route.kind == "operator-timeline" {
-			request, issues = contract.ValidateOperatorPage(r.URL.Query())
-		}
-		issues = append(pathIssues, issues...)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		condition := application.ConditionalRead{Path: r.URL.Path, Query: r.URL.RawQuery, IfNoneMatch: headerText(r.Header.Get("If-None-Match"))}
-		var response application.OperatorResponse
-		switch route.kind {
-		case "operator-list":
-			response, err = h.App.OperatorList(ctx, request, condition)
-		case "operator-overview":
-			response, err = h.App.OperatorOverview(ctx, condition)
-		case "operator-item":
-			response, err = h.App.OperatorItem(ctx, route.itemID, condition)
-		case "operator-group":
-			response, err = h.App.OperatorGroup(ctx, route.label, request, condition)
-		case "operator-timeline":
-			result, err = h.App.OperatorTimeline(ctx, route.executionID, request)
-		}
-		if err != nil {
-			h.failure(w, err)
-			return
-		}
-		if response.ETag != "" {
-			w.Header().Set("ETag", response.ETag)
-			w.Header().Set("Cache-Control", "private, no-cache")
-		}
-		if response.NotModified {
-			w.WriteHeader(304)
-			return
-		}
-		if route.kind != "operator-timeline" {
-			result = response.Body
-		}
-	case "muster-status":
-		result, err = h.App.MusterStatus(ctx, h.Home)
-	case "flags":
-		result, err = h.App.Flags(ctx)
-	case "writer-current":
-		result, err = h.App.CurrentWriter(ctx, writerID)
-	case "flag-write", "flag-clear":
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": missingBody()})
-			return
-		}
-		if route.kind == "flag-write" {
-			request, issues := contract.ValidateFlag(input, keys)
-			if len(issues) > 0 {
-				writeJSON(w, 422, map[string]any{"detail": issues})
-				return
-			}
-			result, err = h.App.RaiseFlag(ctx, request)
-		} else {
-			request, issues := contract.ValidateFlagKey(input, keys)
-			if len(issues) > 0 {
-				writeJSON(w, 422, map[string]any{"detail": issues})
-				return
-			}
-			result, err = h.App.ClearFlag(ctx, request)
-		}
-	case "scout-status", "scout-settings", "scout-claim", "scout-page", "scout-failure", "scout-decision":
-		if bodyRoute(route.kind) && !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
-			return
-		}
-		var issues []contract.Issue
-		switch route.kind {
-		case "scout-status":
-			result, err = h.App.ScoutStatus(ctx)
-		case "scout-settings":
-			request, bodyIssues := contract.ValidateScoutSettings(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.ConfigureScout(ctx, request)
-			}
-		case "scout-claim":
-			request, bodyIssues := contract.ValidateScoutClaim(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.ClaimScout(ctx, request)
-			}
-		case "scout-page":
-			request, bodyIssues := contract.ValidateScoutPage(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.ScoutPage(ctx, route.passID, request)
-			}
-		case "scout-failure":
-			request, bodyIssues := contract.ValidateScoutFailure(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.ScoutFailure(ctx, route.passID, request)
-			}
-		case "scout-decision":
-			request, bodyIssues := contract.ValidateScoutDecision(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.ScoutDecision(ctx, route.repositoryID, pathNumber, request)
-			}
-		}
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-	case "writer-usage", "captain-usage":
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
-			return
-		}
-		var issues []contract.Issue
-		if route.kind == "writer-usage" {
-			request, bodyIssues := contract.ValidateUsageSnapshot(input, keys, h.App.Clock())
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.OwnUsage(ctx, writerID, request)
-			}
-		} else {
-			request, bodyIssues := contract.ValidateCaptainUsage(input, keys, h.App.Clock())
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.CaptainUsage(ctx, route.itemID, route.executionID, route.writerID, request)
-			}
-		}
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-	case "github-observation", "local-checks", "reconciler-heartbeat", "reconciler-retire":
-		if bodyRoute(route.kind) && !bodyPresent && route.kind != "reconciler-heartbeat" {
-			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
-			return
-		}
-		var issues []contract.Issue
-		switch route.kind {
-		case "github-observation":
-			request, bodyIssues := contract.ValidateObservation(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.RecordObservation(ctx, route.itemID, route.executionID, request)
-			}
-		case "local-checks":
-			request, bodyIssues := contract.ValidateLocalChecks(input, keys)
-			issues = append(pathIssues, bodyIssues...)
-			if len(issues) == 0 {
-				result, err = h.App.RecordLocalChecks(ctx, route.itemID, route.executionID, request)
-			}
-		case "reconciler-heartbeat":
-			var request *contract.ReconcilerHeartbeat
-			issues = pathIssues
-			if input != nil {
-				body, bodyIssues := contract.ValidateReconcilerHeartbeat(input, keys)
-				request = &body
-				issues = append(issues, bodyIssues...)
-			}
-			if len(issues) == 0 {
-				result, err = h.App.ReconcilerHeartbeat(ctx, route.runnerID, request)
-			}
-		case "reconciler-retire":
-			result, err = h.App.RetireReconciler(ctx, route.runnerID)
-		}
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-	case "archive-read":
-		sessionID, issues := contract.ValidateArchiveQuery(r.URL.Query())
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.ArchiveStatus(ctx, sessionID)
-	case "archive-write":
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": missingBody()})
-			return
-		}
-		request, issues := contract.ValidateArchive(input, keys)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.RecordArchive(ctx, request)
-	case "captains", "captain", "captain-current", "captain-register", "captain-heartbeat", "captain-reinforce", "captain-action":
-		key, keyIssues := requestKey(r)
-		if route.kind == "captain-register" || route.kind == "captain-action" {
-			pathIssues = append(pathIssues, keyIssues...)
-		} else {
-			key = nil
-		}
-		if bodyRoute(route.kind) && !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
-			return
-		}
-		var issues []contract.Issue
-		result, issues, err = h.captainOperation(ctx, r, route, input, keys, pathIssues, key)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		if route.kind == "captain-register" || route.kind == "captain-action" {
-			status = 201
-		}
-	case "writer-register", "writer-update", "writer-withdraw", "writer-attempt", "writer-progress", "writer-capacity", "writer-result", "writer-stop":
-		var key *string
-		if route.kind == "writer-result" || route.kind == "writer-stop" {
-			var keyIssues []contract.Issue
-			key, keyIssues = requestKey(r)
-			pathIssues = append(pathIssues, keyIssues...)
-		}
-		if bodyRoute(route.kind) && !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(pathIssues, missingBody()...)})
-			return
-		}
-		var issues []contract.Issue
-		result, issues, err = h.writerOperation(ctx, route, writerID, input, keys, pathIssues, key)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-	case "reply":
-		key, issues := requestKey(r)
-		issues = append(pathIssues, issues...)
-		if key == nil {
-			issues = append(issues, contract.Issue{Type: "missing", Loc: []any{"header", "Idempotency-Key"}, Msg: "Field required", Input: nil})
-		}
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})
-			return
-		}
-		request, bodyIssues := contract.ValidateReply(input, keys)
-		issues = append(issues, bodyIssues...)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.Reply(ctx, route.itemID, route.executionID, request, *key)
-	case "steer", "rerun":
-		key, issues := requestKey(r)
-		issues = append(pathIssues, issues...)
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})
-			return
-		}
-		if route.kind == "steer" {
-			request, bodyIssues := contract.ValidateSteering(input, keys)
-			issues = append(issues, bodyIssues...)
-			if len(issues) > 0 {
-				writeJSON(w, 422, map[string]any{"detail": issues})
-				return
-			}
-			result, err = h.App.Steer(ctx, route.itemID, route.executionID, request, key)
-		} else {
-			request, bodyIssues := contract.ValidateRerun(input, keys)
-			issues = append(issues, bodyIssues...)
-			if len(issues) > 0 {
-				writeJSON(w, 422, map[string]any{"detail": issues})
-				return
-			}
-			result, err = h.App.Rerun(ctx, route.itemID, route.executionID, request, key)
-		}
-	case "owner", "runner":
-		writeJSON(w, 200, map[string]any{"role": role})
-		return
-	case "repositories":
-		result, err = h.App.Repositories(ctx)
-	case "dispatch":
-		result, err = h.App.DispatchSettings(ctx)
-	case "set-dispatch":
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": missingBody()})
-			return
-		}
-		request, issues := contract.ValidateDispatchUpdate(input, keys)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.SetDispatch(ctx, request)
-	case "inbox":
-		query, issues := contract.ValidateInboxQuery(r.URL.Query())
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.Inbox(ctx, query)
-	case "register":
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": missingBody()})
-			return
-		}
-		request, issues := contract.ValidateRegistration(input, keys)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.Register(ctx, request)
-	case "inspect":
-		result, err = h.App.Inspect(ctx, route.itemID)
-	case "title":
-		result, err = h.App.DisplayTitle(ctx, route.itemID)
-	case "history":
-		result, err = h.App.History(ctx, route.itemID)
-	case "timeline":
-		result, err = h.App.Timeline(ctx, route.itemID, route.executionID)
-	case "draft":
-		var markdown string
-		markdown, err = h.App.Draft(ctx, route.itemID, route.executionID, route.revision)
-		if err == nil {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(200)
-			w.Write([]byte(markdown))
-			return
-		}
-	case "report":
-		var markdown string
-		markdown, err = h.App.Report(ctx, route.itemID, route.executionID)
-		if err == nil {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(200)
-			w.Write([]byte(markdown))
-			return
-		}
-	case "set-title":
-		issues := pathIssues
-		key := ""
-		if values, exists := r.Header["Idempotency-Key"]; exists && len(values) > 0 {
-			key = headerText(values[0])
-			issues = append(issues, contract.ValidateKey(key)...)
-		} else {
-			issues = append(issues, contract.Issue{Type: "missing", Loc: []any{"header", "Idempotency-Key"}, Msg: "Field required", Input: nil})
-		}
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})
-			return
-		}
-		request, bodyIssues := contract.ValidateDisplayTitle(input, keys)
-		issues = append(issues, bodyIssues...)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		result, err = h.App.SetDisplayTitle(ctx, route.itemID, request, key)
-	case "cancel", "close-failure", "retry-finalization":
-		key, issues := requestKey(r)
-		issues = append(pathIssues, issues...)
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})
-			return
-		}
-		if route.kind == "retry-finalization" {
-			request, bodyIssues := contract.ValidateVersioned(input, keys)
-			issues = append(issues, bodyIssues...)
-			if len(issues) > 0 {
-				writeJSON(w, 422, map[string]any{"detail": issues})
-				return
-			}
-			result, err = h.App.RetryFinalization(ctx, route.itemID, route.executionID, request, key)
-		} else {
-			request, bodyIssues := contract.ValidateCancellation(input, keys)
-			issues = append(issues, bodyIssues...)
-			if len(issues) > 0 {
-				writeJSON(w, 422, map[string]any{"detail": issues})
-				return
-			}
-			event := application.Cancel
-			if route.kind == "close-failure" {
-				event = application.CloseFailure
-			}
-			result, err = h.App.RequestStop(ctx, route.itemID, route.executionID, request, event, key)
-		}
-	case "intake":
-		var issues []contract.Issue
-		var key *string
-		if values, exists := r.Header["Idempotency-Key"]; exists && len(values) > 0 {
-			value := headerText(values[0])
-			key = &value
-			issues = contract.ValidateKey(value)
-		}
-		if !bodyPresent {
-			writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})
-			return
-		}
-		request, bodyIssues := contract.ValidateIntake(input, keys)
-		issues = append(issues, bodyIssues...)
-		if len(issues) > 0 {
-			writeJSON(w, 422, map[string]any{"detail": issues})
-			return
-		}
-		if h.dispatch != nil {
-			h.dispatch()
-		}
-		result, err = h.App.Intake(ctx, request, key)
-		status = 201
-	}
-	if err != nil {
-		h.failure(w, err)
-		return
-	}
-	writeJSONValue(w, status, result, true)
+	q.pathIssues, q.pathNumber = pathIssues, pathNumber
+
 }
 
 func requestKey(r *http.Request) (*string, []contract.Issue) {
@@ -1022,6 +267,14 @@ func (h *Handler) failure(w http.ResponseWriter, err error) {
 		}
 		internalError(w)
 	}
+}
+
+func (h *Handler) respond(w http.ResponseWriter, status int, value any, err error) {
+	if err != nil {
+		h.failure(w, err)
+		return
+	}
+	writeJSONValue(w, status, value, true)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

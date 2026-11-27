@@ -64,6 +64,38 @@ its writes on a production muster. No browser package installation is required.
 
 ## Route permissions and transactions
 
+### Native Go server
+
+The supported HTTP default lives in `server`: `internal/httpapi` owns route/auth/
+transport projection, `internal/contract` validates presence/defaults and canonical
+receipt bytes, `internal/application` owns atomic domain operations and durable
+finalization/refresh jobs, and `internal/sqlite` owns admission/connections/transactions.
+Reuse their existing helpers; do not put network/provider/native-session work inside
+transactions or reimplement domain rules in clients. Accepted operations outlive HTTP
+disconnect; explicit interruption rolls back and unknown commit outcomes require
+receipt reconciliation. The shared OS lock covers HTTP and background-work drain.
+
+Use the prepared checks prefix from `server` for `go mod verify`, `go build -trimpath
+-buildvcs=false ./...`, `go vet ./...` and `go test ./...`. Run the relevant differential
+families plus [real packaged release/identity/rollback proofs](go-server-release.md)
+on isolated synthetic fresh/retained stores. The independent
+[parity report and remediation map](python-server-deprecation.md#reviewed-parity-evidence)
+are evidence, not permission to normalize a failure or refreeze P0/D0.
+Unix race/OS exclusion and the complete Python suite remain required CI.
+
+Original Python HTTP assertions can run against the production Go binary through a
+startup/teardown adapter; retain exact selected IDs/exclusions and complete typed state.
+Python monkeypatch/clock/SQL-spy tests remain Python reference tests, not claimed Go
+coverage. Keep auth, writer CLI, muster and reconciler tests even after HTTP deprecation.
+`test_deployment.py` covers default/saved/explicit engine precedence, no fallback,
+unmodified configuration and retained Python single ownership. `test_server_admin.py`
+covers exclusive new-store initialization without launching HTTP or overwriting data.
+
+### Retained Python reference engine
+
+The following FastAPI/thread-specific implementation guidance applies to the deprecated
+HTTP reference/temporary rollback path, not Go goroutines:
+
 Use `phalanx.auth` route dependencies: `require_owner` for owner writes,
 `require_runner` for trusted reconciler writes, `require_coordinator` for owner/runner
 coordination, and `require_writer` for scoped writer operations. Board reads use the
@@ -142,7 +174,9 @@ against live state or reset a queue. Rehearse on an operator-supplied snapshot f
 Receipt records are copied unchanged. New intake/results hash the complete validated
 request, including defaults and nulls; old-format keys can conflict after conversion.
 Reconcile any uncertain pre-cutover request against its stored response/current state
-before using a new key. There is no old-digest fallback.
+before using a new key. There is no general old-digest fallback; intake alone accepts
+the exact current and historical default-null fingerprints defined in
+[SPEC.md](../SPEC.md#intake-receipt-fingerprints), without rewriting receipts.
 
 ## Queue storage
 

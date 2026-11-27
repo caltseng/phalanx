@@ -1,12 +1,55 @@
 import ctypes
+from contextlib import closing, redirect_stdout
+import io
 import os
+from pathlib import Path
+import sqlite3
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
 from phalanx import priority, server_admin
+from phalanx.store import APPLICATION_ID, SCHEMA_VERSION
+from phalanx.workspaces import any_file_lock
 from timing import WAIT_SECONDS
+
+
+class ServerInitializationTest(unittest.TestCase):
+    def test_new_store_is_initialized_without_http_and_existing_data_is_never_replaced(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary).resolve() / "db" / "new.sqlite3"
+            with patch.dict(os.environ, {"PHALANX_DB": str(path)}), \
+                    patch.object(server_admin, "serve") as serve:
+                with redirect_stdout(io.StringIO()):
+                    server_admin.initialize_database()
+                serve.assert_not_called()
+                with closing(sqlite3.connect(path)) as db:
+                    self.assertEqual(db.execute("PRAGMA application_id").fetchone()[0], APPLICATION_ID)
+                    self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+                    self.assertEqual(db.execute("PRAGMA integrity_check").fetchone()[0], "ok")
+                before = path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "new database"):
+                    server_admin.initialize_database()
+                self.assertEqual(path.read_bytes(), before)
+                path.write_bytes(b"not an empty database")
+                with self.assertRaisesRegex(ValueError, "new database"):
+                    server_admin.initialize_database()
+                self.assertEqual(path.read_bytes(), b"not an empty database")
+
+    def test_initialization_requires_explicit_path_and_sole_ownership(self):
+        for selected in ("", "relative.sqlite3"):
+            with self.subTest(path=selected), patch.dict(os.environ, {"PHALANX_DB": selected}):
+                with self.assertRaisesRegex(ValueError, "explicit absolute"):
+                    server_admin.initialize_database()
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary).resolve() / "new.sqlite3"
+            with patch.dict(os.environ, {"PHALANX_DB": str(path)}), \
+                    any_file_lock([path.with_name(path.name + ".service.lock")]):
+                with self.assertRaisesRegex(ValueError, "sole database ownership"):
+                    server_admin.initialize_database()
+                self.assertFalse(path.exists())
 
 
 class ServerPriorityTest(unittest.TestCase):

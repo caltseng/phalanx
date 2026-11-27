@@ -1,7 +1,9 @@
 # Go server release and operator rehearsal
 
-**Source readiness is not deployment.** Go is opt-in for the existing API
-supervisor, never the default engine or a second service. The author uses only
+**Source readiness is not deployment.** Packaged Go is the supported repository
+default for the existing API supervisor, never a second service. Python HTTP is
+[deprecated, temporarily retained for explicit rollback](python-server-deprecation.md).
+Existing explicit configurations are honored, never rewritten. The author uses only
 sanitized synthetic fixtures. The existing operator alone owns actual private
 D0 inventory, fresh-current-data rehearsal, backup, cutover and rollback.
 Apply [deployment authority and safeguards](deployment.md#standing-authority-for-compatible-upgrades).
@@ -35,6 +37,15 @@ Verify the package digest and every extracted file against `manifest.json`;
 record binary `--version` output separately from the source merge.
 The same compiler/module graph/flags/target produces the reproducibility claim;
 different hosts/toolchains are not silently declared identical.
+
+`deploy run ... server` resolves `--engine`, saved `server.engine`, then Go, and
+requires an absolute `--go-binary` or saved `server.go_binary` beside verified assets.
+Missing packages fail with no automatic fallback. To preserve an existing implicit
+Python task during a package upgrade, its owner must explicitly select Python before
+upgrading; no tool changes the task or current data. New templates select Go.
+New installs use `python -m phalanx server initialize` on a new absolute `PHALANX_DB`;
+this offline Python admin command reserves a new file under the service lock, refuses
+existing files and starts no HTTP process. Go itself still cannot initialize a store.
 
 The launcher reads the existing `PHALANX_DB`, owner/runner credentials,
 `PHALANX_HOME` and `PHALANX_LOCAL_BOARD`. It requires a regular existing database,
@@ -90,6 +101,16 @@ Drain failures retain the actual response, lock-probe elapsed time and complete
 typed after-state; diagnostic capture does not change the workload, lock
 assertions, busy timeout or required successful drain.
 
+The package harness prepares a separate pinned Python lock-probe process before
+holding the intentional SQLite EXCLUSIVE blocker. After shutdown is signaled, that
+same process runs the unchanged pinned OS-lock function and must report exclusion;
+the mutation must still return 201, persist and drain before ownership releases.
+Preparation and critical-probe durations are recorded separately. Cold interpreter/
+model imports inside the blocker could otherwise consume the unchanged two-second
+SQLite busy window. This is a labeled test-sequencing correction, not a longer timeout,
+weaker assertion, production fix or explanation erasing earlier negative drain results.
+Retain those results separately; changed scheduling is not matched performance evidence.
+
 ## Compatibility evidence and limits
 
 P0 is `9af29396b37f86816fd274e01632164a47718a57`; public installed-source
@@ -106,6 +127,13 @@ Missing/null/default, numeric types, arrays, error details, required headers,
 durable bytes, hashes, receipts and versions are not dropped. The exact-request
 owner-approved malformed refusals and named read-default decisions remain the
 only behavioral exceptions; do not refreeze a baseline to conceal a discrepancy.
+
+The [independent audit](python-server-deprecation.md#reviewed-parity-evidence) found
+four real gaps despite green family suites. Its immutable verdict remains historical.
+Integrated fixes add production-entrypoint proxy/home identity proof, nonvacuous
+deployment-retirement effects and the incomplete-header/framing/closure corpus.
+Run those regressions on the final delivery head, in addition to the package proof;
+neither source integration nor a single health probe substitutes for them.
 
 | Specification cases | Executable evidence, in addition to the full Python suite |
 | --- | --- |
@@ -181,14 +209,15 @@ before readiness; different manifests or host conditions are unmatched.
 6. Explicitly select the verified extracted package in the existing launch:
 
    ```text
-   python -P -m phalanx deploy run --config <existing-absolute-deployment.json> server --engine go --go-binary <absolute-package>\phalanx-server.exe
+   python -P -m phalanx deploy run --config <existing-absolute-deployment.json> server --go-binary <absolute-package>\phalanx-server.exe
    ```
 
    The adapter delegates a foreground child; the same supervisor must own/stop
    its exact process tree (POSIX group/cgroup or Windows owned tree/console).
    The Go child, not its Python parent, holds the shared DB lock. Do not add a
    second watchdog, supervisor, scheduler or service. `--initialize-database`
-   is forbidden for Go. Python remains the default for every existing command.
+   is forbidden for Go. `--engine go` remains an explicit override when a saved config
+   selects Python. CLI/saved explicit engine choices survive this default change.
 7. Verify one intended API, authenticated owner/runner/current-writer continuity,
    preserved versions/receipts/jobs/limits, unchanged Scribe at the same URL and
    fresh existing reconciler heartbeat. Reconcile actual caller-loss/unknown
@@ -204,3 +233,23 @@ before readiness; different manifests or host conditions are unmatched.
 9. Record actual private rehearsal/cutover/rollback receipts and notify the current
    Captain for existing bounded reconciliation/refill. Source merge, package build,
    synthetic PASS and a sent message are not those receipts.
+
+### Temporary Python HTTP rollback
+
+After the owner stops/drains the exact Go service tree, retain the current compatible
+database, URL, credentials, configuration and supervisor. With the reviewed retained
+Python package and its pinned server dependencies, use the same foreground entrypoint:
+
+```text
+python -P -m phalanx deploy run --config <existing-absolute-deployment.json> server --engine python
+```
+
+An explicitly saved `"engine": "python"` also works; the CLI flag takes precedence
+without changing the file. Do not pass `--go-binary` to a Python launch. A saved Go
+package path may remain untouched while the explicit Python engine is selected.
+Retain previous packages, P0/D0 source/runtime pins and all earlier rollout/failure
+artifacts. Verify accepted Go writes, original-key replay, bindings/jobs/reports,
+authentication and existing reconciler continuity on the same evolved current file.
+Never restore the pre-upgrade backup over newer accepted work or run both engines.
+Python HTTP is temporary rollback support, not renewed default support or permission
+to remove the still-supported Python CLI/reconciler/admin/shared models/Scribe.

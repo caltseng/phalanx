@@ -221,6 +221,10 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, shell bool)
 		writeJSON(w, 404, map[string]any{"detail": "Not Found"})
 		return
 	}
+	h.serveAssetFile(w, r, path, info, shell)
+}
+
+func (h *Handler) serveAssetFile(w http.ResponseWriter, r *http.Request, path string, info os.FileInfo, shell bool) {
 	size := info.Size()
 	mtime := float64(info.ModTime().Unix()) + float64(info.ModTime().Nanosecond())/1000000000
 	value, err := contract.Canonical(json.Number(strconv.FormatFloat(mtime, 'g', -1, 64)))

@@ -143,7 +143,8 @@ def run(binary, output):
                 observations = []
                 try:
                     with release.production(binary, database, directory,
-                                            python_source=ROOT if runtime == "Python" else None) as (url, _):
+                                            python_source=ROOT if runtime == "Python" else None,
+                                            default_engine=runtime == "Go") as (url, _):
                         requests = [("identity", "GET", "/v1/muster/status", [], "", h.RUNNER, 200)]
                         if name == "unset" or name.startswith("trust-"):
                             requests.extend(cases(trusted))

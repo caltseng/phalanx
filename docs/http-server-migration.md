@@ -1,5 +1,14 @@
 # HTTP server migration: compatibility and architecture specification
 
+**Current implementation pointer:** the [packaged Go server](../server/README.md)
+is now the supported repository launch default. Python HTTP is
+[deprecated, temporarily retained for explicit rollback](python-server-deprecation.md).
+Python CLI/reconciler/admin and Scribe remain supported. The original report status,
+pins, named owner decisions and limits below are historical provenance, not a claim
+that Go is unimplemented, blanket parity approval or a live cutover receipt.
+The deprecation guide records the independent audit's exact heads/G1-G4 findings
+and subsequent integrated remediation separately from this original report.
+
 **Status: substantial draft for collaborative owner review, not authorization to implement or deploy.**
 
 Prepared 2026-11-26 for Phalanx item `e9eec24973954316938ca68aef79a0f2`, execution `67032e84089b425d963a4b937cedef9c`. Scope: replace the Python HTTP server and authoritative server-side domain/storage implementation with a proposed Go implementation. Preserve the API, SQLite data, workflows, Python CLI/Captain clients/reconciler, and Scribe. No source implementation, implementation PR, service changes, schema conversion, production writes for comparison, or cutover is part of this report.
