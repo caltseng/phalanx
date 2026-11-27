@@ -1216,7 +1216,7 @@
     "server/internal/testdb/db_test.go:TestGoldenSchema",
     "server/internal/testdb/db_test.go:TestNewIsEmptyAndIsolated"
   ],
-  "go_test_count": 61,
+  "go_test_count": 62,
   "files": {
     "server/cmd/conformance-decisions/main.go": "a373d0e6f55f2448cd3eabc1a923f7170e75859e96dba3ba11fc0a4be2af247d",
     "server/cmd/conformance-json/main.go": "3dadc98f48f1f8f557dec930341f3041f6d6efc42efb429dac31b22ac9c013dc",
