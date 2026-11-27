@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -10,7 +9,7 @@ import (
 )
 
 func (h *Handler) captainOperation(ctx context.Context, r *http.Request, target route, input any, keys []string,
-	pathIssues []contract.Issue, key *string) (json.RawMessage, []contract.Issue, error) {
+	pathIssues []contract.Issue, key *string) (any, []contract.Issue, error) {
 	switch target.kind {
 	case "captains":
 		limit, issues := contract.ValidateLimit(r.URL.Query(), 25)

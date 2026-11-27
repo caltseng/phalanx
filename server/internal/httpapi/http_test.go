@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -18,9 +19,54 @@ import (
 	"github.com/caltseng/phalanx/server/internal/testdb"
 )
 
+func TestApplicationResponsePreservesWireBytes(t *testing.T) {
+	app := fixtureApp(t)
+	request, issues := contract.ValidateIntake(map[string]any{
+		"repository_id": "fixture", "goal": "<>&\u00e9\U0001f600\u2028\n",
+	}, []string{"repository_id", "goal"})
+	if len(issues) != 0 {
+		t.Fatal(issues)
+	}
+	value, err := app.Intake(context.Background(), request, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := contract.Canonical(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, _, err := contract.Decode([]byte(canonical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := httptest.NewRecorder()
+	writeJSON(expected, http.StatusOK, previous)
+	body, ok := contract.ObjectValues(value)
+	if !ok {
+		t.Fatal("intake returned an encoded response instead of a value")
+	}
+	r := httptest.NewRequest("GET", "/v1/items/"+body["id"].(string), nil)
+	r.Header.Set("Authorization", "Bearer owner")
+	actual := httptest.NewRecorder()
+	(&Handler{App: app, Owner: "owner", Runner: "runner"}).ServeHTTP(actual, r)
+	if actual.Code != expected.Code || !bytes.Equal(actual.Body.Bytes(), expected.Body.Bytes()) {
+		t.Fatalf("wire response changed:\nold %d %s\nnew %d %s",
+			expected.Code, expected.Body.Bytes(), actual.Code, actual.Body.Bytes())
+	}
+}
+
 func fixtureApp(t *testing.T) *application.App {
 	app, _ := fixtureAppDatabase(t)
 	return app
+}
+
+func responseJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	text, err := contract.Canonical(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []byte(text)
 }
 
 func fixtureAppDatabase(t *testing.T) (*application.App, string) {
@@ -111,7 +157,7 @@ func TestDisconnectWhileDispatchedWaitingForAdmissionDoesNotCancelMutation(t *te
 	}
 	if err := app.Store.Read(context.Background(), func(tx *sqlite.Tx) error {
 		receipt, err := tx.Receipt("intake", key)
-		if err == nil && string(replayed) != receipt.Response {
+		if err == nil && string(responseJSON(t, replayed)) != receipt.Response {
 			t.Fatal("retry did not preserve receipt")
 		}
 		return err

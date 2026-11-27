@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -56,13 +55,20 @@ func timestamp(now time.Time) string {
 	return now.UTC().Format("2006-01-02T15:04:05.000000+00:00")
 }
 
-func encoded(value any) (json.RawMessage, error) {
-	text, err := contract.Canonical(value)
-	return json.RawMessage(text), err
+func responseValue(value any) (any, error) {
+	return contract.JSONValue(value)
 }
 
-func (a *App) Register(ctx context.Context, request contract.Registration) (json.RawMessage, error) {
-	var result json.RawMessage
+func storedResponse(text string) (any, error) {
+	value, _, err := contract.Decode([]byte(text))
+	if err != nil {
+		return nil, err
+	}
+	return responseValue(value)
+}
+
+func (a *App) Register(ctx context.Context, request contract.Registration) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		if err := tx.Register(request.ID, request.Remote, timestamp(a.Clock())); err != nil {
 			return err
@@ -74,27 +80,27 @@ func (a *App) Register(ctx context.Context, request contract.Registration) (json
 		if err != nil {
 			return err
 		}
-		result, err = encoded(repository)
+		result, err = responseValue(repository)
 		return err
 	})
 	return result, err
 }
 
-func (a *App) Repositories(ctx context.Context) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Repositories(ctx context.Context) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		repositories, err := tx.Repositories()
 		if err != nil {
 			return err
 		}
-		result, err = encoded(repositories)
+		result, err = responseValue(repositories)
 		return err
 	})
 	return result, err
 }
 
-func (a *App) Inspect(ctx context.Context, itemID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Inspect(ctx context.Context, itemID string) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		result, err = inspect(tx, itemID)
@@ -103,7 +109,7 @@ func (a *App) Inspect(ctx context.Context, itemID string) (json.RawMessage, erro
 	return result, err
 }
 
-func inspect(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
+func inspect(tx *sqlite.Tx, itemID string) (any, error) {
 	item, err := tx.Item(itemID)
 	if err == sql.ErrNoRows {
 		return nil, &Missing{"Work item not found"}
@@ -139,11 +145,11 @@ func inspect(tx *sqlite.Tx, itemID string) (json.RawMessage, error) {
 	body["dependencies"] = links
 	body["execution"] = execution
 	body["last_reply"] = reply
-	return encoded(body)
+	return responseValue(body)
 }
 
-func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		result, err = a.intake(tx, request, key)
@@ -152,7 +158,7 @@ func (a *App) Intake(ctx context.Context, request contract.Intake, key *string) 
 	return result, err
 }
 
-func (a *App) intake(tx *sqlite.Tx, request contract.Intake, key *string) (json.RawMessage, error) {
+func (a *App) intake(tx *sqlite.Tx, request contract.Intake, key *string) (any, error) {
 	material, err := request.Material()
 	if err != nil {
 		return nil, err
@@ -173,7 +179,7 @@ func (a *App) intake(tx *sqlite.Tx, request contract.Intake, key *string) (json.
 				return nil, &Conflict{"Idempotency key was already used with a different request"}
 			}
 			// Do not inspect mutable item state or rewrite the receipt.
-			return json.RawMessage(receipt.Response), nil
+			return storedResponse(receipt.Response)
 		}
 		if err != sql.ErrNoRows {
 			return nil, err
@@ -184,14 +190,18 @@ func (a *App) intake(tx *sqlite.Tx, request contract.Intake, key *string) (json.
 		return nil, err
 	}
 	if key != nil {
-		if err := tx.SaveReceipt("intake", *key, contract.Digest(compatible), string(result)); err != nil {
+		text, err := contract.Canonical(result)
+		if err != nil {
+			return nil, err
+		}
+		if err := tx.SaveReceipt("intake", *key, contract.Digest(compatible), text); err != nil {
 			return nil, err
 		}
 	}
 	return result, nil
 }
 
-func (a *App) create(tx *sqlite.Tx, request contract.Intake) (json.RawMessage, error) {
+func (a *App) create(tx *sqlite.Tx, request contract.Intake) (any, error) {
 	if _, err := tx.Repository(request.RepositoryID); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, &Missing{"Repository not registered"}

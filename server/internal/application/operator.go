@@ -22,7 +22,7 @@ type ConditionalRead struct {
 }
 
 type OperatorResponse struct {
-	Body        json.RawMessage
+	Body        any
 	ETag        string
 	NotModified bool
 }
@@ -581,7 +581,7 @@ func (a *App) OperatorList(ctx context.Context, request contract.OperatorQuery, 
 			}
 			cursor = &value
 		}
-		response.Body, err = encoded(map[string]any{"items": items, "next_cursor": cursor})
+		response.Body, err = responseValue(map[string]any{"items": items, "next_cursor": cursor})
 		return err
 	})
 	return response, err
@@ -638,7 +638,7 @@ func (a *App) OperatorItem(ctx context.Context, itemID string, condition Conditi
 		for name, value := range brief {
 			item[name] = value
 		}
-		response.Body, err = encoded(map[string]any{"item": item})
+		response.Body, err = responseValue(map[string]any{"item": item})
 		return err
 	})
 	return response, err
@@ -728,7 +728,7 @@ func (a *App) OperatorOverview(ctx context.Context, condition ConditionalRead) (
 			value := max(int64(0), (now.UnixMicro()/1000-*oldest)/1000)
 			age = &value
 		}
-		response.Body, err = encoded(map[string]any{"issue_scout": scouting, "issue_scout_needs_owner": needs,
+		response.Body, err = responseValue(map[string]any{"issue_scout": scouting, "issue_scout_needs_owner": needs,
 			"generated_at": pythonStamp(now), "sections": sections, "closed_24h": closed,
 			"dispatch":            map[string]bool{"paused": current.Pickup.Capacity.Paused},
 			"oldest_queued_since": oldestStamp, "oldest_queued_age_seconds": age})
@@ -852,7 +852,7 @@ func (a *App) OperatorGroup(ctx context.Context, label string, request contract.
 		if err != nil {
 			return err
 		}
-		response.Body, err = encoded(map[string]any{"label": label, "items": items, "next_cursor": cursor,
+		response.Body, err = responseValue(map[string]any{"label": label, "items": items, "next_cursor": cursor,
 			"rollup": map[string]any{"scope": "page", "items": len(rows), "open": open, "additions": additions, "deletions": deletions,
 				"size_unknown_count": unknown, "first_created_at": first, "last_closed_at": lastClosed,
 				"oldest_open_since": oldestOpen, "outcomes": closed}})
@@ -966,13 +966,13 @@ func operatorTimelineEvent(row sqlite.OperatorEvent) (map[string]any, error) {
 		"reason": reason, "answered_by": row.AnsweredBy, "candidate": appliedSHA(details), "pr_url": details["pr_url"]}, nil
 }
 
-func (a *App) OperatorTimeline(ctx context.Context, executionID string, request contract.OperatorQuery) (json.RawMessage, error) {
+func (a *App) OperatorTimeline(ctx context.Context, executionID string, request contract.OperatorQuery) (any, error) {
 	scope := "timeline:" + executionID
 	after, err := contract.DecodeCursor(request.Cursor, scope, []string{"version", "stamp"})
 	if err != nil {
 		return nil, &BadRequest{"Invalid cursor"}
 	}
-	var result json.RawMessage
+	var result any
 	err = a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		execution, err := tx.OperatorExecution(executionID)
 		if err == sql.ErrNoRows {
@@ -1051,7 +1051,7 @@ func (a *App) OperatorTimeline(ctx context.Context, executionID string, request 
 		for name, value := range brief {
 			item[name] = value
 		}
-		result, err = encoded(map[string]any{"item": item, "usage": usage, "attempt": execution.StageOwner,
+		result, err = responseValue(map[string]any{"item": item, "usage": usage, "attempt": execution.StageOwner,
 			"previous_execution_id": previous, "next_execution_id": next, "prerequisites": prerequisites,
 			"question": question, "events": events, "next_cursor": cursor})
 		return err
@@ -1059,8 +1059,8 @@ func (a *App) OperatorTimeline(ctx context.Context, executionID string, request 
 	return result, err
 }
 
-func (a *App) MusterStatus(ctx context.Context, home *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) MusterStatus(ctx context.Context, home *string) (any, error) {
+	var result any
 	now := a.Clock().UTC()
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		_, live, err := liveSnapshot(tx, now)
@@ -1104,7 +1104,7 @@ func (a *App) MusterStatus(ctx context.Context, home *string) (json.RawMessage, 
 		if err != nil {
 			return err
 		}
-		result, err = encoded(map[string]any{"status": "ok", "identity": map[string]any{"home": home},
+		result, err = responseValue(map[string]any{"status": "ok", "identity": map[string]any{"home": home},
 			"captains": captains, "writers": writers, "reconcilers": reconcilers,
 			"dispatch_paused": settings.Paused, "observed_at": automaticISO(now)})
 		return err

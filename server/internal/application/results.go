@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -123,11 +122,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 			return sqlite.Execution{}, err
 		}
 	}
-	payload, err := encoded(request)
-	if err != nil {
-		return sqlite.Execution{}, err
-	}
-	value, _, err := contract.Decode(payload)
+	value, err := responseValue(request)
 	if err != nil {
 		return sqlite.Execution{}, err
 	}
@@ -250,7 +245,7 @@ func (a *App) result(tx *sqlite.Tx, itemID, executionID, writerID string, reques
 	}, request.AttemptID, retryAt)
 }
 
-func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *string, view sqlite.Execution) (json.RawMessage, error) {
+func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *string, view sqlite.Execution) (any, error) {
 	var snapshot *admissionContext
 	writer, err := writerRecord(tx, writerID)
 	if err != nil {
@@ -298,12 +293,12 @@ func (a *App) advanceWriter(tx *sqlite.Tx, writerID string, previousAttempt *str
 	return bindingWithContext(tx, writer, snapshot)
 }
 
-func (a *App) WriterResult(ctx context.Context, itemID, executionID, writerID string, request contract.WriterResult, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) WriterResult(ctx context.Context, itemID, executionID, writerID string, request contract.WriterResult, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		result, err = replay(tx, "result:"+itemID+":"+executionID, key,
-			map[string]any{"body": request, "writer_id": writerID}, func() (json.RawMessage, error) {
+			map[string]any{"body": request, "writer_id": writerID}, func() (any, error) {
 				view, err := a.result(tx, itemID, executionID, writerID, request)
 				if err != nil {
 					return nil, err
@@ -318,12 +313,12 @@ func (a *App) WriterResult(ctx context.Context, itemID, executionID, writerID st
 	return a.finishResponse(ctx, result)
 }
 
-func (a *App) WriterStopConfirmed(ctx context.Context, itemID, executionID, writerID string, request contract.AttemptEvent, key *string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) WriterStopConfirmed(ctx context.Context, itemID, executionID, writerID string, request contract.AttemptEvent, key *string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		var err error
 		result, err = replay(tx, "stop_confirmed:"+itemID+":"+executionID, key,
-			map[string]any{"body": request, "writer_id": writerID}, func() (json.RawMessage, error) {
+			map[string]any{"body": request, "writer_id": writerID}, func() (any, error) {
 				row, state, err := checkCurrent(tx, itemID, executionID, request.ExpectedVersion)
 				if err != nil {
 					return nil, err

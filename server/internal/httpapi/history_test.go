@@ -26,7 +26,7 @@ func TestTitleReceiptRacePreservesExecution(t *testing.T) {
 		ID        string           `json:"id"`
 		Execution sqlite.Execution `json:"execution"`
 	}
-	if err := json.Unmarshal(body, &item); err != nil {
+	if err := json.Unmarshal(responseJSON(t, body), &item); err != nil {
 		t.Fatal(err)
 	}
 	handler := &Handler{App: app, Owner: "owner", Runner: "runner"}
@@ -105,7 +105,7 @@ func TestHistoryAndTimelineScopeAndMissing(t *testing.T) {
 		ID        string           `json:"id"`
 		Execution sqlite.Execution `json:"execution"`
 	}
-	if err := json.Unmarshal(body, &item); err != nil {
+	if err := json.Unmarshal(responseJSON(t, body), &item); err != nil {
 		t.Fatal(err)
 	}
 	handler := &Handler{App: app, Owner: "owner", Runner: "runner"}

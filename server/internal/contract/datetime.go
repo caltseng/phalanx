@@ -17,6 +17,10 @@ func (value AwareTime) MarshalJSON() ([]byte, error) {
 	return dateTimeJSON(value.Time, true)
 }
 
+func (value AwareTime) JSONValue() (any, error) {
+	return dateTimeText(value.Time, true), nil
+}
+
 type DateTime struct {
 	time.Time
 	Aware bool
@@ -26,7 +30,15 @@ func (value DateTime) MarshalJSON() ([]byte, error) {
 	return dateTimeJSON(value.Time, value.Aware)
 }
 
+func (value DateTime) JSONValue() (any, error) {
+	return dateTimeText(value.Time, value.Aware), nil
+}
+
 func dateTimeJSON(value time.Time, aware bool) ([]byte, error) {
+	return json.Marshal(dateTimeText(value, aware))
+}
+
+func dateTimeText(value time.Time, aware bool) string {
 	layout := "2006-01-02T15:04:05"
 	if value.Nanosecond() != 0 {
 		layout += ".000000"
@@ -34,7 +46,7 @@ func dateTimeJSON(value time.Time, aware bool) ([]byte, error) {
 	if aware {
 		layout += "Z07:00"
 	}
-	return json.Marshal(value.Format(layout))
+	return value.Format(layout)
 }
 
 var datetimeNumber = regexp.MustCompile(`^[+-]?(?:[0-9]+|(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)$`)

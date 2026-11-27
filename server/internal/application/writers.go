@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -82,20 +81,16 @@ func admissionReason(capacity sqlite.DispatchSettings, rework *string, stage Sta
 	return &reason
 }
 
-func binding(tx *sqlite.Tx, writer sqlite.WriterRecord) (json.RawMessage, error) {
+func binding(tx *sqlite.Tx, writer sqlite.WriterRecord) (any, error) {
 	return bindingWithContext(tx, writer, nil)
 }
 
-func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admissionContext) (json.RawMessage, error) {
+func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admissionContext) (any, error) {
 	execution, err := tx.Execution(writer.ItemID, writer.ExecutionID)
 	if err != nil {
 		return nil, err
 	}
-	view, err := encoded(execution)
-	if err != nil {
-		return nil, err
-	}
-	value, _, err := contract.Decode(view)
+	value, err := responseValue(execution)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +140,7 @@ func bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, current *admi
 		"building": writer.Building, "building_requested_at": writer.BuildingRequestedAt,
 		"capacity_revision": writer.CapacityRevision, "handoff_head": handoff, "capacity_wait": capacityWait,
 	}
-	return encoded(body)
+	return responseValue(body)
 }
 
 func (a *App) acquireBuilding(tx *sqlite.Tx, writer sqlite.WriterRecord, capacity *sqlite.DispatchSettings) (bool, *admissionContext, error) {
@@ -296,8 +291,8 @@ func (a *App) releaseWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, reason st
 	return tx.EndWriter(writer.ID, timestamp(a.Clock()), reason)
 }
 
-func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, request contract.WriterRegistration) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, request contract.WriterRegistration) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		old, err := tx.WriterByNonce(request.Nonce)
 		if err != nil {
@@ -412,8 +407,8 @@ func (a *App) RegisterWriter(ctx context.Context, itemID, executionID string, re
 	return result, err
 }
 
-func (a *App) WriterCapacity(ctx context.Context, writerID string, request contract.WriterCapacity) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) WriterCapacity(ctx context.Context, writerID string, request contract.WriterCapacity) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		writer, err := writerRecord(tx, writerID)
 		if err != nil {
@@ -478,8 +473,8 @@ func (a *App) WriterCapacity(ctx context.Context, writerID string, request contr
 	return result, err
 }
 
-func (a *App) WriterNext(ctx context.Context, writerID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) WriterNext(ctx context.Context, writerID string) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		writer, err := writerRecord(tx, writerID)
 		if err != nil {
@@ -512,8 +507,8 @@ func (a *App) WriterNext(ctx context.Context, writerID string) (json.RawMessage,
 	return result, err
 }
 
-func (a *App) WriterProgress(ctx context.Context, writerID string, request contract.WriterProgress) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) WriterProgress(ctx context.Context, writerID string, request contract.WriterProgress) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		if err := tx.Progress(writerID, timestamp(a.Clock()), request.Note); err != nil {
 			return err
@@ -565,8 +560,8 @@ func authorizeWriter(tx *sqlite.Tx, writer sqlite.WriterRecord, captainID string
 	return captainID, nil
 }
 
-func (a *App) UpdateWriter(ctx context.Context, itemID, executionID string, request contract.WriterUpdate) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) UpdateWriter(ctx context.Context, itemID, executionID string, request contract.WriterUpdate) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		writer, err := boundWriter(tx, itemID, executionID, request.WriterID)
 		if err != nil {
@@ -609,8 +604,8 @@ func (a *App) UpdateWriter(ctx context.Context, itemID, executionID string, requ
 	return result, err
 }
 
-func (a *App) WithdrawWriter(ctx context.Context, itemID, executionID string, request contract.WriterWithdrawal) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) WithdrawWriter(ctx context.Context, itemID, executionID string, request contract.WriterWithdrawal) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		writer, err := boundWriter(tx, itemID, executionID, request.WriterID)
 		if err != nil {

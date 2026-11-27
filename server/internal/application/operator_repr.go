@@ -135,11 +135,7 @@ func writeRepr(buffer *bytes.Buffer, value any) error {
 			}
 			return writeRepr(buffer, entries)
 		}
-		data, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		decoded, _, err := contract.Decode(data)
+		decoded, err := contract.OrderedJSONValue(value)
 		if err != nil {
 			return err
 		}

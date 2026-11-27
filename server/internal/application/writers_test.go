@@ -93,12 +93,12 @@ func TestWriterClaimsReadSettingsOnce(t *testing.T) {
 		} `json:"writer"`
 	}
 	_, _, blockedAttempt := decodeBinding(t, blocked)
-	if err := json.Unmarshal(blocked, &response); err != nil {
+	if err := json.Unmarshal(responseJSON(t, blocked), &response); err != nil {
 		t.Fatal(err)
 	}
 	if blockedAttempt != nil || response.Writer.Building || response.Writer.CapacityWait == nil ||
 		*response.Writer.CapacityWait != "Dispatch is paused" {
-		t.Fatal("paused claim lost its allocation wait", string(blocked))
+		t.Fatal("paused claim lost its allocation wait", string(responseJSON(t, blocked)))
 	}
 }
 
@@ -137,11 +137,11 @@ func TestCaptainLivenessBoundariesAgreeAcrossViews(t *testing.T) {
 					t.Fatal(err)
 				}
 				var captain CaptainView
-				if err := json.Unmarshal(raw, &captain); err != nil {
+				if err := json.Unmarshal(responseJSON(t, raw), &captain); err != nil {
 					t.Fatal(err)
 				}
 				if captain.Live != wantLive || captain.Stale == wantLive {
-					t.Fatal("Captain view liveness", string(raw))
+					t.Fatal("Captain view liveness", string(responseJSON(t, raw)))
 				}
 				raw, err = app.CurrentCaptain(context.Background())
 				if err != nil {
@@ -152,11 +152,11 @@ func TestCaptainLivenessBoundariesAgreeAcrossViews(t *testing.T) {
 						ID string `json:"id"`
 					} `json:"captain"`
 				}
-				if err := json.Unmarshal(raw, &current); err != nil {
+				if err := json.Unmarshal(responseJSON(t, raw), &current); err != nil {
 					t.Fatal(err)
 				}
 				if (current.Captain != nil) != wantLive {
-					t.Fatal("current routing liveness", string(raw))
+					t.Fatal("current routing liveness", string(responseJSON(t, raw)))
 				}
 			})
 		}
@@ -197,11 +197,11 @@ func TestArchiveStatusRetainsReplacementAndCaptainBlockers(t *testing.T) {
 			t.Fatal(err)
 		}
 		var view ArchiveStatusView
-		if err := json.Unmarshal(raw, &view); err != nil {
+		if err := json.Unmarshal(responseJSON(t, raw), &view); err != nil {
 			t.Fatal(err)
 		}
 		if view.Active != wantActive || len(view.Writers) != 12 {
-			t.Fatal("archive blockers or writer membership changed", string(raw))
+			t.Fatal("archive blockers or writer membership changed", string(responseJSON(t, raw)))
 		}
 	}
 	// Archiving a writer session does not discard its Captains' unfinished cleanup.
@@ -276,16 +276,16 @@ func TestCaptainListRetainsPerCaptainCleanupLimit(t *testing.T) {
 			} `json:"ended_writers"`
 		} `json:"captains"`
 	}
-	if err := json.Unmarshal(raw, &view); err != nil {
+	if err := json.Unmarshal(responseJSON(t, raw), &view); err != nil {
 		t.Fatal(err)
 	}
 	if len(view.Captains) != 2 {
-		t.Fatal(string(raw))
+		t.Fatal(string(responseJSON(t, raw)))
 	}
 	for _, captain := range view.Captains {
 		if captain.CleanupPending != 103 || len(captain.EndedWriters) != 100 ||
 			captain.EndedWriters[0].ID != captain.ID+"-000" || captain.EndedWriters[99].ID != captain.ID+"-099" {
-			t.Fatal("cleanup count, ordering, or per-Captain limit changed", string(raw))
+			t.Fatal("cleanup count, ordering, or per-Captain limit changed", string(responseJSON(t, raw)))
 		}
 	}
 }
@@ -352,7 +352,7 @@ func TestWriterRegistrationRefusesNullStoredDefaultsWithoutEffects(t *testing.T)
 	}
 }
 
-func decodeBinding(t *testing.T, raw json.RawMessage) (sqlite.Execution, string, *string) {
+func decodeBinding(t *testing.T, raw any) (sqlite.Execution, string, *string) {
 	t.Helper()
 	var result struct {
 		sqlite.Execution
@@ -361,7 +361,7 @@ func decodeBinding(t *testing.T, raw json.RawMessage) (sqlite.Execution, string,
 			AttemptID *string `json:"attempt_id"`
 		} `json:"writer"`
 	}
-	if err := json.Unmarshal(raw, &result); err != nil {
+	if err := json.Unmarshal(responseJSON(t, raw), &result); err != nil {
 		t.Fatal(err)
 	}
 	return result.Execution, result.Writer.ID, result.Writer.AttemptID
@@ -377,7 +377,7 @@ func TestWriterRegistrationAtomicallyClaimsAndFencesNonce(t *testing.T) {
 	}
 	execution, writerID, attemptID := decodeBinding(t, first)
 	if execution.Version != 2 || attemptID == nil {
-		t.Fatal("registration did not atomically open the first attempt", string(first))
+		t.Fatal("registration did not atomically open the first attempt", string(responseJSON(t, first)))
 	}
 	var stage, historyAttempt string
 	if err := db.QueryRow("SELECT stage FROM attempts WHERE id=?", *attemptID).Scan(&stage); err != nil || stage != "development" {
@@ -389,16 +389,16 @@ func TestWriterRegistrationAtomicallyClaimsAndFencesNonce(t *testing.T) {
 	}
 	request.ExpectedVersion = "99"
 	replayed, err := app.RegisterWriter(context.Background(), "up", "execution", request)
-	if err != nil || string(replayed) != string(first) {
-		t.Fatal("nonce replay reopened or changed a writer allocation", string(replayed), err)
+	if err != nil || string(responseJSON(t, replayed)) != string(responseJSON(t, first)) {
+		t.Fatal("nonce replay reopened or changed a writer allocation", string(responseJSON(t, replayed)), err)
 	}
 	request.Runtime = "another-runtime"
 	if _, err := app.RegisterWriter(context.Background(), "up", "execution", request); err == nil {
 		t.Fatal("changed nonce registration admitted")
 	}
 	next, err := app.WriterNext(context.Background(), writerID)
-	if err != nil || string(next) != string(first) {
-		t.Fatal("next attempt re-claimed a current attempt", string(next), err)
+	if err != nil || string(responseJSON(t, next)) != string(responseJSON(t, first)) {
+		t.Fatal("next attempt re-claimed a current attempt", string(responseJSON(t, next)), err)
 	}
 }
 
@@ -476,7 +476,7 @@ func TestStoppedReplacementTransfersExactBuildingAllocation(t *testing.T) {
 	}
 	execution, newID, newAttempt := decodeBinding(t, replaced)
 	if newID == oldID || newAttempt == nil || *newAttempt == *oldAttempt || execution.Version != 4 {
-		t.Fatal("replacement did not fence/retry/claim under the new writer", string(replaced))
+		t.Fatal("replacement did not fence/retry/claim under the new writer", string(responseJSON(t, replaced)))
 	}
 	if err := app.Store.Read(context.Background(), func(tx *sqlite.Tx) error {
 		old, err := tx.WriterRecord(oldID)

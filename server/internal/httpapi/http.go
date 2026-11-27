@@ -499,7 +499,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 422, map[string]any{"detail": pathIssues})
 		return
 	}
-	var result json.RawMessage
+	var result any
 	var status = 200
 	switch route.kind {
 	case "board-repositories":
@@ -920,12 +920,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.failure(w, err)
 		return
 	}
-	value, _, err := contract.Decode(result)
-	if err != nil {
-		h.failure(w, err)
-		return
-	}
-	writeJSON(w, status, value)
+	writeJSONValue(w, status, result, true)
 }
 
 func requestKey(r *http.Request) (*string, []contract.Issue) {
@@ -1030,9 +1025,15 @@ func (h *Handler) failure(w http.ResponseWriter, err error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	writeJSONValue(w, status, value, false)
+}
+
+func writeJSONValue(w http.ResponseWriter, status int, value any, escapeHTML bool) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
+	// Application responses previously passed through orderedObject.MarshalJSON,
+	// whose nested json.Marshal escaped HTML even with the outer encoder disabled.
+	encoder.SetEscapeHTML(escapeHTML)
 	if err := encoder.Encode(value); err != nil {
 		slog.Error("Could not encode HTTP response", "error", err)
 		internalError(w)

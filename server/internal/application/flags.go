@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -59,8 +58,8 @@ func storedFlag(row sqlite.FlagRecord) FlagView {
 		Reason: row.Reason, Recovery: row.Recovery, FirstSeen: row.FirstSeen, NotifyOwner: row.NotifyOwner, Source: "stored"}
 }
 
-func (a *App) RaiseFlag(ctx context.Context, request contract.Flag) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) RaiseFlag(ctx context.Context, request contract.Flag) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		now := timestamp(a.Clock())
 		row, err := tx.RaiseFlag(sqlite.FlagRecord{Kind: request.Kind, ItemID: request.ItemID, ExecutionID: request.ExecutionID,
@@ -69,20 +68,20 @@ func (a *App) RaiseFlag(ctx context.Context, request contract.Flag) (json.RawMes
 		if err != nil {
 			return err
 		}
-		result, err = encoded(storedFlag(row))
+		result, err = responseValue(storedFlag(row))
 		return err
 	})
 	return result, err
 }
 
-func (a *App) ClearFlag(ctx context.Context, request contract.FlagKey) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) ClearFlag(ctx context.Context, request contract.FlagKey) (any, error) {
+	var result any
 	err := a.Store.Write(ctx, func(tx *sqlite.Tx) error {
 		cleared, err := tx.ClearFlag(request.Kind, request.ItemID, request.ExecutionID, request.CaptainID)
 		if err != nil {
 			return err
 		}
-		result, err = encoded(map[string]bool{"cleared": cleared})
+		result, err = responseValue(map[string]bool{"cleared": cleared})
 		return err
 	})
 	return result, err
@@ -608,21 +607,21 @@ func executionFlags(tx *sqlite.Tx, now time.Time, executionID string, snapshot *
 	return flags, nil
 }
 
-func (a *App) Flags(ctx context.Context) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) Flags(ctx context.Context) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		flags, err := executionFlags(tx, a.Clock().UTC(), "", nil)
 		if err != nil {
 			return err
 		}
-		result, err = encoded(map[string]any{"flags": flags})
+		result, err = responseValue(map[string]any{"flags": flags})
 		return err
 	})
 	return result, err
 }
 
-func (a *App) CurrentWriter(ctx context.Context, writerID string) (json.RawMessage, error) {
-	var result json.RawMessage
+func (a *App) CurrentWriter(ctx context.Context, writerID string) (any, error) {
+	var result any
 	err := a.Store.Read(ctx, func(tx *sqlite.Tx) error {
 		now := a.Clock().UTC()
 		current, err := scopedFlagContext(tx, now)
@@ -637,11 +636,7 @@ func (a *App) CurrentWriter(ctx context.Context, writerID string) (json.RawMessa
 		if err != nil {
 			return err
 		}
-		value, _, err := contract.Decode(view)
-		if err != nil {
-			return err
-		}
-		body, ok := contract.ObjectValues(value)
+		body, ok := contract.ObjectValues(view)
 		if !ok {
 			return errors.New("Writer binding is not an object")
 		}
@@ -650,7 +645,7 @@ func (a *App) CurrentWriter(ctx context.Context, writerID string) (json.RawMessa
 			return err
 		}
 		body["flags"] = flags
-		result, err = encoded(body)
+		result, err = responseValue(body)
 		return err
 	})
 	return result, err
