@@ -47,6 +47,9 @@ replacement-writer, pending-cleanup and unfinished-handoff blockers.
 `internal/httpapi` owns transport/validation/authentication; `internal/application`
 owns immutable intake receipts and transaction orchestration; `internal/sqlite`
 owns SQL, per-transaction connections, PRAGMAs, admission, and commit outcomes.
+Dependency resolution loads ordered links, current executions and stored-report
+existence in one SQL statement. Intake and rerun share execution creation and
+initial dependency-wait refresh.
 `internal/contract` is the presence/validation/canonical encoding
 boundary. `internal/instancelock` holds the Python-compatible database-adjacent OS
 lock for the entire server lifetime. The explicitly selected
