@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"sort"
 	"strconv"
@@ -289,20 +290,6 @@ func operatorSummary(row sqlite.OperatorRow, now time.Time, current operatorCont
 	}, nil
 }
 
-func scoutingRepr(view map[string]any) (reprDict, error) {
-	settings, ok := view["settings"].(map[string]any)
-	if !ok {
-		return nil, errors.New("Scout status settings are not an object")
-	}
-	fields := reprDict{}
-	for _, name := range []string{"id", "revision", "enabled", "cadence_minutes", "author_login", "author_id",
-		"due_at", "changed_by", "updated_at", "repositories"} {
-		fields = append(fields, reprEntry{name, settings[name]})
-	}
-	return reprDict{{"settings", fields}, {"state", view["state"]}, {"last_pass", view["last_pass"]},
-		{"counts", view["counts"]}, {"resume_trigger", view["resume_trigger"]}}, nil
-}
-
 func operatorValidator(tx *sqlite.Tx, now time.Time, current operatorContext, request ConditionalRead, scouting map[string]any) (string, bool, error) {
 	token, err := tx.OperatorChangeToken()
 	if err != nil {
@@ -317,79 +304,24 @@ func operatorValidator(tx *sqlite.Tx, now time.Time, current operatorContext, re
 		holds = append(holds, id)
 	}
 	sort.Strings(holds)
-	holdTuple := reprTuple{}
-	for _, id := range holds {
-		holdTuple = append(holdTuple, id)
-	}
-	type sessionEntry struct {
-		Repr  string
-		Value reprTuple
-	}
-	sessions := []sessionEntry{}
+	sessions := make([][3]string, 0, len(current.Sessions))
 	for key, availability := range current.Sessions {
-		var runtime any
-		if key.runtime != "" {
-			runtime = key.runtime
-		}
-		entry := reprTuple{reprTuple{runtime, key.id}, availability}
-		text, err := pythonRepr(entry)
-		if err != nil {
-			return "", false, err
-		}
-		sessions = append(sessions, sessionEntry{text, entry})
+		sessions = append(sessions, [3]string{key.runtime, key.id, availability})
 	}
-	sort.Slice(sessions, func(i, j int) bool { return sessions[i].Repr < sessions[j].Repr })
-	sessionTuple := reprTuple{}
-	for _, entry := range sessions {
-		sessionTuple = append(sessionTuple, entry.Value)
-	}
-	captains := []any{}
-	for _, captain := range current.Pickup.Captains {
-		if body, ok := contract.ObjectValues(captain.RawPickup); ok {
-			entry := reprDict{{"id", captain.ID}}
-			for _, key := range contract.ObjectKeys(captain.RawPickup) {
-				if key == "id" {
-					entry[0].Value = body[key]
-				} else {
-					entry = append(entry, reprEntry{key, body[key]})
-				}
+	sort.Slice(sessions, func(i, j int) bool {
+		for field := range sessions[i] {
+			if sessions[i][field] != sessions[j][field] {
+				return sessions[i][field] < sessions[j][field]
 			}
-			captains = append(captains, entry)
-			continue
 		}
-		scope := reprDict{}
-		keys := make([]string, 0, len(captain.Repositories))
-		for key := range captain.Repositories {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			var reason any
-			if captain.Repositories[key] != nil {
-				reason = *captain.Repositories[key]
-			}
-			scope = append(scope, reprEntry{key, reason})
-		}
-		captains = append(captains, reprDict{{"id", captain.ID}, {"repositories", scope}})
+		return false
+	})
+	material, err := json.Marshal([]any{token, request.Path, request.Query, deadlines, holds,
+		sessions, current.Pickup.Captains, scouting})
+	if err != nil {
+		return "", false, err
 	}
-	var scoutingValue any
-	if scouting != nil {
-		scoutingValue, err = scoutingRepr(scouting)
-		if err != nil {
-			return "", false, err
-		}
-	}
-	values := []any{reprTuple(deadlines), holdTuple, sessionTuple, captains, scoutingValue}
-	texts := []string{}
-	for _, value := range values {
-		text, err := pythonRepr(value)
-		if err != nil {
-			return "", false, err
-		}
-		texts = append(texts, text)
-	}
-	key := token + ":" + request.Path + "?" + request.Query + ":" + strings.Join(texts, ":")
-	tag := `W/"` + contract.Digest(key) + `"`
+	tag := `W/"` + contract.Digest(string(material)) + `"`
 	expected := strings.TrimPrefix(tag, "W/")
 	for _, value := range strings.Split(request.IfNoneMatch, ",") {
 		value = strings.TrimPrefix(strings.TrimFunc(value, pythonWhitespace), "W/")
@@ -470,11 +402,11 @@ func (a *App) OperatorList(ctx context.Context, request contract.OperatorQuery, 
 	}
 	scope := request.Kind
 	if len(filters) > 0 {
-		value, err := contract.PythonJSON(filters)
-		if err != nil {
-			return response, err
+		values := url.Values{}
+		for name, value := range filters {
+			values.Set(name, value)
 		}
-		scope += ":" + contract.Digest(value)[:16]
+		scope += ":" + contract.Digest(values.Encode())
 	}
 	shape := []string{"stamp", "id"}
 	if request.Kind == "open" {

@@ -88,11 +88,11 @@ func ValidateBoardIdentifier(value, name string) []Issue {
 }
 
 func EncodeCursor(scope string, key []any) (string, error) {
-	data, err := Canonical([]any{json.Number("1"), scope, key})
+	data, err := json.Marshal([]any{1, scope, key})
 	if err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString([]byte(data)), nil
+	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
 var cursorStamp = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}\+00:00$`)
@@ -104,7 +104,7 @@ func DecodeCursor(cursor *string, scope string, shape []string) ([]any, error) {
 	}
 	invalid := errors.New("Invalid cursor")
 	bytes, err := base64.RawURLEncoding.Strict().DecodeString(*cursor)
-	if err != nil {
+	if err != nil || base64.RawURLEncoding.EncodeToString(bytes) != *cursor {
 		return nil, invalid
 	}
 	value, _, err := Decode(bytes)
@@ -152,10 +152,6 @@ func DecodeCursor(cursor *string, scope string, shape []string) ([]any, error) {
 		default:
 			return nil, invalid
 		}
-	}
-	encoded, err := EncodeCursor(scope, key)
-	if err != nil || encoded != *cursor {
-		return nil, invalid
 	}
 	return key, nil
 }

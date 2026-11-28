@@ -1,6 +1,7 @@
 package application
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -14,7 +15,7 @@ import (
 type pickupCaptain struct {
 	ID           string
 	Repositories map[string]*string
-	RawPickup    any
+	RawPickup    json.RawMessage
 }
 
 type pickupContext struct {
@@ -68,7 +69,7 @@ func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 			}
 			scope[repository] = reason
 		}
-		result.Captains = append(result.Captains, pickupCaptain{ID: row.ID, Repositories: scope, RawPickup: value})
+		result.Captains = append(result.Captains, pickupCaptain{ID: row.ID, Repositories: scope, RawPickup: json.RawMessage(row.PickupJSON)})
 	}
 	holds, err := tx.ActiveCaptainHolds(pythonStamp(now.Add(-captainHoldDuration)))
 	if err != nil {
