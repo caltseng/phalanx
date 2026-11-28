@@ -3,6 +3,8 @@
 The [worker prompt](../phalanx/prompts/worker.md) is the authoritative writer/delivery
 policy. Print it with `python -m phalanx shift prompt worker`; generated kickoffs substitute
 the item's identity, configured commands, checks environment and publication instructions.
+Kickoffs include the item's accepted context; retained writers recover it through the
+existing scoped status command under the [task-context policy](../phalanx/prompts/worker.md#task-context).
 Use [Direct path](direct-path.md) for installation and Captain commands, and
 [architecture](architecture.md) for API/execution-host boundaries.
 
