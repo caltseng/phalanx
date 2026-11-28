@@ -693,7 +693,8 @@ class WriterTest(ServerFixture, unittest.TestCase):
                               question={"prompt": "Which detail?", "handoff": "Keep working"})
         route = f"/v1/items/{item_id}/executions/{execution_id}"
         queued = self.ok(route + "/reply", OWNER, {
-            "expected_version": waiting["version"], "answer": "Update the accepted context"})
+            "expected_version": waiting["version"], "answer": "Update the accepted context"},
+            headers={"Idempotency-Key": "context-reply"})
         updated = ['Current "schema"\nDo not retain the original context']
         steered = self.ok(route, OWNER, {
             "expected_version": queued["version"], "context_links": updated}, method="PATCH")
