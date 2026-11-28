@@ -57,6 +57,15 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, shell bool)
 		writeJSON(w, 404, map[string]any{"detail": "Not Found"})
 		return
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		h.failure(w, err)
+		return
+	}
+	if !info.Mode().IsRegular() {
+		writeJSON(w, 404, map[string]any{"detail": "Not Found"})
+		return
+	}
 	root, err := os.OpenRoot(directory)
 	if err != nil {
 		h.failure(w, err)
@@ -66,15 +75,11 @@ func (h *Handler) serveAsset(w http.ResponseWriter, r *http.Request, shell bool)
 	// Root confines the open even if a path component changes after the symlink check.
 	file, err := root.Open(name)
 	if err != nil {
-		if os.IsNotExist(err) {
-			writeJSON(w, 404, map[string]any{"detail": "Not Found"})
-		} else {
-			h.failure(w, err)
-		}
+		h.failure(w, err)
 		return
 	}
 	defer file.Close()
-	info, err := file.Stat()
+	info, err = file.Stat()
 	if err != nil {
 		h.failure(w, err)
 		return
