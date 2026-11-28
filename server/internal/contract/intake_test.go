@@ -1,7 +1,6 @@
 package contract
 
 import (
-	"encoding/json"
 	"go/ast"
 	goparser "go/parser"
 	"go/token"
@@ -94,7 +93,7 @@ func TestCanonicalUnicodeDefaultsPresenceAndRetiredField(t *testing.T) {
 	if err != nil || text != expected {
 		t.Fatal(text, err)
 	}
-	if _, issues := ValidateIntake(material, ObjectKeys(material)); len(issues) != 1 || issues[0].Type != "extra_forbidden" {
+	if _, issues := ValidateIntake(material, ObjectKeys(material)); len(issues) != 1 || issues[0].Loc[1] != "runner_affinity" {
 		t.Fatal("internal null leaked into public contract", issues)
 	}
 }
@@ -105,18 +104,18 @@ func TestNoNumericCoercionOrPrecisionLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, issues := ValidateIntake(value, keys)
-	if len(issues) != 1 || issues[0].Type != "string_type" || issues[0].Input != json.Number("9007199254740993") {
+	if len(issues) != 1 || issues[0].Loc[1] != "goal" {
 		t.Fatal(issues)
 	}
 }
 
-func TestDuplicateJSONLastWinsAndExtraOrder(t *testing.T) {
+func TestDuplicateJSONLastWinsAndExtras(t *testing.T) {
 	value, keys, err := Decode([]byte(`{"repository_id":"repo","goal":"old","z":1,"a":2,"goal":"new"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	request, issues := ValidateIntake(value, keys)
-	if request.Goal != "new" || len(issues) != 2 || issues[0].Loc[1] != "z" || issues[1].Loc[1] != "a" {
+	if request.Goal != "new" || len(issues) != 2 || issues[0].Loc[1] != "a" || issues[1].Loc[1] != "z" {
 		t.Fatal(request, issues)
 	}
 }

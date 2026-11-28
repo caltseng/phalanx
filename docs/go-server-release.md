@@ -156,8 +156,10 @@ The family inventory covers all 66 operations and 51 models; positive/fault
 family tests remain required in addition to inventory. Unit fault seams are
 synthetic transactions, not filesystem power-loss guarantees. Source test review
 is not independent exact-final-head approval. All cross-platform Python/Go jobs,
-Unix Go races, OS exclusion, Windows pinned differential and packaged release
-proof feed the required `Tests` CI gate.
+Unix Go races, OS exclusion and packaged native release/header proof feed the
+required `Tests` CI gate. Live frozen-Python performance and header differential
+runs are opt-in through `historical_conformance`; they remain hard-failing when
+requested and do not replace current native checks.
 
 `release.py --package <zip> --output <outside-checkout-directory>` verifies
 extracted bytes and starts the actual versioned binary against fresh and retained
@@ -169,9 +171,9 @@ Python-held and Go-held locks reject the other engine; missing DB refuses startu
 No old snapshot is restored. Preserve the actual output artifacts and their
 source/build/package identity; never label a fixture adapter run a real package run.
 
-Runtime/load evidence uses the exact 120-request manifest (30 successful intake
+Mandatory native runtime/load evidence uses the exact 120-request manifest (30 successful intake
 writes, 90 authenticated item/settings reads), concurrency8, 12 warmup reads,
-three measured runs per P0/D0/Go on each schema shape, using each real production
+three measured Go runs on each schema shape, using the real production
 entrypoint's ordinary UUIDs and wall clock (no fixture identity/clock injection).
 It records every latency
 and status, p50/p95/p99/max, throughput, host and package digest, and full typed
@@ -180,7 +182,16 @@ It is representative
 synthetic control traffic, **not** the proposed 10,000-item/32-client workload,
 30-minute resource soak, real production load or an approved SLO. Shared-host
 uncontrolled interference remains visible. Proposed timing/resource/percentage
-goals are neither approved nor claimed met. No performance miss waives durability,
+goals are neither approved nor claimed met. `release.py --historical` additionally
+runs the unchanged P0/D0 workload and status assertions. The default still verifies
+both unchanged clients, both-direction locks and new-write/current-data rollback
+through the actual P0/D0 packages. `headers.py` defaults to explicit independent
+native expectations for every existing case, exact refusal bytes, prefix alignment,
+100 repeated fixed/chunked controls, receipt neighbors and ownership/drain checks;
+`--historical` additionally runs live P0/D0 differential comparisons.
+Earlier frozen-reference 503 and response-loss evidence, and unproved temporary
+diagnostic cleanup, remain failures/unknowns, not cured by this CI routing change.
+No performance miss waives durability,
 authority, fencing or rollback. Add actual numeric results to the release evidence
 before readiness; different manifests or host conditions are unmatched.
 

@@ -14,7 +14,7 @@ type ObservedPull struct {
 	MergeCommit        *string      `json:"merge_commit"`
 	Mergeable          *bool        `json:"mergeable"`
 	MergeMethod        *string      `json:"merge_method"`
-	MergedAt           *AwareTime   `json:"merged_at"`
+	MergedAt           *Timestamp   `json:"merged_at"`
 	MergedHeadAncestor *string      `json:"merged_head_ancestor"`
 	Additions          *json.Number `json:"additions"`
 	Deletions          *json.Number `json:"deletions"`
@@ -27,7 +27,7 @@ type Deployment struct {
 }
 
 type Observation struct {
-	ObservedAt     AwareTime     `json:"observed_at"`
+	ObservedAt     Timestamp     `json:"observed_at"`
 	PR             *ObservedPull `json:"pr"`
 	Checks         *string       `json:"checks"`
 	CheckReasons   []string      `json:"check_reasons"`
@@ -64,14 +64,14 @@ func (v *validator) optionalCount(body map[string]any, field string, at []any) *
 	return nil
 }
 
-func (v *validator) valueError(value any, at []any, message string) {
-	v.issue("value_error", "Value error, "+message, at, value, map[string]any{"error": map[string]any{}})
+func (v *validator) valueError(at []any, message string) {
+	v.issue("Value error, "+message, at)
 }
 
 func (v *validator) observedPull(value any, at []any) *ObservedPull {
 	body, ok := object(value)
 	if !ok {
-		v.issues = append(v.issues, modelIssue(value, at)...)
+		v.issues = append(v.issues, modelIssue(at)...)
 		return nil
 	}
 	start := len(v.issues)
@@ -80,7 +80,7 @@ func (v *validator) observedPull(value any, at []any) *ObservedPull {
 		result.Number = v.strictInteger(value, location(at, "number"), 1)
 	}
 	if value, exists := v.required(body, "state", at); exists {
-		result.State = v.choice(value, location(at, "state"), []string{"open", "closed"}, true)
+		result.State = v.choice(value, location(at, "state"), []string{"open", "closed"})
 	}
 	if value, exists := v.required(body, "merged", at); exists {
 		result.Merged = v.boolean(value, location(at, "merged"), false)
@@ -114,20 +114,20 @@ func (v *validator) observedPull(value any, at []any) *ObservedPull {
 		result.Mergeable = &flag
 	}
 	if value, exists := body["merge_method"]; exists && value != nil {
-		text := v.choice(value, location(at, "merge_method"), []string{"merge", "squash_or_rebase"}, true)
+		text := v.choice(value, location(at, "merge_method"), []string{"merge", "squash_or_rebase"})
 		result.MergeMethod = &text
 	}
 	if value, exists := body["merged_at"]; exists && value != nil {
-		stamp := v.awareTime(value, location(at, "merged_at"))
+		stamp := v.timestamp(value, location(at, "merged_at"))
 		result.MergedAt = &stamp
 	}
 	result.MergedHeadAncestor = v.optionalPattern(body, "merged_head_ancestor", at, SHAPattern)
 	result.Additions = v.optionalCount(body, "additions", at)
 	result.Deletions = v.optionalCount(body, "deletions", at)
-	v.extras(body, ObjectKeys(value), []string{"number", "state", "merged", "draft", "head_ref", "head_sha", "base_ref",
+	v.extras(ObjectKeys(value), []string{"number", "state", "merged", "draft", "head_ref", "head_sha", "base_ref",
 		"base_sha", "merge_commit", "mergeable", "merge_method", "merged_at", "merged_head_ancestor", "additions", "deletions"}, at)
 	if len(v.issues) == start && !result.Merged && (result.MergeMethod != nil || result.MergedAt != nil || result.MergedHeadAncestor != nil) {
-		v.valueError(body, at, "Merge details describe a merged PR")
+		v.valueError(at, "Merge details describe a merged PR")
 	}
 	return result
 }
@@ -136,7 +136,7 @@ func (v *validator) reconciliationReasons(value any, at []any, maximum int) []st
 	result := []string{}
 	values, ok := value.([]any)
 	if !ok {
-		v.issue("list_type", "Input should be a valid list", at, value, nil)
+		v.issue("Input should be a valid list", at)
 		return result
 	}
 	start := len(v.issues)
@@ -144,7 +144,7 @@ func (v *validator) reconciliationReasons(value any, at []any, maximum int) []st
 		result = append(result, v.text(entry, location(at, index), true, 1, 4000, ""))
 	}
 	if len(v.issues) == start && len(values) > maximum {
-		v.tooLong(value, at, maximum, len(values))
+		v.tooLong(at, maximum, len(values))
 	}
 	return result
 }
@@ -152,7 +152,7 @@ func (v *validator) reconciliationReasons(value any, at []any, maximum int) []st
 func (v *validator) deployment(value any, at []any) *Deployment {
 	body, ok := object(value)
 	if !ok {
-		v.issues = append(v.issues, modelIssue(value, at)...)
+		v.issues = append(v.issues, modelIssue(at)...)
 		return nil
 	}
 	result := &Deployment{}
@@ -163,9 +163,9 @@ func (v *validator) deployment(value any, at []any) *Deployment {
 		result.CheckName = v.text(value, location(at, "check_name"), true, 1, 255, "")
 	}
 	if value, exists := v.required(body, "state", at); exists {
-		result.State = v.choice(value, location(at, "state"), []string{"pending", "failed", "deployed", "disabled"}, true)
+		result.State = v.choice(value, location(at, "state"), []string{"pending", "failed", "deployed", "disabled"})
 	}
-	v.extras(body, ObjectKeys(value), []string{"commit", "check_name", "state"}, at)
+	v.extras(ObjectKeys(value), []string{"commit", "check_name", "state"}, at)
 	return result
 }
 
@@ -173,17 +173,17 @@ func ValidateObservation(value any, keys []string) (Observation, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return Observation{}, modelIssue(value, at)
+		return Observation{}, modelIssue(at)
 	}
 	v, result := validator{}, Observation{CheckReasons: []string{}, Feedback: []string{}}
 	if value, exists := v.required(body, "observed_at", at); exists {
-		result.ObservedAt = v.awareTime(value, location(at, "observed_at"))
+		result.ObservedAt = v.timestamp(value, location(at, "observed_at"))
 	}
 	if value, exists := body["pr"]; exists && value != nil {
 		result.PR = v.observedPull(value, location(at, "pr"))
 	}
 	if value, exists := body["checks"]; exists && value != nil {
-		text := v.choice(value, location(at, "checks"), []string{"satisfied", "not_configured", "waiting", "failed", "blocked"}, false)
+		text := v.choice(value, location(at, "checks"), []string{"satisfied", "not_configured", "waiting", "failed", "blocked"})
 		result.Checks = &text
 	}
 	if value, exists := body["check_reasons"]; exists {
@@ -203,7 +203,7 @@ func ValidateObservation(value any, keys []string) (Observation, []Issue) {
 		result.Deployment = v.deployment(value, location(at, "deployment"))
 	}
 	result.DuplicateCount = v.optionalCount(body, "duplicate_count", at)
-	v.extras(body, keys, []string{"observed_at", "pr", "checks", "check_reasons", "feedback", "merged_branch", "target_base",
+	v.extras(keys, []string{"observed_at", "pr", "checks", "check_reasons", "feedback", "merged_branch", "target_base",
 		"deployment", "duplicate_count"}, at)
 	if len(v.issues) == 0 {
 		message := ""
@@ -219,7 +219,7 @@ func ValidateObservation(value any, keys []string) (Observation, []Issue) {
 			message = "Deployment describes the merge commit of a PR merged into its target"
 		}
 		if message != "" {
-			v.valueError(body, at, message)
+			v.valueError(at, message)
 		}
 	}
 	return result, v.issues
@@ -229,7 +229,7 @@ func ValidateLocalChecks(value any, keys []string) (LocalChecks, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return LocalChecks{}, modelIssue(value, at)
+		return LocalChecks{}, modelIssue(at)
 	}
 	v, result := validator{}, LocalChecks{Failures: []string{}}
 	if value, exists := v.required(body, "head", at); exists {
@@ -238,7 +238,7 @@ func ValidateLocalChecks(value any, keys []string) (LocalChecks, []Issue) {
 	if value, exists := body["failures"]; exists {
 		result.Failures = v.reconciliationReasons(value, location(at, "failures"), 50)
 	}
-	v.extras(body, keys, []string{"head", "failures"}, at)
+	v.extras(keys, []string{"head", "failures"}, at)
 	return result, v.issues
 }
 
@@ -246,14 +246,14 @@ func ValidateReconcilerHeartbeat(value any, keys []string) (ReconcilerHeartbeat,
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return ReconcilerHeartbeat{}, modelIssue(value, at)
+		return ReconcilerHeartbeat{}, modelIssue(at)
 	}
 	v, result := validator{}, ReconcilerHeartbeat{DeploymentChecks: map[string]*string{}}
 	if value, exists := body["deployment_checks"]; exists {
 		entries, ok := object(value)
 		where := location(at, "deployment_checks")
 		if !ok {
-			v.issue("dict_type", "Input should be a valid dictionary", where, value, nil)
+			v.issue("Input should be a valid dictionary", where)
 		} else {
 			result.DeploymentOrder = ObjectKeys(value)
 			for _, key := range ObjectKeys(value) {
@@ -267,6 +267,6 @@ func ValidateReconcilerHeartbeat(value any, keys []string) (ReconcilerHeartbeat,
 			}
 		}
 	}
-	v.extras(body, keys, []string{"deployment_checks"}, at)
+	v.extras(keys, []string{"deployment_checks"}, at)
 	return result, v.issues
 }

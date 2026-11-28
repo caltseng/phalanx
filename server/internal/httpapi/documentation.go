@@ -6,8 +6,8 @@ import (
 	"strconv"
 )
 
-// Existing documentation bytes are generated from identical immutable P0/D0
-// route/model sources; no Python service or runtime handles these requests.
+// The route inventory originated in P0/D0; ValidationError documents the native
+// loc/msg contract. Historical oracle documents remain separate and immutable.
 //
 //go:embed contract-docs/*
 var contractDocumentation embed.FS

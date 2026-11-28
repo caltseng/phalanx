@@ -41,7 +41,7 @@ func TestApplicationResponsePreservesWireBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := httptest.NewRecorder()
-	writeJSON(expected, http.StatusOK, previous)
+	writeJSONValue(expected, http.StatusOK, previous, true)
 	body, ok := contract.ObjectValues(value)
 	if !ok {
 		t.Fatal("intake returned an encoded response instead of a value")

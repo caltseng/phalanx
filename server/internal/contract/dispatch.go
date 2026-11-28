@@ -18,9 +18,9 @@ func (v *validator) dispatchLimit(value any, loc []any) *json.Number {
 	}
 	integer, _ := new(big.Int).SetString(string(number), 10)
 	if integer.Sign() <= 0 {
-		v.issue("greater_than", "Input should be greater than 0", loc, value, map[string]any{"gt": 0})
+		v.issue("Input should be greater than 0", loc)
 	} else if integer.Cmp(big.NewInt(2147483647)) > 0 {
-		v.issue("less_than_equal", "Input should be less than or equal to 2147483647", loc, value, map[string]any{"le": 2147483647})
+		v.issue("Input should be less than or equal to 2147483647", loc)
 	}
 	return &number
 }
@@ -29,13 +29,13 @@ func ValidateDispatchUpdate(value any, keys []string) (DispatchUpdate, []Issue) 
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return DispatchUpdate{}, modelIssue(value, prefix)
+		return DispatchUpdate{}, modelIssue(prefix)
 	}
 	v, result := validator{}, DispatchUpdate{}
 	for _, value := range body {
 		if value == nil {
-			v.issue("value_error", "Value error, Dispatch settings cannot be null; omit unchanged fields",
-				prefix, body, map[string]any{"error": map[string]any{}})
+			v.issue("Value error, Dispatch settings cannot be null; omit unchanged fields",
+				prefix)
 			return result, v.issues
 		}
 	}
@@ -49,6 +49,6 @@ func ValidateDispatchUpdate(value any, keys []string) (DispatchUpdate, []Issue) 
 	if value, exists := body["max_building_writers"]; exists {
 		result.MaxBuildingWriters = v.dispatchLimit(value, location(prefix, "max_building_writers"))
 	}
-	v.extras(body, keys, []string{"paused", "max_writers", "max_building_writers"}, prefix)
+	v.extras(keys, []string{"paused", "max_writers", "max_building_writers"}, prefix)
 	return result, v.issues
 }

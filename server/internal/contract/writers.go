@@ -85,7 +85,7 @@ func (v *validator) boolean(value any, loc []any, strict bool) bool {
 	if kind == "bool_parsing" {
 		message += ", unable to interpret input"
 	}
-	v.issue(kind, message, loc, value, nil)
+	v.issue(message, loc)
 	return false
 }
 
@@ -93,7 +93,7 @@ func ValidateWriterRegistration(value any, keys []string) (WriterRegistration, [
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return WriterRegistration{}, modelIssue(value, prefix)
+		return WriterRegistration{}, modelIssue(prefix)
 	}
 	v, result := validator{}, WriterRegistration{}
 	if x, ok := v.required(body, "expected_version", prefix); ok {
@@ -118,7 +118,7 @@ func ValidateWriterRegistration(value any, keys []string) (WriterRegistration, [
 	if x, ok := body["replaced_stopped"]; ok {
 		result.ReplacedStopped = v.boolean(x, location(prefix, "replaced_stopped"), false)
 	}
-	v.extras(body, keys, []string{"expected_version", "captain_id", "runtime", "nonce", "token_digest", "replaces", "replaced_stopped"}, prefix)
+	v.extras(keys, []string{"expected_version", "captain_id", "runtime", "nonce", "token_digest", "replaces", "replaced_stopped"}, prefix)
 	return result, v.issues
 }
 
@@ -126,7 +126,7 @@ func ValidateWriterUpdate(value any, keys []string) (WriterUpdate, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return WriterUpdate{}, modelIssue(value, prefix)
+		return WriterUpdate{}, modelIssue(prefix)
 	}
 	v, result := validator{}, WriterUpdate{}
 	if x, ok := v.required(body, "captain_id", prefix); ok {
@@ -144,13 +144,13 @@ func ValidateWriterUpdate(value any, keys []string) (WriterUpdate, []Issue) {
 		result.SessionURL = &text
 	}
 	if x, ok := body["state"]; ok && x != nil {
-		text := v.choice(x, location(prefix, "state"), []string{"busy", "idle", "stopped", "error"}, true)
+		text := v.choice(x, location(prefix, "state"), []string{"busy", "idle", "stopped", "error"})
 		result.State = &text
 	}
 	if x, ok := body["abandon"]; ok {
 		result.Abandon = v.boolean(x, location(prefix, "abandon"), false)
 	}
-	v.extras(body, keys, []string{"captain_id", "writer_id", "session_id", "session_url", "state", "abandon"}, prefix)
+	v.extras(keys, []string{"captain_id", "writer_id", "session_id", "session_url", "state", "abandon"}, prefix)
 	return result, v.issues
 }
 
@@ -158,7 +158,7 @@ func ValidateWriterWithdrawal(value any, keys []string) (WriterWithdrawal, []Iss
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return WriterWithdrawal{}, modelIssue(value, prefix)
+		return WriterWithdrawal{}, modelIssue(prefix)
 	}
 	v, result := validator{}, WriterWithdrawal{}
 	if x, ok := v.required(body, "captain_id", prefix); ok {
@@ -173,7 +173,7 @@ func ValidateWriterWithdrawal(value any, keys []string) (WriterWithdrawal, []Iss
 	if x, ok := body["stopped"]; ok {
 		result.Stopped = v.boolean(x, location(prefix, "stopped"), false)
 	}
-	v.extras(body, keys, []string{"captain_id", "writer_id", "reason", "stopped"}, prefix)
+	v.extras(keys, []string{"captain_id", "writer_id", "reason", "stopped"}, prefix)
 	return result, v.issues
 }
 
@@ -181,14 +181,14 @@ func ValidateWriterProgress(value any, keys []string) (WriterProgress, []Issue) 
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return WriterProgress{}, modelIssue(value, prefix)
+		return WriterProgress{}, modelIssue(prefix)
 	}
 	v, result := validator{}, WriterProgress{}
 	if x, ok := body["note"]; ok && x != nil {
 		text := v.text(x, location(prefix, "note"), true, 1, 16000, "")
 		result.Note = &text
 	}
-	v.extras(body, keys, []string{"note"}, prefix)
+	v.extras(keys, []string{"note"}, prefix)
 	return result, v.issues
 }
 
@@ -196,11 +196,11 @@ func ValidateWriterCapacity(value any, keys []string) (WriterCapacity, []Issue) 
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return WriterCapacity{}, modelIssue(value, prefix)
+		return WriterCapacity{}, modelIssue(prefix)
 	}
 	v, result := validator{}, WriterCapacity{}
 	if x, ok := v.required(body, "phase", prefix); ok {
-		result.Phase = v.choice(x, location(prefix, "phase"), []string{"building", "delivering"}, true)
+		result.Phase = v.choice(x, location(prefix, "phase"), []string{"building", "delivering"})
 	}
 	if x, ok := v.required(body, "expected_revision", prefix); ok {
 		result.ExpectedRevision = v.strictInteger(x, location(prefix, "expected_revision"), 0)
@@ -209,6 +209,6 @@ func ValidateWriterCapacity(value any, keys []string) (WriterCapacity, []Issue) 
 		text := v.text(x, location(prefix, "handoff_head"), false, 0, 0, SHAPattern)
 		result.HandoffHead = &text
 	}
-	v.extras(body, keys, []string{"phase", "expected_revision", "handoff_head"}, prefix)
+	v.extras(keys, []string{"phase", "expected_revision", "handoff_head"}, prefix)
 	return result, v.issues
 }

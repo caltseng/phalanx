@@ -3,10 +3,8 @@ package contract
 import (
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"net/url"
-	"regexp"
-	"strings"
+	"strconv"
 )
 
 type InboxQuery struct {
@@ -31,23 +29,13 @@ func lastQuery(values url.Values, name string) (string, bool) {
 	return entries[len(entries)-1], true
 }
 
-var queryInteger = regexp.MustCompile(`^[+-]?[0-9](_?[0-9])*(\.0+)?$`)
-
 func (v *validator) queryIntegerValue(value string, loc []any) (json.Number, bool) {
-	text := strings.TrimFunc(value, pythonSpace)
-	if !queryInteger.MatchString(text) {
-		v.issue("int_parsing", "Input should be a valid integer, unable to parse string as an integer", loc, value, nil)
+	integer, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		v.issue("Input must be a decimal integer", loc)
 		return "0", false
 	}
-	integerPart := strings.SplitN(text, ".", 2)[0]
-	integerPart = strings.ReplaceAll(integerPart, "_", "")
-	digits := strings.TrimLeft(strings.TrimLeft(integerPart, "+-"), "0")
-	if len(digits) > 4300 {
-		v.issue("int_parsing_size", "Unable to parse input string as an integer, exceeded maximum size", loc, value, nil)
-		return "0", false
-	}
-	integer, _ := new(big.Int).SetString(integerPart, 10)
-	return json.Number(integer.String()), true
+	return json.Number(strconv.FormatInt(integer, 10)), true
 }
 
 func (v *validator) queryLimit(value string, loc []any, minimum, maximum int64) int {
@@ -55,16 +43,16 @@ func (v *validator) queryLimit(value string, loc []any, minimum, maximum int64) 
 	if !ok {
 		return 0
 	}
-	integer, _ := new(big.Int).SetString(string(number), 10)
-	if integer.Cmp(big.NewInt(minimum)) < 0 {
-		v.issue("greater_than_equal", fmt.Sprintf("Input should be greater than or equal to %d", minimum), loc, value, map[string]any{"ge": minimum})
+	integer, _ := number.Int64()
+	if integer < minimum {
+		v.issue(fmt.Sprintf("Input should be greater than or equal to %d", minimum), loc)
 		return 0
 	}
-	if integer.Cmp(big.NewInt(maximum)) > 0 {
-		v.issue("less_than_equal", fmt.Sprintf("Input should be less than or equal to %d", maximum), loc, value, map[string]any{"le": maximum})
+	if integer > maximum {
+		v.issue(fmt.Sprintf("Input should be less than or equal to %d", maximum), loc)
 		return 0
 	}
-	return int(integer.Int64())
+	return int(integer)
 }
 
 func ValidateInboxQuery(values url.Values) (InboxQuery, []Issue) {

@@ -302,7 +302,7 @@ func (a *App) ReconcilerHeartbeat(ctx context.Context, runnerID string, request 
 						return errors.New("Stored deployment is not an object")
 					}
 					body.Deployment.State = "disabled"
-					observation := contract.Observation{ObservedAt: contract.AwareTime{Time: observedAt.Truncate(time.Microsecond)},
+					observation := contract.Observation{ObservedAt: contract.Timestamp{Time: observedAt.Truncate(time.Microsecond)},
 						PR: body.PR.ObservedPull, Checks: body.Checks, CheckReasons: body.CheckReasons, Feedback: body.Feedback,
 						MergedBranch: body.MergedBranch, TargetBase: body.TargetBase, Deployment: body.Deployment,
 						DuplicateCount: body.DuplicateCount}

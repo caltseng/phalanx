@@ -14,16 +14,10 @@ import (
 // RawMessage is reserved for JSON read from storage. Canonical remains the
 // separate, unchanged request-digest and persistence encoding contract.
 func JSONValue(value any) (any, error) {
-	return projectJSONValue(value, false)
+	return projectJSONValue(value)
 }
 
-// OrderedJSONValue also retains struct declaration order for Python repr-based
-// validators. It is not the HTTP response representation.
-func OrderedJSONValue(value any) (any, error) {
-	return projectJSONValue(value, true)
-}
-
-func projectJSONValue(value any, ordered bool) (any, error) {
+func projectJSONValue(value any) (any, error) {
 	if pointer := reflect.ValueOf(value); pointer.IsValid() && pointer.Kind() == reflect.Pointer && pointer.IsNil() {
 		return nil, nil
 	}
@@ -38,38 +32,29 @@ func projectJSONValue(value any, ordered bool) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return projectJSONValue(decoded, ordered)
+		return projectJSONValue(decoded)
 	case json.Number:
 		text, err := Canonical(value)
 		return json.Number(text), err
-	case *orderedObject:
-		projected, err := projectJSONValue(value.values, ordered)
-		if err != nil {
-			return nil, err
-		}
-		if ordered {
-			return &orderedObject{keys: value.keys, values: projected.(map[string]any)}, nil
-		}
-		return projected, nil
 	case interface{ JSONValue() (any, error) }:
 		projected, err := value.JSONValue()
 		if err != nil {
 			return nil, err
 		}
-		return projectJSONValue(projected, ordered)
+		return projectJSONValue(projected)
 	case json.Marshaler:
 		return nil, fmt.Errorf("JSON marshaler %T requires an explicit projection", value)
 	}
-	return reflectJSONValue(reflect.ValueOf(value), ordered)
+	return reflectJSONValue(reflect.ValueOf(value))
 }
 
-func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
+func reflectJSONValue(value reflect.Value) (any, error) {
 	switch value.Kind() {
 	case reflect.Pointer, reflect.Interface:
 		if value.IsNil() {
 			return nil, nil
 		}
-		return projectJSONValue(value.Elem().Interface(), ordered)
+		return projectJSONValue(value.Elem().Interface())
 	case reflect.String:
 		return value.String(), nil
 	case reflect.Bool:
@@ -88,7 +73,7 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 			bits == 32 && (float32(absolute) < 1e-6 || float32(absolute) >= 1e21)) {
 			format = 'e'
 		}
-		return projectJSONValue(json.Number(strconv.FormatFloat(number, format, -1, bits)), ordered)
+		return projectJSONValue(json.Number(strconv.FormatFloat(number, format, -1, bits)))
 	case reflect.Slice:
 		if value.IsNil() {
 			return nil, nil
@@ -100,7 +85,7 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 	case reflect.Array:
 		result := make([]any, value.Len())
 		for index := range result {
-			entry, err := projectJSONValue(value.Index(index).Interface(), ordered)
+			entry, err := projectJSONValue(value.Index(index).Interface())
 			if err != nil {
 				return nil, err
 			}
@@ -117,7 +102,7 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 		result := make(map[string]any, value.Len())
 		entries := value.MapRange()
 		for entries.Next() {
-			entry, err := projectJSONValue(entries.Value().Interface(), ordered)
+			entry, err := projectJSONValue(entries.Value().Interface())
 			if err != nil {
 				return nil, err
 			}
@@ -126,7 +111,6 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 		return result, nil
 	case reflect.Struct:
 		result := map[string]any{}
-		keys := []string{}
 		for index := 0; index < value.NumField(); index++ {
 			field := value.Type().Field(index)
 			if !field.IsExported() {
@@ -142,7 +126,7 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 				continue
 			}
 			if field.Anonymous && name == "" {
-				embedded, err := projectJSONValue(entry.Interface(), ordered)
+				embedded, err := projectJSONValue(entry.Interface())
 				if err != nil {
 					return nil, err
 				}
@@ -158,7 +142,6 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 						return nil, fmt.Errorf("ambiguous JSON field %s requires an explicit projection", key)
 					}
 					result[key] = fields[key]
-					keys = append(keys, key)
 				}
 				continue
 			}
@@ -168,15 +151,11 @@ func reflectJSONValue(value reflect.Value, ordered bool) (any, error) {
 			if _, exists := result[name]; exists {
 				return nil, fmt.Errorf("ambiguous JSON field %s requires an explicit projection", name)
 			}
-			projected, err := projectJSONValue(entry.Interface(), ordered)
+			projected, err := projectJSONValue(entry.Interface())
 			if err != nil {
 				return nil, err
 			}
 			result[name] = projected
-			keys = append(keys, name)
-		}
-		if ordered {
-			return &orderedObject{keys: keys, values: result}, nil
 		}
 		return result, nil
 	default:

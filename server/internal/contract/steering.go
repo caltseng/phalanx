@@ -17,7 +17,7 @@ type Rerun struct {
 func (v *validator) prerequisites(value any, loc []any) []Prerequisite {
 	values, ok := value.([]any)
 	if !ok {
-		v.issue("list_type", "Input should be a valid list", loc, value, nil)
+		v.issue("Input should be a valid list", loc)
 		return nil
 	}
 	start := len(v.issues)
@@ -26,7 +26,7 @@ func (v *validator) prerequisites(value any, loc []any) []Prerequisite {
 		at := location(loc, index)
 		body, ok := object(entry)
 		if !ok {
-			v.issues = append(v.issues, modelIssue(entry, at)...)
+			v.issues = append(v.issues, modelIssue(at)...)
 			continue
 		}
 		link := Prerequisite{Milestone: "checked_in"}
@@ -34,13 +34,13 @@ func (v *validator) prerequisites(value any, loc []any) []Prerequisite {
 			link.UpstreamID = v.text(value, location(at, "upstream_id"), false, 0, 0, IdentifierPattern)
 		}
 		if value, ok := body["milestone"]; ok {
-			link.Milestone = v.choice(value, location(at, "milestone"), targets, false)
+			link.Milestone = v.choice(value, location(at, "milestone"), targets)
 		}
-		v.extras(body, ObjectKeys(entry), []string{"upstream_id", "milestone"}, at)
+		v.extras(ObjectKeys(entry), []string{"upstream_id", "milestone"}, at)
 		result = append(result, link)
 	}
 	if len(v.issues) == start && len(values) > 100 {
-		v.tooLong(value, loc, 100, len(values))
+		v.tooLong(loc, 100, len(values))
 	}
 	return result
 }
@@ -49,7 +49,7 @@ func ValidateSteering(value any, keys []string) (Steering, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Steering{}, modelIssue(value, prefix)
+		return Steering{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := Steering{SteeredBy: "owner", Edits: map[string]any{}, Payload: map[string]any{}}
@@ -70,22 +70,22 @@ func ValidateSteering(value any, keys []string) (Steering, []Issue) {
 			case "context_links", "acceptance_criteria":
 				normalized = v.texts(value, location(prefix, field), 50)
 			case "priority":
-				normalized = v.choice(value, location(prefix, field), []string{"low", "normal", "urgent"}, true)
+				normalized = v.choice(value, location(prefix, field), []string{"low", "normal", "urgent"})
 			case "label":
 				normalized = v.text(value, location(prefix, field), false, 0, 0, labelPattern)
 			case "dependencies":
 				normalized = v.prerequisites(value, location(prefix, field))
 			case "target":
-				normalized = v.choice(value, location(prefix, field), targets, false)
+				normalized = v.choice(value, location(prefix, field), targets)
 			}
 		}
 		result.Edits[field], result.Payload[field] = normalized, normalized
 	}
 	if value, exists := body["steered_by"]; exists {
-		result.SteeredBy = v.choice(value, location(prefix, "steered_by"), []string{"owner", "captain"}, true)
+		result.SteeredBy = v.choice(value, location(prefix, "steered_by"), []string{"owner", "captain"})
 		result.Payload["steered_by"] = result.SteeredBy
 	}
-	v.extras(body, keys, []string{"expected_version", "goal", "context_links", "acceptance_criteria", "priority", "label",
+	v.extras(keys, []string{"expected_version", "goal", "context_links", "acceptance_criteria", "priority", "label",
 		"dependencies", "target", "steered_by"}, prefix)
 	return result, v.issues
 }
@@ -94,15 +94,15 @@ func ValidateRerun(value any, keys []string) (Rerun, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Rerun{}, modelIssue(value, prefix)
+		return Rerun{}, modelIssue(prefix)
 	}
 	v, result := validator{}, Rerun{}
 	if value, ok := v.required(body, "expected_version", prefix); ok {
 		result.ExpectedVersion = v.strictInteger(value, location(prefix, "expected_version"), 1)
 	}
 	if value, ok := v.required(body, "target", prefix); ok {
-		result.Target = v.choice(value, location(prefix, "target"), targets, false)
+		result.Target = v.choice(value, location(prefix, "target"), targets)
 	}
-	v.extras(body, keys, []string{"expected_version", "target"}, prefix)
+	v.extras(keys, []string{"expected_version", "target"}, prefix)
 	return result, v.issues
 }

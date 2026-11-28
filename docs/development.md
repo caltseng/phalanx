@@ -79,6 +79,9 @@ Reuse their existing helpers; do not put network/provider/native-session work in
 transactions or reimplement domain rules in clients. Accepted operations outlive HTTP
 disconnect; explicit interruption rolls back and unknown commit outcomes require
 receipt reconciliation. The shared OS lock covers HTTP and background-work drain.
+Writer admission is FIFO, with the existing reader batch between writers and
+unchanged four-second admission bound. Cancelling the last waiting writer releases
+queued readers without inventing a completed write or retaining phantom admission.
 
 Use the prepared checks prefix from `server` for `go mod verify`, `go build -trimpath
 -buildvcs=false ./...`, `go vet ./...` and `go test ./...`. The native Go CI job needs
@@ -90,7 +93,12 @@ The separate required runtime-safety job retains [real packaged release/identity
 both-direction OS locks, Windows Task Scheduler supervision and production headers.
 The historical P0/D0 differential corpora are opt-in through the CI workflow's
 `historical_conformance` dispatch input; no historical source, manifest or golden is
-deleted. Their harness checks immutable golden integrity and records current
+deleted. This includes live frozen-Python load/header comparisons via
+`release.py --historical` and `headers.py --historical`. Default required jobs retain
+all native workload/status/framing/refusal/drain/receipt predicates and actual
+P0/D0 clients, current-data rollback and both-direction locks. Native header
+expectations are explicit contracts, never inferred from the tested Go responses.
+Their harness checks immutable golden integrity and records current
 working-file provenance instead of rejecting routine `.go` edits against an old
 source hash. Neither normal checks nor explicit reruns require manifest regeneration.
 The independent

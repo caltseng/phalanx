@@ -46,7 +46,8 @@ CLI Python selections fail with migration guidance; there is no fallback.
 See [configuration](../docs/configuration.md) and
 [local-board security](../docs/work-items.md#operator-work-board) for details.
 The board is at `/operator/`; authenticated routes are documented in
-[the API reference](../docs/api.md).
+[the API reference](../docs/api.md). Native JSON/RFC3339 validation uses HTTP 422
+`detail` entries with `loc` and `msg`; see [request validation](../docs/api.md#request-validation).
 
 Go refuses missing or unsupported stores and performs no initialization or
 migration. Only a **new** installation uses
@@ -85,7 +86,7 @@ C compiler cannot provide a local race-check result.
 | Code | Responsibility |
 | --- | --- |
 | `internal/httpapi` | HTTP transport, authentication, validation projection and Scribe assets. |
-| `internal/contract` | Presence/default validation and canonical encoding. |
+| `internal/contract` | Native JSON/RFC3339 validation, loc/msg issues and receipt digest canonicalization. |
 | `internal/application` | Atomic domain operations, receipts, injected clock and durable jobs. |
 | `internal/sqlite` | Typed storage, admission, connection pools and transaction outcomes. |
 | `internal/instancelock` | Cross-platform exclusive server ownership. |

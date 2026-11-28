@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
@@ -24,6 +25,59 @@ func responseJSON(t *testing.T, value any) []byte {
 	return data
 }
 
+func TestNativeDecodedRequestsReplayHistoricalNumericAndUnicodeDigests(t *testing.T) {
+	store, _ := dependencyStore(t)
+	const snapshot = `{"id":"historical-receipt"}`
+	// Digests are independently captured from Python's historical canonical
+	// encoder, not calculated by the implementation under test.
+	for _, test := range []struct{ body, digest string }{
+		{`{"value":1e0}`, "3a7d647740ec6f86b72e0bf3948ab456551e07e9605e3a2785de1c66842ebb48"},
+		{`{"value":1.0}`, "3a7d647740ec6f86b72e0bf3948ab456551e07e9605e3a2785de1c66842ebb48"},
+		{`{"value":1E+0}`, "3a7d647740ec6f86b72e0bf3948ab456551e07e9605e3a2785de1c66842ebb48"},
+		{`{"unicode":"\u00e9 \ud83d\ude80 <>&","numbers":[-0,-0.0,1e0,0.00001,999999999999999999999999999999,1.234567890123456789]}`,
+			"c534d1ac5159674cfa9dc39b8749b526b81c79bc8b6c878144abad9b882f7f03"},
+	} {
+		t.Run(test.body, func(t *testing.T) {
+			decoded, _, err := contract.Decode([]byte(test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Write(context.Background(), func(tx *sqlite.Tx) error {
+				key := test.body
+				if err := tx.SaveReceipt("result", key, test.digest, snapshot); err != nil {
+					return err
+				}
+				result, err := replay(tx, "result", &key, decoded, func() (any, error) {
+					t.Fatal("historical replay attempted a mutation")
+					return nil, nil
+				})
+				if err != nil {
+					return err
+				}
+				if text, err := contract.Canonical(result); err != nil || text != snapshot {
+					t.Fatal(text, err)
+				}
+				if test.digest == "3a7d647740ec6f86b72e0bf3948ab456551e07e9605e3a2785de1c66842ebb48" {
+					integer, _, err := contract.Decode([]byte(`{"value":1}`))
+					if err != nil {
+						return err
+					}
+					_, err = replay(tx, "result", &key, integer, func() (any, error) {
+						t.Fatal("changed numeric kind attempted a mutation")
+						return nil, nil
+					})
+					var conflict *Conflict
+					if !errors.As(err, &conflict) {
+						t.Fatal("integer and real receipts were conflated", err)
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 func TestLegacyReceiptDigestsAndSnapshotsReplayUnchanged(t *testing.T) {
 	store, _ := dependencyStore(t)
 	app := New(store)

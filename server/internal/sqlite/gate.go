@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"container/list"
 	"context"
 	"sync"
 	"time"
@@ -9,14 +10,15 @@ import (
 const AdmissionTimeout = 4 * time.Second
 
 type gate struct {
-	mu       sync.Mutex
-	changed  chan struct{}
-	writing  bool
-	writers  int
-	admitted int
-	queued   int
-	writes   uint64
-	timeout  time.Duration
+	mu          sync.Mutex
+	changed     chan struct{}
+	writing     bool
+	writers     int
+	writerQueue list.List
+	admitted    int
+	queued      int
+	writes      uint64
+	timeout     time.Duration
 }
 
 func newGate() *gate {
@@ -60,7 +62,11 @@ func (g *gate) wait(ctx context.Context, read bool, ready func() bool) error {
 func (g *gate) write(ctx context.Context) (func(), error) {
 	g.mu.Lock()
 	g.writers++
-	err := g.wait(ctx, false, func() bool { return !g.writing && g.admitted == 0 })
+	turn := g.writerQueue.PushBack(nil)
+	err := g.wait(ctx, false, func() bool {
+		return g.writerQueue.Front() == turn && !g.writing && g.admitted == 0
+	})
+	g.writerQueue.Remove(turn)
 	g.writers--
 	if err != nil {
 		g.notify()
@@ -85,7 +91,9 @@ func (g *gate) readStart(ctx context.Context) (func(), error) {
 	if g.writing || g.writers > 0 {
 		g.queued++
 		writes := g.writes
-		err := g.wait(ctx, true, func() bool { return g.writes != writes })
+		err := g.wait(ctx, true, func() bool {
+			return g.writes != writes || !g.writing && g.writers == 0
+		})
 		if err != nil {
 			if g.writes == writes {
 				g.queued--
@@ -95,6 +103,10 @@ func (g *gate) readStart(ctx context.Context) (func(), error) {
 			g.notify()
 			g.mu.Unlock()
 			return nil, err
+		}
+		if g.writes == writes {
+			g.queued--
+			g.admitted++
 		}
 	} else {
 		if err := ctx.Err(); err != nil {

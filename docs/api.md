@@ -4,6 +4,29 @@ The HTTP API is the only path to queue state. Owner routes use the owner bearer 
 Captain/reconciler routes use the trusted runner token, and writer routes use a scoped writer
 bearer token. All routes below are under `/v1` unless shown in full.
 
+## Request validation
+
+The Go server accepts standard JSON, retaining exact numeric tokens for existing
+idempotency receipt digests. JSON syntax and model/field validation failures return
+HTTP 422 with `{"detail":[{"loc":["body","goal"],"msg":"Field required"}]}`.
+Locations identify `body`, `query`, `path` or `header`, followed by the field and,
+where applicable, nested fields/list indexes. Scribe highlights the body field
+using `loc`; clients should display `msg`, not depend on its exact wording.
+Errors do not echo request input or expose Python/Pydantic `type` or `ctx` fields.
+Malformed JSON uses `loc: ["body"]`. Authentication, authorization, conflict and
+other route status codes are unchanged.
+Authenticated endpoints without a JSON-body model consume ignored request bytes
+for transport framing, without decoding or validating their JSON. This prevents
+unread input from resetting an authorization reply when the connection closes;
+it adds no body timeout.
+
+Timestamps must be RFC3339 strings with a timezone, such as
+`2026-11-27T12:34:56.123456Z`, in years 0001-9999. Date-only, naive, numeric Unix timestamps and
+Python-specific coercions are not accepted. Integer query/path parameters use
+decimal integers, not whitespace/underscore/decimal-point coercions.
+Historical receipt canonicalization, including numeric and timestamp spelling,
+is retained separately from request parsing so old receipts still replay.
+
 ## Direct muster status
 
 `GET /v1/muster/status` requires an owner or runner bearer token, even with the local board

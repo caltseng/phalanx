@@ -51,10 +51,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !h.readBody(w, r, q) || !h.authorize(w, r, q) {
 			return
 		}
-		if q.unpaired {
-			h.failure(w, errors.New("unpaired surrogate in request validation input"))
-			return
-		}
 		q.validatePath()
 		if !route.body && len(q.pathIssues) > 0 && route.operation != opOperatorGroup && route.operation != opOperatorTimeline {
 			writeJSON(w, 422, map[string]any{"detail": q.pathIssues})
@@ -85,17 +81,25 @@ func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, q *requestState) bool {
+	var data []byte
+	var err error
 	if q.route.body {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			if h.Logger != nil {
-				h.Logger.Error("HTTP body framing failed", "error", err)
-			}
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(400)
-			w.Write([]byte("Invalid HTTP request received."))
-			return false
+		data, err = io.ReadAll(r.Body)
+	} else {
+		// Even ignored bodies must leave no unread request bytes that can
+		// reset an authorization reply when the connection closes.
+		_, err = io.Copy(io.Discard, r.Body)
+	}
+	if err != nil {
+		if h.Logger != nil {
+			h.Logger.Error("HTTP body framing failed", "error", err)
 		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(400)
+		w.Write([]byte("Invalid HTTP request received."))
+		return false
+	}
+	if q.route.body {
 		if len(data) > 0 {
 			q.bodyPresent = true
 			contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
@@ -103,24 +107,12 @@ func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, q *requestSta
 				(strings.HasPrefix(contentType, "application/") && strings.HasSuffix(contentType, "+json")) {
 				q.input, q.keys, err = contract.Decode(data)
 				if err != nil {
-					var malformed *contract.BodyError
-					if errors.As(err, &malformed) {
-						writeJSON(w, 400, map[string]any{"detail": malformed.Error()})
-						return false
-					}
-					var syntax *contract.JSONError
-					if !errors.As(err, &syntax) {
-						h.failure(w, err)
-						return false
-					}
 					writeJSON(w, 422, map[string]any{"detail": []contract.Issue{
-						{Type: "json_invalid", Loc: []any{"body", syntax.Offset}, Msg: "JSON decode error", Input: map[string]any{}, Ctx: map[string]any{"error": syntax.Message}},
+						{Loc: []any{"body"}, Msg: "Invalid JSON body"},
 					}})
 					return false
 				}
-				q.unpaired = contract.HasUnpaired(q.input)
 			} else {
-				// FastAPI exposes non-JSON body bytes as validation input.
 				q.input = string(data)
 			}
 		}
@@ -240,7 +232,7 @@ func headerText(value string) string {
 }
 
 func missingBody() []contract.Issue {
-	return []contract.Issue{{Type: "missing", Loc: []any{"body"}, Msg: "Field required", Input: nil}}
+	return []contract.Issue{{Loc: []any{"body"}, Msg: "Field required"}}
 }
 
 func (h *Handler) failure(w http.ResponseWriter, err error) {
@@ -284,8 +276,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeJSONValue(w http.ResponseWriter, status int, value any, escapeHTML bool) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
-	// Application responses previously passed through orderedObject.MarshalJSON,
-	// whose nested json.Marshal escaped HTML even with the outer encoder disabled.
+	// Preserve application responses' historical HTML escaping.
 	encoder.SetEscapeHTML(escapeHTML)
 	if err := encoder.Encode(value); err != nil {
 		slog.Error("Could not encode HTTP response", "error", err)

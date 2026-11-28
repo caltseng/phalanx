@@ -552,6 +552,92 @@ func TestGateReaderBatchPrecedesNextWriter(t *testing.T) {
 	await(t, func() bool { w, a, q, busy := gateCounts(g); return w+a+q == 0 && !busy })
 }
 
+func TestGateNewWriterCannotOvertakeWaitingWriter(t *testing.T) {
+	g := newGate()
+	if _, err := g.write(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	admitted := make(chan int, 2)
+	finish := make(chan struct{})
+	write := func(id int) {
+		release, err := g.write(ctx)
+		if err != nil {
+			return
+		}
+		admitted <- id
+		select {
+		case <-finish:
+		case <-ctx.Done():
+		}
+		release()
+	}
+	go write(1)
+	await(t, func() bool { w, _, _, _ := gateCounts(g); return w == 1 })
+	// Pause notification to model a queued writer not yet scheduled after release.
+	g.mu.Lock()
+	g.writing = false
+	g.writes++
+	g.mu.Unlock()
+	go write(2)
+	await(t, func() bool { w, _, _, busy := gateCounts(g); return w == 2 || busy })
+	if _, _, _, busy := gateCounts(g); busy {
+		t.Fatal("new writer overtook its waiting predecessor")
+	}
+	g.mu.Lock()
+	g.notify()
+	g.mu.Unlock()
+	if first := <-admitted; first != 1 {
+		t.Fatal("writer admission was not FIFO", first)
+	}
+	finish <- struct{}{}
+	if second := <-admitted; second != 2 {
+		t.Fatal("next writer lost its turn", second)
+	}
+	finish <- struct{}{}
+	await(t, func() bool { w, a, q, busy := gateCounts(g); return w+a+q == 0 && !busy })
+}
+
+func TestGateLastCancelledWriterReleasesQueuedReadersWithoutAWrite(t *testing.T) {
+	g := newGate()
+	exitRead, err := g.readStart(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	writer := make(chan error, 1)
+	go func() { _, err := g.write(ctx); writer <- err }()
+	await(t, func() bool { w, _, _, _ := gateCounts(g); return w == 1 })
+	reader := make(chan error, 1)
+	go func() {
+		exit, err := g.readStart(context.Background())
+		if err == nil {
+			exit()
+		}
+		reader <- err
+	}()
+	await(t, func() bool { _, _, q, _ := gateCounts(g); return q == 1 })
+	cancel()
+	if err := <-writer; !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled writer admitted", err)
+	}
+	select {
+	case err := <-reader:
+		if err != nil {
+			t.Fatal("reader depended on a cancelled writer's nonexistent commit", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reader stranded with no pending writer")
+	}
+	exitRead()
+	w, a, q, busy := gateCounts(g)
+	if w+a+q != 0 || busy || g.writes != 0 {
+		t.Fatal("phantom admission or completed write", w, a, q, busy, g.writes)
+	}
+}
+
 func TestGateInterruptionBeforeAndAfterReaderTransfer(t *testing.T) {
 	for _, transferred := range []bool{false, true} {
 		g := newGate()

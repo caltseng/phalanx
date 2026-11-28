@@ -36,11 +36,11 @@ func ValidateFlagKey(value any, keys []string) (FlagKey, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return FlagKey{}, modelIssue(value, at)
+		return FlagKey{}, modelIssue(at)
 	}
 	v := validator{}
 	result := v.flagKey(body, at)
-	v.extras(body, keys, []string{"kind", "item_id", "execution_id", "captain_id"}, at)
+	v.extras(keys, []string{"kind", "item_id", "execution_id", "captain_id"}, at)
 	return result, v.issues
 }
 
@@ -48,7 +48,7 @@ func ValidateFlag(value any, keys []string) (Flag, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return Flag{}, modelIssue(value, at)
+		return Flag{}, modelIssue(at)
 	}
 	v := validator{}
 	result := Flag{FlagKey: v.flagKey(body, at)}
@@ -61,6 +61,6 @@ func ValidateFlag(value any, keys []string) (Flag, []Issue) {
 	if value, exists := body["notify_owner"]; exists {
 		result.NotifyOwner = v.boolean(value, location(at, "notify_owner"), false)
 	}
-	v.extras(body, keys, []string{"kind", "item_id", "execution_id", "captain_id", "reason", "recovery", "notify_owner"}, at)
+	v.extras(keys, []string{"kind", "item_id", "execution_id", "captain_id", "reason", "recovery", "notify_owner"}, at)
 	return result, v.issues
 }
