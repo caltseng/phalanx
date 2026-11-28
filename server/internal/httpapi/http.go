@@ -81,17 +81,25 @@ func (h *Handler) notFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, q *requestState) bool {
+	var data []byte
+	var err error
 	if q.route.body {
-		data, err := io.ReadAll(r.Body)
-		if err != nil {
-			if h.Logger != nil {
-				h.Logger.Error("HTTP body framing failed", "error", err)
-			}
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(400)
-			w.Write([]byte("Invalid HTTP request received."))
-			return false
+		data, err = io.ReadAll(r.Body)
+	} else {
+		// Even ignored bodies must leave no unread request bytes that can
+		// reset an authorization reply when the connection closes.
+		_, err = io.Copy(io.Discard, r.Body)
+	}
+	if err != nil {
+		if h.Logger != nil {
+			h.Logger.Error("HTTP body framing failed", "error", err)
 		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(400)
+		w.Write([]byte("Invalid HTTP request received."))
+		return false
+	}
+	if q.route.body {
 		if len(data) > 0 {
 			q.bodyPresent = true
 			contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))

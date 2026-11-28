@@ -79,6 +79,9 @@ Reuse their existing helpers; do not put network/provider/native-session work in
 transactions or reimplement domain rules in clients. Accepted operations outlive HTTP
 disconnect; explicit interruption rolls back and unknown commit outcomes require
 receipt reconciliation. The shared OS lock covers HTTP and background-work drain.
+Writer admission is FIFO, with the existing reader batch between writers and
+unchanged four-second admission bound. Cancelling the last waiting writer releases
+queued readers without inventing a completed write or retaining phantom admission.
 
 Use the prepared checks prefix from `server` for `go mod verify`, `go build -trimpath
 -buildvcs=false ./...`, `go vet ./...` and `go test ./...`. The native Go CI job needs

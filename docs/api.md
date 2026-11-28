@@ -15,6 +15,10 @@ using `loc`; clients should display `msg`, not depend on its exact wording.
 Errors do not echo request input or expose Python/Pydantic `type` or `ctx` fields.
 Malformed JSON uses `loc: ["body"]`. Authentication, authorization, conflict and
 other route status codes are unchanged.
+Authenticated endpoints without a JSON-body model consume ignored request bytes
+for transport framing, without decoding or validating their JSON. This prevents
+unread input from resetting an authorization reply when the connection closes;
+it adds no body timeout.
 
 Timestamps must be RFC3339 strings with a timezone, such as
 `2026-11-27T12:34:56.123456Z`, in years 0001-9999. Date-only, naive, numeric Unix timestamps and

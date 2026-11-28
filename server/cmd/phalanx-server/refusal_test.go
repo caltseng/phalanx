@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/caltseng/phalanx/server/internal/httpapi"
 )
 
 func refusedTCP(t *testing.T) (*idleConnection, *net.TCPConn, context.CancelFunc) {
@@ -117,6 +120,7 @@ func TestRefusedHTTPConnectionsDoNotAccumulateBeforePeerEOF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	closed := make(chan net.Conn, 16)
 	server := &http.Server{
@@ -167,5 +171,55 @@ func TestRefusedHTTPConnectionsDoNotAccumulateBeforePeerEOF(t *testing.T) {
 	}
 	if ctx.Err() != nil {
 		t.Fatal("test disposed peers only by service cancellation")
+	}
+}
+
+func TestUnauthenticatedCompleteBodiesKeepTheir401Response(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	server := &http.Server{Handler: &httpapi.Handler{Owner: "owner", Runner: "runner"}, ConnState: idleState}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(idleListener{Listener: listener, lifetime: ctx}) }()
+	t.Cleanup(func() {
+		cancel()
+		server.Close()
+		if err := <-done; !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	})
+	for index := 0; index < 100; index++ {
+		func() {
+			client, err := net.Dial("tcp", listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			for _, part := range []string{
+				"POST /v1/writer/attempt HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n",
+				"{", "}",
+			} {
+				if _, err := io.WriteString(client, part); err != nil {
+					t.Fatal(index, err)
+				}
+			}
+			response, err := http.ReadResponse(bufio.NewReader(client), &http.Request{Method: "POST"})
+			if err != nil {
+				t.Fatal("complete body lost authentication response", index, err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != 401 || string(body) != `{"detail":"Valid bearer token required"}` {
+				t.Fatal(index, response.StatusCode, string(body), err)
+			}
+			if _, err := client.Read(make([]byte, 1)); err != io.EOF {
+				t.Fatal("authentication response did not close cleanly", index, err)
+			}
+		}()
 	}
 }
