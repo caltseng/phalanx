@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/caltseng/phalanx/server/internal/contract"
@@ -38,10 +39,11 @@ func refreshWait(tx *sqlite.Tx, itemID, executionID string, nowMS int64) error {
 	}
 	var wait *string
 	if len(unmet) > 0 {
-		text, err := pythonOrderedJSON(unmet)
+		data, err := json.Marshal(unmet)
 		if err != nil {
 			return err
 		}
+		text := string(data)
 		wait = &text
 	}
 	return tx.UpdateDependencyWait(executionID, wait, nowMS)

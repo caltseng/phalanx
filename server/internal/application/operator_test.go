@@ -12,6 +12,31 @@ import (
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
+func TestReasonTextRedactsBeforeTruncating(t *testing.T) {
+	for _, test := range []struct {
+		name, input, want string
+		limit             int
+	}{
+		{"token", "push ghp_private github_pat_private failed", "push [redacted] [redacted] failed", 200},
+		{"bearer", "Authorization: BeArEr private", "Authorization: [redacted]", 200},
+		{"basic", "Basic private", "[redacted]", 200},
+		{"assignments", `runner_token="two words" PASSWORD='private' api-key=private lease: private`, "[redacted] [redacted] [redacted] [redacted]", 200},
+		{"quoted key", `{"secret_key": "private"}`, `{"[redacted]}`, 200},
+		{"overlap", `token="ghp_private other"`, "[redacted]", 200},
+		{"word boundaries", "xghp_private αBearer private _token=private", "xghp_private αBearer private _token=private", 200},
+		{"unicode prefix", "雪: Bearer private", "雪: [redacted]", 200},
+		{"normalization", " \tBearer\u00a0private\nfailed ", "[redacted] failed", 200},
+		{"truncate", "雪 ghp_private failed", "雪 [redact…", 10},
+		{"ordinary", "Push rejected: permission denied", "Push rejected: permission denied", 200},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := reasonText(test.input, test.limit); got != test.want {
+				t.Fatalf("reasonText = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestStoredStateDefaultsAndReadOnlyNullMode(t *testing.T) {
 	for _, test := range []struct {
 		name, fields string

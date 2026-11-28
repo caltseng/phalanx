@@ -320,24 +320,10 @@ func (a *App) ClaimScout(ctx context.Context, request contract.ScoutClaim) (any,
 	return result, err
 }
 
-func pythonLowerASCII(text string) string {
-	return strings.Map(func(value rune) rune {
-		switch value {
-		case '\u0130', '\u0131':
-			return 'i'
-		case '\u017f':
-			return 's'
-		case '\u212a':
-			return 'k'
-		}
-		return unicode.ToLower(value)
-	}, text)
-}
-
 var historicalIssueLink = regexp.MustCompile(`https://github\.com/[^\x09-\x0d\x1c-\x1f\x20\x85\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}/]+/[^\x09-\x0d\x1c-\x1f\x20\x85\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}/]+/issues/[1-9][0-9]*`)
 
 func historicalURLMatch(text, url string) bool {
-	text, url = pythonLowerASCII(text), strings.ToLower(url)
+	text, url = strings.ToLower(text), strings.ToLower(url)
 	for offset := 0; offset <= len(text); {
 		at := strings.Index(text[offset:], url)
 		if at < 0 {
@@ -381,7 +367,7 @@ func historicalScoutItem(tx *sqlite.Tx, repositoryID, url string) (*string, erro
 				if !ok {
 					return nil, errors.New("Historical item context link is not text")
 				}
-				if historicalIssueLink.MatchString(pythonLowerASCII(link)) {
+				if historicalIssueLink.MatchString(strings.ToLower(link)) {
 					links = append(links, link)
 				}
 			}

@@ -50,7 +50,7 @@ func deploymentFlags(row sqlite.ObservationProjection, observation projectedObse
 		return []FlagView{serverFlag("deployment_missing", deployment.CheckName+
 			" did not complete successfully within 24 hours of check-in on merge commit "+deployment.Commit,
 			"The owner checks the deployment workflow on GitHub; automatic deployment polling has ended",
-			pythonStamp(deadline), subject, true)}, nil
+			timestamp(deadline), subject, true)}, nil
 	}
 	recovery := "Check the post-merge workflow on GitHub and rerun or repair it; reconciliation refreshes this flag"
 	if deployment.State == "deployed" {
@@ -211,7 +211,7 @@ func observationFlags(tx *sqlite.Tx, now time.Time, executionID string) ([]FlagV
 				}
 				stale := serverFlag("observation_stale", "GitHub was last observed for this item at "+row.LastObservedAt,
 					"A Captain checks the reconciler's pass log for this item's error and repairs it",
-					pythonStamp(last.Add(15*time.Minute)), contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ExecutionID}, false)
+					timestamp(last.Add(15*time.Minute)), contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ExecutionID}, false)
 				found = append([]FlagView{stale}, found...)
 			}
 		}
@@ -238,7 +238,7 @@ func reconcilerStaleFlags(tx *sqlite.Tx, now time.Time) ([]FlagView, error) {
 			result = append(result, serverFlag("reconciler_stale", "Reconciler "+row.RunnerID+" has sent no heartbeat since "+row.LastSeen,
 				"A Captain restarts reconciler "+row.RunnerID+", reports it to the owner, or retires it "+
 					"with `phx shift retire-reconciler` if it was decommissioned",
-				pythonStamp(last.Add(15*time.Minute)), contract.FlagKey{}, false))
+				timestamp(last.Add(15*time.Minute)), contract.FlagKey{}, false))
 		}
 	}
 	return result, nil

@@ -29,10 +29,6 @@ type FlagView struct {
 	Source      string `json:"source"`
 }
 
-func pythonStamp(value time.Time) string {
-	return value.Format("2006-01-02T15:04:05.000000-07:00")
-}
-
 func elapsedSeconds(now, then time.Time) float64 {
 	return float64(now.UnixMicro()-then.UnixMicro()) / 1000000
 }
@@ -116,7 +112,7 @@ func captainStaleFlags(current pickupContext) ([]FlagView, error) {
 				"Resume the same available Captain; replace only for verified native loss/degradation, never an API outage or unknown status. "+
 				"Reconcile pending successors and writer nonces before recovery. Its creator archives it only after "+
 				"a clean handoff and local-work preservation checks.",
-			pythonStamp(gone), contract.FlagKey{CaptainID: row.ID}, false))
+			timestamp(gone), contract.FlagKey{CaptainID: row.ID}, false))
 	}
 	return result, nil
 }
@@ -161,7 +157,7 @@ func noLiveCaptainFlags(tx *sqlite.Tx, current pickupContext) ([]FlagView, error
 		"The keeper verifies API and native availability before recovery; resume the same available Captain. "+
 			"An API outage or unknown native status must not spawn a replacement. Start only for verified native loss/degradation "+
 			"or authoritative empty/ended history, respecting pending successors, handoff grace and charter stop conditions.",
-		pythonStamp(first), contract.FlagKey{CaptainID: captainID}, true)}, nil
+		timestamp(first), contract.FlagKey{CaptainID: captainID}, true)}, nil
 }
 
 func firstRunes(value string, maximum int) string {
@@ -214,7 +210,7 @@ func idleCaptainFlags(tx *sqlite.Tx, now time.Time, current pickupContext) ([]Fl
 			delay = 60 * time.Minute
 		}
 		result = append(result, serverFlag(kind, reason, recovery,
-			pythonStamp(time.UnixMilli(*row.ReadySince).UTC().Add(delay)),
+			timestamp(time.UnixMilli(*row.ReadySince).UTC().Add(delay)),
 			contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ID}, kind == "pickup_blocked"))
 		if len(result) >= derivedLimit {
 			break
@@ -257,7 +253,7 @@ func writerFlags(rows []sqlite.FlagWriter, now time.Time, current pickupContext)
 				return nil, err
 			}
 			result = append(result, serverFlag("launch_unconfirmed", wait.Reason, wait.Trigger,
-				pythonStamp(created.Add(10*time.Minute)), subject, true))
+				timestamp(created.Add(10*time.Minute)), subject, true))
 		}
 		capacityWait := present(row.BuildingRequestedAt) && !row.Building &&
 			buildingReason(current.Capacity, current.Rework, row.ID) != nil
@@ -284,7 +280,7 @@ func writerFlags(rows []sqlite.FlagWriter, now time.Time, current pickupContext)
 				}
 				reason := "Busy with no progress or stage advance since " + moved.Format(layout+"-07:00")
 				result = append(result, serverFlag("no_progress", reason, "Check the session, then nudge or replace it",
-					pythonStamp(moved.Add(2*time.Hour)), subject, false))
+					timestamp(moved.Add(2*time.Hour)), subject, false))
 			}
 		}
 		if row.State == "stopped" || row.State == "error" {
@@ -296,7 +292,7 @@ func writerFlags(rows []sqlite.FlagWriter, now time.Time, current pickupContext)
 				}
 			}
 			result = append(result, serverFlag("writer_stopped", "Writer reported "+row.State+" without a result",
-				"Resume the same session or replace the writer", pythonStamp(stamp), subject, false))
+				"Resume the same session or replace the writer", timestamp(stamp), subject, false))
 		}
 	}
 	return result, nil
@@ -425,14 +421,14 @@ func sessionFlags(tx *sqlite.Tx, rows []sqlite.FlagWriter, now time.Time, curren
 		if !bound {
 			result = append(result, serverFlag("orphan_session", label+" has no registered writer or Captain",
 				"A Captain archives it if its work is done or abandoned, or stops it and reports it to the owner",
-				pythonStamp(stamp), contract.FlagKey{CaptainID: captainID}, false))
+				timestamp(stamp), contract.FlagKey{CaptainID: captainID}, false))
 		} else if writer.SessionID != nil {
 			reference := writer.Nonce
 			if present(writer.SessionID) {
 				reference = *writer.SessionID
 			}
 			result = append(result, serverFlag("duplicate_writer", label+" carries item "+writer.ItemID+", whose writer is "+reference,
-				"A Captain stops and archives the unregistered session", pythonStamp(stamp),
+				"A Captain stops and archives the unregistered session", timestamp(stamp),
 				contract.FlagKey{ItemID: writer.ItemID, ExecutionID: writer.ExecutionID, CaptainID: captainID}, false))
 		}
 		if len(result) >= derivedLimit {
@@ -455,7 +451,7 @@ func archiveFlags(tx *sqlite.Tx) ([]FlagView, error) {
 		}
 		result = append(result, serverFlag("orphan_session", "Session "+row.SessionID+" archive "+row.Outcome+": "+row.Reason,
 			"Preserve local work before archiving; for a runtime refusal, the owner must resolve it. Do not retry a refused archive.",
-			pythonStamp(stamp), contract.FlagKey{}, true))
+			timestamp(stamp), contract.FlagKey{}, true))
 	}
 	return result, nil
 }
@@ -465,7 +461,7 @@ func activeOverdueFlags(tx *sqlite.Tx, now time.Time, known []FlagView, executio
 	for _, flag := range known {
 		byExecution[flag.ExecutionID] = append(byExecution[flag.ExecutionID], flag)
 	}
-	rows, err := tx.ActiveOverdue(pythonStamp(now.Add(-activeOverdueDelay)), executionID, derivedLimit)
+	rows, err := tx.ActiveOverdue(timestamp(now.Add(-activeOverdueDelay)), executionID, derivedLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -524,7 +520,7 @@ func activeOverdueFlags(tx *sqlite.Tx, now time.Time, known []FlagView, executio
 			captainID = *row.CaptainID
 		}
 		result = append(result, serverFlag("active_overdue", firstRunes(reason, 16000), firstRunes(action, 16000),
-			pythonStamp(started.Add(activeOverdueDelay)), contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ID, CaptainID: captainID}, false))
+			timestamp(started.Add(activeOverdueDelay)), contract.FlagKey{ItemID: row.ItemID, ExecutionID: row.ID, CaptainID: captainID}, false))
 	}
 	return result, nil
 }

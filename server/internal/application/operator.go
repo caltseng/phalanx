@@ -295,7 +295,7 @@ func operatorValidator(tx *sqlite.Tx, now time.Time, current operatorContext, re
 	if err != nil {
 		return "", false, err
 	}
-	deadlines, err := tx.OperatorDeadlines(now.UnixMicro()/1000, pythonStamp(now.Add(-10*time.Minute)), pythonStamp(now.Add(-24*time.Hour)))
+	deadlines, err := tx.OperatorDeadlines(now.UnixMicro()/1000, timestamp(now.Add(-10*time.Minute)), timestamp(now.Add(-24*time.Hour)))
 	if err != nil {
 		return "", false, err
 	}
@@ -324,7 +324,7 @@ func operatorValidator(tx *sqlite.Tx, now time.Time, current operatorContext, re
 	tag := `W/"` + contract.Digest(string(material)) + `"`
 	expected := strings.TrimPrefix(tag, "W/")
 	for _, value := range strings.Split(request.IfNoneMatch, ",") {
-		value = strings.TrimPrefix(strings.TrimFunc(value, pythonWhitespace), "W/")
+		value = strings.TrimPrefix(strings.TrimSpace(value), "W/")
 		if value == "*" || value == expected {
 			return tag, true, nil
 		}
@@ -348,7 +348,7 @@ func operatorFilters(request contract.OperatorQuery) (map[string]string, string,
 		}
 	}
 	if request.ClosedAfter != nil {
-		filters["closed_after"] = pythonStamp(request.ClosedAfter.UTC())
+		filters["closed_after"] = timestamp(request.ClosedAfter.UTC())
 	}
 	where, parameters := "", []any{}
 	for _, entry := range [][2]string{{"repository", "item.repository_id"}, {"label", "item.label"},
@@ -580,7 +580,7 @@ func (a *App) OperatorOverview(ctx context.Context, condition ConditionalRead) (
 		if err != nil {
 			return err
 		}
-		closures, err := tx.OperatorClosedCounts(pythonStamp(now.Add(-24 * time.Hour)))
+		closures, err := tx.OperatorClosedCounts(timestamp(now.Add(-24 * time.Hour)))
 		if err != nil {
 			return err
 		}
@@ -635,13 +635,13 @@ func (a *App) OperatorOverview(ctx context.Context, condition ConditionalRead) (
 			if moment.Year() < 1 || moment.Year() > 9999 {
 				return errors.New("Queued time is outside datetime range")
 			}
-			stamp := pythonStamp(moment)
+			stamp := timestamp(moment)
 			oldestStamp = &stamp
 			value := max(int64(0), (now.UnixMicro()/1000-*oldest)/1000)
 			age = &value
 		}
 		response.Body, err = responseValue(map[string]any{"issue_scout": scouting, "issue_scout_needs_owner": needs,
-			"generated_at": pythonStamp(now), "sections": sections, "closed_24h": closed,
+			"generated_at": timestamp(now), "sections": sections, "closed_24h": closed,
 			"dispatch":            map[string]bool{"paused": current.Pickup.Capacity.Paused},
 			"oldest_queued_since": oldestStamp, "oldest_queued_age_seconds": age})
 		return err

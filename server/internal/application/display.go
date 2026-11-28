@@ -2,41 +2,31 @@ package application
 
 import (
 	"regexp"
-	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-func pythonWhitespace(value rune) bool {
-	return unicode.IsSpace(value) || value >= 0x1c && value <= 0x1f
-}
-
-func pythonLines(value string) []string {
-	return strings.FieldsFunc(value, func(value rune) bool {
-		return value == '\n' || value == '\r' || value == '\v' || value == '\f' ||
-			value >= 0x1c && value <= 0x1e || value == 0x85 || value == 0x2028 || value == 0x2029
-	})
-}
+var titleLineBreak = regexp.MustCompile("[\n\r\v\f\u0085\u2028\u2029]")
 
 func shortTitle(goal string, limit int) string {
 	line := ""
-	for _, value := range pythonLines(goal) {
-		value = strings.TrimFunc(value, pythonWhitespace)
+	for _, value := range titleLineBreak.Split(goal, -1) {
+		value = strings.TrimSpace(value)
 		if value != "" {
-			line = strings.TrimFunc(strings.TrimLeft(value, "#*-> "), pythonWhitespace)
+			line = strings.TrimSpace(strings.TrimLeft(value, "#*-> "))
 			break
 		}
 	}
 	sentence, previous := line, rune(0)
 	for index, value := range line {
-		if (previous == '.' || previous == '!' || previous == '?') && pythonWhitespace(value) {
+		if (previous == '.' || previous == '!' || previous == '?') && unicode.IsSpace(value) {
 			sentence = line[:index]
 			break
 		}
 		previous = value
 	}
-	sentence = strings.TrimFunc(sentence, pythonWhitespace)
+	sentence = strings.TrimSpace(sentence)
 	if sentence == "" {
 		sentence = line
 	}
@@ -47,84 +37,30 @@ func shortTitle(goal string, limit int) string {
 		return sentence
 	}
 	cut := firstRunes(sentence, limit-1)
-	if strings.Contains(strings.TrimFunc(cut, pythonWhitespace), " ") {
-		trimmed := strings.TrimRightFunc(cut, pythonWhitespace)
+	if strings.Contains(strings.TrimSpace(cut), " ") {
+		trimmed := strings.TrimRightFunc(cut, unicode.IsSpace)
 		last := -1
 		for index, value := range trimmed {
-			if pythonWhitespace(value) {
+			if unicode.IsSpace(value) {
 				last = index
 			}
 		}
 		if last >= 0 {
-			cut = strings.TrimRightFunc(trimmed[:last], pythonWhitespace)
+			cut = strings.TrimRightFunc(trimmed[:last], unicode.IsSpace)
 		}
 	}
 	return strings.TrimRight(cut, " ,;:-") + "\u2026"
 }
 
-var displayedToken = regexp.MustCompile(`(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+`)
-var displayedAuthorization = regexp.MustCompile(`(?:bearer|basic) +[^ ]+`)
-var displayedAssignment = regexp.MustCompile(`(?:[a-z][a-z0-9]*[_-])*(?:token|secret|password|lease|(?:api|secret)[_-]?key)["']? *[:=] *(?:"[^"]*"|'[^']*'|[^ ]+)`)
-
-type redactedSpan struct{ start, end, order int }
-
-func wordRune(value rune) bool {
-	return unicode.IsLetter(value) || unicode.IsNumber(value) || value == '_'
-}
+var displayedSecret = regexp.MustCompile(`(^|[^\p{L}\p{N}_])((?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+|(?i:(?:bearer|basic) +[^ ]+|(?:[a-z][a-z0-9]*[_-])*(?:token|secret|password|lease|(?:api|secret)[_-]?key)["']? *[:=] *(?:"[^"]*"|'[^']*'|[^ ]+)))`)
 
 func reasonText(value string, limit int) string {
-	value = strings.Join(strings.FieldsFunc(value, pythonWhitespace), " ")
-	folded := pythonLowerASCII(value)
-	boundaries := []int{}
-	for index := range value {
-		boundaries = append(boundaries, index)
-	}
-	boundaries = append(boundaries, len(value))
-	foldedBoundaries := []int{}
-	for index := range folded {
-		foldedBoundaries = append(foldedBoundaries, index)
-	}
-	foldedBoundaries = append(foldedBoundaries, len(folded))
-	mapBoundary := func(index int) int {
-		return boundaries[sort.SearchInts(foldedBoundaries, index)]
-	}
-	spans := []redactedSpan{}
-	for order, expression := range []*regexp.Regexp{displayedToken, displayedAuthorization, displayedAssignment} {
-		source := value
-		if order != 0 {
-			source = folded
-		}
-		for _, found := range expression.FindAllStringIndex(source, -1) {
-			start, end := found[0], found[1]
-			if order != 0 {
-				start, end = mapBoundary(start), mapBoundary(end)
-			}
-			if start > 0 {
-				before, _ := utf8.DecodeLastRuneInString(value[:start])
-				if wordRune(before) {
-					continue
-				}
-			}
-			spans = append(spans, redactedSpan{start, end, order})
-		}
-	}
-	sort.SliceStable(spans, func(i, j int) bool {
-		return spans[i].start < spans[j].start || spans[i].start == spans[j].start && spans[i].order < spans[j].order
+	value = strings.Join(strings.Fields(value), " ")
+	value = displayedSecret.ReplaceAllStringFunc(value, func(match string) string {
+		return displayedSecret.FindStringSubmatch(match)[1] + "[redacted]"
 	})
-	var text strings.Builder
-	end := 0
-	for _, span := range spans {
-		if span.start < end {
-			continue
-		}
-		text.WriteString(value[end:span.start])
-		text.WriteString("[redacted]")
-		end = span.end
+	if utf8.RuneCountInString(value) > limit {
+		value = firstRunes(value, limit-1) + "\u2026"
 	}
-	text.WriteString(value[end:])
-	result := text.String()
-	if utf8.RuneCountInString(result) > limit {
-		result = firstRunes(result, limit-1) + "\u2026"
-	}
-	return result
+	return value
 }
