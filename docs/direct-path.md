@@ -344,6 +344,9 @@ it instead freshly fetches the item's target branch (or configured base branch) 
 local commit to be on that origin base. Report-only writers need not push a branch. Tracked or
 staged changes, untracked non-ignored files, hidden index changes, in-progress Git operations and
 unavailable Git evidence all prevent archival. Gitignored build output does not block archival.
+Rebase activity is identified by `rebase-merge` or `rebase-apply` state directories, not
+`REBASE_HEAD` alone: Git can retain that file after a successful rebase. The check leaves
+all Git state untouched.
 Nothing is discarded or reset. For a helper or Captain
 with a Git worktree use `--worktree`; use `--no-worktree` only after runtime inspection confirms
 there is no Git worktree or persistent work that archival would remove. `can_archive: true` is
