@@ -1,15 +1,63 @@
 package httpapi
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
+
+func TestHTTP10ValidationPreservesFramingAndNativeIssues(t *testing.T) {
+	server := httptest.NewServer(&Handler{App: fixtureApp(t), Owner: "owner", Runner: "runner"})
+	defer server.Close()
+	connection, err := net.DialTimeout("tcp", strings.TrimPrefix(server.URL, "http://"), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fmt.Fprint(connection, "POST /v1/items HTTP/1.0\r\nHost: localhost\r\n"+
+		"Authorization: Bearer owner\r\nContent-Type: application/json\r\n"+
+		"Content-Length: 2\r\nConnection: keep-alive\r\n\r\n{}"); err != nil {
+		t.Fatal(err)
+	}
+	wire, err := io.ReadAll(connection)
+	if err != nil {
+		t.Fatal("invalid request retained the keep-alive connection", err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(wire)), &http.Request{Method: "POST"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string][]map[string]any
+	expected := map[string][]map[string]any{"detail": {
+		{"loc": []any{"body", "repository_id"}, "msg": "Field required"},
+		{"loc": []any{"body", "goal"}, "msg": "Field required"},
+	}}
+	if response.Proto != "HTTP/1.1" || response.StatusCode != 422 || !response.Close ||
+		!bytes.Contains(wire, []byte("\r\nConnection: close\r\n")) || json.Unmarshal(data, &body) != nil ||
+		!reflect.DeepEqual(body, expected) {
+		t.Fatal(response.Proto, response.StatusCode, response.Header, string(data))
+	}
+}
 
 func TestOpenAPIDocumentsNativeValidationIssues(t *testing.T) {
 	response := httptest.NewRecorder()

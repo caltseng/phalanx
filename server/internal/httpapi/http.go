@@ -268,8 +268,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeJSONValue(w http.ResponseWriter, status int, value any, escapeHTML bool) {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
-	// Application responses previously passed through orderedObject.MarshalJSON,
-	// whose nested json.Marshal escaped HTML even with the outer encoder disabled.
+	// Preserve application responses' historical HTML escaping.
 	encoder.SetEscapeHTML(escapeHTML)
 	if err := encoder.Encode(value); err != nil {
 		slog.Error("Could not encode HTTP response", "error", err)

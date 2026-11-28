@@ -411,9 +411,20 @@ def _query(pids):
 
 
 def _write_new(path, value):
-    with path.open("x", encoding="utf-8") as handle:
-        json.dump(value, handle, indent=2)
-        handle.write("\n")
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    owned = False
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            owned = True
+            json.dump(value, handle, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Link the closed, complete file atomically without replacing any final record.
+        os.link(temporary, path)
+    finally:
+        if owned:
+            temporary.unlink()
 
 
 def supervise(config_path, config, env, *, task, record, engine, go_binary):

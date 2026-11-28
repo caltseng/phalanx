@@ -15,9 +15,6 @@ import (
 )
 
 func ObjectKeys(value any) []string {
-	if object, ok := value.(*orderedObject); ok {
-		return object.keys
-	}
 	keys := []string{}
 	if object, ok := value.(map[string]any); ok {
 		for key := range object {
@@ -149,8 +146,6 @@ func writeValue(buffer *bytes.Buffer, value any) error {
 			}
 		}
 		buffer.WriteByte('}')
-	case *orderedObject:
-		return writeValue(buffer, x.values)
 	case []any:
 		if x == nil {
 			buffer.WriteString("null")

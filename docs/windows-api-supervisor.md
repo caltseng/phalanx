@@ -64,6 +64,13 @@ Native creation FILETIME is retained exactly; CIM's microsecond representation m
 differ by at most 10 ticks, never an arbitrary time window. Original-handle exit
 proves only that original process exited and never authorizes acting on a reused PID.
 
+Ownership records and stop receipts become visible only as complete JSON: the writer
+flushes and closes an exclusively created temporary file in the same private directory,
+then atomically links it to the new final path without replacing any existing record.
+Write, publication and temporary cleanup failures propagate; the final path stays absent
+or complete. An interrupted writer may leave its private temporary file, which is not an
+ownership record or stop receipt. Cleanup never removes a final record or another writer's file.
+
 Stop uses the exact running task instance's `Stop()` plus its original owned Job.
 It is a **hard stop, not a clean-drain guarantee**. The receipt always identifies
 interrupted caller outcomes as `transport-unknown`; reconcile requests/jobs on

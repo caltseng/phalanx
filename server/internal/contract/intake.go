@@ -182,9 +182,6 @@ func (v *validator) extras(keys, allowed []string, prefix []any) {
 }
 
 func object(value any) (map[string]any, bool) {
-	if body, ok := value.(*orderedObject); ok {
-		return body.values, true
-	}
 	body, ok := value.(map[string]any)
 	return body, ok
 }

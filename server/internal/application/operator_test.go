@@ -182,6 +182,79 @@ func TestFilteredOperatorPageContinuesAfterExactCandidateWindow(t *testing.T) {
 	}
 }
 
+func TestOperatorValidatorHashesEveryInputDeterministically(t *testing.T) {
+	app, db := writerStore(t, 2, 1)
+	now := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO operator_change VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Store.Read(context.Background(), func(tx *sqlite.Tx) error {
+		baseline := ""
+		for round := range 20 {
+			current := operatorContext{
+				Pickup: pickupContext{
+					Holds: map[string]string{"second": "held", "first": "held"},
+					Captains: []pickupCaptain{{ID: "captain", Repositories: map[string]*string{"fixture": nil},
+						RawPickup: json.RawMessage(`{"repositories":{"fixture":null},"opaque":{"number":999999999999999999999}}`)}},
+				},
+				Sessions: map[sessionKey]string{
+					{"runtime", "second"}: "available", {"", "first"}: "missing",
+				},
+			}
+			condition := ConditionalRead{Path: "/v1/operator/executions", Query: "limit=1"}
+			scouting := map[string]any{"state": "due", "counts": map[string]int64{"needs_owner": 1}}
+			tag, matched, err := operatorValidator(tx, now, current, condition, scouting)
+			if err != nil {
+				return err
+			}
+			if matched || round > 0 && tag != baseline {
+				t.Fatal("unchanged maps produced a different validator", tag, baseline)
+			}
+			baseline = tag
+			if round > 0 {
+				continue
+			}
+			for _, test := range []struct {
+				name   string
+				change func()
+				undo   func()
+			}{
+				{"path", func() { condition.Path += "/other" }, func() { condition.Path = "/v1/operator/executions" }},
+				{"query", func() { condition.Query = "limit=2" }, func() { condition.Query = "limit=1" }},
+				{"hold", func() { current.Pickup.Holds["third"] = "held" }, func() { delete(current.Pickup.Holds, "third") }},
+				{"session availability", func() { current.Sessions[sessionKey{"", "first"}] = "available" },
+					func() { current.Sessions[sessionKey{"", "first"}] = "missing" }},
+				{"session runtime", func() { current.Sessions[sessionKey{"other", "first"}] = "missing" },
+					func() { delete(current.Sessions, sessionKey{"other", "first"}) }},
+				{"captain identity", func() { current.Pickup.Captains[0].ID = "other" },
+					func() { current.Pickup.Captains[0].ID = "captain" }},
+				{"opaque pickup", func() {
+					current.Pickup.Captains[0].RawPickup = json.RawMessage(`{"repositories":{"fixture":null},"opaque":{"number":999999999999999999998}}`)
+				},
+					func() {
+						current.Pickup.Captains[0].RawPickup = json.RawMessage(`{"repositories":{"fixture":null},"opaque":{"number":999999999999999999999}}`)
+					}},
+				{"scouting", func() { scouting["state"] = "running" }, func() { scouting["state"] = "due" }},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					test.change()
+					changed, _, err := operatorValidator(tx, now, current, condition, scouting)
+					if err != nil || changed == baseline {
+						t.Fatal("changed input did not invalidate", changed, err)
+					}
+					test.undo()
+					restored, _, err := operatorValidator(tx, now, current, condition, scouting)
+					if err != nil || restored != baseline {
+						t.Fatal("restored input did not restore validator", restored, err)
+					}
+				})
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 func TestOperatorValidatorIgnoresTickingAgesButKeepsDeadlinesAndOpaquePickup(t *testing.T) {
 	app, db := writerStore(t, 2, 1)
 	now := time.Now().UTC().Truncate(time.Millisecond)

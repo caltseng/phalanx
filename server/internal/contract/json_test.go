@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -82,35 +81,6 @@ func TestJSONValueMatchesPreviousResponseRoundTrip(t *testing.T) {
 	persisted, err := Canonical(projected)
 	if err != nil || persisted != previous {
 		t.Fatal("canonical receipt snapshot changed", persisted, previous, err)
-	}
-}
-
-func TestOrderedJSONValuePreservesStructOrder(t *testing.T) {
-	value := struct {
-		Z string `json:"z"`
-		A []struct {
-			Y int `json:"y"`
-			B int `json:"b"`
-		} `json:"a"`
-	}{Z: "first"}
-	value.A = append(value.A, struct {
-		Y int `json:"y"`
-		B int `json:"b"`
-	}{1, 2})
-	projected, err := OrderedJSONValue(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(ObjectKeys(projected), []string{"z", "a"}) {
-		t.Fatal("struct field order changed", ObjectKeys(projected))
-	}
-	old, err := Canonical(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	current, err := Canonical(projected)
-	if err != nil || current != old {
-		t.Fatal("repr/storage field order changed", current, old, err)
 	}
 }
 

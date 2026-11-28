@@ -409,6 +409,15 @@ def differential(binary, output, record_only=False):
                     target = framework.approved_go(second["case"]) if label == "Go" else None
                     if target is None:
                         target = framework.comparable(first["response"])
+                    if label == "Go" and second["case"]["id"] == "http10-invalid-body":
+                        # Only the expected validation payload changed; keep the
+                        # oracle's protocol/status/headers/closure and state checks.
+                        expected_response = first["response"].copy()
+                        payload = json.loads(bytes.fromhex(expected_response["decoded_body_hex"]))
+                        payload = {"detail": [{"loc": issue["loc"], "msg": issue["msg"]}
+                                              for issue in payload["detail"]]}
+                        expected_response["decoded_body_hex"] = json.dumps(payload).encode().hex()
+                        target = framework.comparable(expected_response)
                     if framework.comparable(second["response"]) != target:
                         failures.append(f"{shape}/{label}/{second['case']['id']}: native framing precedence changed")
                 for first, second in zip(expected_prefixes, prefixes, strict=True):
