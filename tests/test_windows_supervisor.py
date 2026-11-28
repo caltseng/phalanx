@@ -1,4 +1,5 @@
-from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager
 import ctypes
 import json
 import os
@@ -6,12 +7,165 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
 
 from phalanx import windows_supervisor as w
 from timing import WAIT_SECONDS
+
+
+class PublicationTest(unittest.TestCase):
+    def test_final_record_is_absent_while_json_write_is_paused(self):
+        for name, value in (("ownership.json", {"format": 1, "job_handle": 901}),
+                            ("stop.json", {"format": 1, "stopped": False}),
+                            ("stop.json", {"format": 1, "stopped": True})):
+            with self.subTest(value=value), TemporaryDirectory() as temporary:
+                path = Path(temporary) / name
+                paused, resume = threading.Event(), threading.Event()
+                dump = json.dump
+
+                def paused_dump(data, handle, **options):
+                    handle.write("{")
+                    handle.flush()
+                    paused.set()
+                    if not resume.wait(WAIT_SECONDS):
+                        raise AssertionError("Publication fixture was not resumed")
+                    handle.seek(0)
+                    dump(data, handle, **options)
+
+                with ThreadPoolExecutor(max_workers=1) as executor, \
+                        patch.object(w.json, "dump", side_effect=paused_dump):
+                    future = executor.submit(w._write_new, path, value)
+                    try:
+                        self.assertTrue(paused.wait(WAIT_SECONDS))
+                        self.assertFalse(path.exists(), "Incomplete JSON became a final record")
+                    finally:
+                        resume.set()
+                    future.result(timeout=WAIT_SECONDS)
+                self.assertEqual(json.loads(path.read_text()), value)
+                self.assertEqual(list(path.parent.iterdir()), [path])
+
+    def test_concurrent_publishers_have_one_winner_and_never_replace_it(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "record.json"
+            barrier = threading.Barrier(2)
+            link = os.link
+
+            def publish(source, destination):
+                barrier.wait(timeout=WAIT_SECONDS)
+                link(source, destination)
+
+            with ThreadPoolExecutor(max_workers=2) as executor, \
+                    patch.object(w.os, "link", side_effect=publish):
+                futures = [executor.submit(w._write_new, path, {"publisher": number})
+                           for number in range(2)]
+                outcomes = []
+                for future in futures:
+                    try:
+                        future.result(timeout=WAIT_SECONDS)
+                        outcomes.append("won")
+                    except FileExistsError:
+                        outcomes.append("lost")
+            self.assertCountEqual(outcomes, ["won", "lost"])
+            before = path.read_bytes()
+            with self.assertRaises(FileExistsError):
+                w._write_new(path, {"publisher": "replacement"})
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(list(path.parent.iterdir()), [path])
+
+    def test_write_flush_close_sync_and_publication_faults_leave_no_final_record(self):
+        for fault in ("create", "write", "flush", "close", "sync", "publish", "interrupt"):
+            with self.subTest(fault=fault), TemporaryDirectory() as temporary:
+                path = Path(temporary) / "record.json"
+                actual_open = Path.open
+
+                @contextmanager
+                def open_file(candidate, *arguments, **options):
+                    if fault == "create":
+                        raise OSError("injected create failure")
+                    with actual_open(candidate, *arguments, **options) as handle:
+                        proxy = Mock(wraps=handle)
+                        if fault in ("write", "flush"):
+                            getattr(proxy, fault).side_effect = OSError(f"injected {fault} failure")
+                        yield proxy
+                    if fault == "close":
+                        raise OSError("injected close failure")
+
+                with ExitStack() as stack:
+                    stack.enter_context(patch.object(Path, "open", open_file))
+                    if fault == "sync":
+                        stack.enter_context(patch.object(w.os, "fsync", side_effect=OSError("injected sync failure")))
+                    if fault == "publish":
+                        stack.enter_context(patch.object(w.os, "link", side_effect=OSError("injected publish failure")))
+                    if fault == "interrupt":
+                        stack.enter_context(patch.object(w.json, "dump", side_effect=KeyboardInterrupt))
+                    with self.assertRaises(KeyboardInterrupt if fault == "interrupt" else OSError):
+                        w._write_new(path, {"stopped": True})
+                self.assertFalse(path.exists())
+                self.assertEqual(list(path.parent.iterdir()), [])
+
+    def test_cleanup_failure_surfaces_without_removing_final_or_foreign_files(self):
+        for published in (False, True):
+            with self.subTest(published=published), TemporaryDirectory() as temporary:
+                path = Path(temporary) / "record.json"
+                foreign = path.parent / "unrelated.tmp"
+                foreign.write_text("foreign")
+                with ExitStack() as stack:
+                    unlink = stack.enter_context(patch.object(Path, "unlink", autospec=True,
+                                                              side_effect=OSError("injected cleanup failure")))
+                    if not published:
+                        stack.enter_context(patch.object(w.os, "link",
+                                                         side_effect=OSError("injected publication failure")))
+                    with self.assertRaisesRegex(OSError, "cleanup failure") as caught:
+                        w._write_new(path, {"stopped": False})
+                self.assertEqual(foreign.read_text(), "foreign")
+                leftovers = [entry for entry in path.parent.iterdir()
+                             if entry not in (path, foreign)]
+                self.assertEqual(len(leftovers), 1)
+                unlink.assert_called_once_with(leftovers[0])
+                self.assertEqual(json.loads(leftovers[0].read_text()), {"stopped": False})
+                if published:
+                    self.assertEqual(json.loads(path.read_text()), {"stopped": False})
+                else:
+                    self.assertFalse(path.exists())
+                    self.assertRegex(str(caught.exception.__context__), "publication failure")
+                leftovers[0].unlink()
+
+    def test_temporary_name_collision_never_deletes_unowned_file(self):
+        with TemporaryDirectory() as temporary:
+            path = Path(temporary) / "record.json"
+            token = Mock(hex="fixed")
+            foreign = path.with_name(".record.json.fixed.tmp")
+            foreign.write_text("foreign")
+            with patch.object(w.uuid, "uuid4", return_value=token):
+                with self.assertRaises(FileExistsError):
+                    w._write_new(path, {"stopped": True})
+            self.assertFalse(path.exists())
+            self.assertEqual(foreign.read_text(), "foreign")
+
+    def test_interruption_at_link_leaves_final_absent_or_complete(self):
+        for linked in (False, True):
+            with self.subTest(linked=linked), TemporaryDirectory() as temporary:
+                path = Path(temporary) / "stop.json"
+                link = os.link
+
+                def interrupted_link(source, destination):
+                    self.assertFalse(destination.exists())
+                    self.assertEqual(json.loads(source.read_text()), {"stopped": False})
+                    if linked:
+                        link(source, destination)
+                    raise KeyboardInterrupt
+
+                with patch.object(w.os, "link", side_effect=interrupted_link):
+                    with self.assertRaises(KeyboardInterrupt):
+                        w._write_new(path, {"stopped": False})
+                if linked:
+                    self.assertEqual(json.loads(path.read_text()), {"stopped": False})
+                    self.assertEqual(list(path.parent.iterdir()), [path])
+                else:
+                    self.assertEqual(list(path.parent.iterdir()), [])
 
 
 class IdentityTest(unittest.TestCase):
@@ -308,6 +462,13 @@ class WindowsJobTest(unittest.TestCase):
             "from phalanx import windows_supervisor as w\n"
             "root=Path(sys.argv[2]); n=w._native(); j=w.Job(n)\n"
             "s=w.Original.capture(n,os.getpid(),w._query)\n"
+            "dump=json.dump\n"
+            "def paused_dump(value,handle,**options):\n"
+            " handle.write('{'); handle.flush()\n"
+            " print('publication-paused',flush=True)\n"
+            " if sys.stdin.readline()!='publish\\n': raise RuntimeError('Fixture publication not resumed')\n"
+            " handle.seek(0); dump(value,handle,**options)\n"
+            "w.json.dump=paused_dump\n"
             "try:\n"
             " p=j.launch([sys.executable,'-c','import threading; threading.Event().wait()'],dict(os.environ),root)\n"
             " w._write_new(root/'ownership.json',{'format':1,'task_path':'\\\\synthetic',"
@@ -320,14 +481,29 @@ class WindowsJobTest(unittest.TestCase):
             " j.wait_empty()\n"
             "finally:\n j.close(); s.close()\n", encoding="utf-8")
         process = subprocess.Popen([sys.executable, "-I", str(worker),
-                                    str(Path(w.__file__).resolve().parents[1]), str(self.root)])
+                                    str(Path(w.__file__).resolve().parents[1]), str(self.root)],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
 
         def cleanup():
             if process.poll() is None:
                 process.terminate()
             process.wait(timeout=WAIT_SECONDS)
+            process.stdin.close()
+            process.stdout.close()
 
         self.stack.callback(cleanup)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            paused = executor.submit(process.stdout.readline)
+            try:
+                self.assertEqual(paused.result(timeout=WAIT_SECONDS), "publication-paused\n")
+                self.assertFalse(record.exists(), "Original handoff exposed incomplete ownership")
+            except BaseException:
+                cleanup()
+                raise
+            finally:
+                if process.poll() is None:
+                    process.stdin.write("publish\n")
+                    process.stdin.flush()
         owned = self.wait_file(record)
         real_control = w.task_control
         operations = []
