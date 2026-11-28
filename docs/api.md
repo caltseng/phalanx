@@ -17,7 +17,7 @@ Malformed JSON uses `loc: ["body"]`. Authentication, authorization, conflict and
 other route status codes are unchanged.
 
 Timestamps must be RFC3339 strings with a timezone, such as
-`2026-11-27T12:34:56.123456Z`. Date-only, naive, numeric Unix timestamps and
+`2026-11-27T12:34:56.123456Z`, in years 0001-9999. Date-only, naive, numeric Unix timestamps and
 Python-specific coercions are not accepted. Integer query/path parameters use
 decimal integers, not whitespace/underscore/decimal-point coercions.
 Historical receipt canonicalization, including numeric and timestamp spelling,

@@ -46,6 +46,10 @@ func TestValidationDetailsContainOnlyFieldLocationAndMessage(t *testing.T) {
 		{"POST", "/v1/items", `{} {}`, []any{"body"}},
 		{"GET", "/v1/owner/inbox?limit=1_0", "", []any{"query", "limit"}},
 		{"GET", "/v1/operator/executions?closed_after=1700000000", "", []any{"query", "closed_after"}},
+		{"GET", "/v1/operator/executions?closed_after=2026-11-27T12:34:56%2B24:00", "", []any{"query", "closed_after"}},
+		{"GET", "/v1/operator/executions?closed_after=2026-11-27T12:34:56%2B00:60", "", []any{"query", "closed_after"}},
+		{"GET", "/v1/operator/executions?closed_after=2026-11-27T1:34:56Z", "", []any{"query", "closed_after"}},
+		{"GET", "/v1/operator/executions?closed_after=2026-11-27T12:34:56,123Z", "", []any{"query", "closed_after"}},
 	} {
 		t.Run(test.path+"/"+test.body, func(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, strings.NewReader(test.body))

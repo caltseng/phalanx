@@ -61,7 +61,9 @@ func TestRFC3339TimestampsAndReceiptSpelling(t *testing.T) {
 		}
 	}
 	for _, invalid := range []any{nil, true, json.Number("1700000000"), "1700000000", "2026-11-27",
-		"2026-11-27 12:34:56+00:00", "2026-11-27T12:34:56", "2026-02-30T12:34:56Z"} {
+		"2026-11-27 12:34:56+00:00", "2026-11-27T12:34:56", "2026-02-30T12:34:56Z",
+		"2026-11-27T12:34:56+24:00", "2026-11-27T12:34:56+00:60",
+		"2026-11-27T1:34:56Z", "2026-11-27T12:34:56,123Z", "0000-01-01T00:00:00Z"} {
 		if _, issues := ValidateTimestamp(invalid, []any{"body", "observed_at"}); len(issues) != 1 {
 			t.Errorf("accepted invalid timestamp %v", invalid)
 		}
