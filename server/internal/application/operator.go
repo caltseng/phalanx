@@ -470,11 +470,11 @@ func (a *App) OperatorList(ctx context.Context, request contract.OperatorQuery, 
 	}
 	scope := request.Kind
 	if len(filters) > 0 {
-		value, err := contract.PythonJSON(filters)
+		digest, err := contract.LegacyFilterDigest(filters)
 		if err != nil {
 			return response, err
 		}
-		scope += ":" + contract.Digest(value)[:16]
+		scope += ":" + digest[:16]
 	}
 	shape := []string{"stamp", "id"}
 	if request.Kind == "open" {

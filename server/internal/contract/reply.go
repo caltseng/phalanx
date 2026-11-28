@@ -12,7 +12,7 @@ func ValidateReply(value any, keys []string) (Reply, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Reply{}, modelIssue(value, prefix)
+		return Reply{}, modelIssue(prefix)
 	}
 	v, result := validator{}, Reply{AnsweredBy: "owner"}
 	if x, ok := v.required(body, "expected_version", prefix); ok {
@@ -22,8 +22,8 @@ func ValidateReply(value any, keys []string) (Reply, []Issue) {
 		result.Answer = v.text(x, location(prefix, "answer"), true, 1, 16000, "")
 	}
 	if x, ok := body["answered_by"]; ok {
-		result.AnsweredBy = v.choice(x, location(prefix, "answered_by"), []string{"owner", "captain"}, true)
+		result.AnsweredBy = v.choice(x, location(prefix, "answered_by"), []string{"owner", "captain"})
 	}
-	v.extras(body, keys, []string{"expected_version", "answer", "answered_by"}, prefix)
+	v.extras(keys, []string{"expected_version", "answer", "answered_by"}, prefix)
 	return result, v.issues
 }

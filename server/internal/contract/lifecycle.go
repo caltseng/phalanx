@@ -15,14 +15,14 @@ func ValidateVersioned(value any, keys []string) (Versioned, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Versioned{}, modelIssue(value, prefix)
+		return Versioned{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := Versioned{}
 	if x, ok := v.required(body, "expected_version", prefix); ok {
 		result.ExpectedVersion = v.strictInteger(x, location(prefix, "expected_version"), 1)
 	}
-	v.extras(body, keys, []string{"expected_version"}, prefix)
+	v.extras(keys, []string{"expected_version"}, prefix)
 	return result, v.issues
 }
 
@@ -30,7 +30,7 @@ func ValidateCancellation(value any, keys []string) (Cancellation, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Cancellation{}, modelIssue(value, prefix)
+		return Cancellation{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := Cancellation{}
@@ -40,6 +40,6 @@ func ValidateCancellation(value any, keys []string) (Cancellation, []Issue) {
 	if x, ok := v.required(body, "reason", prefix); ok {
 		result.Reason = v.text(x, location(prefix, "reason"), true, 1, 16000, "")
 	}
-	v.extras(body, keys, []string{"expected_version", "reason"}, prefix)
+	v.extras(keys, []string{"expected_version", "reason"}, prefix)
 	return result, v.issues
 }

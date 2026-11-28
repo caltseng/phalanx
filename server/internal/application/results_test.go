@@ -33,7 +33,7 @@ func TestObservationAndDeliveryRollbackTogetherThenReplay(t *testing.T) {
 	if _, err := db.Exec("UPDATE executions SET state_json=? WHERE id='execution'; UPDATE writers SET building=0", raw); err != nil {
 		t.Fatal(err)
 	}
-	request := contract.Observation{ObservedAt: contract.AwareTime{Time: app.Clock()},
+	request := contract.Observation{ObservedAt: contract.Timestamp{Time: app.Clock()},
 		PR: &contract.ObservedPull{Number: "1", State: "open", HeadRef: itemBranch("up"), HeadSHA: head,
 			BaseRef: "main", BaseSHA: base}, Checks: pointer("satisfied"), TargetBase: pointer("main"),
 		CheckReasons: []string{}, Feedback: []string{}}

@@ -45,7 +45,7 @@ func nativeScoutPage(row *sqlite.ScoutPass) contract.ScoutPage {
 		VerifiedLogin: author, VerifiedID: authorID, Issues: []contract.ScoutIssue{
 			{Number: "1", AuthorLogin: &author, AuthorID: &authorID, State: "open",
 				Title: "Synthetic scout work", Body: "Synthetic source snow \u96ea",
-				UpdatedAt: contract.DateTime{Time: time.Now().UTC(), Aware: true}},
+				UpdatedAt: contract.Timestamp{Time: time.Now().UTC()}},
 		}}
 }
 

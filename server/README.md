@@ -31,8 +31,12 @@ Native operator execution/item/group/timeline/overview and muster reads include
 filter-bound cursors, weak conditional validators, retained opaque pickup
 metadata, bounded candidate windows and usage projections. Native Scribe shell/
 assets and direct local-board transport retain CSP, exact file/range/conditional
-behavior and narrowly wired owner actions. Existing documentation URLs serve
-byte-pinned identical P0/D0 generated schema/HTML, not a Python runtime proxy.
+behavior and narrowly wired owner actions. Existing documentation URLs serve embedded schema/HTML, not a Python runtime proxy.
+The native validation boundary uses standard JSON, timezone-bearing RFC3339 timestamps,
+decimal integer query/path parameters, and HTTP 422 `detail` entries containing only
+`loc` and `msg`; see [request validation](../docs/api.md#request-validation).
+Historical receipt digests retain their canonical spelling independently of request
+parsing. The historical P0/D0 oracle documents and golden artifacts remain unchanged.
 Native report finalization and bounded dependency refresh use the existing
 schema26 jobs. Every pinned public operation is inventoried; complete whole-port
 fault/race/framework/rollback and final delivery proof still remain required.

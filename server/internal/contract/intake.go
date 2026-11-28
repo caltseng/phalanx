@@ -1,4 +1,4 @@
-// Package contract owns the Python-compatible request boundary, not database state.
+// Package contract owns request validation and historical receipt canonicalization.
 package contract
 
 import (
@@ -59,19 +59,16 @@ type Registration struct {
 }
 
 type Issue struct {
-	Type  string         `json:"type"`
-	Loc   []any          `json:"loc"`
-	Msg   string         `json:"msg"`
-	Input any            `json:"input"`
-	Ctx   map[string]any `json:"ctx,omitempty"`
+	Loc []any  `json:"loc"`
+	Msg string `json:"msg"`
 }
 
 type validator struct {
 	issues []Issue
 }
 
-func (v *validator) issue(kind, message string, loc []any, input any, ctx map[string]any) {
-	v.issues = append(v.issues, Issue{kind, loc, message, input, ctx})
+func (v *validator) issue(message string, loc []any) {
+	v.issues = append(v.issues, Issue{Loc: loc, Msg: message})
 }
 
 func location(prefix []any, field any) []any {
@@ -81,7 +78,7 @@ func location(prefix []any, field any) []any {
 func (v *validator) required(body map[string]any, field string, prefix []any) (any, bool) {
 	value, ok := body[field]
 	if !ok {
-		v.issue("missing", "Field required", location(prefix, field), body, nil)
+		v.issue("Field required", location(prefix, field))
 	}
 	return value, ok
 }
@@ -95,7 +92,7 @@ func pythonSpace(r rune) bool {
 func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern string) string {
 	text, ok := value.(string)
 	if !ok {
-		v.issue("string_type", "Input should be a valid string", loc, value, nil)
+		v.issue("Input should be a valid string", loc)
 		return ""
 	}
 	if strip {
@@ -103,11 +100,11 @@ func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern
 	}
 	size := utf8.RuneCountInString(text)
 	if min > 0 && size < min {
-		v.issue("string_too_short", fmt.Sprintf("String should have at least %d character", min), loc, value, map[string]any{"min_length": min})
+		v.issue(fmt.Sprintf("String should have at least %d character", min), loc)
 	} else if max > 0 && size > max {
-		v.issue("string_too_long", fmt.Sprintf("String should have at most %d characters", max), loc, value, map[string]any{"max_length": max})
+		v.issue(fmt.Sprintf("String should have at most %d characters", max), loc)
 	} else if pattern != "" && !pythonPattern(pattern).MatchString(text) {
-		v.issue("string_pattern_mismatch", fmt.Sprintf("String should match pattern '%s'", pattern), loc, value, map[string]any{"pattern": pattern})
+		v.issue(fmt.Sprintf("String should match pattern '%s'", pattern), loc)
 	}
 	return text
 }
@@ -129,7 +126,7 @@ func pythonPatternSource(pattern string) string {
 	return pattern
 }
 
-func (v *validator) choice(value any, loc []any, choices []string, literal bool) string {
+func (v *validator) choice(value any, loc []any, choices []string) string {
 	text, ok := value.(string)
 	if ok {
 		for _, choice := range choices {
@@ -143,18 +140,14 @@ func (v *validator) choice(value any, loc []any, choices []string, literal bool)
 		quoted[i] = "'" + choice + "'"
 	}
 	expected := strings.Join(quoted[:len(quoted)-1], ", ") + " or " + quoted[len(quoted)-1]
-	kind := "enum"
-	if literal {
-		kind = "literal_error"
-	}
-	v.issue(kind, "Input should be "+expected, loc, value, map[string]any{"expected": expected})
+	v.issue("Input should be "+expected, loc)
 	return ""
 }
 
 func (v *validator) texts(value any, loc []any, limit int) []string {
 	values, ok := value.([]any)
 	if !ok {
-		v.issue("list_type", "Input should be a valid list", loc, value, nil)
+		v.issue("Input should be a valid list", loc)
 		return nil
 	}
 	start := len(v.issues)
@@ -164,17 +157,16 @@ func (v *validator) texts(value any, loc []any, limit int) []string {
 	}
 	// Pydantic validates elements before checking the collection bound.
 	if len(v.issues) == start && len(values) > limit {
-		v.tooLong(value, loc, limit, len(values))
+		v.tooLong(loc, limit, len(values))
 	}
 	return result
 }
 
-func (v *validator) tooLong(value any, loc []any, limit, length int) {
-	v.issue("too_long", fmt.Sprintf("List should have at most %d items after validation, not %d", limit, length), loc, value,
-		map[string]any{"field_type": "List", "max_length": limit, "actual_length": length})
+func (v *validator) tooLong(loc []any, limit, length int) {
+	v.issue(fmt.Sprintf("List should have at most %d items after validation, not %d", limit, length), loc)
 }
 
-func (v *validator) extras(body map[string]any, keys, allowed []string, prefix []any) {
+func (v *validator) extras(keys, allowed []string, prefix []any) {
 	for _, key := range keys {
 		found := false
 		for _, field := range allowed {
@@ -184,7 +176,7 @@ func (v *validator) extras(body map[string]any, keys, allowed []string, prefix [
 			}
 		}
 		if !found {
-			v.issue("extra_forbidden", "Extra inputs are not permitted", location(prefix, key), body[key], nil)
+			v.issue("Extra inputs are not permitted", location(prefix, key))
 		}
 	}
 }
@@ -201,8 +193,8 @@ func ObjectValues(value any) (map[string]any, bool) {
 	return object(value)
 }
 
-func modelIssue(value any, prefix []any) []Issue {
-	return []Issue{{Type: "model_attributes_type", Loc: prefix, Msg: "Input should be a valid dictionary or object to extract fields from", Input: value}}
+func modelIssue(prefix []any) []Issue {
+	return []Issue{{Loc: prefix, Msg: "Input should be a valid object"}}
 }
 
 var targets = []string{"report", "ready_for_check_in", "checked_in"}
@@ -211,7 +203,7 @@ func ValidateIntake(value any, keys []string) (Intake, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Intake{}, modelIssue(value, prefix)
+		return Intake{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := Intake{Target: "checked_in", ContextLinks: []string{}, AcceptanceCriteria: []string{}, Dependencies: []Prerequisite{}, Priority: "normal", PublicationMode: "ready"}
@@ -222,7 +214,7 @@ func ValidateIntake(value any, keys []string) (Intake, []Issue) {
 		result.Goal = v.text(x, location(prefix, "goal"), true, 1, 16000, "")
 	}
 	if x, ok := body["target"]; ok {
-		result.Target = v.choice(x, location(prefix, "target"), targets, false)
+		result.Target = v.choice(x, location(prefix, "target"), targets)
 	}
 	if x, ok := body["context_links"]; ok {
 		result.ContextLinks = v.texts(x, location(prefix, "context_links"), 50)
@@ -235,7 +227,7 @@ func ValidateIntake(value any, keys []string) (Intake, []Issue) {
 		result.TargetBranch = &text
 	}
 	if x, ok := body["priority"]; ok {
-		result.Priority = v.choice(x, location(prefix, "priority"), []string{"low", "normal", "urgent"}, true)
+		result.Priority = v.choice(x, location(prefix, "priority"), []string{"low", "normal", "urgent"})
 	}
 	if x, ok := body["label"]; ok && x != nil {
 		text := v.text(x, location(prefix, "label"), false, 0, 0, labelPattern)
@@ -245,14 +237,14 @@ func ValidateIntake(value any, keys []string) (Intake, []Issue) {
 		loc := location(prefix, "dependencies")
 		values, ok := x.([]any)
 		if !ok {
-			v.issue("list_type", "Input should be a valid list", loc, x, nil)
+			v.issue("Input should be a valid list", loc)
 		} else {
 			start := len(v.issues)
 			for i, entry := range values {
 				at := location(loc, i)
 				dependency, ok := object(entry)
 				if !ok {
-					v.issues = append(v.issues, modelIssue(entry, at)...)
+					v.issues = append(v.issues, modelIssue(at)...)
 					continue
 				}
 				link := Prerequisite{Milestone: "checked_in"}
@@ -260,22 +252,22 @@ func ValidateIntake(value any, keys []string) (Intake, []Issue) {
 					link.UpstreamID = v.text(y, location(at, "upstream_id"), false, 0, 0, IdentifierPattern)
 				}
 				if y, ok := dependency["milestone"]; ok {
-					link.Milestone = v.choice(y, location(at, "milestone"), targets, false)
+					link.Milestone = v.choice(y, location(at, "milestone"), targets)
 				}
-				v.extras(dependency, ObjectKeys(entry), []string{"upstream_id", "milestone"}, at)
+				v.extras(ObjectKeys(entry), []string{"upstream_id", "milestone"}, at)
 				result.Dependencies = append(result.Dependencies, link)
 			}
 			if len(v.issues) == start && len(values) > 100 {
-				v.tooLong(x, loc, 100, len(values))
+				v.tooLong(loc, 100, len(values))
 			}
 		}
 	}
 	if x, ok := body["publication_mode"]; ok {
-		result.PublicationMode = v.choice(x, location(prefix, "publication_mode"), []string{"ready", "draft"}, false)
+		result.PublicationMode = v.choice(x, location(prefix, "publication_mode"), []string{"ready", "draft"})
 	}
-	v.extras(body, keys, []string{"repository_id", "goal", "target", "context_links", "acceptance_criteria", "target_branch", "priority", "label", "dependencies", "publication_mode"}, prefix)
+	v.extras(keys, []string{"repository_id", "goal", "target", "context_links", "acceptance_criteria", "target_branch", "priority", "label", "dependencies", "publication_mode"}, prefix)
 	if len(v.issues) == 0 && result.Target == "report" && result.PublicationMode == "draft" {
-		v.issue("value_error", "Value error, Draft publication requires a PR target", prefix, body, map[string]any{"error": map[string]any{}})
+		v.issue("Value error, Draft publication requires a PR target", prefix)
 	}
 	return result, v.issues
 }
@@ -284,7 +276,7 @@ func ValidateRegistration(value any, keys []string) (Registration, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Registration{}, modelIssue(value, prefix)
+		return Registration{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := Registration{}
@@ -294,7 +286,7 @@ func ValidateRegistration(value any, keys []string) (Registration, []Issue) {
 	if x, ok := v.required(body, "remote", prefix); ok {
 		result.Remote = v.text(x, location(prefix, "remote"), true, 1, 16000, "")
 	}
-	v.extras(body, keys, []string{"id", "remote"}, prefix)
+	v.extras(keys, []string{"id", "remote"}, prefix)
 	return result, v.issues
 }
 
@@ -302,7 +294,7 @@ func ValidateIdentifier(text string, name string) []Issue {
 	if identifier.MatchString(text) {
 		return nil
 	}
-	return []Issue{{Type: "string_pattern_mismatch", Loc: []any{"path", name}, Msg: "String should match pattern '" + IdentifierPattern + "'", Input: text, Ctx: map[string]any{"pattern": IdentifierPattern}}}
+	return []Issue{{Loc: []any{"path", name}, Msg: "String should match pattern '" + IdentifierPattern + "'"}}
 }
 
 func ValidateKey(key string) []Issue {

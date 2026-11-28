@@ -10,6 +10,14 @@ import (
 	"strings"
 )
 
+// orderedObject is only used by server-owned repr projections, never requests.
+type orderedObject struct {
+	values map[string]any
+	keys   []string
+}
+
+func (o *orderedObject) MarshalJSON() ([]byte, error) { return json.Marshal(o.values) }
+
 // JSONValue projects server-owned values without an encode/decode round trip.
 // RawMessage is reserved for JSON read from storage. Canonical remains the
 // separate, unchanged request-digest and persistence encoding contract.

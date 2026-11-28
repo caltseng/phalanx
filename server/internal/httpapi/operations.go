@@ -304,7 +304,7 @@ func (h *Handler) serveReply(w http.ResponseWriter, r *http.Request, q *requestS
 	key, issues := requestKey(r)
 	issues = append(q.pathIssues, issues...)
 	if key == nil {
-		issues = append(issues, contract.Issue{Type: "missing", Loc: []any{"header", "Idempotency-Key"}, Msg: "Field required", Input: nil})
+		issues = append(issues, contract.Issue{Loc: []any{"header", "Idempotency-Key"}, Msg: "Field required"})
 	}
 	if !q.bodyPresent {
 		writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})
@@ -463,7 +463,7 @@ func (h *Handler) serveSetTitle(w http.ResponseWriter, r *http.Request, q *reque
 		key = headerText(values[0])
 		issues = append(issues, contract.ValidateKey(key)...)
 	} else {
-		issues = append(issues, contract.Issue{Type: "missing", Loc: []any{"header", "Idempotency-Key"}, Msg: "Field required", Input: nil})
+		issues = append(issues, contract.Issue{Loc: []any{"header", "Idempotency-Key"}, Msg: "Field required"})
 	}
 	if !q.bodyPresent {
 		writeJSON(w, 422, map[string]any{"detail": append(issues, missingBody()...)})

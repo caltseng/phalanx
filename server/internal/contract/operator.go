@@ -17,7 +17,7 @@ type OperatorQuery struct {
 	Limit                                            int
 	Cursor                                           *string
 	Repository, Label, Status, Stage, Outcome, Query *string
-	ClosedAfter                                      *DateTime
+	ClosedAfter                                      *Timestamp
 }
 
 func operatorPageQuery(v *validator, values url.Values, result *OperatorQuery) {
@@ -39,7 +39,7 @@ func ValidateOperatorPage(values url.Values) (OperatorQuery, []Issue) {
 func ValidateOperatorQuery(values url.Values) (OperatorQuery, []Issue) {
 	v, result := validator{}, OperatorQuery{Kind: "open", Limit: 25}
 	if value, exists := lastQuery(values, "kind"); exists {
-		result.Kind = v.choice(value, []any{"query", "kind"}, []string{"open", "closed"}, true)
+		result.Kind = v.choice(value, []any{"query", "kind"}, []string{"open", "closed"})
 	}
 	operatorPageQuery(&v, values, &result)
 	if value, exists := lastQuery(values, "repository"); exists {
@@ -52,16 +52,16 @@ func ValidateOperatorQuery(values url.Values) (OperatorQuery, []Issue) {
 	}
 	if value, exists := lastQuery(values, "status"); exists {
 		text := v.choice(value, []any{"query", "status"}, []string{"queued", "running", "waiting_for_input",
-			"waiting_for_external", "completed", "failed", "cancelled"}, false)
+			"waiting_for_external", "completed", "failed", "cancelled"})
 		result.Status = &text
 	}
 	if value, exists := lastQuery(values, "stage"); exists {
-		text := v.choice(value, []any{"query", "stage"}, stages, false)
+		text := v.choice(value, []any{"query", "stage"}, stages)
 		result.Stage = &text
 	}
 	if value, exists := lastQuery(values, "outcome"); exists {
 		text := v.choice(value, []any{"query", "outcome"}, []string{"report_stored", "draft_published", "ready_for_check_in",
-			"checked_in", "failed", "cancelled"}, true)
+			"checked_in", "failed", "cancelled"})
 		result.Outcome = &text
 	}
 	if value, exists := lastQuery(values, "q"); exists {
@@ -69,7 +69,7 @@ func ValidateOperatorQuery(values url.Values) (OperatorQuery, []Issue) {
 		result.Query = &text
 	}
 	if value, exists := lastQuery(values, "closed_after"); exists {
-		moment := v.dateTime(value, []any{"query", "closed_after"})
+		moment := v.timestamp(value, []any{"query", "closed_after"})
 		result.ClosedAfter = &moment
 	}
 	return result, v.issues

@@ -14,12 +14,6 @@ import (
 	"unicode/utf16"
 )
 
-// Decode keeps numeric input exact and top-level key order for extra-field
-// errors. The last duplicate key wins, as in Python json.loads.
-func Decode(data []byte) (any, []string, error) {
-	return decode(data)
-}
-
 func ObjectKeys(value any) []string {
 	if object, ok := value.(*orderedObject); ok {
 		return object.keys

@@ -42,7 +42,7 @@ func TestJSONValueMatchesPreviousResponseRoundTrip(t *testing.T) {
 		Empty   []string        `json:"empty"`
 		Absent  []string        `json:"absent"`
 		Omitted *string         `json:"omitted,omitempty"`
-		When    AwareTime       `json:"when"`
+		When    Timestamp       `json:"when"`
 	}
 	type Embedded struct {
 		ID string `json:"id"`
@@ -54,7 +54,7 @@ func TestJSONValueMatchesPreviousResponseRoundTrip(t *testing.T) {
 		Embedded: Embedded{"outer"},
 		View: view{Text: "<>&\u00e9\U0001f600\u2028\n", Count: 9007199254740993,
 			State: json.RawMessage(`{"float":1e0,"small":0.00001,"zero":-0.0,"huge":999999999999999999999999999999}`),
-			Empty: []string{}, When: AwareTime{time.Date(2026, 11, 27, 1, 2, 3, 123456000, time.UTC)}},
+			Empty: []string{}, When: Timestamp{time.Date(2026, 11, 27, 1, 2, 3, 123456000, time.UTC)}},
 	}
 	previous, err := Canonical(value)
 	if err != nil {
@@ -104,11 +104,11 @@ func TestOrderedJSONValuePreservesStructOrder(t *testing.T) {
 	if !reflect.DeepEqual(ObjectKeys(projected), []string{"z", "a"}) {
 		t.Fatal("struct field order changed", ObjectKeys(projected))
 	}
-	old, err := PythonJSON(value)
+	old, err := Canonical(value)
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := PythonJSON(projected)
+	current, err := Canonical(projected)
 	if err != nil || current != old {
 		t.Fatal("repr/storage field order changed", current, old, err)
 	}

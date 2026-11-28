@@ -10,7 +10,7 @@ import (
 )
 
 func TestObservationStoragePreservesCanonicalPayload(t *testing.T) {
-	stamp := contract.AwareTime{Time: time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)}
+	stamp := contract.Timestamp{Time: time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)}
 	huge := json.Number("90071992547409931234567890")
 	request := contract.Observation{ObservedAt: stamp, TargetBase: pointer("stale-base"),
 		Checks: pointer("satisfied"), CheckReasons: []string{"snow \u96ea"}, Feedback: []string{},

@@ -50,14 +50,14 @@ func (v *validator) pickup(value any, prefix []any) Pickup {
 	result := Pickup{Repositories: map[string]*string{}}
 	body, ok := object(value)
 	if !ok {
-		v.issues = append(v.issues, modelIssue(value, prefix)...)
+		v.issues = append(v.issues, modelIssue(prefix)...)
 		return result
 	}
 	if input, exists := body["repositories"]; exists {
 		entries, ok := object(input)
 		at := location(prefix, "repositories")
 		if !ok {
-			v.issue("dict_type", "Input should be a valid dictionary", at, input, nil)
+			v.issue("Input should be a valid dictionary", at)
 		} else {
 			start := len(v.issues)
 			for _, key := range ObjectKeys(input) {
@@ -70,12 +70,12 @@ func (v *validator) pickup(value any, prefix []any) Pickup {
 				result.Repositories[key] = text
 			}
 			if len(v.issues) == start && len(entries) > 100 {
-				v.issue("too_long", fmt.Sprintf("Dictionary should have at most 100 items after validation, not %d", len(entries)),
-					at, input, map[string]any{"field_type": "Dictionary", "max_length": 100, "actual_length": len(entries)})
+				v.issue(fmt.Sprintf("Dictionary should have at most 100 items after validation, not %d", len(entries)),
+					at)
 			}
 		}
 	}
-	v.extras(body, ObjectKeys(value), []string{"repositories"}, prefix)
+	v.extras(ObjectKeys(value), []string{"repositories"}, prefix)
 	return result
 }
 
@@ -83,7 +83,7 @@ func ValidateCaptainRegistration(value any, keys []string) (CaptainRegistration,
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return CaptainRegistration{}, modelIssue(value, prefix)
+		return CaptainRegistration{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := CaptainRegistration{Pickup: Pickup{Repositories: map[string]*string{}}}
@@ -100,14 +100,14 @@ func ValidateCaptainRegistration(value any, keys []string) (CaptainRegistration,
 	if value, exists := body["pickup"]; exists {
 		result.Pickup = v.pickup(value, location(prefix, "pickup"))
 	}
-	v.extras(body, keys, []string{"session_ref", "charter_revision", "parent_id", "pickup"}, prefix)
+	v.extras(keys, []string{"session_ref", "charter_revision", "parent_id", "pickup"}, prefix)
 	return result, v.issues
 }
 
 func (v *validator) nativeSession(value any, at []any) NativeSession {
 	body, ok := object(value)
 	if !ok {
-		v.issues = append(v.issues, modelIssue(value, at)...)
+		v.issues = append(v.issues, modelIssue(at)...)
 		return NativeSession{}
 	}
 	result := NativeSession{}
@@ -122,14 +122,14 @@ func (v *validator) nativeSession(value any, at []any) NativeSession {
 		result.WriterNonce = &text
 	}
 	if value, exists := body["availability"]; exists && value != nil {
-		text := v.choice(value, location(at, "availability"), []string{"present", "missing", "deleted"}, true)
+		text := v.choice(value, location(at, "availability"), []string{"present", "missing", "deleted"})
 		result.Availability = &text
 	}
 	if value, exists := body["runtime"]; exists && value != nil {
 		text := v.text(value, location(at, "runtime"), true, 1, 200, "")
 		result.Runtime = &text
 	}
-	v.extras(body, ObjectKeys(value), []string{"id", "name", "writer_nonce", "availability", "runtime"}, at)
+	v.extras(ObjectKeys(value), []string{"id", "name", "writer_nonce", "availability", "runtime"}, at)
 	return result
 }
 
@@ -137,7 +137,7 @@ func ValidateCaptainHeartbeat(value any, keys []string) (CaptainHeartbeat, []Iss
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return CaptainHeartbeat{}, modelIssue(value, prefix)
+		return CaptainHeartbeat{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := CaptainHeartbeat{Focus: []string{}, Sessions: []NativeSession{}}
@@ -151,26 +151,26 @@ func ValidateCaptainHeartbeat(value any, keys []string) (CaptainHeartbeat, []Iss
 		number := v.strictInteger(value, location(prefix, "compaction_count"), 0)
 		integer, _ := new(big.Int).SetString(string(number), 10)
 		if integer.Cmp(big.NewInt(9007199254740991)) > 0 {
-			v.issue("less_than_equal", "Input should be less than or equal to 9007199254740991",
-				location(prefix, "compaction_count"), value, map[string]any{"le": 9007199254740991})
+			v.issue("Input should be less than or equal to 9007199254740991",
+				location(prefix, "compaction_count"))
 		}
 		result.CompactionCount = &number
 	}
 	if value, exists := v.required(body, "state", prefix); exists {
-		result.State = v.choice(value, location(prefix, "state"), []string{"active", "ending", "ended"}, true)
+		result.State = v.choice(value, location(prefix, "state"), []string{"active", "ending", "ended"})
 	}
 	if value, exists := body["focus"]; exists {
 		at := location(prefix, "focus")
 		values, ok := value.([]any)
 		if !ok {
-			v.issue("list_type", "Input should be a valid list", at, value, nil)
+			v.issue("Input should be a valid list", at)
 		} else {
 			start := len(v.issues)
 			for index, entry := range values {
 				result.Focus = append(result.Focus, v.text(entry, location(at, index), false, 0, 0, IdentifierPattern))
 			}
 			if len(v.issues) == start && len(values) > 100 {
-				v.tooLong(value, at, 100, len(values))
+				v.tooLong(at, 100, len(values))
 			}
 		}
 	}
@@ -178,14 +178,14 @@ func ValidateCaptainHeartbeat(value any, keys []string) (CaptainHeartbeat, []Iss
 		at := location(prefix, "sessions")
 		values, ok := value.([]any)
 		if !ok {
-			v.issue("list_type", "Input should be a valid list", at, value, nil)
+			v.issue("Input should be a valid list", at)
 		} else {
 			start := len(v.issues)
 			for index, entry := range values {
 				result.Sessions = append(result.Sessions, v.nativeSession(entry, location(at, index)))
 			}
 			if len(v.issues) == start && len(values) > 500 {
-				v.tooLong(value, at, 500, len(values))
+				v.tooLong(at, 500, len(values))
 			}
 		}
 	}
@@ -194,7 +194,7 @@ func ValidateCaptainHeartbeat(value any, keys []string) (CaptainHeartbeat, []Iss
 		pickup := v.pickup(value, location(prefix, "pickup"))
 		result.Pickup = &pickup
 	}
-	v.extras(body, keys, []string{"charter_revision", "wake_count", "compaction_count", "state", "focus", "sessions", "handoff_note", "pickup"}, prefix)
+	v.extras(keys, []string{"charter_revision", "wake_count", "compaction_count", "state", "focus", "sessions", "handoff_note", "pickup"}, prefix)
 	return result, v.issues
 }
 
@@ -202,7 +202,7 @@ func ValidateCaptainAction(value any, keys []string) (CaptainAction, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return CaptainAction{}, modelIssue(value, prefix)
+		return CaptainAction{}, modelIssue(prefix)
 	}
 	v, result := validator{}, CaptainAction{}
 	if value, exists := v.required(body, "captain_id", prefix); exists {
@@ -214,7 +214,7 @@ func ValidateCaptainAction(value any, keys []string) (CaptainAction, []Issue) {
 	if value, exists := v.required(body, "reason", prefix); exists {
 		result.Reason = v.text(value, location(prefix, "reason"), true, 1, 16000, "")
 	}
-	v.extras(body, keys, []string{"captain_id", "action", "reason"}, prefix)
+	v.extras(keys, []string{"captain_id", "action", "reason"}, prefix)
 	return result, v.issues
 }
 
@@ -222,12 +222,12 @@ func ValidateReinforcement(value any, keys []string) (Reinforcement, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return Reinforcement{}, modelIssue(value, prefix)
+		return Reinforcement{}, modelIssue(prefix)
 	}
 	v, result := validator{}, Reinforcement{}
 	if value, exists := v.required(body, "interval", prefix); exists {
 		result.Interval = v.strictInteger(value, location(prefix, "interval"), 1)
 	}
-	v.extras(body, keys, []string{"interval"}, prefix)
+	v.extras(keys, []string{"interval"}, prefix)
 	return result, v.issues
 }

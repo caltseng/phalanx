@@ -51,10 +51,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !h.readBody(w, r, q) || !h.authorize(w, r, q) {
 			return
 		}
-		if q.unpaired {
-			h.failure(w, errors.New("unpaired surrogate in request validation input"))
-			return
-		}
 		q.validatePath()
 		if !route.body && len(q.pathIssues) > 0 && route.operation != opOperatorGroup && route.operation != opOperatorTimeline {
 			writeJSON(w, 422, map[string]any{"detail": q.pathIssues})
@@ -103,24 +99,12 @@ func (h *Handler) readBody(w http.ResponseWriter, r *http.Request, q *requestSta
 				(strings.HasPrefix(contentType, "application/") && strings.HasSuffix(contentType, "+json")) {
 				q.input, q.keys, err = contract.Decode(data)
 				if err != nil {
-					var malformed *contract.BodyError
-					if errors.As(err, &malformed) {
-						writeJSON(w, 400, map[string]any{"detail": malformed.Error()})
-						return false
-					}
-					var syntax *contract.JSONError
-					if !errors.As(err, &syntax) {
-						h.failure(w, err)
-						return false
-					}
 					writeJSON(w, 422, map[string]any{"detail": []contract.Issue{
-						{Type: "json_invalid", Loc: []any{"body", syntax.Offset}, Msg: "JSON decode error", Input: map[string]any{}, Ctx: map[string]any{"error": syntax.Message}},
+						{Loc: []any{"body"}, Msg: "Invalid JSON body"},
 					}})
 					return false
 				}
-				q.unpaired = contract.HasUnpaired(q.input)
 			} else {
-				// FastAPI exposes non-JSON body bytes as validation input.
 				q.input = string(data)
 			}
 		}
@@ -240,7 +224,7 @@ func headerText(value string) string {
 }
 
 func missingBody() []contract.Issue {
-	return []contract.Issue{{Type: "missing", Loc: []any{"body"}, Msg: "Field required", Input: nil}}
+	return []contract.Issue{{Loc: []any{"body"}, Msg: "Field required"}}
 }
 
 func (h *Handler) failure(w http.ResponseWriter, err error) {

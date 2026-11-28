@@ -29,7 +29,7 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	stamp := contract.AwareTime{Time: time.Now().UTC()}
+	stamp := contract.Timestamp{Time: time.Now().UTC()}
 	input, output := json.Number("10"), json.Number("0")
 	snapshot := contract.UsageSnapshot{Runtime: "synthetic-runtime", Provider: "synthetic-provider",
 		Account: "synthetic-account", Origin: "synthetic-origin", SessionID: "synthetic-session",
@@ -113,8 +113,8 @@ func TestUsageRacingReplayRetainsMeasurementsWithoutLifecycleEffects(t *testing.
 
 func TestUsageSeriesComparesSerializedTimesAndNullableModel(t *testing.T) {
 	stamp := time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)
-	snapshot := contract.UsageSnapshot{WindowStart: contract.AwareTime{Time: stamp}}
-	raw, err := contract.PythonJSON(snapshot)
+	snapshot := contract.UsageSnapshot{WindowStart: contract.Timestamp{Time: stamp}}
+	raw, err := contract.Canonical(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,11 +138,11 @@ func TestUsageSeriesComparesSerializedTimesAndNullableModel(t *testing.T) {
 
 func TestUsageSubtotalExcludesSharedSessionsAndPreservesOverflow(t *testing.T) {
 	counter := json.Number("9007199254740991")
-	stamp := contract.AwareTime{Time: time.Now().UTC()}
+	stamp := contract.Timestamp{Time: time.Now().UTC()}
 	snapshot := contract.UsageSnapshot{WindowStart: stamp, Cutoff: stamp, ObservedAt: stamp,
 		Scope: "item_exclusive", Status: "observed", Reason: "Synthetic coverage",
 		Tokens: contract.Tokens{Input: &counter}}
-	raw, err := contract.PythonJSON(snapshot)
+	raw, err := contract.Canonical(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}

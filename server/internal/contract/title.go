@@ -19,7 +19,7 @@ var integerToken = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
 func (v *validator) integerType(value any, loc []any) (json.Number, bool) {
 	number, ok := value.(json.Number)
 	if !ok || !integerToken.MatchString(string(number)) {
-		v.issue("int_type", "Input should be a valid integer", loc, value, nil)
+		v.issue("Input should be a valid integer", loc)
 		return "0", false
 	}
 	result, _ := new(big.Int).SetString(string(number), 10)
@@ -33,8 +33,8 @@ func (v *validator) strictInteger(value any, loc []any, minimum int64) json.Numb
 	}
 	result, _ := new(big.Int).SetString(string(number), 10)
 	if result.Cmp(big.NewInt(minimum)) < 0 {
-		v.issue("greater_than_equal", "Input should be greater than or equal to "+strconv.FormatInt(minimum, 10),
-			loc, value, map[string]any{"ge": minimum})
+		v.issue("Input should be greater than or equal to "+strconv.FormatInt(minimum, 10),
+			loc)
 	}
 	return json.Number(result.String())
 }
@@ -43,7 +43,7 @@ func ValidateDisplayTitle(value any, keys []string) (DisplayTitle, []Issue) {
 	body, ok := object(value)
 	prefix := []any{"body"}
 	if !ok {
-		return DisplayTitle{}, modelIssue(value, prefix)
+		return DisplayTitle{}, modelIssue(prefix)
 	}
 	v := validator{}
 	result := DisplayTitle{}
@@ -54,7 +54,7 @@ func ValidateDisplayTitle(value any, keys []string) (DisplayTitle, []Issue) {
 		text := v.text(x, location(prefix, "title"), true, 1, 200, `^[^\r\n]+$`)
 		result.Title = &text
 	}
-	v.extras(body, keys, []string{"expected_revision", "title"}, prefix)
+	v.extras(keys, []string{"expected_revision", "title"}, prefix)
 	return result, v.issues
 }
 

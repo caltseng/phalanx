@@ -29,7 +29,7 @@ type ScoutIssue struct {
 	State       string       `json:"state"`
 	Title       string       `json:"title"`
 	Body        string       `json:"body"`
-	UpdatedAt   DateTime     `json:"updated_at"`
+	UpdatedAt   Timestamp    `json:"updated_at"`
 }
 
 type ScoutPage struct {
@@ -59,7 +59,7 @@ func (v *validator) positive(value any, at []any) json.Number {
 	if ok {
 		integer, _ := new(big.Int).SetString(string(number), 10)
 		if integer.Sign() <= 0 {
-			v.issue("greater_than", "Input should be greater than 0", at, value, map[string]any{"gt": 0})
+			v.issue("Input should be greater than 0", at)
 		}
 	}
 	return number
@@ -78,7 +78,7 @@ func (v *validator) scoutCadence(value any, at []any) int64 {
 		}
 	}
 	expected := "15, 30, 60, 180, 360, 720 or 1440"
-	v.issue("literal_error", "Input should be "+expected, at, value, map[string]any{"expected": expected})
+	v.issue("Input should be "+expected, at)
 	return 60
 }
 
@@ -86,7 +86,7 @@ func ValidateScoutSettings(value any, keys []string) (ScoutSettings, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return ScoutSettings{}, modelIssue(value, at)
+		return ScoutSettings{}, modelIssue(at)
 	}
 	v, result := validator{}, ScoutSettings{CadenceMinutes: 60, Repositories: []string{}}
 	if value, exists := v.required(body, "expected_revision", at); exists {
@@ -108,7 +108,7 @@ func ValidateScoutSettings(value any, keys []string) (ScoutSettings, []Issue) {
 		where := location(at, "repositories")
 		entries, ok := value.([]any)
 		if !ok {
-			v.issue("list_type", "Input should be a valid list", where, value, nil)
+			v.issue("Input should be a valid list", where)
 		} else {
 			start := len(v.issues)
 			for index, entry := range entries {
@@ -116,20 +116,19 @@ func ValidateScoutSettings(value any, keys []string) (ScoutSettings, []Issue) {
 			}
 			if len(v.issues) == start {
 				if len(entries) > 100 {
-					v.tooLong(value, where, 100, len(entries))
+					v.tooLong(where, 100, len(entries))
 				} else if len(entries) == 0 {
-					v.issue("too_short", "List should have at least 1 item after validation, not 0", where, value,
-						map[string]any{"field_type": "List", "min_length": 1, "actual_length": 0})
+					v.issue("List should have at least 1 item after validation, not 0", where)
 				}
 			}
 		}
 	}
-	v.extras(body, keys, []string{"expected_revision", "enabled", "cadence_minutes", "author_login", "author_id", "repositories"}, at)
+	v.extras(keys, []string{"expected_revision", "enabled", "cadence_minutes", "author_login", "author_id", "repositories"}, at)
 	if len(v.issues) == 0 {
 		seen := map[string]bool{}
 		for _, repository := range result.Repositories {
 			if seen[repository] {
-				v.valueError(body, at, "Scout repositories must be unique")
+				v.valueError(at, "Scout repositories must be unique")
 				break
 			}
 			seen[repository] = true
@@ -142,20 +141,20 @@ func ValidateScoutClaim(value any, keys []string) (ScoutClaim, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return ScoutClaim{}, modelIssue(value, at)
+		return ScoutClaim{}, modelIssue(at)
 	}
 	v, result := validator{}, ScoutClaim{}
 	if value, exists := v.required(body, "captain_id", at); exists {
 		result.CaptainID = v.text(value, location(at, "captain_id"), false, 0, 0, IdentifierPattern)
 	}
-	v.extras(body, keys, []string{"captain_id"}, at)
+	v.extras(keys, []string{"captain_id"}, at)
 	return result, v.issues
 }
 
 func (v *validator) scoutIssue(value any, at []any) ScoutIssue {
 	body, ok := object(value)
 	if !ok {
-		v.issues = append(v.issues, modelIssue(value, at)...)
+		v.issues = append(v.issues, modelIssue(at)...)
 		return ScoutIssue{}
 	}
 	result := ScoutIssue{}
@@ -171,7 +170,7 @@ func (v *validator) scoutIssue(value any, at []any) ScoutIssue {
 		result.AuthorID = &number
 	}
 	if value, exists := v.required(body, "state", at); exists {
-		result.State = v.choice(value, location(at, "state"), []string{"open", "closed"}, true)
+		result.State = v.choice(value, location(at, "state"), []string{"open", "closed"})
 	}
 	if value, exists := v.required(body, "title", at); exists {
 		result.Title = v.text(value, location(at, "title"), false, 1, 16000, "")
@@ -180,9 +179,9 @@ func (v *validator) scoutIssue(value any, at []any) ScoutIssue {
 		result.Body = v.text(value, location(at, "body"), false, 0, 1000000, "")
 	}
 	if value, exists := v.required(body, "updated_at", at); exists {
-		result.UpdatedAt = v.dateTime(value, location(at, "updated_at"))
+		result.UpdatedAt = v.timestamp(value, location(at, "updated_at"))
 	}
-	v.extras(body, ObjectKeys(value), []string{"number", "author_login", "author_id", "state", "title", "body", "updated_at"}, at)
+	v.extras(ObjectKeys(value), []string{"number", "author_login", "author_id", "state", "title", "body", "updated_at"}, at)
 	return result
 }
 
@@ -190,7 +189,7 @@ func ValidateScoutPage(value any, keys []string) (ScoutPage, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return ScoutPage{}, modelIssue(value, at)
+		return ScoutPage{}, modelIssue(at)
 	}
 	v, result := validator{}, ScoutPage{Issues: []ScoutIssue{}}
 	if value, exists := v.required(body, "claim_id", at); exists {
@@ -212,21 +211,21 @@ func ValidateScoutPage(value any, keys []string) (ScoutPage, []Issue) {
 		where := location(at, "issues")
 		entries, ok := value.([]any)
 		if !ok {
-			v.issue("list_type", "Input should be a valid list", where, value, nil)
+			v.issue("Input should be a valid list", where)
 		} else {
 			start := len(v.issues)
 			for index, entry := range entries {
 				result.Issues = append(result.Issues, v.scoutIssue(entry, location(where, index)))
 			}
 			if len(v.issues) == start && len(entries) > 30 {
-				v.tooLong(value, where, 30, len(entries))
+				v.tooLong(where, 30, len(entries))
 			}
 		}
 	}
 	if value, exists := v.required(body, "has_more", at); exists {
 		result.HasMore = v.boolean(value, location(at, "has_more"), false)
 	}
-	v.extras(body, keys, []string{"claim_id", "repository_id", "page", "verified_login", "verified_id", "issues", "has_more"}, at)
+	v.extras(keys, []string{"claim_id", "repository_id", "page", "verified_login", "verified_id", "issues", "has_more"}, at)
 	return result, v.issues
 }
 
@@ -234,33 +233,31 @@ func ValidateScoutFailure(value any, keys []string) (ScoutFailure, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return ScoutFailure{}, modelIssue(value, at)
+		return ScoutFailure{}, modelIssue(at)
 	}
 	v, result := validator{}, ScoutFailure{RetryAfterSeconds: "300"}
 	if value, exists := v.required(body, "claim_id", at); exists {
 		result.ClaimID = v.text(value, location(at, "claim_id"), false, 0, 0, IdentifierPattern)
 	}
 	if value, exists := v.required(body, "kind", at); exists {
-		result.Kind = v.choice(value, location(at, "kind"), []string{"github", "identity", "credential", "api"}, true)
+		result.Kind = v.choice(value, location(at, "kind"), []string{"github", "identity", "credential", "api"})
 	}
 	if value, exists := body["http_status"]; exists && value != nil {
 		number := v.strictInteger(value, location(at, "http_status"), 100)
 		result.HTTPStatus = &number
 		integer, _ := new(big.Int).SetString(string(number), 10)
 		if integer.Cmp(big.NewInt(599)) > 0 {
-			v.issue("less_than_equal", "Input should be less than or equal to 599", location(at, "http_status"), value,
-				map[string]any{"le": 599})
+			v.issue("Input should be less than or equal to 599", location(at, "http_status"))
 		}
 	}
 	if value, exists := body["retry_after_seconds"]; exists {
 		result.RetryAfterSeconds = v.strictInteger(value, location(at, "retry_after_seconds"), 0)
 		integer, _ := new(big.Int).SetString(string(result.RetryAfterSeconds), 10)
 		if integer.Cmp(big.NewInt(604800)) > 0 {
-			v.issue("less_than_equal", "Input should be less than or equal to 604800", location(at, "retry_after_seconds"), value,
-				map[string]any{"le": 604800})
+			v.issue("Input should be less than or equal to 604800", location(at, "retry_after_seconds"))
 		}
 	}
-	v.extras(body, keys, []string{"claim_id", "kind", "http_status", "retry_after_seconds"}, at)
+	v.extras(keys, []string{"claim_id", "kind", "http_status", "retry_after_seconds"}, at)
 	return result, v.issues
 }
 
@@ -268,16 +265,16 @@ func ValidateScoutDecision(value any, keys []string) (ScoutDecision, []Issue) {
 	body, ok := object(value)
 	at := []any{"body"}
 	if !ok {
-		return ScoutDecision{}, modelIssue(value, at)
+		return ScoutDecision{}, modelIssue(at)
 	}
 	v, result := validator{}, ScoutDecision{}
 	if value, exists := v.required(body, "expected_fingerprint", at); exists {
 		result.ExpectedFingerprint = v.text(value, location(at, "expected_fingerprint"), false, 0, 0, RevisionPattern)
 	}
 	if value, exists := v.required(body, "decision", at); exists {
-		result.Decision = v.choice(value, location(at, "decision"), []string{"approved", "declined"}, true)
+		result.Decision = v.choice(value, location(at, "decision"), []string{"approved", "declined"})
 	}
-	v.extras(body, keys, []string{"expected_fingerprint", "decision"}, at)
+	v.extras(keys, []string{"expected_fingerprint", "decision"}, at)
 	return result, v.issues
 }
 

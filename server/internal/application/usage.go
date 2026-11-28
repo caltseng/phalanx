@@ -91,7 +91,7 @@ func (a *App) observeUsage(tx *sqlite.Tx, writer sqlite.WriterRecord, snapshot c
 			return nil, &Conflict{"Late observation must retain a cutoff within ended writer ownership"}
 		}
 	}
-	raw, err := contract.PythonJSON(snapshot)
+	raw, err := contract.Canonical(snapshot)
 	if err != nil {
 		return nil, err
 	}

@@ -99,14 +99,14 @@ type route struct {
 }
 
 type requestState struct {
-	ctx                   context.Context
-	route                 route
-	input                 any
-	keys                  []string
-	bodyPresent, unpaired bool
-	role, writerID        string
-	pathIssues            []contract.Issue
-	pathNumber            json.Number
+	ctx            context.Context
+	route          route
+	input          any
+	keys           []string
+	bodyPresent    bool
+	role, writerID string
+	pathIssues     []contract.Issue
+	pathNumber     json.Number
 }
 
 // Ordering selects the legacy method fallback and Allow bytes, not a union.
