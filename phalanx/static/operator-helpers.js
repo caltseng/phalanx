@@ -39,5 +39,10 @@
     ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)])
     : AbortSignal.timeout(REQUEST_TIMEOUT_MS);
 
-  window.PhalanxOperatorHelpers = { h, svg, safeUrl, readSignal };
+  async function copyText(text) {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(text);
+  }
+
+  window.PhalanxOperatorHelpers = { h, svg, safeUrl, readSignal, copyText };
 })();

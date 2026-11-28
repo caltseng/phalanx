@@ -127,6 +127,8 @@ focuses its first control, and Escape restores trigger focus (dropdown first).
 Applied state remains visible in text/badges; unapplied edits survive panel closure.
 Filter triggers show value/Any and expose existing exact-match text fields.
 Writer settings reparent the host's same native disclosure, never duplicate its write path.
+Actions dock to the right edge and wrap without changing their order. Desktop fine-pointer
+controls use 36px targets with reduced padding; mobile/coarse-pointer controls retain 44px targets.
 The toolbar retains top clearance for the upward rim break while removing bottom
 padding, row spacing and the inline-heading baseline gap. Its complete default header
 keeps the 100px budget at 1280px without scaling the shield or engraved typography.
@@ -231,6 +233,10 @@ Reports use dependency-free Markdown headings, emphasis, links, lists, quotes, t
 and fenced/inline code in the existing dialog. Strip raw HTML/comments, render image alt
 text only, keep code literal and insert generated DOM only. Links accept credential-free
 HTTP(S); no report scripts/images/dependency or CSP change. Plain-text report API remains.
+The compact, non-scrolling report header retains Close and adds an accessible Copy icon.
+Copy writes the full original Markdown, including offscreen content, not rendered control
+labels; success is announced only after the clipboard write succeeds, with visible retry
+guidance on failure. Closing or changing reports clears copy state.
 
 ### Groups
 

@@ -226,6 +226,35 @@
     app.doc.querySelector("[data-report]").click();
     await until(() => app.doc.querySelector("#operator-report-content h1"));
     const content = app.doc.querySelector("#operator-report-content");
+    const copy = app.doc.querySelector("#operator-report-copy");
+    const copyStatus = app.doc.querySelector("#operator-report-copy-status");
+    let copied;
+    let rejectCopy = false;
+    let finishCopy;
+    Object.defineProperty(app.win.navigator, "clipboard", { configurable: true, value: {
+      async writeText(text) {
+        copied = text;
+        if (rejectCopy) throw new Error("Clipboard denied");
+      }
+    } });
+    assert(copy.getAttribute("aria-label") === "Copy full field report" && !copy.disabled &&
+      copy.querySelector('svg[aria-hidden="true"]'), "Copy has an accessible name and decorative icon");
+    copy.click();
+    await until(() => copyStatus.textContent === "Full report copied.");
+    assert(copied === report, "Copies complete original Markdown including long tail, tables, code and line breaks");
+    rejectCopy = true;
+    copy.click();
+    await until(() => !copy.disabled);
+    assert(copyStatus.textContent.includes("Could not copy") && !copyStatus.textContent.includes("copied."),
+      "Clipboard rejection reports failure, never success, and permits retry");
+    rejectCopy = false;
+    Object.defineProperty(app.win.navigator, "clipboard", { configurable: true, value: undefined });
+    copy.click();
+    await until(() => !copy.disabled);
+    assert(copyStatus.textContent.includes("Could not copy"), "Unavailable clipboard fails truthfully");
+    Object.defineProperty(app.win.navigator, "clipboard", { configurable: true, value: {
+      writeText: () => new Promise(resolve => { finishCopy = resolve; })
+    } });
     assert(content.querySelector("strong") && content.querySelector("em") && content.querySelector("ul li") &&
       content.querySelector("ol li") && content.querySelector("blockquote") && content.querySelector("table td"), "Markdown renders semantic blocks");
     assert(content.querySelector("pre code").textContent.includes("<img"), "Fenced code is literal text");
@@ -243,11 +272,15 @@
       await new Promise(resolve => app.win.requestAnimationFrame(resolve));
       const dialog = app.doc.querySelector("#operator-report");
       const body = app.doc.querySelector("#operator-report-body");
-      const close = dialog.querySelector("button");
+      const close = dialog.querySelector("#operator-report-close");
       const initial = close.getBoundingClientRect();
       assert(close.getAttribute("aria-label") === "Close field report" && close.textContent.trim() === "×",
         "Report has an explicitly labeled X button");
-      assert(initial.width >= 44 && initial.height >= 44, "Close touch target at " + width);
+      const size = width <= 760 || app.win.matchMedia("(pointer: coarse)").matches ? 44 : 36;
+      assert(initial.width === size && initial.height === size &&
+        copy.getBoundingClientRect().width === size && copy.getBoundingClientRect().height === size,
+      "Copy and Close are compact with accessible pointer targets at " + width);
+      assert(app.win.getComputedStyle(close).padding === "0px", "Close has no unnecessary internal padding");
       assert(body.scrollHeight > body.clientHeight * 3, "Actual report is long enough to scroll");
       for (const fraction of [0, .5, 1]) {
         body.scrollTop = (body.scrollHeight - body.clientHeight) * fraction;
@@ -271,13 +304,19 @@
     const opener = app.doc.querySelector("[data-report]");
     if (preview === "report") {
       result.textContent = "Report layout checks passed; preview retained.";
+      result.dataset.status = "passed";
       return;
     }
-    app.doc.querySelector("#operator-report button").click();
+    copy.click();
+    assert(copy.disabled && copyStatus.textContent === "Copying report…", "Pending copy does not announce success");
+    app.doc.querySelector("#operator-report-close").click();
     await until(() => !app.doc.querySelector("#operator-report").open);
     assert(app.doc.activeElement === opener, "Closing report returns focus to opener");
     opener.click();
     await until(() => app.doc.querySelector("#operator-report-content h1"));
+    finishCopy();
+    await new Promise(resolve => app.win.setTimeout(resolve, 0));
+    assert(copyStatus.textContent === "" && !copy.disabled, "Old copy completion cannot affect a reopened report");
     assert(app.doc.querySelector("#operator-report-body").scrollTop === 0, "Reopened report starts at the beginning");
     app.doc.querySelector("#operator-report").close();
     frame.style.width = "100%";
@@ -539,12 +578,25 @@
         .filter(control => control.getBoundingClientRect().height);
       assert(controls.every(control => {
         const box = control.getBoundingClientRect();
-        return box.width >= 44 && box.height >= 44 &&
+        const size = control.classList.contains("tool-button") && width > 760 &&
+          !app.win.matchMedia("(pointer: coarse)").matches ? 36 : 44;
+        return box.width >= size && box.height >= size &&
           (control.getAttribute("aria-label") || control.textContent.trim());
-      }), "Toolbar and navigation have named 44px touch targets");
+      }), "Toolbar and navigation have named accessible pointer targets");
+      const actions = app.doc.querySelector(".actions");
+      assert(Math.abs(actions.getBoundingClientRect().right -
+        app.doc.querySelector(".bar").getBoundingClientRect().right) < 1,
+      "Controls are docked to the right edge at " + width + "px");
+      const tools = [...actions.querySelectorAll(".tool-button")];
+      const size = width <= 760 || app.win.matchMedia("(pointer: coarse)").matches ? 44 : 36;
+      assert(tools.every(tool => tool.getBoundingClientRect().height === size),
+        "Control row uses compact sizing at " + width + "px");
+      assert(tools.map(tool => tool.dataset.action || "settings").join(",") === "create,search,filters,settings,theme,refresh",
+        "Board action order is unchanged");
       assert(controls.every((control, index) => controls.slice(index + 1).every(other => {
         const a = control.getBoundingClientRect(), b = other.getBoundingClientRect();
-        return a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top;
+        return a.right <= b.left + .01 || b.right <= a.left + .01 ||
+          a.bottom <= b.top + .01 || b.bottom <= a.top + .01;
       })), "Toolbar controls do not overlap at " + width + "px");
       const toggles = [...app.doc.querySelectorAll('.bar button[aria-controls]')];
       assert(toggles.every(trigger => app.doc.getElementById(trigger.getAttribute("aria-controls")).hidden),
@@ -638,6 +690,7 @@
       "Closed start alignment survives live relative-time refresh");
     if (preview === "needs") {
       result.textContent = "Needs-you and timestamp layout checks passed; preview retained.";
+      result.dataset.status = "passed";
       return;
     }
     readingLayout = false;
@@ -700,6 +753,6 @@
       " Page: " + frame.contentDocument.body.textContent.slice(0, 200);
     result.dataset.status = "failed";
   } finally {
-    if (result.dataset.status === "passed" && preview !== "formation") frame.remove();
+    if (result.dataset.status === "passed" && !["formation", "needs", "report"].includes(preview)) frame.remove();
   }
 })();

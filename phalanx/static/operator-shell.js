@@ -495,7 +495,26 @@
     };
   }
 
-  dialog.querySelector("button").addEventListener("click", () => dialog.close());
+  const reportCopy = document.querySelector("#operator-report-copy");
+  const reportCopyStatus = document.querySelector("#operator-report-copy-status");
+  let reportMarkdown = null;
+  document.querySelector("#operator-report-close").addEventListener("click", () => dialog.close());
+  reportCopy.addEventListener("click", async () => {
+    if (reportMarkdown === null || reportCopy.disabled) return;
+    const request = reportRead;
+    reportCopy.disabled = true;
+    reportCopyStatus.textContent = "Copying report…";
+    try {
+      await window.PhalanxOperatorHelpers.copyText(reportMarkdown);
+      if (reportRead === request && dialog.open) reportCopyStatus.textContent = "Full report copied.";
+    } catch {
+      if (reportRead === request && dialog.open) {
+        reportCopyStatus.textContent = "Could not copy the report. Check clipboard permissions and try again.";
+      }
+    } finally {
+      if (reportRead === request && dialog.open) reportCopy.disabled = false;
+    }
+  });
   dialog.addEventListener("close", () => {
     // A queued close event can arrive after a new report opens.
     if (!dialog.open) clearReport();
@@ -504,6 +523,9 @@
   function clearReport() {
     reportRead?.abort();
     reportRead = undefined;
+    reportMarkdown = null;
+    reportCopy.disabled = true;
+    reportCopyStatus.textContent = "";
     reportStatus.textContent = "";
     reportContent.textContent = "";
   }
@@ -521,6 +543,8 @@
       if (reportRead === request && dialog.open) {
         reportStatus.textContent = "";
         reportContent.replaceChildren(window.PhalanxMarkdown.render(markdown));
+        reportMarkdown = markdown;
+        reportCopy.disabled = false;
       }
     } catch {
       if (reportRead === request && dialog.open) {
