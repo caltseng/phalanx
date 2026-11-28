@@ -333,7 +333,96 @@ def refusal_ownership(url, process, database, sources, python):
                     "request_buffers_released": True, "service_shutdown_interrupts": True}}
 
 
-def differential(binary, output, record_only=False):
+def native_response(status, body, *, content_type="application/json", close=True, headers=()):
+    fields = list(headers) + [("content-type", content_type)]
+    if close:
+        fields.append(("connection", "close"))
+    if content_type == "application/json":
+        body = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return "HTTP/1.1", status, sorted(fields), body.encode().hex(), True
+
+
+def native_refusal():
+    return native_response(400, "Invalid HTTP request received.", content_type="text/plain; charset=utf-8")
+
+
+def native_header(case):
+    if case not in cases():
+        raise AssertionError("Unclassified native header case")
+    name, _, split, _, _ = case
+    if not name.startswith(("incomplete-", "complete-", "split-then-complete-", "split-terminator-",
+                            "pipeline-", "fixed-body-", "chunked-body-", "lf-", "multiple-fields-")) \
+            and name not in ("refused-mutation", "refused-intake-receipt"):
+        raise AssertionError("Unclassified native header case: " + name)
+    previous = name.startswith(("pipeline-", "fixed-body-", "chunked-body-"))
+    early = split is not None and split > 16384
+    refused = early or name in ("fixed-body-complete", "chunked-body-complete")
+    responses = [native_response(200, {"status": "ok"}, close=False)] if previous else []
+    responses.append(native_refusal() if refused else native_response(200, {"status": "ok"}))
+    result = {"id": name, "responses": responses, "early": early, "closed": True, "durable_unchanged": True}
+    if not previous and refused:
+        result["raw_response"] = ("HTTP/1.1 400 Bad Request\r\ncontent-type: text/plain; charset=utf-8\r\n"
+                                  "Connection: close\r\n\r\nInvalid HTTP request received.")
+    return result
+
+
+def native_prefixes():
+    method = native_response(405, {"detail": "Method Not Allowed"}, close=False, headers=(("allow", "GET"),))
+    result = []
+    for name, _, context in post_prefix_cases():
+        if context == "initial":
+            stages = [([native_refusal()], True)]
+        elif context.startswith("coalesced"):
+            stages = [([method, native_refusal()], True)]
+        else:
+            stages = [([method], False), ([native_refusal()], True)]
+        result.append({"id": name, "stages": [
+            {"responses": responses, "closed": closed, "durable_unchanged": True} for responses, closed in stages]})
+    return result
+
+
+def native_framing(case, before):
+    if case not in framework.cases():
+        raise AssertionError("Unclassified native framing case")
+    approved = framework.approved_go(case)
+    if approved is not None:
+        return approved
+    name = case["id"]
+    if name in ("valid-http", "same-content-length", "http-1.0-without-host",
+                "http10-health-with-host", "http10-health-keepalive"):
+        response = native_response(200, {"status": "ok"})
+    elif name == "invalid-chunk":
+        response = native_refusal()
+    elif name == "http10-repositories-close":
+        table = before["tables"]["repositories"]
+        rows = [dict(zip(table["columns"], (cell["value"] for cell in row), strict=True)) for row in table["rows"]]
+        response = native_response(200, [{key: row[key] for key in ("id", "remote", "created_at")} for row in rows])
+    elif name == "http10-repositories-denied":
+        response = native_response(401, {"detail": "Valid bearer token required"},
+                                   headers=(("www-authenticate", "Bearer"),))
+    elif name == "http10-invalid-body":
+        response = native_response(422, {"detail": [
+            {"loc": ["body", field], "msg": "Field required"} for field in ("repository_id", "goal")]})
+    elif name == "http10-head-method":
+        response = native_response(405, {"detail": "Method Not Allowed"}, headers=(("allow", "GET"),))
+        response = response[:3] + ("", response[4])
+    else:
+        raise AssertionError("Unclassified native framing case: " + name)
+    return response
+
+
+def header_differences(expected, actual):
+    failures = []
+    for first, second in zip(expected, actual, strict=True):
+        for key in ("responses", "early", "closed", "durable_unchanged"):
+            if first[key] != second[key]:
+                failures.append(f"{second['id']}/{key}: differs; exact wire/state retained")
+        if second["status"] == 400 and second["raw_response"] != first["raw_response"]:
+            failures.append(f"{second['id']}: refusal bytes differ")
+    return failures
+
+
+def differential(binary, output, record_only=False, *, historical=False):
     h.verify_manifest()
     output.mkdir(parents=True, exist_ok=True)
     shutil.copytree(h.ROOT / "phalanx" / "static", binary.parent / "assets", dirs_exist_ok=True)
@@ -342,8 +431,9 @@ def differential(binary, output, record_only=False):
         sources = {label: h.export(label, root) for label in h.PINS}
         for retained in (False, True):
             shape = "retained" if retained else "fresh"
-            expected = None
-            for label in ("P0", "D0", "Go"):
+            expected = None if historical else [native_header(case) for case in cases()]
+            expected_prefixes = None if historical else native_prefixes()
+            for label in release.load_implementations(historical):
                 directory = root / f"headers-{shape}-{label}"
                 database = h.fresh(directory, sources, retained)
                 actual, framing = [], []
@@ -365,6 +455,8 @@ def differential(binary, output, record_only=False):
                         framing.append({"case": case, "response": response, "before": before, "after": after})
                         if before != after:
                             failures.append(f"{shape}/{label}/{case['id']}: native framing changed durable state")
+                        if not historical and framework.comparable(response) != native_framing(case, before):
+                            failures.append(f"{shape}/{label}/{case['id']}: native framing contract changed")
                     prefixes = post_prefixes(url, database)
                     (output / f"post-prefixes-{shape}-{label}.json").write_text(json.dumps(prefixes), encoding="utf-8")
                     if any(stage["response_error"] is not None for record in prefixes for stage in record["stages"]):
@@ -387,7 +479,8 @@ def differential(binary, output, record_only=False):
                     (output / f"neighbors-{shape}-{label}.json").write_text(
                         json.dumps({"before": before, "response": receipt_neighbor, "after": after}), encoding="utf-8")
                     preservation, preserved = response_preservation(
-                        url, database, {record["id"]: record["responses"] for record in actual})
+                        url, database, {record["id"]: record["responses"]
+                                        for record in (actual if historical else expected)})
                     (output / f"preservation-{shape}-{label}.json").write_text(json.dumps(preservation), encoding="utf-8")
                     if not preserved:
                         failures.append(f"{shape}/{label}: repeated coalesced refusal lost response or durable integrity")
@@ -399,13 +492,8 @@ def differential(binary, output, record_only=False):
                     expected = actual
                     expected_framing = framing
                     expected_prefixes = prefixes
-                for first, second in zip(expected, actual, strict=True):
-                    for key in ("responses", "early", "closed", "durable_unchanged"):
-                        if first[key] != second[key]:
-                            failures.append(f"{shape}/{label}/{second['id']}/{key}: differs; exact wire/state retained")
-                    if second["status"] == 400 and second["raw_response"] != first["raw_response"]:
-                        failures.append(f"{shape}/{label}/{second['id']}: refusal bytes differ")
-                for first, second in zip(expected_framing, framing, strict=True):
+                failures.extend(f"{shape}/{label}/{failure}" for failure in header_differences(expected, actual))
+                for first, second in zip(expected_framing if historical else [], framing if historical else [], strict=True):
                     target = framework.approved_go(second["case"]) if label == "Go" else None
                     if target is None:
                         target = framework.comparable(first["response"])
@@ -429,6 +517,15 @@ def differential(binary, output, record_only=False):
                                 failures.append(f"{shape}/{label}/{second['id']}/{key}: prefix alignment differs")
                 print(f"{shape}/{label}: {len(actual)} production header cases recorded", flush=True)
     (output / "failures.json").write_text(json.dumps(failures, indent=2), encoding="utf-8")
+    (output / "mode.json").write_text(json.dumps({
+        "mode": "historical-differential" if historical else "native-runtime",
+        "implementations": release.load_implementations(historical),
+        "header_cases": [case[0] for case in cases()],
+        "framing_cases": [case["id"] for case in framework.cases()],
+        "prefix_cases": [case[0] for case in post_prefix_cases()],
+        "preservation_repeats_per_case": 100,
+        "expectations": "live P0 baseline" if historical else "explicit independent native contracts",
+    }, indent=2), encoding="utf-8")
     if failures and not record_only:
         raise AssertionError("\n".join(failures))
     print("\n".join(failures) if failures else "Header boundaries PASS")
@@ -439,8 +536,10 @@ def main():
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--record-only", action="store_true")
+    parser.add_argument("--historical", action="store_true",
+                        help="Also run the unchanged live P0/D0 header differential")
     args = parser.parse_args()
-    differential(args.binary.resolve(), args.output.resolve(), args.record_only)
+    differential(args.binary.resolve(), args.output.resolve(), args.record_only, historical=args.historical)
 
 
 if __name__ == "__main__":

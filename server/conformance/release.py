@@ -367,7 +367,11 @@ def measure(url, run):
             "max_seconds": ordered[-1], "records": records}
 
 
-def release(package, output):
+def load_implementations(historical=False):
+    return ("P0", "D0", "Go") if historical else ("Go",)
+
+
+def release(package, output, *, historical=False):
     h.verify_manifest()
     output.mkdir(parents=True, exist_ok=True)
     package_manifest = None
@@ -467,7 +471,7 @@ def release(package, output):
 
         loads = []
         for retained in (False, True):
-            for label in ("P0", "D0", "Go"):
+            for label in load_implementations(historical):
                 directory = root / f"load-{retained}-{label}"
                 database = h.fresh(directory, sources, retained)
                 baseline = h.snapshot(database)
@@ -519,6 +523,9 @@ def release(package, output):
                      "controller": "sequential P0/D0/Go workloads; other host activity unmeasured"},
             "manifest": requests(), "manifest_sha256": h.digest(json.dumps(requests(), sort_keys=True).encode()),
             "concurrency": 8, "warmup_reads": 12, "runs_per_implementation_shape": 3,
+            "mode": "historical-differential" if historical else "native-runtime",
+            "load_implementations": load_implementations(historical),
+            "rollback_packages": ["P0", "D0"],
             "metadata_policy": "Real UUIDs and wall clock for all production entrypoints; no fixture clock/ID injection",
             "performance_classification": "observations only; proposed goals not approved or claimed",
             "resource_metrics": "CPU/RSS/GC/goroutine/connection/30-minute-soak unmeasured; not passed gates",
@@ -530,8 +537,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--historical", action="store_true",
+                        help="Also run the unchanged live P0/D0 load comparisons")
     args = parser.parse_args()
-    release(args.package.resolve(), args.output.resolve())
+    release(args.package.resolve(), args.output.resolve(), historical=args.historical)
 
 
 if __name__ == "__main__":
