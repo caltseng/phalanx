@@ -9,6 +9,12 @@ a separate trusted bootstrap boundary. A PID/CIM snapshot or retroactive Job
 assignment cannot prove descendants hidden by an already-exited intermediate
 parent. Root exit alone is not full-tree exclusion.
 
+Current packages run only Go HTTP. Explicit or saved Python selections fail with
+migration guidance before task/native queries, containment or ownership-record writes.
+An explicit Go override does not rewrite a saved engine. An omitted override remains
+omitted in the child command, preserving the documented deployment precedence.
+`deploy stop` still operates on its verified retained ownership, not engine selection.
+
 After the reviewed bootstrap/preparation gates below, the owner can explicitly
 configure the same task's foreground API action, retaining its security, principal,
 settings, triggers, working directory and existing deployment configuration:

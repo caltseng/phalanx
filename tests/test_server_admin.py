@@ -114,8 +114,15 @@ assert kernel.GetPriorityClass(kernel.GetCurrentProcess()) == 0x20
                 kernel.GetPriorityClass.return_value = value
                 kernel.SetPriorityClass.return_value = changed
                 with patch.object(ctypes, "WinDLL", return_value=kernel), \
-                        patch.object(ctypes, "get_last_error", return_value=5), \
-                        patch("uvicorn.run") as run:
+                        patch.object(ctypes, "get_last_error", return_value=5):
                     with self.assertRaises(OSError):
-                        server_admin.serve(host="127.0.0.1", port=8765)
-                    run.assert_not_called()
+                        priority.foreground_priority()
+
+    def test_removed_python_entrypoints_fail_with_migration_guidance(self):
+        with self.assertRaisesRegex(ValueError, "packaged Go server"):
+            server_admin.serve(host="127.0.0.1", port=8765)
+        result = subprocess.run([sys.executable, "-c", "import phalanx.api"],
+                                capture_output=True, text=True, timeout=WAIT_SECONDS)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python HTTP server has been removed", result.stderr)
+        self.assertIn("docs/python-server-deprecation.md", result.stderr)

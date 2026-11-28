@@ -2,14 +2,11 @@ from datetime import UTC, datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 import unittest
 from urllib.request import urlopen
 
-from fastapi import HTTPException, Request
 
 from phalanx import captains
-from phalanx.auth import require_board_owner
 from phalanx.store import write_transaction
 from phalanx.session_links import session_target
 
@@ -160,32 +157,23 @@ class OperatorWebTest(ServerFixture, unittest.TestCase):
         })[0], 403)
 
     def test_dashboard_authority_checks_actual_peer_and_origin(self):
-        app = SimpleNamespace(state=SimpleNamespace(local_board=True))
-        for peer, host, origin, site, expected in (
-            ("127.0.0.1", "localhost:8000", "http://localhost:8000", "same-origin", "local"),
-            ("::1", "[::1]:8000", "http://[::1]:8000", "same-origin", "local"),
-            ("203.0.113.8", "localhost:8000", "http://localhost:8000", "same-origin", 401),
-            ("::ffff:203.0.113.8", "localhost:8000", "http://localhost:8000", "same-origin", 401),
-            (None, "localhost:8000", "http://localhost:8000", "same-origin", 401),
-            ("127.0.0.1", "evil.example", "http://evil.example", "same-origin", 401),
-            ("127.0.0.1", "localhost:8000", "http://localhost:8001", "same-origin", 403),
-            ("127.0.0.1", "localhost:8000", "null", "same-origin", 403),
-            ("127.0.0.1", "localhost:8000", None, "same-origin", 403),
-            ("127.0.0.1", "localhost:8000", "http://localhost:8000", "cross-site", 403),
+        directory = self.enterContext(TemporaryDirectory())
+        self.start_server(Path(directory) / "authority.sqlite3", PHALANX_LOCAL_BOARD="1")
+        for host, origin, site, expected in (
+            ("localhost:8000", "http://localhost:8000", "same-origin", 200),
+            ("[::1]:8000", "http://[::1]:8000", "same-origin", 200),
+            ("evil.example", "http://evil.example", "same-origin", 401),
+            ("localhost:8000", "http://localhost:8001", "same-origin", 403),
+            ("localhost:8000", "null", "same-origin", 403),
+            ("localhost:8000", None, "same-origin", 403),
+            ("localhost:8000", "http://localhost:8000", "cross-site", 403),
         ):
-            with self.subTest(peer=peer, host=host, origin=origin, site=site):
-                headers = [(b"host", host.encode()), (b"sec-fetch-site", site.encode())]
+            with self.subTest(host=host, origin=origin, site=site):
+                headers = {"Host": host, "Sec-Fetch-Site": site}
                 if origin is not None:
-                    headers.append((b"origin", origin.encode()))
-                request = Request({"type": "http", "method": "POST", "scheme": "http",
-                                   "path": "/operator/api/items", "headers": headers,
-                                   "client": (peer, 1234) if peer else None, "app": app})
-                if expected == "local":
-                    self.assertEqual(require_board_owner(request, None), expected)
-                else:
-                    with self.assertRaises(HTTPException) as raised:
-                        require_board_owner(request, None)
-                    self.assertEqual(raised.exception.status_code, expected)
+                    headers["Origin"] = origin
+                self.assertEqual(self.request("/operator/api/dispatch/settings", body={"paused": False},
+                                              headers=headers, method="PUT")[0], expected)
 
     def test_owner_intake_from_board_is_validated_idempotent_and_same_origin(self):
         directory = self.enterContext(TemporaryDirectory())

@@ -1,9 +1,10 @@
 # Go server release and operator rehearsal
 
 **Source readiness is not deployment.** Packaged Go is the supported repository
-default for the existing API supervisor, never a second service. Python HTTP is
-[deprecated, temporarily retained for explicit rollback](python-server-deprecation.md).
-Existing explicit configurations are honored, never rewritten. The author uses only
+runtime for the existing API supervisor, never a second service. Python HTTP is
+[removed from this package](python-server-deprecation.md); known-good rollback
+packages remain separate. Existing configurations are never rewritten; a selected
+Python engine fails clearly instead of switching. The author uses only
 sanitized synthetic fixtures. The existing operator alone owns actual private
 D0 inventory, fresh-current-data rehearsal, backup, cutover and rollback.
 Apply [deployment authority and safeguards](deployment.md#standing-authority-for-compatible-upgrades).
@@ -238,18 +239,20 @@ before readiness; different manifests or host conditions are unmatched.
 
 After the owner stops/drains the exact Go service tree, retain the current compatible
 database, URL, credentials, configuration and supervisor. With the reviewed retained
-Python package and its pinned server dependencies, use the same foreground entrypoint:
+Python package and its pinned server dependencies, use **that package's own retained
+interpreter/source**, not the upgraded installation:
 
 ```text
-python -P -m phalanx deploy run --config <existing-absolute-deployment.json> server --engine python
+<retained-known-good-python> -P -m phalanx deploy run --config <existing-absolute-deployment.json> server --engine python
 ```
 
-An explicitly saved `"engine": "python"` also works; the CLI flag takes precedence
+This command is historical-package-only; the current package refuses Python HTTP.
+Within the retained package, a saved `"engine": "python"` also works; the CLI flag takes precedence
 without changing the file. Do not pass `--go-binary` to a Python launch. A saved Go
 package path may remain untouched while the explicit Python engine is selected.
 Retain previous packages, P0/D0 source/runtime pins and all earlier rollout/failure
 artifacts. Verify accepted Go writes, original-key replay, bindings/jobs/reports,
 authentication and existing reconciler continuity on the same evolved current file.
 Never restore the pre-upgrade backup over newer accepted work or run both engines.
-Python HTTP is temporary rollback support, not renewed default support or permission
+Historical-package rollback is not renewed current Python HTTP support or permission
 to remove the still-supported Python CLI/reconciler/admin/shared models/Scribe.

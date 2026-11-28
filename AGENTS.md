@@ -50,7 +50,7 @@
 - Before you open or update a Phalanx PR, run only the tests that cover the change, one module at a time with `python -m unittest discover -s tests -p test_x.py`. The full suite runs in GitHub CI and gates the merge. Run:
   - every changed test module;
   - every test module that imports a changed `phalanx/` module;
-  - for a server-side change (`store`, `transitions`, `dispatch_api`, `intake*`, `operator_api` or the app), also the modules that start a server and drive the affected routes.
+  - for native server-side changes under `server/internal/`, or retained Python `store`, `transitions` and `intake*` fixture/admin changes, also the modules that start the real Go server and drive affected routes.
   - Some changes always need their safety tests as well:
     - store, claims, leases, fencing or dispatch: `test_dispatch`, `test_writers`, `test_transitions` and `test_bootstrap`
     - Captain sessions or recovery: `test_shift`, `test_writers` and `test_reconciler`

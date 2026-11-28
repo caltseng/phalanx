@@ -1,4 +1,4 @@
-"""Current-source production entrypoint proxy/home parity; disposable schema26 only."""
+"""Retained production proxy/home contracts; no current Python HTTP oracle."""
 
 import argparse
 from contextlib import closing
@@ -123,8 +123,7 @@ def run(binary, output):
             ("empty", "", False), ("other", "192.0.2.1", False),
             ("network", "192.0.2.1, 127.0.0.0/8", True), ("all", "*", True))]
         for name, home_value, trust, trusted in configurations:
-            compared = {}
-            for runtime in ("Python", "Go"):
+            for runtime in ("Go",):
                 directory = root / (name + "-" + runtime)
                 database = h.fresh(directory, {"P0": ROOT})
 
@@ -143,8 +142,7 @@ def run(binary, output):
                 observations = []
                 try:
                     with release.production(binary, database, directory,
-                                            python_source=ROOT if runtime == "Python" else None,
-                                            default_engine=runtime == "Go") as (url, _):
+                                            default_engine=True) as (url, _):
                         requests = [("identity", "GET", "/v1/muster/status", [], "", h.RUNNER, 200)]
                         if name == "unset" or name.startswith("trust-"):
                             requests.extend(cases(trusted))
@@ -174,7 +172,43 @@ def run(binary, output):
                             if label == "identity":
                                 projection["json"] = dict(response["json"])
                                 projection["json"].pop("observed_at")
-                            compared.setdefault(label, []).append(h.comparable(projection))
+                                selected = (str(root) + home_value[1:] if home_value and home_value.startswith("~")
+                                            else home_value)
+                                expected_home = (str(Path(selected).resolve())
+                                                 if selected and Path(selected).is_absolute() else None)
+                                if response["json"]["identity"]["home"] != expected_home:
+                                    failures.append(f"{name}/{runtime}: noncanonical muster identity")
+                                expected_body = {
+                                    "status": "ok", "identity": {"home": expected_home}, "captains": [],
+                                    "writers": [{"id": "fixture-writer", "item_id": h.SEED,
+                                                 "execution_id": h.SEED_EXECUTION,
+                                                 "captain_id": "fixture-captain", "state": "idle",
+                                                 "session_id": None, "session_url": None,
+                                                 "last_progress_at": None}],
+                                    "reconcilers": [], "dispatch_paused": True,
+                                }
+                                if h.typed_json(projection["json"]) != h.typed_json(expected_body):
+                                    failures.append(f"{name}/{runtime}: retained complete muster projection changed")
+                            elif response["status"] == 200:
+                                expected_body = {"paused": json.loads(body)["paused"],
+                                                 "max_writers": 3, "active_writers": 1,
+                                                 "max_building_writers": 2, "building_writers": 1,
+                                                 "delivering_writers": 0}
+                                if h.typed_json(response["json"]) != h.typed_json(expected_body):
+                                    failures.append(f"{name}/{runtime}/{label}: retained capacity projection changed")
+                            elif response["status"] >= 400:
+                                detail = ("Valid bearer token required" if expected == 401 else
+                                          "Owner token required" if label == "runner" else
+                                          "This writer token is scoped to another item" if label == "writer" else
+                                          "Browser writes require a same-origin request")
+                                if response["json"] != {"detail": detail}:
+                                    failures.append(f"{name}/{runtime}/{label}: retained refusal body changed")
+                                if expected == 401 and ("www-authenticate", "Bearer") not in response["headers"]:
+                                    failures.append(f"{name}/{runtime}/{label}: missing bearer challenge")
+                            if label == "https-redirect":
+                                scheme = "https" if trusted else "http"
+                                if ("location", scheme + "://board.example.test/v1/owner/status") not in response["headers"]:
+                                    failures.append(f"{name}/{runtime}: incorrect production redirect scheme")
                         if name == "unset" or name.startswith("trust-"):
                             receipt_check(url, database, trusted, failures, observations)
                         if name in {"unset", "relative", "absolute-dots", "tilde"}:
@@ -202,15 +236,12 @@ def run(binary, output):
                     release.environment = original
                     (output / f"{name}-{runtime}.json").write_text(json.dumps(observations), encoding="utf-8")
                 records.append({"configuration": name, "runtime": runtime, "count": len(observations)})
-            for label, values in compared.items():
-                if values[0] != values[1]:
-                    failures.append(f"{name}/{label}: Python/Go wire mismatch")
         summary = {"source": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                    "binary_sha256": h.digest(binary.read_bytes()), "records": records, "failures": failures}
         (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if failures:
         raise AssertionError("\n".join(failures))
-    print(f"Production proxy/home parity: {sum(row['count'] for row in records)} observations")
+    print(f"Retained production proxy/home contracts: {sum(row['count'] for row in records)} Go observations")
 
 
 if __name__ == "__main__":

@@ -5,12 +5,9 @@ import json
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Query, Request
 from pydantic import Field, StringConstraints
 
 from . import intake
-from .auth import authenticate_board_read, require_coordinator
-from .intake_api import Key, run
 from .intake_models import Identifier, Payload, Text
 from .session_links import session_id as native_session_id, session_key, session_target
 
@@ -26,7 +23,6 @@ CaptainState = Literal["active", "ending", "ended"]
 # A Captain moves only forward: active, then ending, then ended.
 ORDER = {"active": 0, "ending": 1, "ended": 2}
 
-router = APIRouter(prefix="/v1")
 
 
 class Pickup(Payload):
@@ -377,50 +373,3 @@ def record_action(db, item_id, payload):
                 payload.reason, intake.timestamp()))
     return {"id": action_id, "item_id": item_id, "execution_id": execution["id"],
             "version": execution["version"], **payload.model_dump()}
-
-
-@router.post("/captains", status_code=201, dependencies=[Depends(require_coordinator)])
-def create(request: Request, body: CaptainRegistration, key: Key = None):
-    return run(request, register, body, write=True, scope="captain", key=key,
-               payload=body.model_dump(mode="json"))
-
-
-@router.put("/captains/{captain_id}", dependencies=[Depends(require_coordinator)])
-def update(request: Request, captain_id: Identifier, body: Heartbeat):
-    return run(request, heartbeat, captain_id, body, write=True)
-
-
-@router.put("/captains/{captain_id}/reinforcement", dependencies=[Depends(require_coordinator)])
-def reinforce(request: Request, captain_id: Identifier, body: ReinforcementAcknowledgement):
-    return run(request, acknowledge_reinforcement, captain_id, body, write=True)
-
-
-@router.post("/items/{item_id}/captain-actions", status_code=201, dependencies=[Depends(require_coordinator)])
-def post_action(request: Request, item_id: Identifier, body: Action, key: Key = None):
-    return run(request, record_action, item_id, body, write=True, scope=f"captain-action:{item_id}", key=key,
-               payload=body.model_dump(mode="json"))
-
-
-@router.get("/captains", dependencies=[Depends(authenticate_board_read)])
-def list_captains(request: Request, limit: Annotated[int, Query(ge=1, le=100)] = 25):
-    return run(request, captains, limit)
-
-
-@router.get("/captains/current", dependencies=[Depends(authenticate_board_read)])
-def get_current_captain(request: Request):
-    return run(request, current_captain)
-
-
-@router.get("/captains/{captain_id}", dependencies=[Depends(authenticate_board_read)])
-def get_captain(request: Request, captain_id: Identifier):
-    return run(request, lambda db: view(db, captain_row(db, captain_id)))
-
-
-@router.get("/session-archives", dependencies=[Depends(require_coordinator)])
-def get_archive(request: Request, session_id: Short):
-    return run(request, archive_status, session_id)
-
-
-@router.put("/session-archives", dependencies=[Depends(require_coordinator)])
-def put_archive(request: Request, body: SessionArchive):
-    return run(request, record_archive, body, write=True)

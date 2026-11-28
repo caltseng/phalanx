@@ -47,6 +47,7 @@ func TestLocalBoardMutationRequiresOneMatchingOrigin(t *testing.T) {
 	if !localBoardOrigin(read) {
 		t.Fatal("read unexpectedly required Origin")
 	}
+
 	write := httptest.NewRequest("POST", "http://localhost/operator/api/items", nil)
 	if localBoardOrigin(write) {
 		t.Fatal("anonymous local mutation accepted missing Origin")
@@ -75,5 +76,40 @@ func TestStaticRangesKeepRefusalPrecedenceAndBoundedMultipart(t *testing.T) {
 	}
 	if _, status, message := fileRanges("items=0-1", 100); status != 400 || message != "Only support bytes range" {
 		t.Fatal(status, message)
+	}
+}
+
+func TestRetainedDashboardPeerAndOriginVectors(t *testing.T) {
+	handler := Handler{LocalBoard: true}
+	for _, fixture := range []struct {
+		peer, host, origin, site string
+		status                   int
+	}{
+		{"127.0.0.1:1234", "localhost:8000", "http://localhost:8000", "same-origin", 200},
+		{"[::1]:1234", "[::1]:8000", "http://[::1]:8000", "same-origin", 200},
+		{"203.0.113.8:1234", "localhost:8000", "http://localhost:8000", "same-origin", 401},
+		{"[::ffff:203.0.113.8]:1234", "localhost:8000", "http://localhost:8000", "same-origin", 401},
+		{"", "localhost:8000", "http://localhost:8000", "same-origin", 401},
+		{"127.0.0.1:1234", "evil.example", "http://evil.example", "same-origin", 401},
+		{"127.0.0.1:1234", "localhost:8000", "http://localhost:8001", "same-origin", 403},
+		{"127.0.0.1:1234", "localhost:8000", "null", "same-origin", 403},
+		{"127.0.0.1:1234", "localhost:8000", "", "same-origin", 403},
+		{"127.0.0.1:1234", "localhost:8000", "http://localhost:8000", "cross-site", 403},
+	} {
+		request := httptest.NewRequest("POST", "http://localhost/operator/api/items", nil)
+		request.RemoteAddr, request.Host = fixture.peer, fixture.host
+		if fixture.origin != "" {
+			request.Header.Set("Origin", fixture.origin)
+		}
+		request.Header.Set("Sec-Fetch-Site", fixture.site)
+		status := 200
+		if !handler.localBoardAuthority(request) {
+			status = 401
+		} else if !localBoardOrigin(request) {
+			status = 403
+		}
+		if status != fixture.status {
+			t.Fatalf("retained actual-peer/origin vector changed: %+v: %d", fixture, status)
+		}
 	}
 }

@@ -16,13 +16,15 @@ selects `--engine`, then saved `server.engine`, then `go`. Set an absolute
 `server.go_binary` in `deployment.json` or pass `--go-binary`; it must name the
 verified extracted package's binary, beside its `assets` directory. Missing
 packages fail explicitly; there is no automatic Python fallback or PATH search.
-An explicit `--engine python` or `"engine": "python"` retains the deprecated Python
-HTTP server temporarily. CLI overrides do not rewrite the saved configuration.
+An explicit `--engine python` or saved `"engine": "python"` now fails with migration
+guidance; it never silently changes engine or restores Python HTTP. An explicit Go
+override does not rewrite the saved configuration.
 These options apply only to `server`; the reconciler remains Python.
 
 Existing configs with only `host`/`port` remain readable, but now select Go when no
 engine is specified. Before upgrading a Python supervisor's package, its owner must
-explicitly retain Python or complete the [reviewed Go adoption](go-server-release.md);
+complete the [reviewed Go adoption](go-server-release.md) or keep the separate known-good
+package for coordinated rollback;
 the upgrade does not edit its command/task. See [deprecation and rollback](python-server-deprecation.md).
 
 ## Direct muster discovery and status

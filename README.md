@@ -66,8 +66,9 @@ results and recovery information. Every closed execution records a verified PR o
 
 ## Quickstart: new install
 
-The packaged **Go HTTP server is the supported default**. The Python HTTP server is
-deprecated and temporarily retained for [explicit rollback](docs/python-server-deprecation.md).
+The packaged **Go HTTP server is the only supported HTTP runtime**. The Python HTTP
+implementation has been [removed](docs/python-server-deprecation.md); rollback uses a
+separately retained known-good package, never an old data snapshot.
 Python CLI, Captain/writer clients, reconciler and server-host admin remain supported;
 Scribe assets are unchanged. Repository defaults do not change any live installation.
 
@@ -148,7 +149,7 @@ checks and shared fixtures, use [Develop Phalanx](docs/development.md).
 - [Writer operations](docs/writer-operations.md): publication, validation flags and delivery.
 - [Recovery](docs/recovery.md): writer replacement, troubleshooting, backup and restore.
 - [Architecture](docs/architecture.md): implementation map and ownership diagrams.
-- [Python HTTP deprecation](docs/python-server-deprecation.md): reviewed parity findings, retained Python scope, follow-on removal inventory and temporary rollback.
+- [Python HTTP retirement](docs/python-server-deprecation.md): reviewed parity findings, retained Python scope, replacement vectors and archived-package rollback.
 - [HTTP server migration](docs/http-server-migration.md): historical proposal/decision evidence and current implementation pointer; not a live-deployment receipt.
 - [API reference](docs/api.md): routes, scoped attempts and correlated timelines.
 - [Develop Phalanx](docs/development.md): tests, CI, fixtures and transactions.

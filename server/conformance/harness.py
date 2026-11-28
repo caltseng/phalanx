@@ -119,6 +119,7 @@ def vector_manifest():
     import route_models
     import framework
     import headers
+    import identity
 
     paths = sorted((ROOT / "server").rglob("*.go")) + sorted(HERE.glob("*.py"))
     paths += [ROOT / "server" / "go.mod", ROOT / "server" / "go.sum",
@@ -126,6 +127,9 @@ def vector_manifest():
               HERE / "golden-fresh.json", HERE / "golden-retained.json"]
     paths += sorted((ROOT / "server" / "internal" / "httpapi" / "contract-docs").glob("*"))
     paths += sorted((ROOT / "server" / "internal" / "testdb").glob("*.sql"))
+    paths += sorted((ROOT / "phalanx").glob("*.py")) + sorted((ROOT / "tests").glob("*.py"))
+    paths += sorted((ROOT / "phalanx").glob("*.ps1"))
+    paths += [ROOT / ".gitattributes", ROOT / "pyproject.toml", ROOT / "requirements.lock", HERE / "requirements.lock"]
     tests = []
     for path in paths:
         if path.name.endswith("_test.go"):
@@ -187,6 +191,9 @@ def vector_manifest():
                                                       "repeats_per_case": 100},
                             "refusal_ownership": ["quiet", "sending", "prompt-native-disposal", "exclusive-store-probe",
                                                   "ordinary-receipt", "shutdown-lock-release"]},
+                "production_identity": {"request_ids": [case[0] for case in identity.cases(True)],
+                                        "oracle": "retained explicit production contracts; no current Python HTTP",
+                                        "unchanged_muster_client": True},
                 "rehearsal": {"reference_packages": ["P0", "D0"], "schema_shapes": ["fresh", "retained"],
                               "package_only_stages": 8},
                 "decisions": {"request_count": len(domain_requests), "request_sha256": digest(domain_bytes)},

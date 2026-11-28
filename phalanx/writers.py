@@ -10,11 +10,9 @@ from time import time
 from typing import Annotated, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field, StringConstraints
 
-from . import captains, dispatch, intake, intake_api
-from .auth import authenticate, require_coordinator, require_writer
+from . import captains, dispatch, intake
 from .flags import execution_flags
 from .intake_models import Identifier, Payload, Text, Versioned
 from .pr_models import SHA
@@ -26,7 +24,6 @@ Nonce = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{16,100}$")]
 TokenDigest = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
 Url = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9+.-]{0,31}://\S{1,2000}$")]
 
-router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 
 
 class Registration(Versioned):
@@ -346,48 +343,3 @@ def current(db, writer_id):
     view = binding(db, writer_row(db, writer_id), current=context)
     view.update(execution_flags(db, view["id"], current=context))
     return view
-
-
-EXECUTION = "/items/{item_id}/executions/{execution_id}/writer"
-
-
-@router.post(EXECUTION, dependencies=[Depends(require_coordinator)])
-def post_writer(request: Request, item_id: Identifier, execution_id: Identifier, body: Registration):
-    return intake_api.run(request, register, item_id, execution_id, body, write=True)
-
-
-@router.patch(EXECUTION, dependencies=[Depends(require_coordinator)])
-def patch_writer(request: Request, item_id: Identifier, execution_id: Identifier, body: Update):
-    return intake_api.run(request, update, item_id, execution_id, body, write=True)
-
-
-@router.post(EXECUTION + "/withdraw", dependencies=[Depends(require_coordinator)])
-def post_withdraw(request: Request, item_id: Identifier, execution_id: Identifier, body: Withdrawal):
-    return intake_api.run(request, withdraw, item_id, execution_id, body, write=True)
-
-
-def own_writer(request):
-    writer = getattr(request.state, "writer", None)
-    if writer is None:
-        raise HTTPException(403, "Writer token required")
-    return writer["id"]
-
-
-@router.get("/writer", dependencies=[Depends(require_writer)])
-def get_current(request: Request):
-    return intake_api.run(request, current, own_writer(request))
-
-
-@router.post("/writer/attempt", dependencies=[Depends(require_writer)])
-def post_attempt(request: Request):
-    return intake_api.run(request, next_attempt, own_writer(request), write=True)
-
-
-@router.post("/writer/progress", dependencies=[Depends(require_writer)])
-def post_progress(request: Request, body: Progress):
-    return intake_api.run(request, progress, own_writer(request), body, write=True)
-
-
-@router.post("/writer/capacity", dependencies=[Depends(require_writer)])
-def post_capacity(request: Request, body: Capacity):
-    return intake_api.run(request, capacity, own_writer(request), body, write=True)

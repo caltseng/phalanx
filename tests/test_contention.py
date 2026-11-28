@@ -1,6 +1,6 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack, asynccontextmanager
+from contextlib import ExitStack
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -11,49 +11,9 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-import anyio.to_thread
-
-from phalanx.api import create_app
 from phalanx import captains, dependencies, finalization, intake, store, writers
 from phalanx.intake_models import Cancel, Intake, Result
 from test_bootstrap import OWNER, RUNNER, ServerFixture
-
-
-def contention_app():
-    app = create_app()
-    original_lifespan = app.router.lifespan_context
-    worker_borrowers = [object(), object()]
-
-    @asynccontextmanager
-    async def lifespan(app):
-        async with original_lifespan(app):
-            anyio.to_thread.current_default_thread_limiter().total_tokens = 2
-            yield
-
-    app.router.lifespan_context = lifespan
-
-    @app.post("/fixture/workers")
-    async def workers(body: dict):
-        limiter = anyio.to_thread.current_default_thread_limiter()
-        for borrower in worker_borrowers:
-            limiter.acquire_on_behalf_of_nowait(borrower)
-        return {"held": True}
-
-    @app.post("/fixture/release-workers")
-    async def release_workers(body: dict):
-        limiter = anyio.to_thread.current_default_thread_limiter()
-        for borrower in worker_borrowers:
-            limiter.release_on_behalf_of(borrower)
-        return {"released": True}
-
-    @app.get("/fixture/read")
-    async def read():
-        def transaction():
-            with store.read_transaction(app.state.database_path) as db:
-                return db.execute("PRAGMA user_version").fetchone()[0]
-        return {"version": await asyncio.to_thread(transaction)}
-
-    return app
 
 
 class ContentionTests(ServerFixture, unittest.TestCase):
@@ -122,23 +82,23 @@ class ContentionTests(ServerFixture, unittest.TestCase):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "external.sqlite3"
             store.initialize(path)
-            server = self.start_server(path, app=contention_app())
+            server = self.start_server(path)
             try:
-                self.assertEqual(self.request("/fixture/workers", body={})[0], 200)
                 with store.connect(path) as lock:
                     lock.execute("BEGIN EXCLUSIVE")
                     try:
-                        with ThreadPoolExecutor(max_workers=1) as pool:
-                            response = pool.submit(self.request, "/fixture/read", timeout=10)
-                            try:
-                                code, body = response.result(timeout=5)
+                        with ThreadPoolExecutor(max_workers=9) as pool:
+                            responses = [pool.submit(self.get, "/v1/dispatch/settings", OWNER)
+                                         for _ in range(8)]
+                            self.assertEqual(pool.submit(self.get, "/v1/owner/status", OWNER).result(timeout=5),
+                                             (200, {"role": "owner"}))
+                            for response in responses:
+                                code, body = response.result(timeout=10)
                                 self.assertEqual(code, 503, body)
                                 self.assertIn("database is locked", body["detail"])
-                            finally:
-                                self.assertEqual(self.request("/fixture/release-workers", body={})[0], 200)
                     finally:
                         lock.execute("ROLLBACK")
-                self.assertEqual(self.get("/fixture/read"), (200, {"version": store.SCHEMA_VERSION}))
+                self.assertEqual(self.get("/v1/dispatch/settings", OWNER)[0], 200)
             finally:
                 self.stop_server(server)
 
@@ -304,18 +264,15 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                 "expected_version": binding["version"], "outcome": "succeeded", "candidate": "a" * 40,
             }
             headers = {"Idempotency-Key": "contention-result"}
-            server = self.start_server(path, app=None if external else contention_app())
+            server = self.start_server(path)
             cleanup.callback(self.stop_server, server)
             with store.connect(path, mode="ro") as db:
                 before = {
                     table: [tuple(row) for row in db.execute(f"SELECT * FROM {table} ORDER BY rowid")]
                     for table in ("writers", "attempts", "transition_history", "executions")
                 }
-            if external:
-                lock = cleanup.enter_context(store.connect(path))
-                lock.execute("BEGIN IMMEDIATE")
-            else:
-                held.enter_context(store._gate.write())
+            lock = cleanup.enter_context(store.connect(path))
+            lock.execute("BEGIN IMMEDIATE" if external else "BEGIN EXCLUSIVE")
             try:
                 operations = [
                     ("/v1/writer/progress", token, {"note": "Still moving"}),
@@ -332,8 +289,9 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                     ]
                     self.assertEqual(pool.submit(self.get, "/v1/owner/status", OWNER).result(timeout=15),
                                      (200, {"role": "owner"}))
-                    self.assertEqual(pool.submit(self.get, "/health").result(timeout=15),
-                                     (200, {"status": "ok"}))
+                    health = pool.submit(self.get, "/health").result(timeout=15)
+                    self.assertEqual(health, (200, {"status": "ok"}) if external else
+                                     (503, {"detail": "SQLite store unavailable"}))
                     for future in pending:
                         code, body = future.result(timeout=15)
                         self.assertEqual(code, 503, body)
@@ -349,10 +307,7 @@ class ContentionTests(ServerFixture, unittest.TestCase):
                     self.assertEqual(response.exception.code, 503)
                     self.assertEqual(response.exception.headers["Retry-After"], "1")
             finally:
-                if external:
-                    lock.execute("ROLLBACK")
-                else:
-                    held.close()
+                lock.execute("ROLLBACK")
 
             with store.connect(path, mode="ro") as db:
                 for table, rows in before.items():

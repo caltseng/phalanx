@@ -140,8 +140,9 @@ class IdentityTest(unittest.TestCase):
             self.assertEqual(result["request_outcomes"], "transport-unknown")
 
     def test_supervise_keeps_server_engine_separate_from_task_engine_identity(self):
-        for selected, launcher in ((engine, parent) for engine in (None, "python", "go")
-                                   for parent in (False, True)):
+        for selected, saved, launcher in ((engine, saved, parent)
+                                          for engine, saved in ((None, None), ("go", None), ("go", "python"))
+                                          for parent in (False, True)):
             with self.subTest(engine=selected, launcher=launcher), TemporaryDirectory() as temporary:
                 root = Path(temporary).resolve()
                 database = root / "synthetic.sqlite3"
@@ -163,11 +164,14 @@ class IdentityTest(unittest.TestCase):
                 def control(operation, **arguments):
                     return {"task": proof} if operation == "inspect" else {"listeners": []}
 
+                config = {"server": {"port": 12345}}
+                if saved is not None:
+                    config["server"]["engine"] = saved
                 with patch.object(w, "_native", return_value=self.native), \
                         patch.object(w.Original, "capture", side_effect=[original, parent]), \
                         patch.object(w, "Job", return_value=job), \
                         patch.object(w, "task_control", side_effect=control):
-                    code = w.supervise(root / "deployment.json", {"server": {"port": 12345}},
+                    code = w.supervise(root / "deployment.json", config,
                                        {"PHALANX_DB": str(database)}, task="\\synthetic",
                                        record=root / "record.json", engine=selected, go_binary=None)
                 command = job.launch.call_args.args[0]
@@ -176,6 +180,21 @@ class IdentityTest(unittest.TestCase):
                 else:
                     self.assertEqual(command[command.index("--engine") + 1], selected)
                 self.assertEqual(code, 17)
+                self.assertEqual(config["server"].get("engine"), saved)
+
+    def test_removed_python_selection_refuses_before_native_task_or_record_changes(self):
+        for saved, selected in (("go", "python"), ("python", None), ("python", "python")):
+            with self.subTest(saved=saved, selected=selected), TemporaryDirectory() as temporary, \
+                    patch.object(w, "_native") as native, patch.object(w, "task_control") as task:
+                root = Path(temporary).resolve()
+                config = {"server": {"port": 12345, "engine": saved}}
+                with self.assertRaisesRegex(ValueError, "Python HTTP server has been removed"):
+                    w.supervise(root / "deployment.json", config, {}, task="\\synthetic",
+                                record=root / "record.json", engine=selected, go_binary=None)
+                native.assert_not_called()
+                task.assert_not_called()
+                self.assertEqual(list(root.iterdir()), [])
+                self.assertEqual(config["server"]["engine"], saved)
 
     def test_shared_engine_parent_never_substitutes_for_the_executable_action(self):
         identity = dict(self.row, pid=os.getpid())

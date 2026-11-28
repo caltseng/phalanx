@@ -104,7 +104,7 @@ def production(binary, database, directory, python_source=None, *, default_engin
                 raise AssertionError(f"Packaged server exit was not clean: {process.returncode}")
 
 
-def default_engine_check(binary, database, directory, output):
+def default_engine_check(binary, database, directory, output, rollback_source):
     before = h.snapshot(database)
     with production(binary, database, directory, default_engine=True) as (url, _):
         body = {"repository_id": "fixture", "goal": "Default packaged Go launch"}
@@ -114,12 +114,12 @@ def default_engine_check(binary, database, directory, output):
     evolved = h.snapshot(database)
     if evolved["ddl"] != before["ddl"]:
         raise AssertionError("Default launch changed the schema")
-    with production(binary, database, directory, python_source=h.ROOT) as (url, _):
+    with production(binary, database, directory, python_source=rollback_source) as (url, _):
         replay = h.mutation(url, body, "default-packaged-go")
         if h.comparable(replay) != h.comparable(accepted) or h.snapshot(database) != evolved:
-            raise AssertionError("Explicit current Python rollback lost default Go-accepted current data")
+            raise AssertionError("Retained D0 package rollback lost default Go-accepted current data")
     output.write_text(json.dumps({
-        "default_go_response": accepted, "explicit_python_replay": replay,
+        "default_go_response": accepted, "retained_D0_replay": replay, "rollback_revision": h.PINS["D0"],
         "current_data": evolved, "before": before,
         "launch": "run_service with no engine and saved packaged go_binary; no mocked child",
     }, sort_keys=True), encoding="utf-8")
@@ -389,7 +389,7 @@ def release(package, output):
         for retained in (False, True):
             directory = root / ("release-retained" if retained else "release-fresh")
             database = h.fresh(directory, sources, retained)
-            default_engine_check(binary, database, directory, output / f"default-engine-{retained}.json")
+            default_engine_check(binary, database, directory, output / f"default-engine-{retained}.json", sources["D0"])
             initial = h.snapshot(database)
             receipts = {}
             body = {"repository_id": "fixture", "goal": "Real release current data \u96ea"}

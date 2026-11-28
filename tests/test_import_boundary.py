@@ -10,9 +10,9 @@ import unittest
 PACKAGE = Path(__file__).resolve().parents[1] / "phalanx"
 # Server-only: queue storage, HTTP routes and server-side lifecycle handlers.
 SERVER = {
-    "api", "auth", "captains", "config", "dependencies", "dispatch", "dispatch_api", "finalization",
-    "finalization_schema", "flags", "intake", "intake_api", "muster_api", "operator_api", "operator_schema",
-    "operator_web", "pickup", "reconciliation", "schema", "server_admin", "store", "waits", "writers", "usage",
+    "api", "captains", "config", "dependencies", "dispatch", "dispatch_models", "finalization",
+    "finalization_schema", "flags", "intake", "operator_schema",
+    "pickup", "reconciliation", "schema", "server_admin", "store", "waits", "writers", "usage",
     "issue_scout", "flag_models",
 }
 # Contracts and storage-free helpers both sides import. They depend only on each other.
@@ -51,8 +51,7 @@ class ImportBoundaryTest(unittest.TestCase):
             for target, top_level in imports(name):
                 with self.subTest(module=name, imports=target):
                     if target.startswith("external:"):
-                        if name not in SERVER:
-                            self.assertNotIn(target.removeprefix("external:"), SERVER_PACKAGES)
+                        self.assertNotIn(target.removeprefix("external:"), SERVER_PACKAGES)
                     elif name in SHARED:
                         self.assertIn(target, SHARED)
                     elif name in SERVER:

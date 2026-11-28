@@ -49,6 +49,23 @@ jobs:
           python -m pip install -r requirements.lock
           python -m pip install -e .
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: server/go.sum
+
+      - name: Build the real HTTP fixture
+        env:
+          GOTOOLCHAIN: local
+          GOENV: "off"
+          CGO_ENABLED: "0"
+        run: >-
+          python -c "import os,pathlib,shutil,subprocess;
+          binary=pathlib.Path(os.environ['RUNNER_TEMP'])/('phalanx-test-server.exe' if os.name=='nt' else 'phalanx-test-server');
+          subprocess.run(['go','build','-trimpath','-buildvcs=false','-o',str(binary),'./cmd/phalanx-server'],cwd='server',check=True);
+          shutil.copytree('phalanx/static',binary.parent/'assets',dirs_exist_ok=True);
+          pathlib.Path(os.environ['GITHUB_ENV']).open('a').write('PHALANX_TEST_SERVER='+str(binary)+'\n')"
+
       - name: Run tests
         run: python tests/shard.py ${{ matrix.shard }} ${{ matrix.target.shards }}
 
@@ -73,6 +90,22 @@ jobs:
         run: |
           python -m pip install -r requirements.lock
           python -m pip install -e .
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.4"
+          cache-dependency-path: server/go.sum
+
+      - name: Build the real HTTP fixture
+        env:
+          GOTOOLCHAIN: local
+          GOENV: "off"
+          CGO_ENABLED: "0"
+        run: >-
+          python -c "import os,pathlib,subprocess;
+          binary=pathlib.Path(os.environ['RUNNER_TEMP'])/'phalanx-test-server';
+          subprocess.run(['go','build','-trimpath','-buildvcs=false','-o',str(binary),'./cmd/phalanx-server'],cwd='server',check=True);
+          pathlib.Path(os.environ['GITHUB_ENV']).open('a').write('PHALANX_TEST_SERVER='+str(binary)+'\n')"
 
       - name: Run envelope probe once
         run: >-
@@ -157,7 +190,8 @@ jobs:
 
       - name: Install pinned disposable Python oracle dependencies
         if: runner.os == 'Windows'
-        run: '& $env:PHALANX_CONFORMANCE_PYTHON -m pip install -r requirements.lock'
+        run: '& $env:PHALANX_CONFORMANCE_PYTHON -m pip install -r conformance/requirements.lock'
+        working-directory: server
 
       - name: Prove actual Python-Go sole locks on Unix
         if: runner.os != 'Windows'

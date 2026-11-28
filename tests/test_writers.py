@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 
 from phalanx import captains, dispatch, finalization, flags, intake, shift, store, work_cli, writers
 from phalanx.api_client import APIClient
-from phalanx.dispatch_api import DispatchSettings
+from phalanx.dispatch_models import DispatchSettings
 from phalanx.intake_models import Intake
 from phalanx.pr_models import DEPLOYMENT_WINDOW
 from phalanx.store import connect, initialize, write_transaction
@@ -67,10 +67,14 @@ class WriterTest(ServerFixture, unittest.TestCase):
                     self.ok("/v1/captains", RUNNER, {
                         "session_ref": f"captain-{index}", "charter_revision": "c1"}, 201)
             with patch.object(captains, "captains", side_effect=counted):
+                with connect(self.path, mode="ro") as db:
+                    self.assertEqual(len(captains.captains(db, 100)["captains"]), count)
                 self.assertEqual(len(self.ok("/v1/captains?limit=100", OWNER)["captains"]), count)
             with patch.object(flags, "live_captains", wraps=captains.live_captains) as live:
-                self.ok("/v1/flags", OWNER)
+                with connect(self.path, mode="ro") as db:
+                    flags.all_flags(db)
                 self.assertEqual(live.call_count, 1)
+                self.ok("/v1/flags", OWNER)
         self.assertEqual(counts[0], counts[1])
 
     def test_writer_flags_are_scoped_and_capacity_is_read_once(self):
@@ -88,9 +92,8 @@ class WriterTest(ServerFixture, unittest.TestCase):
             stack.enter_context(patch("phalanx.flags.datetime", wraps=datetime)).now.return_value = now
             reads = [stack.enter_context(patch.object(dispatch, name, wraps=getattr(dispatch, name)))
                      for name in ("settings", "first_rework")]
-            current = writers.get_current(SimpleNamespace(
-                app=SimpleNamespace(state=SimpleNamespace(database_path=self.path)),
-                state=SimpleNamespace(writer=binding["writer"])))
+            with connect(self.path, mode="ro") as db:
+                current = writers.current(db, binding["writer"]["id"])
             self.assertEqual([read.call_count for read in reads], [1, 1])
         self.assertEqual(current["flags"], [entry for entry in expected if entry["execution_id"] == binding["id"]])
         self.assertIn("review_wait", {entry["kind"] for entry in current["flags"]})
@@ -1590,23 +1593,18 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.assertEqual(self.ok(route, RUNNER, body, method="PUT")["compaction_count"], 3)
 
     def test_unconfirmed_launch_wait_is_visible_without_claiming_native_execution(self):
-        from fastapi import Response
-        from starlette.requests import Request
-        from phalanx.operator_api import SUMMARY, conditional_read, dispatch_context, summary
+        from operator_fixture import SUMMARY, dispatch_context, summary, validator
 
         item_id, execution_id = self.item()
         binding, token, _ = self.register(item_id, execution_id)
         writer = binding["writer"]
         created = datetime.fromisoformat(writer["created_at"])
-        request = Request({"type": "http", "path": "/v1/operator/executions", "query_string": b"", "headers": []})
         etags = []
         for age in (timedelta(seconds=30), flags.LAUNCH_UNCONFIRMED - timedelta(microseconds=1),
                     flags.LAUNCH_UNCONFIRMED, timedelta(minutes=30)):
             with self.subTest(age=age), connect(self.path) as db:
                 now = created + age
-                response = Response()
-                conditional_read(request, response, db, now)
-                etags.append(response.headers["ETag"])
+                etags.append(validator(db, now, "/v1/operator/executions"))
                 row = db.execute(SUMMARY + " WHERE execution.id=?", (execution_id,)).fetchone()
                 projected = summary(row, now, dispatch_context(db, now))
                 overdue = age >= flags.LAUNCH_UNCONFIRMED
@@ -2033,7 +2031,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                         self.assertEqual(flags.captain_idle_with_work(db, now), [])
 
     def test_owner_action_pickup_blockers_remain_visible_after_the_existing_queue_budget(self):
-        from phalanx.operator_api import SUMMARY, dispatch_context, summary
+        from operator_fixture import SUMMARY, dispatch_context, summary
 
         with write_transaction(self.path) as db:
             intake.register(db, "repo", "https://github.com/e/r.git")
@@ -2177,7 +2175,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
         self.assertIn("without finishing its handoff", stale["reason"])
 
     def test_deliberate_hold_suppresses_idle_only_while_current_fresh_and_live(self):
-        from phalanx.operator_api import SUMMARY, dispatch_context, summary
+        from operator_fixture import SUMMARY, dispatch_context, summary
 
         with write_transaction(self.path) as db:
             intake.register(db, "repo", "https://github.com/e/r.git")
@@ -2248,9 +2246,7 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
                     db.set_progress_handler(None, 0)
 
     def test_expired_hold_invalidates_board_cache_without_a_write(self):
-        from fastapi import Response
-        from starlette.requests import Request
-        from phalanx.operator_api import conditional_read
+        from operator_fixture import validator
 
         with write_transaction(self.path) as db:
             intake.register(db, "repo", "https://github.com/e/r.git")
@@ -2261,11 +2257,9 @@ class CaptainFlagTest(ServerFixture, unittest.TestCase):
             with patch("phalanx.intake.timestamp", return_value=held_at.isoformat(timespec="microseconds")):
                 captains.record_action(db, item["id"], captains.Action(
                     captain_id=captain["id"], action="held", reason="Charter writer cap"))
-            request = Request({"type": "http", "path": "/v1/operator/executions", "query_string": b"", "headers": []})
-            first, second = Response(), Response()
-            conditional_read(request, first, db, now)
-            conditional_read(request, second, db, now + timedelta(seconds=1))
-            self.assertNotEqual(first.headers["ETag"], second.headers["ETag"])
+            first = validator(db, now, "/v1/operator/executions")
+            second = validator(db, now + timedelta(seconds=1), "/v1/operator/executions")
+            self.assertNotEqual(first, second)
 
 
 

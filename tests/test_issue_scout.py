@@ -182,7 +182,12 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
             self.issue(5, state="closed"),
         ]
         with patch("phalanx.issue_scout.historical_item", wraps=issue_scout.historical_item) as history:
-            self.submit(self.claim(), issues)
+            claimed = self.claim()
+            with write_transaction(self.path) as db:
+                issue_scout.page(db, claimed["id"], issue_scout.Page(
+                    claim_id=claimed["claim_id"], repository_id="example", page=claimed["page"],
+                    verified_login="configured-owner", verified_id=42,
+                    issues=issues, has_more=False))
             self.assertEqual(history.call_count, len(issues))
             self.decide("declined", 3)
             self.due()
@@ -218,22 +223,16 @@ class IssueScoutTest(ServerFixture, unittest.TestCase):
 
     def test_overview_reuses_scout_status_for_body_and_conditional_validator(self):
         route = "/v1/operator/overview"
-        with patch("phalanx.issue_scout.status", wraps=issue_scout.status) as status:
-            with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {RUNNER}"})) as response:
-                self.assertEqual(response.status, 200)
-                overview = json.load(response)
-                etag = response.headers["ETag"]
-            self.assertEqual(status.call_count, 1)
-            self.assertEqual(overview["issue_scout"]["state"], "due")
-            status.reset_mock()
-            self.assertEqual(self.request(
-                route, RUNNER, headers={"If-None-Match": etag})[0], 304)
-            self.assertEqual(status.call_count, 1)
-            self.claim()
-            status.reset_mock()
-            self.assertEqual(self.request(
-                route, RUNNER, headers={"If-None-Match": etag})[0], 200)
-            self.assertEqual(status.call_count, 1)
+        with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {RUNNER}"})) as response:
+            self.assertEqual(response.status, 200)
+            overview = json.load(response)
+            etag = response.headers["ETag"]
+        self.assertEqual(overview["issue_scout"]["state"], "due")
+        self.assertEqual(self.request(route, RUNNER, headers={"If-None-Match": etag})[0], 304)
+        self.claim()
+        code, changed = self.request(route, RUNNER, headers={"If-None-Match": etag})
+        self.assertEqual(code, 200)
+        self.assertEqual(changed["issue_scout"]["state"], "running")
 
     def test_single_claim_page_replay_and_captain_handoff_preserve_cursor(self):
         with ThreadPoolExecutor(max_workers=4) as pool:

@@ -17,7 +17,7 @@ The [native Go server](../server/README.md) implements the public
 HTTP/application/schema26 SQLite families with pinned P0/D0 conformance fixtures.
 Its [versioned entrypoint and existing launch adapter](go-server-release.md) are the
 repository default, not proof of any installation's live engine/revision.
-Python HTTP is deprecated but retained for explicit rollback. Python clients,
+Python HTTP is removed; rollback uses a separate retained known-good package. Python clients,
 reconciler and admin remain supported; [removal boundaries](python-server-deprecation.md)
 retain shared domain/model/schema and historical oracle dependencies.
 Its immutable-source/raw-wire/current-data evidence and
@@ -68,19 +68,19 @@ It does not launch sessions, write GitHub, or merge PRs.
 
 | Boundary | Authoritative state / responsibility | Implementation |
 | --- | --- | --- |
-| API and database | Items, dependencies, executions, attempts, questions/replies, reports, bindings, actions, observations and flags; atomic transitions and finalization | [Go startup](../server/cmd/phalanx-server/main.go), [application](../server/internal/application), [storage](../server/internal/sqlite); retained Python reference: [API](../phalanx/api.py), [store](../phalanx/store.py), [intake](../phalanx/intake.py), shared [transitions](../phalanx/transitions.py) |
+| API and database | Items, dependencies, executions, attempts, questions/replies, reports, bindings, actions, observations and flags; atomic transitions and finalization | [Go startup](../server/cmd/phalanx-server/main.go), [application](../server/internal/application), [storage](../server/internal/sqlite); Python offline [store/admin](../phalanx/server_admin.py), shared [transitions](../phalanx/transitions.py) |
 | Python API clients | One authenticated, no-redirect transport with explicit full routes, HTTP status/details and uncertain-mutation diagnostics; shared CLI JSON output | [APIClient.call](../phalanx/api_client.py), [print_json](../phalanx/json_utils.py) |
-| GitHub | PR identity, actual head/base, checks, feedback, merge and deployment facts | [GitHub reader](../phalanx/github.py), [reconciliation](../phalanx/reconciliation.py) |
+| GitHub | PR identity, actual head/base, checks, feedback, merge and deployment facts | [GitHub reader](../phalanx/github.py), [native reconciliation](../server/internal/application/reconciliation.go) |
 | Captain runtime | Native launch/discovery, coordination, trust-block escalation, shift handoff and creator-owned cleanup | [shift client](../phalanx/shift.py), [Captain prompt](../phalanx/prompts/captain.md), [keeper prompt](../phalanx/prompts/keeper.md) |
-| Pickup projection | Captain liveness comes from `captains.live_captains`; routing/pickup select only active registrations. Request-local capacity/rework, holds and native availability snapshots feed board validators and rows; writer reads derive only their execution's flags, sharing capacity with the binding | [captains](../phalanx/captains.py), [pickup](../phalanx/pickup.py), [operator views](../phalanx/operator_api.py), [flags](../phalanx/flags.py) |
+| Pickup projection | Routing/pickup select only live active registrations. Request-local capacity/rework, holds and native availability snapshots feed board validators and rows; writer reads derive only their execution's flags, sharing capacity with the binding | [captains](../server/internal/application/captains.go), [pickup](../server/internal/application/pickup.go), [operator views](../server/internal/application/operator.go), [flags](../server/internal/application/flags.go) |
 | Scribe browser | Shared DOM/SVG/link and request-deadline helpers, visible-page board rendering with delegated row controls, Markdown rendering, fetch/auth transport, and shell-owned response projections and form/dialog wiring. Recorded session targets are resolved by the server, not inferred by the browser. | [helpers](../phalanx/static/operator-helpers.js), [board](../phalanx/static/operator-board.js), [Markdown](../phalanx/static/operator-markdown.js), [HTTP](../phalanx/static/operator-http.js), [shell](../phalanx/static/operator-shell.js), [session targets](../phalanx/session_links.py) |
-| Writer runtime | Implement, run repository checks, self-review, commit, publish, and fix its primary PR through delivery | [writer binding](../phalanx/writers.py), [work CLI](../phalanx/work_cli.py), [worker prompt](../phalanx/prompts/worker.md) |
+| Writer runtime | Implement, run repository checks, self-review, commit, publish, and fix its primary PR through delivery | [native writer binding](../server/internal/application/writers.go), [work CLI](../phalanx/work_cli.py), [worker prompt](../phalanx/prompts/worker.md) |
 | Execution host | Mapped checkouts, isolated item worktrees, Git credentials, prepared checks environments, scoped credential files and artifacts | [workspaces](../phalanx/workspaces.py), [configuration](configuration.md) |
 | Reconciler | Read provider facts independently, post timestamped observations, run trusted local checks serially and notify on owner-needed flags | [reconciler](../phalanx/reconciler.py), [validation policy](validation-policy.md) |
-| Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [models](../phalanx/usage_models.py), [API/projection](../phalanx/usage.py), [schema](../phalanx/schema.py) |
-| Periodic issue scouting | Owner settings, due/cursor, fenced page claims, retry and source/owner-decision metadata in server SQLite; local credential verifies configured login/ID; ordinary intake owns admitted work | [server](../phalanx/issue_scout.py), [wake client](../phalanx/issue_scout_client.py), [activation](direct-path.md#periodic-github-issue-scouting) |
+| Observed usage | Optional allowlisted cumulative native writer measurements, separate from lifecycle state; read-only native tools transport through existing authorized runtime passes | [contract](usage.md), [client models](../phalanx/usage_models.py), [native projection](../server/internal/application/usage.go), [schema](../phalanx/schema.py) |
+| Periodic issue scouting | Owner settings, due/cursor, fenced page claims, retry and source/owner-decision metadata in server SQLite; local credential verifies configured login/ID; ordinary intake owns admitted work | [native server](../server/internal/application/scout.go), [wake client](../phalanx/issue_scout_client.py), [activation](direct-path.md#periodic-github-issue-scouting) |
 
-Operator summary waits are selected in `operator_api.summary_wait`: writerless queued
+Operator summary waits are selected in Go application `operator.go`: writerless queued
 work uses only `pickup.decision`; otherwise Building acquisition, delivery rework/handoff,
 persisted waits, prerequisites, retained-writer queue controls and unconfirmed launch
 waits take precedence in that order. The projection reuses the request-local context
@@ -281,13 +281,13 @@ storage, authentication and backups; multi-user tenancy and multi-device handoff
 remain separate work.
 
 [Deployment tooling](deployment.md) provides foreground service entrypoints and a
-database-adjacent OS lock for `deploy run server`; raw Uvicorn does not acquire that
-lock. One supervisor owns each service. Reconciler scratch locking is independent.
+database-adjacent OS lock owned by the Go child for `deploy run server`.
+One supervisor owns each service. Reconciler scratch locking is independent.
 Templates do not install a supervisor, launch sessions or deploy themselves. Adoption
 on an existing installation is a reviewed service-owner operation preserving paths,
 database, tokens, active writers and capacity; never initialize a replacement database
 or restart another owner's services from a writer.
-The [Windows API entrypoint](../phalanx/server_admin.py) normalizes only its own inherited
+The [Windows API launcher](../phalanx/deployment.py) and native Go entrypoint normalize only their own inherited
 background CPU priority to Normal before serving; the operator configures the existing
 supervisor at Normal as well. This does not change writer capacity or other processes.
 

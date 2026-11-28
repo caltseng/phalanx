@@ -29,7 +29,7 @@ under running workers. [Resume an existing install](resume.md) uses the recorded
 ## Install the package
 
 The supported HTTP default is a verified [Go server package](go-server-release.md).
-Python HTTP is deprecated, not removed; Python CLI/Captain/writer/reconciler and
+Python HTTP is removed; Python CLI/Captain/writer/reconciler and
 offline admin remain supported. Install Python tooling below and extract the reviewed
 Go package with its unchanged `assets` beside the binary. Record both revisions/digests.
 Repository defaults do not prove an existing installation runs that engine.
@@ -52,7 +52,7 @@ python -m pip install -r requirements.lock -e .
 
 The `python -m phalanx` commands in these docs are the same in either shell once the virtual environment is active. Examples use Windows paths such as `C:\phalanx-runner` for the runner state directory and `C:/enlistments/example` for a checkout. On macOS or Linux use paths such as `~/phalanx-runner` on the command line and absolute paths such as `/Users/you/src/example` in JSON config. Set environment variables with `$env:NAME = "value"` in PowerShell or `export NAME="value"` in a POSIX shell. On macOS, configure checkout and state paths with their exact on-disk letter case.
 
-If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins runtime dependencies for repeatable local installs, while the package metadata keeps compatible ranges for downstream installs. The `server` extra (`pip install -e ".[server]"`) is needed only for retained Python HTTP rollback/reference tests when not using the lock file; do not remove locked oracle/rollback dependencies during deprecation.
+If the machine cannot reach PyPI, install from a local wheel directory with `python -m pip install --no-index --find-links <wheel-dir> -r requirements.lock -e .`. The lock file pins client/admin runtime dependencies; package metadata keeps compatible ranges. There is no current Python `server` extra. Historical P0/D0 conformance uses a separate `server/conformance/requirements.lock` in its isolated prepared environment; never replace retained rollback packages or their pinned dependencies with current runtime files.
 
 ## Create credentials and start the server
 

@@ -1,18 +1,21 @@
-# Python HTTP server deprecation
+# Python HTTP server retirement
 
-The versioned packaged Go HTTP server is the supported repository default.
-Python HTTP is deprecated, **not removed**: explicit `--engine python` or saved
-`server.engine: "python"` is retained temporarily for rollback/reference work.
+The versioned packaged Go HTTP server is the **only current HTTP implementation**.
+Python HTTP routes, app startup and serving dependencies are removed. Explicit
+`--engine python`, saved `server.engine: "python"`, the old raw app import and
+`server_admin.serve` fail clearly with migration guidance, before any database/config
+change. They never silently choose Go or restore Python.
 Python CLI, Captain/writer clients, reconciler, domain models, offline admin and Scribe
 remain supported. This stage changes source/tooling defaults, not any live installation,
 scheduled task, private configuration, credential, saved capacity or current database.
 Actual live Go adoption/revision requires the service owner's separate receipts.
 
-`deploy run` resolves CLI engine, saved engine, then Go. An absolute verified packaged
+`deploy run` resolves CLI engine, saved engine, then Go; a resolved Python selection
+fails. An absolute verified packaged
 binary is required via `--go-binary` or `server.go_binary`; missing/failed Go never
-silently starts Python. Before upgrading an implicit Python task, its owner must pin
-Python explicitly or complete the [Go rehearsal](go-server-release.md). Explicit existing
-engines remain effective and no command rewrites the config. New-store setup uses
+silently starts Python. Before upgrading a Python task, its owner must complete the
+[Go rehearsal](go-server-release.md), or retain the separate known-good installation
+for coordinated rollback. No command rewrites the config. New-store setup uses
 `server initialize` offline under the service lock; Go never initializes/migrates data.
 
 ## Reviewed parity evidence
@@ -50,25 +53,47 @@ required finding may be waived to declare deprecation ready or remove the fallba
 The exact named owner-approved malformed/default exceptions remain exact; no refreeze
 or broad error normalization is authorized.
 
-## Retained code and follow-on removal inventory
+## Removed and retained consumers
 
-The follow-on removal must trace consumers before deleting anything. This stage removes
-no Python module, dependency, historical package or Scribe asset.
+HTTP removal does not remove supported Python consumers or historical evidence.
+No historical package, Git revision, source manifest, golden or Scribe asset is deleted.
 
 | Entrypoint / dependency / call site | Removal boundary and retained consumer |
 | --- | --- |
-| `python -m uvicorn phalanx.api:app`; `phalanx/api.py` | Deprecated raw Python HTTP entrypoint/reference lifespan and routers. Not the supported new-install command and does not acquire the deployment lock. Historical tests/oracles still invoke it. |
-| `phalanx/server_admin.py:serve`; `deployment.run_service` Python branch; CLI `deploy run ... --engine python` and saved engine | Temporary single-owner rollback entrypoint. Retain until separately reviewed removal and compatible recovery replacement. |
-| `auth.py`, `intake_api.py`, `dispatch_api.py`, `operator_api.py`, `operator_web.py`, `muster_api.py` | Python HTTP/auth/router projections; production authority now lives in Go. Test fixtures and temporary rollback still require them. |
-| `captains.py`, `writers.py`, `flags.py`, `usage.py`, `issue_scout.py` | Mix Python routers with domain helpers. Do not delete by filename: other Python reference modules/tests and shared domain projections import these helpers. Trace/split only in the follow-on scope. |
-| FastAPI/Uvicorn `server` extra in `pyproject.toml`; Starlette/AnyIO/h11 and related pins in `requirements.lock` | Retained Python HTTP/oracle dependencies. Do not remove the complete lockfile, refreeze historical runtimes or assume every transitive pin is server-only. |
-| `tests/test_bootstrap.py`, server HTTP tests, original assertions, `server/conformance/oracle.py`, exported P0/D0 sources | Historical compatibility/reference fixtures, including explicit Python selection in `release.production`. Preserve original bytes, exact exclusions, goldens and labeled failures; inventory-only coverage was insufficient. |
+| `python -m uvicorn phalanx.api:app`; `phalanx/api.py` | No app, lifespan or routes remain. A migration-only tombstone explains the removed command. |
+| `server_admin.py:serve`; Python branch of `deployment.run_service` | Serving branch removed; old selections fail. Offline initialize/backup/restore remain. Rollback uses a separately retained package/interpreter. |
+| `auth.py`, `intake_api.py`, `dispatch_api.py`, `operator_api.py`, `operator_web.py`, `muster_api.py` | HTTP modules removed. Dispatch payload is retained in `dispatch_models.py`. Offline operator projections used by synthetic unit fixtures move to `tests/operator_fixture.py`, without HTTP request/response classes, handlers or routes. |
+| `captains.py`, `writers.py`, `flags.py`, `usage.py`, `issue_scout.py` | HTTP imports, routers and handlers removed; non-HTTP models/domain helpers remain for synthetic seeding, reference projections and assertions. They do not run the API. |
+| FastAPI/Uvicorn `server` extra and runtime-only transitives | Removed from package metadata/current runtime lock. Pydantic and its required transitives remain for supported clients/models. Exact historical oracle pins remain separately in `server/conformance/requirements.lock` and immutable P0/D0 exports; no refreeze. |
+| `tests/test_bootstrap.py`, HTTP tests, envelope probe | Actual Go production process, isolated stores, unchanged CLI/network assertions, graceful stop/restart and ownership. No current Python server app/custom-route fixture. |
+| `server/conformance/oracle.py`, exported P0/D0 sources | Historical immutable comparisons/rollback remain extra evidence, not a current Python runtime. Native contract docs, original golden vectors and raw wire/typed-state assertions remain. |
 | `api_client.py`, `work_cli.py`, `shift.py`, `reconciler.py`, `issue_scout_client.py`, `issue_intake.py`, `muster.py`, Git/provider/workspace helpers and prompts | Supported Python clients, reconcilers and runtime integration, **not** HTTP-server removal targets. |
 | Pydantic and `*_models.py`, `transitions.py`, `json_utils.py`, shared enums/domain behavior | Still used by clients and domain/validation code. Examples: reconciler/workspaces import `transitions.item_branch`; intake models import lifecycle enums. Retain even where also used by Python HTTP. |
 | `server initialize/backup/restore`, `server_admin.py`, `store.py`, `schema.py`, `scripts/convert_store.py` | Supported offline server-host admin/schema/backup/conversion, not client-side queue access. Keep storage/schema dependencies until separately replaced; no live schema conversion is authorized here. |
 | `phalanx/static`, package-data declarations, Go package `assets`, `httpapi/contract-docs` | Unchanged Scribe and intentionally frozen Python-generated OpenAPI/docs/redoc bytes served natively by Go, not runtime Python requests. Preserve assets and route/model accuracy. |
 
-## Rollback, testing and removal prerequisites
+## Durable replacement vectors and rollback
+
+The original historical matrix H01-H15 remains in the complete independently stored
+report above, not rewritten as a current parity certificate. Current regression coverage
+includes the real Go fixture for original intake/writer/dependency/scout/operator/usage/
+CLI/reconciler tests, plus native transaction/admission/commit-failure/concurrency tests.
+Python internal query/clock spies explicitly remain offline fixture tests, not purported
+Go HTTP coverage. The complete peer/origin matrix is retained in native
+`TestRetainedDashboardPeerAndOriginVectors`; the old worker-slot contention intent is
+covered by `TestAdmissionRefusalsKeepWorkerIndependentResponsesAndRecover` on the actual
+native gate, and real packaged HTTP uses both SQLite lock modes.
+
+G1/G2 now have standalone retained production vectors in `conformance/identity.py`:
+trusted/untrusted forwarding, exact redirect scheme, complete capacity/muster responses,
+immutable receipts, local-board refusals, every home/link case and unchanged muster
+client identity checks, with raw wire and typed state. These no longer require a current
+Python HTTP source. Pre-removal Python/Go evidence remains historical.
+G3 retains the original writer regression plus `test_go_contract.py` null/renamed/same-name
+controls on explicitly older-than-24-hour completed executions, heartbeat effects,
+actual disabled observations, immutable closed state and replay.
+G4 retains every production header/framing/prefix/resource vector and native prompt-disposal
+tests; immutable P0/D0 sources and exact allowed exceptions are unchanged.
 
 Use the [versioned package/rehearsal commands](go-server-release.md), prepared checks
 environment and isolated fresh/retained stores. Run default/saved/explicit-engine and
@@ -78,14 +103,16 @@ OS exclusion. Record exact source/build/package/test identities outside tracked 
 No live config/task/database or credential may be borrowed for writer tests.
 
 For rollback, stop/drain only the exact Go process tree through the existing sole owner,
-then select the retained reviewed Python package with `--engine python` on the **same
+then select the retained reviewed Python package **using its own interpreter/source**
+with `--engine python` on the **same
 evolved current database**. Verify new Go-accepted writes, original-key replay,
 auth/bindings/reports/jobs and existing reconciler continuity. Retain previous package,
 configuration, fresh validated backup and earlier evidence; never restore an old snapshot
 over newly accepted work. See the [complete temporary rollback procedure](go-server-release.md#temporary-python-http-rollback).
 No new supervisor/service/watchdog or automatic fallback is introduced.
 
-Removing the Python HTTP fallback is a later separately reviewed stage. It requires all
-required parity findings resolved, final exact-head review/CI, current-data operational
-rollback evidence and a consumer-by-consumer inventory preserving supported Python/client/
-admin/shared-model/assets functions. This stage does not claim that later removal is ready.
+Source removal still requires final exact-head independent review, required CI and real
+packaged current-data/backup/rollback/sole-owner proof. Source delivery is not private
+deployment. The existing authorized operator alone coordinates later live adoption with
+fresh actual-current-data receipts, preserving config, credentials, settings and writers;
+no new service, data reset, implicit cutover or history/artifact deletion is authorized.

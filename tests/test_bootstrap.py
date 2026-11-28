@@ -1,11 +1,10 @@
-import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import socket
+import signal
 import subprocess
-import sys
 from tempfile import TemporaryDirectory
 import threading
 import time
@@ -14,9 +13,6 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-import uvicorn
-
-from phalanx.api import create_app
 from phalanx import store
 from phalanx.store import APPLICATION_ID, connect, initialize, read_transaction, write_transaction
 from cli_runner import run_cli
@@ -71,72 +67,29 @@ def claim_stage(path, item_id, token, session_ref="fixture"):
 # Tests never assert on these timeouts.
 REQUEST_TIMEOUT = STARTUP_TIMEOUT = WAIT_SECONDS
 
-# Let the real server exit before its Python launcher exits on Windows.
-SERVER_PROCESS = """
-import sys
-from threading import Thread
-
-import uvicorn
-
-server = uvicorn.Server(uvicorn.Config("phalanx.api:app", port=int(sys.argv[1]),
-                                     timeout_graceful_shutdown=5))
-
-def stop_on_eof():
-    sys.stdin.buffer.read()
-    server.should_exit = True
-
-Thread(target=stop_on_eof, daemon=True).start()
-server.run()
-"""
-
-
-class InProcessServer(uvicorn.Server):
-    def __init__(self, config):
-        super().__init__(config)
-        self.stop_requested = threading.Event()
-
-    async def main_loop(self):
-        # Wake teardown immediately, retaining uvicorn's normal graceful shutdown.
-        if not await self.on_tick(0):
-            await asyncio.to_thread(self.stop_requested.wait)
-
-
 class ServerFixture:
-    def start_server(self, path, *, in_process=True, script=SERVER_PROCESS, app=None, **environment):
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+    def start_server(self, path, **environment):
+        if any(not isinstance(value, str) for value in environment.values()):
+            raise TypeError("Go HTTP fixture environment values must be strings")
+        binary = Path(os.environ["PHALANX_TEST_SERVER"]).resolve(strict=True)
+        if not path.exists():
+            initialize(path)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
-        env = dict(os.environ, PHALANX_DB=str(path), PHALANX_OWNER_TOKEN=OWNER,
+        env = {key: value for key, value in os.environ.items() if not key.startswith("PHALANX_")}
+        env.update(PHALANX_DB=str(path), PHALANX_OWNER_TOKEN=OWNER,
                    PHALANX_RUNNER_TOKEN=RUNNER, PHALANX_LOCAL_BOARD="0")
         env.update(environment)
-        if in_process:
-            server = InProcessServer(uvicorn.Config(
-                app if app is not None else create_app(), host="127.0.0.1", port=port, log_config=None,
-                log_level="error", access_log=False,
-                timeout_graceful_shutdown=5, timeout_keep_alive=0,
-            ))
-            # Proactor TCP reset callbacks can leak transports during Windows teardown.
-            thread = threading.Thread(
-                target=lambda: asyncio.run(server.serve(sockets=[listener]),
-                                           loop_factory=asyncio.SelectorEventLoop),
-                daemon=True,
-            )
-            self.addCleanup(self.stop_server, (server, thread, listener))
-            # The lifespan snapshots its environment before uvicorn marks startup complete.
-            with patch.dict(os.environ, env, clear=True):
-                thread.start()
-                deadline = time.monotonic() + STARTUP_TIMEOUT
-                while thread.is_alive() and not server.started and time.monotonic() < deadline:
-                    time.sleep(0.001)
-            self.assertTrue(server.started, "In-process API failed to start")
-            return server, thread, listener
-        listener.close()
         log = path.with_suffix(".log")
-        with log.open("w") as output:
+        with log.open("a") as output:
             server = subprocess.Popen(
-                [sys.executable, "-c", script, str(port)],
-                env=env, stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
+                [str(binary), "--host", "127.0.0.1", "--port", str(port),
+                 "--assets", str(Path(__file__).resolve().parents[1] / "phalanx" / "static")],
+                env=env, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                start_new_session=os.name != "nt",
             )
         self.addCleanup(self.stop_server, server)
         deadline = time.monotonic() + STARTUP_TIMEOUT
@@ -151,26 +104,17 @@ class ServerFixture:
 
     @staticmethod
     def stop_server(server):
-        if isinstance(server, tuple):
-            instance, thread, listener = server
-            instance.should_exit = True
-            instance.stop_requested.set()
-            thread.join(timeout=STARTUP_TIMEOUT)
-            listener.close()
-            if thread.is_alive():
-                raise RuntimeError("In-process API failed to shut down")
+        if server.poll() is not None:
             return
-        if server.stdin and not server.stdin.closed:
-            server.stdin.close()
-        # Teardown only: a slow shutdown on a loaded host is not a test failure.
-        for stop in (None, server.terminate, server.kill):
-            if stop:
-                stop()
-            try:
-                server.wait(timeout=15)
-                return
-            except subprocess.TimeoutExpired:
-                pass
+        server.send_signal(signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM)
+        try:
+            server.wait(timeout=STARTUP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=15)
+            raise RuntimeError("Go HTTP fixture did not gracefully shut down") from None
+        if server.returncode != 0:
+            raise RuntimeError(f"Go HTTP fixture exited with {server.returncode}")
 
     def get(self, path, token=None):
         return self.request(path, token=token)

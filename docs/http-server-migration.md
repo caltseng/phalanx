@@ -1,8 +1,8 @@
 # HTTP server migration: compatibility and architecture specification
 
 **Current implementation pointer:** the [packaged Go server](../server/README.md)
-is now the supported repository launch default. Python HTTP is
-[deprecated, temporarily retained for explicit rollback](python-server-deprecation.md).
+is now the only supported repository HTTP runtime. Python HTTP is
+[removed; rollback uses a retained known-good package](python-server-deprecation.md).
 Python CLI/reconciler/admin and Scribe remain supported. The original report status,
 pins, named owner decisions and limits below are historical provenance, not a claim
 that Go is unimplemented, blanket parity approval or a live cutover receipt.

@@ -9,10 +9,11 @@ import unittest
 from unittest.mock import patch
 from urllib.request import Request, urlopen
 
-from phalanx import dispatch, intake, operator_api
+from phalanx import dispatch, intake
+import operator_fixture as operator_api
 from phalanx.intake import record, steer
 from phalanx.intake_models import Intake, Steering
-from phalanx.operator_api import closed_page, conditional_read, filtered_open_page, open_page, short_title
+from operator_fixture import closed_page, filtered_open_page, open_page, short_title, validator
 from phalanx.reconciliation import Observation, record as record_observation
 from phalanx.store import APPLICATION_ID, connect, initialize, write_transaction
 from phalanx.transitions import Execution, PullRequest, Revision, Stage, Status, StoredReport, Target, Wait, item_branch
@@ -629,44 +630,40 @@ class DashboardTest(ServerFixture, unittest.TestCase):
                                       headers={"If-None-Match": "*"})[0], 404)
 
     def test_read_context_is_shared_with_validators_and_304_skips_summary(self):
-        from fastapi import Response
         item_id = self.row(BOARD)["item_id"]
-        handlers = ((operator_api.list_executions, ()), (operator_api.overview, ()),
-                    (operator_api.group, ("wave-1",)), (operator_api.current_item, (item_id,)))
-        for handler, args in handlers:
-            with self.subTest(handler=handler.__name__), ExitStack() as stack:
+        routes = (BOARD, "/v1/operator/overview", "/v1/operator/groups/wave-1",
+                  "/v1/operator/items/" + item_id)
+        for route in routes:
+            with self.subTest(route=route), ExitStack() as stack:
                 reads = [stack.enter_context(patch.object(module, name, wraps=getattr(module, name)))
                          for module, name in ((dispatch, "settings"), (dispatch, "first_rework"),
                                               (operator_api, "availability_reports"), (operator_api.pickup, "active_holds"))]
-                request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(database_path=self.path)),
-                                          url=SimpleNamespace(path=handler.__name__, query=""), headers={})
-                response = Response()
-                handler(request, response, *args)
+                now = datetime.now(UTC)
+                with connect(self.path, mode="ro") as db:
+                    context = operator_api.dispatch_context(db, now)
+                    token = validator(db, now, route, context=context)
                 self.assertEqual([read.call_count for read in reads], [1, 1, 1, 1])
                 for read in reads:
                     read.reset_mock()
-                request.headers["if-none-match"] = response.headers["ETag"]
                 stack.enter_context(patch.object(operator_api, "SUMMARY", "INVALID SUMMARY"))
-                self.assertEqual(handler(request, Response(), *args).status_code, 304)
+                with connect(self.path, mode="ro") as db:
+                    self.assertEqual(validator(db, now, route), token)
                 self.assertEqual([read.call_count for read in reads], [1, 1, 1, 1])
+                with urlopen(Request(self.url + route, headers={"Authorization": f"Bearer {OWNER}"})) as response:
+                    go_token = response.headers["ETag"]
+                self.assertEqual(self.request(route, OWNER, headers={"If-None-Match": go_token}), (304, ""))
 
     def test_retry_expiry_changes_token_and_queue_reason_without_a_write(self):
-        from fastapi import Response
-        from starlette.requests import Request as APIRequest
         before = datetime.fromisoformat(LATER)
         with write_transaction(self.path) as db:
             ready_at = int((before + timedelta(seconds=1)).timestamp() * 1000)
             db.execute("UPDATE executions SET retry_at=?, ready_since=? WHERE id=?",
                        (ready_at, ready_at, self.execution))
-        request = APIRequest({"type": "http", "method": "GET", "path": BOARD,
-                              "query_string": b"", "headers": []})
         with connect(self.path, mode="ro") as db:
-            first = Response()
-            self.assertIsNone(conditional_read(request, first, db, before))
-            second = Response()
-            self.assertIsNone(conditional_read(request, second, db, before + timedelta(seconds=2)))
-        self.assertNotEqual(first.headers["ETag"], second.headers["ETag"])
-        from phalanx.operator_api import dispatch_context, summary, SUMMARY
+            first = validator(db, before, BOARD)
+            second = validator(db, before + timedelta(seconds=2), BOARD)
+        self.assertNotEqual(first, second)
+        from operator_fixture import dispatch_context, summary, SUMMARY
         with connect(self.path, mode="ro") as db:
             row = db.execute(f"{SUMMARY} WHERE execution.id=?", (self.execution,)).fetchone()
             context = dispatch_context(db, before)

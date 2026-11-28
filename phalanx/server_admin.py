@@ -5,7 +5,6 @@ from pathlib import Path
 
 from .config import database_path
 from .file_lock import lock
-from .priority import foreground_priority
 from .store import initialize, snapshot
 
 
@@ -30,10 +29,8 @@ def initialize_database():
 
 
 def serve(*, host, port):
-    import uvicorn
-
-    foreground_priority()
-    uvicorn.run("phalanx.api:app", host=host, port=port, workers=1)
+    raise ValueError("Python HTTP server has been removed; use the verified packaged Go server. "
+                     "See docs/python-server-deprecation.md; server initialize/backup/restore remain supported")
 
 
 def run_server_command(args) -> None:
