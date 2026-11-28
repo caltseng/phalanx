@@ -670,6 +670,79 @@ class WriterTest(ServerFixture, unittest.TestCase):
         self.ok(route + "/timeline", replacement_token, code=403)
         self.ok("/v1/writer", token, code=401)
 
+    def test_writer_status_recovers_current_context_with_existing_cli_shape(self):
+        context = ['https://example.test/playlist?id=1', 'Approved "schema"\n  Privacy details\n$nonce']
+        item = self.ok("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write it", "target": "report",
+            "context_links": context}, 201)
+        item_id, execution_id = item["id"], item["execution"]["id"]
+        binding, token, _ = self.register(item_id, execution_id)
+        self.assertEqual(binding["context_links"], context)
+        with patch.object(work_cli, "credential", return_value=(self.url, token)):
+            for command in ("status", "next"):
+                result = run_cli(["work", command])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                current = json.loads(result.stdout)
+                self.assertEqual(current["context_links"], context)
+                for field in ("id", "item_id", "state", "version", "writer", "last_reply", "usage"):
+                    self.assertEqual(current[field], binding[field])
+                self.assertNotIn("request", current)
+                self.assertNotIn("token_digest", current["writer"])
+
+        waiting = self.submit(token, binding, outcome="needs_input",
+                              question={"prompt": "Which detail?", "handoff": "Keep working"})
+        route = f"/v1/items/{item_id}/executions/{execution_id}"
+        queued = self.ok(route + "/reply", OWNER, {
+            "expected_version": waiting["version"], "answer": "Update the accepted context"})
+        updated = ['Current "schema"\nDo not retain the original context']
+        steered = self.ok(route, OWNER, {
+            "expected_version": queued["version"], "context_links": updated}, method="PATCH")
+        current = self.ok("/v1/writer", token)
+        self.assertEqual(current["context_links"], updated)
+        self.assertEqual(current["version"], steered["execution"]["version"])
+        self.assertEqual(self.ok("/v1/writer/attempt", token, method="POST")["context_links"], updated)
+
+    def test_writer_context_defaults_empty_and_preserves_item_execution_fences(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing):
+                item_id, execution_id = self.item()
+                if missing:
+                    with write_transaction(self.path) as db:
+                        db.execute("UPDATE work_items SET request_json=json_remove(request_json, '$.context_links') "
+                                   "WHERE id=?", (item_id,))
+                binding, token, _ = self.register(item_id, execution_id)
+                self.assertEqual(binding["context_links"], [])
+                self.assertEqual(self.ok("/v1/writer", token)["context_links"], [])
+                drafted = self.submit(token, binding, report_markdown="# Report\n")
+                reviewed = self.submit(token, drafted, report_revision=drafted["state"]["report_draft"])
+                self.submit(token, reviewed, report_revision=reviewed["state"]["report_draft"])
+                self.ok("/v1/writer", token, code=401)
+
+        context = ["Only the first item's context"]
+        item = self.ok("/v1/items", OWNER, {
+            "repository_id": "repo", "goal": "Write it", "target": "report",
+            "context_links": context}, 201)
+        item_id, execution_id = item["id"], item["execution"]["id"]
+        original, token, _ = self.register(item_id, execution_id)
+        other_id, other_execution = self.item()
+        other, other_token, _ = self.register(other_id, other_execution)
+        self.assertEqual(self.ok("/v1/writer", other_token)["context_links"], [])
+        self.assertEqual(self.ok("/v1/writer", token)["context_links"], context)
+        self.ok(f"/v1/items/{item_id}", other_token, code=403)
+        route = f"/v1/items/{item_id}/executions/{execution_id}"
+        self.ok(route + "/timeline", other_token, code=403)
+        self.ok(f"/v1/items/{other_id}/executions/{other_execution}/timeline", token, code=403)
+        drafted = self.submit(token, original, report_markdown="# Report\n")
+        reviewed = self.submit(token, drafted, report_revision=drafted["state"]["report_draft"])
+        done = self.submit(token, reviewed, report_revision=reviewed["state"]["report_draft"])
+        rerun = self.ok(route + "/rerun", OWNER, {"expected_version": done["version"], "target": "report"})
+        replacement, replacement_token, _ = self.register(item_id, rerun["id"])
+        self.assertEqual(replacement["context_links"], context)
+        self.assertEqual(self.ok("/v1/writer", replacement_token)["context_links"], context)
+        self.ok(route + "/timeline", replacement_token, code=403)
+        self.ok("/v1/writer", token, code=401)
+        self.ok("/v1/writer/attempt", token, code=401, method="POST")
+
     def pr_item(self, target, **fields):
         item = self.ok("/v1/items", OWNER, {"repository_id": "repo", "goal": "Fix it", "target": target,
                                              **fields}, 201)

@@ -282,6 +282,8 @@ def kickoff(item, worktree, nonce, work_command, base, checks_environment=None):
         checks_environment=(f"`{checks_environment}`" if checks_environment is not None
                             else "Not configured. Do not guess an interpreter or command prefix."),
         criteria="\n".join(f"- {entry}" for entry in criteria) or "- None beyond the goal",
+        context="\n".join("    " + line for line in
+                          json.dumps(item.get("context_links") or [], ensure_ascii=True, indent=2).splitlines()),
     )
 
 
