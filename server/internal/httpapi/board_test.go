@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+var scribeAssetReference = regexp.MustCompile(`(?:src|href)="(/operator/assets/[^"]+)"`)
+
 func TestScribeLoadsPackagedShellAndReferencedAssets(t *testing.T) {
 	directory, err := filepath.Abs(filepath.Join("..", "..", "..", "phalanx", "static"))
 	if err != nil {
@@ -33,7 +35,7 @@ func TestScribeLoadsPackagedShellAndReferencedAssets(t *testing.T) {
 			t.Fatalf("%s: shell failed to load: %d", path, response.Code)
 		}
 		assertScribeHeaders(t, response)
-		assets := regexp.MustCompile(`(?:src|href)="(/operator/assets/[^"]+)"`).FindAllSubmatch(shell, -1)
+		assets := scribeAssetReference.FindAllSubmatch(shell, -1)
 		if len(assets) == 0 {
 			t.Fatal("shell does not reference any assets")
 		}
