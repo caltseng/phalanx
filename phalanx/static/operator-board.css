@@ -114,12 +114,12 @@ body { margin: 0; }
 .counts strong { color: var(--ink); font-variant-numeric: tabular-nums; }
 .counts .t-attn, .counts .t-attn strong { color: var(--attn); }
 .counts .t-wait strong { color: var(--wait); }
-.actions { display: flex; flex-wrap: wrap; gap: .25rem; }
+.actions { display: flex; flex-wrap: wrap; justify-content: flex-end; margin-left: auto; max-width: 100%; gap: .15rem; }
 .actions .tool-button {
   position: relative; display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
-  min-width: 44px; min-height: 44px; padding: .35rem; box-sizing: border-box;
+  min-width: 36px; min-height: 36px; padding: .15rem; box-sizing: border-box;
 }
-.actions .new-item { padding-inline: .65rem; font-weight: 600; color: var(--accent); }
+.actions .new-item { padding-inline: .4rem; font-weight: 600; color: var(--accent); }
 .tool-button[aria-expanded="true"], .actions .tool-button.is-active {
   border-color: var(--gold); background: var(--raised);
 }
@@ -358,6 +358,7 @@ body { margin: 0; }
   .board-navigation { margin-left: 0; }
   .health { margin-left: auto; }
   .actions { gap: .15rem; }
+  .actions .tool-button { min-width: 44px; min-height: 44px; }
   .actions .new-item { padding-inline: .4rem; }
   .toolbar-settings-panel { left: 0; right: auto; }
   .tool-button::after { max-width: 11rem; }
@@ -384,19 +385,28 @@ body { margin: 0; }
 #operator-report[open] { display: flex; flex-direction: column; }
 .report-heading {
   display: flex; flex: none; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: .5rem .75rem .5rem 1.25rem; border-bottom: 1px solid var(--line);
+  padding: .25rem .5rem .25rem 1.25rem; border-bottom: 1px solid var(--line);
 }
 #operator-report h2 { margin: 0; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
-#operator-report .report-heading button { flex: none; width: 44px; height: 44px; padding: 0; font-size: 24px; }
+.report-controls { display: flex; flex: none; gap: .15rem; }
+#operator-report .report-heading button {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; width: 36px; height: 36px; padding: 0; font-size: 24px;
+}
+#operator-report .report-heading button:disabled { opacity: .5; cursor: default; }
 #operator-report .report-heading button:hover { background: var(--hover); }
 #operator-report-body { min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 0 1.25rem 1rem; }
-#operator-report-status:empty { display: none; }
+#operator-report-status:empty, #operator-report-copy-status:empty { display: none; }
 #operator-report :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 #operator-report::backdrop { background: #0008; }
 #operator-report-content { overflow-wrap: anywhere; font: 13px/1.5 system-ui, sans-serif; }
 #operator-report-content pre { white-space: pre-wrap; font-family: var(--mono); }
 #operator-report-content table { border-collapse: collapse; display: block; overflow: auto; }
 #operator-report-content th, #operator-report-content td { border: 1px solid var(--line); padding: .3rem .6rem; }
+@media (max-width: 760px), (pointer: coarse) {
+  .actions .tool-button { min-width: 44px; min-height: 44px; }
+  #operator-report .report-heading button { width: 44px; height: 44px; }
+}
 
 #operator-create {
   box-sizing: border-box; width: min(42rem, calc(100vw - 1rem)); max-height: 90dvh; overflow-y: auto;
@@ -416,8 +426,7 @@ body { margin: 0; }
 #operator-create .create-options { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .75rem; }
 #operator-create-errors { color: var(--flag); white-space: pre-wrap; overflow-wrap: anywhere; }
 #operator-create [aria-invalid="true"] { border-color: var(--flag); }
-#operator-create button, #operator-create input, #operator-create select, .actions .new-item { min-height: 44px; }
-.actions .new-item { min-width: 44px; }
+#operator-create button, #operator-create input, #operator-create select { min-height: 44px; }
 #operator-create :disabled { opacity: .65; cursor: default; }
 @media (max-width: 480px) {
   .bar { column-gap: .2rem; }
