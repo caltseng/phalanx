@@ -30,8 +30,10 @@ precedence, bounded warning families and exact elapsed-age boundaries.
 Native operator execution/item/group/timeline/overview and muster reads include
 filter-bound cursors, weak conditional validators, retained opaque pickup
 metadata, bounded candidate windows and usage projections. Native Scribe shell/
-assets and direct local-board transport retain CSP, exact file/range/conditional
-behavior and narrowly wired owner actions. Existing documentation URLs serve embedded schema/HTML, not a Python runtime proxy.
+assets use standard `http.ServeContent` GET/HEAD, range and conditional responses,
+with root-confined regular files, symlink refusal and security headers.
+Direct local-board transport retains CSP and narrowly wired owner actions.
+Existing documentation URLs serve embedded schema/HTML, not a Python runtime proxy.
 The native validation boundary uses standard JSON, timezone-bearing RFC3339 timestamps,
 decimal integer query/path parameters, and HTTP 422 `detail` entries containing only
 `loc` and `msg`; see [request validation](../docs/api.md#request-validation).
