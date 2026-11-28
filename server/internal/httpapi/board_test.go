@@ -1,10 +1,124 @@
 package httpapi
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/caltseng/phalanx/server/internal/contract"
 )
+
+func TestOperatorConditionalPoll(t *testing.T) {
+	for _, route := range []string{"list", "filtered", "cursor", "overview", "group", "item"} {
+		t.Run(route, func(t *testing.T) {
+			for _, phase := range []string{"initial", "conditional", "invalidate"} {
+				t.Run(phase, func(t *testing.T) {
+					app, path := fixtureAppDatabase(t)
+					now := time.Now().UTC()
+					app.Clock = func() time.Time { return now }
+					var itemID string
+					label := "poll"
+					for range 2 {
+						body, err := app.Intake(context.Background(), contract.Intake{
+							RepositoryID: "fixture", Goal: "Poll needle", Target: "checked_in", Priority: "normal",
+							PublicationMode: "ready", Label: &label, ContextLinks: []string{},
+							AcceptanceCriteria: []string{}, Dependencies: []contract.Prerequisite{},
+						}, nil)
+						if err != nil {
+							t.Fatal(err)
+						}
+						var item struct{ ID string }
+						if err := json.Unmarshal(responseJSON(t, body), &item); err != nil {
+							t.Fatal(err)
+						}
+						itemID = item.ID
+					}
+					db, err := sql.Open("sqlite", path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer db.Close()
+					stamp := now.Format(time.RFC3339Nano)
+					if _, err := db.Exec(`INSERT INTO dispatch_settings VALUES (1,0,10,5);
+						INSERT INTO operator_change VALUES ('AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+						INSERT INTO issue_scout_settings(id) VALUES (1);
+						INSERT INTO captains(id,session_ref,charter_revision,state,created_at,heartbeat_at,pickup_json)
+						VALUES ('poll-captain','session','charter','active',?,?,
+						'{"repositories":{"fixture":null},"opaque":{"nested":[1,true,null]}}')`, stamp, stamp); err != nil {
+						t.Fatal(err)
+					}
+					handler := &Handler{App: app, Owner: "owner", Runner: "runner"}
+					get := func(path, token, tag string) *httptest.ResponseRecorder {
+						r := httptest.NewRequest(http.MethodGet, path, nil)
+						if token != "" {
+							r.Header.Set("Authorization", "Bearer "+token)
+						}
+						if tag != "" {
+							r.Header.Set("If-None-Match", tag)
+						}
+						w := httptest.NewRecorder()
+						handler.ServeHTTP(w, r)
+						return w
+					}
+					target := "/v1/operator/executions"
+					switch route {
+					case "filtered", "cursor":
+						target += "?q=needle&limit=1"
+						if route == "cursor" {
+							first := get(target, "owner", "")
+							var page struct {
+								Next *string `json:"next_cursor"`
+							}
+							if err := json.Unmarshal(first.Body.Bytes(), &page); err != nil || first.Code != 200 || page.Next == nil {
+								t.Fatal("missing continuation", first.Code, first.Body.String(), err)
+							}
+							target += "&cursor=" + *page.Next
+						}
+					case "overview":
+						target = "/v1/operator/overview"
+					case "group":
+						target = "/v1/operator/groups/poll"
+					case "item":
+						target = "/v1/operator/items/" + itemID
+					}
+					first := get(target, "owner", "")
+					tag := first.Header().Get("ETag")
+					if first.Code != 200 || tag == "" || first.Body.Len() == 0 {
+						t.Fatal("initial poll", first.Code, first.Body.String())
+					}
+					if phase == "initial" {
+						return
+					}
+					poll := get(target, "owner", tag)
+					if poll.Code != http.StatusNotModified || poll.Body.Len() != 0 ||
+						poll.Header().Get("ETag") != tag || poll.Header().Get("Cache-Control") != "private, no-cache" {
+						t.Fatal("conditional poll", poll.Code, poll.Body.String(), poll.Header())
+					}
+					if phase == "conditional" {
+						return
+					}
+					if response := get(target, "", tag); response.Code != 401 {
+						t.Fatal("conditional poll bypassed authentication", response.Code)
+					}
+					if _, err := db.Exec("UPDATE dispatch_settings SET paused=NOT paused"); err != nil {
+						t.Fatal(err)
+					}
+					if response := get(target, "owner", tag); response.Code != 200 || response.Header().Get("ETag") == tag {
+						t.Fatal("state mutation failed to invalidate", response.Code, response.Body.String())
+					}
+					if response := get("/v1/operator/executions?cursor=invalid", "owner", "*"); response.Code != 400 {
+						t.Fatal("conditional poll bypassed cursor validation", response.Code)
+					}
+				})
+			}
+		})
+	}
+}
 
 func TestLocalBoardAuthorityRequiresDirectPeerAndNoProxyOrAuthorization(t *testing.T) {
 	handler := Handler{LocalBoard: true}
