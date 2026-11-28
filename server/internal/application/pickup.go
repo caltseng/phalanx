@@ -71,7 +71,7 @@ func pickupSnapshot(tx *sqlite.Tx, now time.Time) (pickupContext, error) {
 		}
 		result.Captains = append(result.Captains, pickupCaptain{ID: row.ID, Repositories: scope, RawPickup: json.RawMessage(row.PickupJSON)})
 	}
-	holds, err := tx.ActiveCaptainHolds(pythonStamp(now.Add(-captainHoldDuration)))
+	holds, err := tx.ActiveCaptainHolds(timestamp(now.Add(-captainHoldDuration)))
 	if err != nil {
 		return result, err
 	}

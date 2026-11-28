@@ -109,6 +109,33 @@ func TestNoNumericCoercionOrPrecisionLoss(t *testing.T) {
 	}
 }
 
+func TestNativeTextValidationKeepsPublicIssues(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		value   any
+		pattern string
+		min     int
+		max     int
+		want    string
+	}{
+		{"type", 42, "", 0, 0, "Input should be a valid string"},
+		{"minimum", "\u00a0 ", "", 1, 0, "String should have at least 1 character"},
+		{"maximum", "雪雪", "", 0, 1, "String should have at most 1 characters"},
+		{"pattern", "bad!", IdentifierPattern, 0, 0, "String should match pattern '" + IdentifierPattern + "'"},
+		{"nonspace", "\u2009", `\S`, 0, 0, "String should match pattern '\\S'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			v := validator{}
+			loc := []any{"body", "field"}
+			v.text(test.value, loc, true, test.min, test.max, test.pattern)
+			if len(v.issues) != 1 || v.issues[0].Msg != test.want ||
+				len(v.issues[0].Loc) != 2 || v.issues[0].Loc[0] != "body" || v.issues[0].Loc[1] != "field" {
+				t.Fatalf("issues = %+v", v.issues)
+			}
+		})
+	}
+}
+
 func TestDuplicateJSONLastWinsAndExtras(t *testing.T) {
 	value, keys, err := Decode([]byte(`{"repository_id":"repo","goal":"old","z":1,"a":2,"goal":"new"}`))
 	if err != nil {

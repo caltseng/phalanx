@@ -1,10 +1,6 @@
 package application
 
 import (
-	"fmt"
-	"strings"
-
-	"github.com/caltseng/phalanx/server/internal/contract"
 	"github.com/caltseng/phalanx/server/internal/sqlite"
 )
 
@@ -94,28 +90,4 @@ func resolveDependencies(tx *sqlite.Tx, itemID string) ([]resolved, []unmet, err
 
 func resolvedDependency(link sqlite.Link, executionID, reference, revision string, reviewed *Revision) resolved {
 	return resolved{link.UpstreamID, link.Milestone, executionID, reference, revision, reviewed}
-}
-
-func pythonOrderedJSON(values []unmet) (string, error) {
-	entries := make([]string, 0, len(values))
-	for _, value := range values {
-		upstream, err := contract.Canonical(value.UpstreamID)
-		if err != nil {
-			return "", err
-		}
-		milestone, err := contract.Canonical(value.Milestone)
-		if err != nil {
-			return "", err
-		}
-		execution, err := contract.Canonical(value.ExecutionID)
-		if err != nil {
-			return "", err
-		}
-		reason, err := contract.Canonical(value.Reason)
-		if err != nil {
-			return "", err
-		}
-		entries = append(entries, fmt.Sprintf(`{"upstream_id":%s,"milestone":%s,"execution_id":%s,"reason":%s}`, upstream, milestone, execution, reason))
-	}
-	return "[" + strings.Join(entries, ",") + "]", nil
 }

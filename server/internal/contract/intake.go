@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -16,14 +15,14 @@ const labelPattern = `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`
 var identifier = regexp.MustCompile(IdentifierPattern)
 var label = regexp.MustCompile(labelPattern)
 
-// Keys retain the Python patterns used in validation messages.
+// Keys retain the public patterns used in validation messages.
 var textPatterns = map[string]*regexp.Regexp{
 	IdentifierPattern:  identifier,
 	labelPattern:       label,
 	FlagKindPattern:    regexp.MustCompile(FlagKindPattern),
 	FlagSubjectPattern: regexp.MustCompile(FlagSubjectPattern),
 	NoncePattern:       regexp.MustCompile(NoncePattern),
-	URLPattern:         regexp.MustCompile(pythonPatternSource(URLPattern)),
+	URLPattern:         regexp.MustCompile(validationPatternSource(URLPattern)),
 	SHAPattern:         regexp.MustCompile(SHAPattern),
 	RevisionPattern:    regexp.MustCompile(RevisionPattern),
 	PullURLPattern:     regexp.MustCompile(PullURLPattern),
@@ -31,7 +30,7 @@ var textPatterns = map[string]*regexp.Regexp{
 	ScoutAuthorPattern: regexp.MustCompile(ScoutAuthorPattern),
 	UsageAmountPattern: regexp.MustCompile(UsageAmountPattern),
 	`^[0-9a-f]{32}$`:   cursorID,
-	`\S`:               regexp.MustCompile(pythonPatternSource(`\S`)),
+	`\S`:               regexp.MustCompile(validationPatternSource(`\S`)),
 	`^[^\r\n]+$`:       regexp.MustCompile(`^[^\r\n]+$`),
 }
 
@@ -83,12 +82,6 @@ func (v *validator) required(body map[string]any, field string, prefix []any) (a
 	return value, ok
 }
 
-// Pydantic's Rust string validator strips Unicode White_Space, not Python
-// str.strip's additional ASCII information separators.
-func pythonSpace(r rune) bool {
-	return unicode.IsSpace(r)
-}
-
 func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern string) string {
 	text, ok := value.(string)
 	if !ok {
@@ -96,20 +89,20 @@ func (v *validator) text(value any, loc []any, strip bool, min, max int, pattern
 		return ""
 	}
 	if strip {
-		text = strings.TrimFunc(text, pythonSpace)
+		text = strings.TrimSpace(text)
 	}
 	size := utf8.RuneCountInString(text)
 	if min > 0 && size < min {
 		v.issue(fmt.Sprintf("String should have at least %d character", min), loc)
 	} else if max > 0 && size > max {
 		v.issue(fmt.Sprintf("String should have at most %d characters", max), loc)
-	} else if pattern != "" && !pythonPattern(pattern).MatchString(text) {
+	} else if pattern != "" && !validationPattern(pattern).MatchString(text) {
 		v.issue(fmt.Sprintf("String should match pattern '%s'", pattern), loc)
 	}
 	return text
 }
 
-func pythonPattern(pattern string) *regexp.Regexp {
+func validationPattern(pattern string) *regexp.Regexp {
 	compiled, ok := textPatterns[pattern]
 	if !ok {
 		panic(fmt.Sprintf("unregistered validation pattern %q", pattern))
@@ -117,7 +110,7 @@ func pythonPattern(pattern string) *regexp.Regexp {
 	return compiled
 }
 
-func pythonPatternSource(pattern string) string {
+func validationPatternSource(pattern string) string {
 	// Rust/Pydantic's \S uses Unicode White_Space; Go's Perl class is ASCII.
 	const atom = `[^\x09-\x0d\x20\x85\x{a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]`
 	pattern = strings.ReplaceAll(pattern, `\S`, atom)

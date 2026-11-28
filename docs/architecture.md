@@ -35,6 +35,13 @@ remain separate from exact-head review, required CI and installation adoption.
 | `phalanx/windows_supervisor.py`, `phalanx/windows_task.ps1` | Opt-in same-task foreground Windows Job containment, retained-native-handle exact-task stop and exclusion receipts; no uninstrumented live-tree adoption or task mutation; [operator boundary](windows-api-supervisor.md) |
 | `server/cmd/conformance-*`, `server/conformance` | Disposable-only fixture adapters, pinned Python oracles, raw wire/typed-store differential and package-only current-data rehearsal; no runtime Python proxy |
 
+Application display and scouting use native Go whitespace and case handling;
+Python-only ASCII information separators and special case aliases are not emulated.
+Displayed reasons redact tokens, authorization values and secret assignments before
+truncation. Dependency waits use ordinary typed JSON, and flags share the existing
+UTC timestamp formatter. Historical receipt digest canonicalization remains isolated
+in contract `json.go`; public validation patterns and loc/msg messages are unchanged.
+
 Scribe files use `http.ServeContent` for GET/HEAD, byte ranges (including multipart),
 conditional requests and cache validators. Range syntax and error responses follow
 Go's standard library rather than the retired Python server's parser. Asset paths
