@@ -114,7 +114,8 @@ go test ./...
 ```
 
 Go database tests share `internal/testdb`: `New` creates an empty, disposable
-database from its embedded Go-owned `schema.sql`, and `Open` manages connections
+database from its embedded Go-owned `schema.sql` in one committed DDL transaction,
+avoiding a durable commit per table/index/trigger, and `Open` manages connections
 used to inspect or reopen that fixture. Package-specific helpers only seed their
 domain data. The helper's schema test pins the compact JSON DDL SHA-256
 `c8dd5872e18dad37d74f800028922a439814365bcc2fee6d4f3f8fa5c5f4e288`
@@ -126,7 +127,12 @@ production server still refuses to initialize a database.
 CI builds/tests on Windows, Linux and macOS and race-checks Linux/macOS with their
 prepared C compilers. The supplied local Windows environment has CGO disabled
 and no C compiler: a local `go test -race` is an explicit gap, not a passing check.
-Windows real-loopback pinned differential evidence is a required CI job.
+Native tests run without Python, source-hash manifests or regenerated goldens.
+CI preserves their exact test IDs and durations as `go-tests-<os>` artifacts.
+The separate required runtime-safety jobs retain production identity, OS exclusion,
+Windows Task Scheduler supervision, reproducible packaging/current-data rollback and
+production header/framing proofs. Moving these out of the fast native job does not
+remove them from the required `Tests` aggregate.
 `conformance/locks.py` separately exercises actual Python-Go exclusion in both
 directions on Windows/Linux/macOS. Its OS-only runtime is recorded, not falsely
 called the exact Windows wire oracle. Host eligibility still requires the
@@ -152,8 +158,7 @@ an absolute path, resolved through existing filesystem links with a non-strict
 missing suffix, matching the unchanged Python muster identity comparison.
 
 Run `conformance/identity.py --binary <production-server> --output <outside-checkout>`
-with the prepared Python checks prefix. This starts the actual current-source
-Python service entrypoint and production Go binary in isolated current-schema
+with the prepared Python checks prefix. This starts the production Go binary in isolated current-schema
 stores, not the in-process oracle adapter. It retains wire/header evidence and
 complete typed before/after snapshots for trusted/untrusted schemes, redirects,
 owner/runner/writer/browser/local-board refusals and home identity, including
@@ -179,13 +184,23 @@ The compact golden files retain **exact request bytes, raw response bytes/header
 multimaps and every typed SQLite row**, using content-addressed row/snapshot
 deduplication, not dropped tables. The harness re-runs P0 and D0 and refuses oracle
 drift before comparing Go. It never fetches a substitute oracle on a missing pin.
-`vectors-manifest.json` binds the 114 exact request IDs, Go test IDs, source hashes,
-module graph and both golden corpora. That is 684 ordinary wire/durable
+`vectors-manifest.json` retains the historical 114 exact request IDs, Go test IDs,
+source hashes, module graph and both golden corpora. That was 684 ordinary wire/durable
 observations across three implementations/two shapes, plus separately recorded
 busy, switch, abort, lost-response/crash and lock fault windows.
 Scoped Git attributes keep server sources/manifests LF on every host; oracle
 exports disable caller `autocrlf` and verify actual extracted source bytes
 against the unchanged Git-blob manifest.
+
+The historical differential corpora are retired from ordinary PR/push CI. They can
+still be run explicitly with CI's `historical_conformance` workflow-dispatch input or
+the commands below. Their source/test inventory is historical evidence, not a
+current-source equality gate. `verify_vectors` still refuses changes to either
+foundation golden; immutable P0/D0 exports and oracle/runtime pins remain checked.
+Every foundation harness run records the actual working-file hashes and test IDs in
+`source-provenance.json`, including dirty source bytes. Rebuild the fixture binary
+after editing; never use an old binary as evidence for edited sources. A `.go` edit
+requires no manifest or golden regeneration.
 
 Fresh canonical 26 and the public old-initializer -> D0 retained-26 sequence are
 both exercised. Retained DDL SHA-256 is

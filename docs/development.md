@@ -19,7 +19,7 @@ The [CI workflow](../.github/workflows/ci.yml) runs the full unit suite with loc
 dependencies on every pull request and push to `main`: Windows/Python 3.12 (three
 shards), Linux/Python 3.14 (two), and macOS/Python 3.14 (two), plus one standalone
 envelope probe: eight test jobs. The `Tests` aggregate remains the required check
-and passes only when all shards and the probe pass.
+and passes only when all shards, the probe, native Go checks and runtime-safety jobs pass.
 
 `python tests/shard.py INDEX COUNT` uses deterministic longest-first assignment with
 platform-specific runtime estimates in `tests/shard_timings.json`, not test-count
@@ -81,12 +81,33 @@ disconnect; explicit interruption rolls back and unknown commit outcomes require
 receipt reconciliation. The shared OS lock covers HTTP and background-work drain.
 
 Use the prepared checks prefix from `server` for `go mod verify`, `go build -trimpath
--buildvcs=false ./...`, `go vet ./...` and `go test ./...`. Run the relevant differential
-families plus [real packaged release/identity/rollback proofs](go-server-release.md)
-on isolated synthetic fresh/retained stores. The independent
+-buildvcs=false ./...`, `go vet ./...` and `go test ./...`. The native Go CI job needs
+no Python oracle or generated source manifest. Test schemas are initialized in one
+transaction without disabling foreign keys, production synchronization or admission.
+Native JSON test logs preserve exact test IDs and per-test durations.
+
+The separate required runtime-safety job retains [real packaged release/identity/rollback proofs](go-server-release.md),
+both-direction OS locks, Windows Task Scheduler supervision and production headers.
+The historical P0/D0 differential corpora are opt-in through the CI workflow's
+`historical_conformance` dispatch input; no historical source, manifest or golden is
+deleted. Their harness checks immutable golden integrity and records current
+working-file provenance instead of rejecting routine `.go` edits against an old
+source hash. Neither normal checks nor explicit reruns require manifest regeneration.
+The independent
 [parity report and remediation map](python-server-deprecation.md#reviewed-parity-evidence)
 are evidence, not permission to normalize a failure or refreeze P0/D0.
 Unix race/OS exclusion and the complete Python suite remain required CI.
+
+Native replacement coverage is maintained in executable Go tests, not only an inventory:
+
+| Contract | Go regression |
+| --- | --- |
+| Roles and origin refusals | `httpapi.TestRouteRoleMatrix`, `TestRouteAuthorityWireBytes`, `TestRetainedDashboardPeerAndOriginVectors` |
+| 422 field highlighting, exact idempotent replay and history | `httpapi.TestNativeValidationDetailsAndIntakeReplay`, `TestHistoryAndTimelineScopeAndMissing` |
+| Inbox keyset and filter-bound cursors | `httpapi.TestNativeInboxKeysetAndOperatorCursorScope`, `application.TestFilteredOperatorPageContinuesAfterExactCandidateWindow` |
+| Captains and archives | `application.TestCaptainLivenessBoundariesAgreeAcrossViews`, `TestArchiveStatusRetainsReplacementAndCaptainBlockers` |
+| Reconciliation and transactional delivery/replay | `application.TestObservationAndDeliveryRollbackTogetherThenReplay`, `TestObservationStoragePreservesCanonicalPayload` |
+| Scribe asset bytes, CSP, conditional reads, ranges and traversal | `httpapi.TestScribeAssetsServeRepositoryBytesAndSafeBoundaries` |
 
 Original Python HTTP assertions run against the production Go binary through a
 startup/teardown adapter; retain exact selected IDs/exclusions and complete typed state.

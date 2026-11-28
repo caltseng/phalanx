@@ -17,7 +17,15 @@ func New(t testing.TB) (string, *sql.DB) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "fixture.sqlite3")
 	db := Open(t, path)
-	if _, err := db.Exec(schema); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	return path, db
