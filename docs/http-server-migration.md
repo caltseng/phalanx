@@ -19,7 +19,7 @@ Prepared 2026-11-26 for Phalanx item `e9eec24973954316938ca68aef79a0f2`, executi
 
 **Separately authorized foundation:** the first disposable implementation slice
 and its executable P0/D0 conformance boundary are documented in
-[server/README.md](../server/README.md). The historical proposal/review text below
+[the compatibility archive](../server/COMPATIBILITY.md). The historical proposal/review text below
 is preserved as provenance. Partial routes and synthetic slice proofs do not
 authorize production cutover or establish complete API/package rollback parity.
 
@@ -164,7 +164,7 @@ and new-input versus buffered-prefix distinctions. It does not waive parity,
 permit a replacement parser or add a global header cap/deadline. Adoption
 requires original stream/body/disconnect/drain/typed-state regressions,
 independent exact-final-head review and fresh required CI. The
-[production regression](../server/README.md#deployment-retirement-and-incomplete-header-regression)
+[production regression](../server/COMPATIBILITY.md#deployment-retirement-and-incomplete-header-regression)
 retains the original failing evidence and measured complete/incomplete boundary.
 
 The same execution's owner reply **v11** separately authorizes bounded owned
