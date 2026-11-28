@@ -190,7 +190,7 @@ never advance work or affect capacity. The existing operator timeline response i
 | `PUT /v1/dispatch/settings` | Owner changes any settings above except derived counts; omitted fields are preserved. Both limits must be strict integers 1..2147483647, with Building <= Total against the saved pair (409 for an incoherent pair). Set both in one request for an atomic pair update. Null, unknown fields and aliases are rejected. Browser writes must be same-origin. Returns saved settings and usage. Pause stops new registrations/attempts/acquisitions; existing progress/results remain accepted. Lowering never ends writers or revokes existing allocations. |
 | `POST /v1/items/{item}/executions/{execution}/writer` | Captain registers a named writer intent, expected version, nonce and token digest. Atomically enforces Total and, for building work, Building; no caller-supplied limit. Replacement requires the current writer ID and stopped attestation; transfers its allocation and pending request, revoking the old identity. |
 | `PATCH /v1/items/{item}/executions/{execution}/writer` | Captain confirms the native session ID/link for its registered intent. |
-| `GET /v1/writer` | Scoped writer reads its binding, execution, open flags and latest persisted reply. |
+| `GET /v1/writer` | Scoped writer reads its binding, execution, open flags, latest persisted reply and current own-item `context_links` (an empty list when absent). No other item or private history is included. |
 | `POST /v1/writer/attempt` | Scoped writer claims/resumes its own next runnable stage, acquiring Building when required. On full Building, returns a binding with no attempt and visible capacity wait; the same writer retains Total. |
 | `POST /v1/writer/progress` | Scoped writer records progress without a timed lease. |
 | `POST /v1/writer/capacity` | Scoped writer posts `{"phase":"building","expected_revision":N}` before rework, or phase `delivering` with `handoff_head` (the full reviewed commit SHA) after local work. The CLI reads HEAD automatically. Read N from `writer.capacity_revision`. Inspect returned `writer.building`; false means wait/retry, not permission to build. Binding includes durable `building_requested_at`, `capacity_wait` and `handoff_head`. Repeated requests do not double-allocate; stale revisions fail 409 without releasing later work. Eligible waiting PR fixes precede new builds. Building stages cannot release. A mismatched open head waits visibly with `head_drift`; review/hand off a superseding head or stop/withdraw the writer to clear it. Verified merges remain authoritative and release the writer. |
@@ -203,6 +203,12 @@ waits. It has no timed expiry. See the [complete fencing and evidence contract](
 Writer bindings include `last_reply`, scoped to the bound execution: `null` before a reply,
 otherwise `{version, created_at, answer, answered_by}`, the same shape as owner inspection.
 Both `phx work status` and `next` expose it; claiming an attempt does not change the reply.
+
+Writer bindings also include top-level `context_links` from the bound item's current
+accepted request, not an attempt snapshot or history. Existing writer authentication and
+execution fencing apply; this additive field does not revive ended credentials or permit
+broader reads. Context is task data, not an authority grant; see the
+[worker read-context instructions](../phalanx/prompts/worker.md#task-context).
 
 Unbound queued items include `pickup` (`eligible`, `code`, `reason`, `trigger`, and eligible
 `captain_ids`). `wait_reason` is the same concrete exclusion reason, or null when eligible;

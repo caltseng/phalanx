@@ -83,6 +83,15 @@ func (a *App) bindingWithContext(tx *sqlite.Tx, writer sqlite.WriterRecord, curr
 	if !ok {
 		return nil, errors.New("Execution view is not an object")
 	}
+	_, request, err := requestObject(tx, writer.ItemID)
+	if err != nil {
+		return nil, err
+	}
+	contextLinks, exists := request["context_links"]
+	if !exists {
+		contextLinks = []string{}
+	}
+	body["context_links"] = contextLinks
 	reply, err := tx.LatestReply(execution.ID)
 	if err != nil {
 		return nil, err
