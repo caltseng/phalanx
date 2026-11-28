@@ -13,7 +13,7 @@ Python client/admin dependencies; historical oracle dependencies have their own
 `server/conformance/requirements.lock`. Git fixtures set their own identity and use
 `--git-dir`, requiring no global Git configuration.
 
-### CI shards and timing profiles
+### CI shards
 
 The [CI workflow](../.github/workflows/ci.yml) runs the full unit suite with locked
 dependencies on every pull request and push to `main`: Windows/Python 3.12 (three
@@ -21,20 +21,16 @@ shards), Linux/Python 3.14 (two), and macOS/Python 3.14 (two), plus one standalo
 envelope probe: eight test jobs. The `Tests` aggregate remains the required check
 and passes only when all shards, the probe, native Go checks and runtime-safety jobs pass.
 
-`python tests/shard.py INDEX COUNT` uses deterministic longest-first assignment with
-platform-specific runtime estimates in `tests/shard_timings.json`, not test-count
-round-robin. New tests inherit their module's estimate (one second for a new module),
-so discovery never drops unmeasured tests. Each shard still runs in test-ID order.
-The timing file links each platform's source CI run. Initial estimates use elapsed
-time between verbose test-completion timestamps; refreshed profiles use complete
-duration logs. Values are seconds, with a module mean for ordinary tests and exact-ID
-overrides for outliers above both one second and twice the module mean. Module means
-exclude those outliers.
+`python tests/shard.py INDEX COUNT` discovers the full suite, sorts by test ID, and
+assigns tests round-robin using a one-based shard index. Every test, including new
+tests and discovery failures, belongs to exactly one shard; no timing profile needs
+maintenance. Each shard runs in test-ID order and fails if it selects no tests.
 
-When balance drifts, refresh estimates from a green run's complete duration log on
-each target, then compare actual slowest/fastest shard runtimes and end-to-end workflow
-wall time against the baseline. CI logs all test durations to support that comparison;
-estimates alone are not performance acceptance evidence.
+CI logs all test durations. Compare actual slowest/fastest Windows shard runtimes
+over three consecutive runs and end-to-end workflow wall time against the baseline
+when changing sharding or shared fixtures; the balance target is at most 1.3x.
+Keep platform coverage, the standalone envelope probe, and the required `Tests`
+aggregate intact.
 
 ### Shared fixtures
 
