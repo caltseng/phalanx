@@ -30,8 +30,9 @@ precedence, bounded warning families and exact elapsed-age boundaries.
 Native operator execution/item/group/timeline/overview and muster reads include
 filter-bound cursors, weak conditional validators, retained opaque pickup
 metadata, bounded candidate windows and usage projections. Native Scribe shell/
-assets and direct local-board transport retain CSP, exact file/range/conditional
-behavior and narrowly wired owner actions. Existing documentation URLs serve
+assets use standard `http.ServeContent` GET/HEAD, range and conditional responses,
+with root-confined regular files, symlink refusal and security headers.
+Direct local-board transport retains narrowly wired owner actions. Existing documentation URLs serve
 byte-pinned identical P0/D0 generated schema/HTML, not a Python runtime proxy.
 Native report finalization and bounded dependency refresh use the existing
 schema26 jobs. Every pinned public operation is inventoried; complete whole-port

@@ -35,6 +35,13 @@ remain separate from exact-head review, required CI and installation adoption.
 | `phalanx/windows_supervisor.py`, `phalanx/windows_task.ps1` | Opt-in same-task foreground Windows Job containment, retained-native-handle exact-task stop and exclusion receipts; no uninstrumented live-tree adoption or task mutation; [operator boundary](windows-api-supervisor.md) |
 | `server/cmd/conformance-*`, `server/conformance` | Disposable-only fixture adapters, pinned Python oracles, raw wire/typed-store differential and package-only current-data rehearsal; no runtime Python proxy |
 
+Scribe files use `http.ServeContent` for GET/HEAD, byte ranges (including multipart),
+conditional requests and cache validators. Range syntax and error responses follow
+Go's standard library rather than the retired Python server's parser. Asset paths
+must be local regular files without symlink components; `os.Root` confines opens
+to the configured asset directory even if paths change concurrently. The shell
+and assets carry CSP, no-referrer and nosniff headers.
+
 ## Components and ownership
 
 ```mermaid
