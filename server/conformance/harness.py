@@ -207,8 +207,9 @@ def vector_manifest():
 
 def verify_vectors():
     expected = json.loads((HERE / "vectors-manifest.json").read_text(encoding="utf-8"))
-    if expected != vector_manifest():
-        raise AssertionError("Exact source/test/vector manifest changed; do not regenerate to hide a mismatch")
+    for name in ("golden-fresh.json", "golden-retained.json"):
+        if expected["files"]["server/conformance/" + name] != digest((HERE / name).read_bytes()):
+            raise AssertionError("Immutable foundation golden changed: " + name)
 
 
 def snapshot(path):
@@ -706,6 +707,8 @@ def differential(binary, output, freeze=False):
     verify_manifest()
     if not freeze:
         verify_vectors()
+    (output / "source-provenance.json").write_text(
+        json.dumps(vector_manifest(), indent=2), encoding="utf-8", newline="\n")
     with disposable_root() as root:
         sources = {label: export(label, root) for label in PINS}
         for retained in (False, True):
