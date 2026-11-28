@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from shutil import copytree
 import sqlite3
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -1354,6 +1355,75 @@ class ShiftArchiveTest(ShiftFixture, unittest.TestCase):
         (cache / "module.pyc").write_bytes(b"build output")
         self.assertTrue(self.check_archive(item)["can_archive"])
         self.assertTrue((cache / "module.pyc").exists())
+
+    def test_completed_rebase_head_does_not_block_clean_linked_worktree(self):
+        _, item, worktree = self.ended_writer()
+        checkout = Path(self.config["repositories"]["repo"]["checkout"])
+        (worktree / "README.md").write_text("Topic change\n", encoding="utf-8")
+        git(worktree, "commit", "-qam", "Topic change")
+        (checkout / "README.md").write_text("Base change\n", encoding="utf-8")
+        git(checkout, "commit", "-qam", "Base change")
+        git(checkout, "push", "-q", "origin", "main")
+        git(worktree, "fetch", "-q", "origin", "main")
+        with self.assertRaises(subprocess.CalledProcessError) as conflict:
+            git(worktree, "rebase", "origin/main")
+        self.assertEqual(conflict.exception.returncode, 1)
+        (worktree / "README.md").write_text("Resolved change\n", encoding="utf-8")
+        git(worktree, "add", "README.md")
+        git(worktree, "-c", "core.editor=true", "rebase", "--continue")
+        git(worktree, "push", "-q", "origin", "HEAD")
+        git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir"))
+        self.assertTrue((worktree / ".git").is_file())
+        self.assertTrue((git_dir / "REBASE_HEAD").is_file())
+        self.assertFalse((git_dir / "rebase-merge").exists())
+        self.assertFalse((git_dir / "rebase-apply").exists())
+        self.assertEqual(git(worktree, "status", "--porcelain"), "")
+        checked = self.check_archive(item)
+        self.assertTrue(checked["can_archive"], checked)
+        self.assertTrue((git_dir / "REBASE_HEAD").is_file())
+
+    def test_clean_in_progress_rebase_still_blocks_archiving(self):
+        _, item, worktree = self.ended_writer()
+        (worktree / "README.md").write_text("Topic change\n", encoding="utf-8")
+        git(worktree, "commit", "-qam", "Topic change")
+        git(worktree, "push", "-q", "origin", "HEAD")
+        with self.assertRaises(subprocess.CalledProcessError) as paused:
+            git(worktree, "-c", "core.editor=true", "rebase", "-i",
+                "--exec", "false", "HEAD~1")
+        self.assertEqual(paused.exception.returncode, 1)
+        git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir"))
+        self.assertTrue((git_dir / "rebase-merge").is_dir())
+        self.assertEqual(git(worktree, "status", "--porcelain"), "")
+        self.assertFalse(self.check_archive(item)["can_archive"])
+        checked = shift.archive_check(self.api, self.config, self.charter,
+                                      "helper", "creator", worktree=worktree)
+        self.assertFalse(checked["can_archive"])
+        self.assertIn("in-progress Git operation", checked["reason"])
+        self.assertTrue((git_dir / "rebase-merge").is_dir())
+
+    def test_other_operation_markers_still_block_clean_worktree(self):
+        _, item, worktree = self.ended_writer()
+        git_dir = Path(git(worktree, "rev-parse", "--absolute-git-dir"))
+        for name in ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+                     "rebase-apply", "sequencer", "BISECT_START"):
+            with self.subTest(marker=name):
+                marker = git_dir / name
+                directory = name in ("rebase-apply", "sequencer")
+                if directory:
+                    marker.mkdir()
+                else:
+                    marker.write_text(git(worktree, "rev-parse", "HEAD") + "\n", encoding="utf-8")
+                try:
+                    self.assertEqual(git(worktree, "status", "--porcelain"), "")
+                    checked = self.check_archive(item)
+                    self.assertFalse(checked["can_archive"])
+                    self.assertIn("in-progress Git operation", checked["reason"])
+                    self.assertTrue(marker.exists())
+                finally:
+                    if directory:
+                        marker.rmdir()
+                    else:
+                        marker.unlink()
 
     def test_local_changes_and_unpushed_commits_block_archiving(self):
         _, item, worktree = self.ended_writer()

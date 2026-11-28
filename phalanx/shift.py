@@ -434,8 +434,9 @@ def archive_check(api, config, charter, session_id, reported_by, *, item_id=None
             if any(not entry.startswith("H ") for entry in entries.split("\0") if entry):
                 raise WorkspaceError(f"Index entries can hide local changes: {path}")
             git_dir = Path(_git(path, "rev-parse", "--absolute-git-dir").strip())
+            # Git can retain REBASE_HEAD after a successful rebase; its state directories are authoritative.
             if any((git_dir / name).exists() for name in (
-                    "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD",
+                    "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
                     "rebase-merge", "rebase-apply", "sequencer", "BISECT_START")):
                 raise WorkspaceError(f"Worktree has an in-progress Git operation: {path}")
             branch = _git(path, "symbolic-ref", "--short", "HEAD").strip()
