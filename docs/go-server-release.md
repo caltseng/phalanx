@@ -42,8 +42,10 @@ different hosts/toolchains are not silently declared identical.
 `deploy run ... server` resolves `--engine`, saved `server.engine`, then Go, and
 requires an absolute `--go-binary` or saved `server.go_binary` beside verified assets.
 Missing packages fail with no automatic fallback. To preserve an existing implicit
-Python task during a package upgrade, its owner must explicitly select Python before
-upgrading; no tool changes the task or current data. New templates select Go.
+Python task during a package upgrade, its owner must retain a separately verified
+known-good package or complete the reviewed Go cutover before upgrading; selecting
+Python in the current package fails. No tool changes the task or current data.
+New templates select Go.
 New installs use `python -m phalanx server initialize` on a new absolute `PHALANX_DB`;
 this offline Python admin command reserves a new file under the service lock, refuses
 existing files and starts no HTTP process. Go itself still cannot initialize a store.
@@ -85,13 +87,13 @@ coalesced oversized heads remain valid; an incomplete event above 16,384
 bytes returns the pinned early 400/close without dispatch or durable effects.
 Native fixed/chunked-body and pipeline alignment, buffered-prefix idle behavior
 and transient pending-read aborts are covered by the
-[production header corpus](../server/README.md#deployment-retirement-and-incomplete-header-regression).
+[production header corpus](../server/COMPATIBILITY.md#deployment-retirement-and-incomplete-header-regression).
 Native `net/http` still parses unchanged request bytes; this adds no request,
 body, idle or drain deadline and no new byte/count cap. The owner-authorized
 experiment requires independent exact-head review and fresh required CI,
 not merely a passing anonymous health probe.
 Earlier Windows refusal-response loss and the unsuccessful shutdown experiment
-remain in the [closure evidence](../server/README.md#deployment-retirement-and-incomplete-header-regression).
+remain in the [closure evidence](../server/COMPATIBILITY.md#deployment-retirement-and-incomplete-header-regression).
 The separately authorized v11 finite queued-byte cleanup must pass that same
 repeated manifest. An earlier FIN/drain-until-peer-EOF strategy was independently
 rejected for retaining resources. Current prompt socket/tracking disposal,
@@ -119,7 +121,7 @@ D0 is `ce0a32cd7c83c77d50d19b7a4601cd48cdacf8ae`; the retained initializer is
 `7b86cc994916dc8c393e6217303374b1a5c2c9d0`. These public pins do not replace the
 operator's private inventory of actual package/overlay/current data.
 
-[`server/README.md`](../server/README.md) enumerates the whole route/model/domain
+The [historical compatibility archive](../server/COMPATIBILITY.md) enumerates the route/model/domain
 corpora and counts. `manifest.json` fixes original Python bytes/runtime;
 `vectors-manifest.json` fixes exact requests, test IDs, Go sources and goldens.
 Retain raw wire and every typed table/DDL snapshot, not just health or final counts.
